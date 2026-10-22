@@ -185,20 +185,6 @@ fn output_that_is_not_pi_json_is_distill_failed_output() {
 }
 
 #[test]
-fn an_answer_cut_at_the_output_limit_fails_the_run_but_its_cost_is_logged() {
-    let fx = fx();
-    fx.decide("Use sqlite.");
-    // pi exits 0 in JSON mode when the final message stopped with `length`.
-    fx.env.fake_pi(&pi_says("echo 'half'").replace(r#""stopReason":"stop""#, r#""stopReason":"length""#));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
-    assert_eq!(error["details"]["reason"], "output");
-    assert!(error["message"].as_str().unwrap().contains("length"), "{error}");
-    assert!(fx.digest_files().is_empty());
-    let runs = fx.runs();
-    assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_in"].clone(), runs[0]["cost"].clone()), (json!("failed"), json!(733), json!(0.25)));
-}
-
-#[test]
 fn pi_that_cannot_start_is_distill_failed_spawn() {
     let fx = fx();
     fx.decide("Use sqlite.");
@@ -246,11 +232,6 @@ fn the_context_is_required_and_must_exist() {
 // ---- The Tier ladder (hs-d538): contract §4.6 ----
 
 const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
-
-/// The `tier` of each run line.
-fn tiers_of(runs: &[Value]) -> Vec<String> {
-    runs.iter().map(|r| r["tier"].as_str().unwrap_or("<none>").to_string()).collect()
-}
 
 // ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
 
@@ -389,60 +370,6 @@ EOF"#,
     assert_eq!(fx.pi_calls(), 1);
 }
 
-#[test]
-fn an_output_missing_a_batch_id_is_invalid_and_climbs_the_ladder() {
-    let fx = fx();
-    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
-    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use flock.", Draft::Decision { supersedes: None });
-    fx.env.fake_pi(&pi_says(r#"echo '{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":false}'"#));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let upto = fx.highest_seq();
-    let details = &error["details"];
-    assert_eq!((details["context"].clone(), details["upto_seq"].clone()), (json!(CONTEXT), json!(upto)));
-    let errors = details["errors"].as_array().unwrap_or_else(|| panic!("details.errors lists the failures: {details}"));
-    assert!(errors.iter().any(|e| e["id"] == "hs-d2" && e["what"].is_string()), "{errors:?}");
-    let invalid = fx.digests().join(format!("{upto}.jsonl.invalid"));
-    assert_eq!(details["invalid"], invalid.display().to_string());
-    assert!(fs::read_to_string(&invalid).unwrap().contains("hs-d1"), "the last output is kept");
-    // The ladder (hs-d538) climbs as before, and the whole run writes one Event.
-    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3", "S1", "S2", "S3", "S4"]);
-    assert_eq!(fx.errors().len(), 1);
-    assert_eq!(fx.errors()[0]["data"]["code"], "distill_invalid");
-    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]), "an invalid output writes nothing");
-}
-
-#[test]
-fn a_superseded_target_must_be_newer() {
-    let fx = fx().one_step();
-    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
-    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
-    // hs-d2 is superseded by hs-d1, which is older (a lower seq): invalid.
-    fx.env.fake_pi(&pi_says(
-        r#"cat <<'EOF'
-{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":false}
-{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":{"reason":"superseded","target":"hs-d1"},"doc":false}
-EOF"#,
-    ));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
-    assert!(errors.iter().any(|e| e["id"] == "hs-d2"), "{errors:?}");
-    assert!(!errors.iter().any(|e| e["id"] == "hs-d1"), "only the bad line is listed: {errors:?}");
-    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
-    let upto = fx.highest_seq();
-    assert!(fx.digests().join(format!("{upto}.jsonl.invalid")).exists());
-
-    // The other way round is valid, and removes the kept output.
-    fx.env.fake_pi(&pi_says(
-        r#"cat <<'EOF'
-{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
-{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null,"doc":false}
-EOF"#,
-    ));
-    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(retirement_rows(&fx), [(s("hs-d1"), s("superseded"), s("hs-d2"), s("pending"))]);
-    assert!(!fx.digests().join(format!("{upto}.jsonl.invalid")).exists());
-}
-
 /// Plan `pl` of `ctx` with one PR in each of `repos` (the PRs' repos are the Context's repos).
 fn plan_with_repos(fx: &Fx, repos: &[&std::path::Path]) {
     let prs: String = repos
@@ -500,37 +427,6 @@ fn docs_md_lists_the_grep_hits_of_the_contexts_repos() {
 }
 
 #[test]
-fn a_documented_target_must_be_a_grep_hit() {
-    let fx = fx().one_step();
-    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
-    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use flock.", Draft::Decision { supersedes: None });
-    let a = repo_with(&fx, "a", &[("docs/design.md", "We use sqlite, see hs-d1.\n")]);
-    plan_with_repos(&fx, &[&a]);
-    let hit = format!("{}:docs/design.md", a.display());
-    // hs-d1 names a path that is no hit; hs-d2 names a real hit of hs-d1, not of its own.
-    fx.env.fake_pi(&pi_says(&format!(
-        r#"cat <<'EOF'
-{{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{{"reason":"documented","target":"{a}:docs/invented.md"}},"doc":false}}
-{{"id":"hs-d2","topic":"locking","short":"flock","retire":{{"reason":"documented","target":"{hit}"}},"doc":false}}
-EOF"#,
-        a = a.display()
-    )));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
-    assert!(errors.iter().any(|e| e["id"] == "hs-d1") && errors.iter().any(|e| e["id"] == "hs-d2"), "every failure at once: {errors:?}");
-    assert_eq!(retirement_rows(&fx), vec![]);
-
-    fx.env.fake_pi(&pi_says(&format!(
-        r#"cat <<'EOF'
-{{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{{"reason":"documented","target":"{hit}"}},"doc":false}}
-{{"id":"hs-d2","topic":"locking","short":"flock","retire":null,"doc":false}}
-EOF"#
-    )));
-    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(retirement_rows(&fx), [(s("hs-d1"), s("documented"), hit, s("pending"))]);
-}
-
-#[test]
 fn no_repair_turn_and_no_contradictions_section() {
     let fx = fx().one_step();
     fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
@@ -558,12 +454,6 @@ fn no_repair_turn_and_no_contradictions_section() {
 
 // ---- The fixes FX1 to FX4 (hs-d549, hs-d551) ----
 
-/// The `what` of every failure of a refused run, with the ids they name.
-fn failures(error: &Value) -> Vec<(Option<String>, String)> {
-    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
-    errors.iter().map(|e| (e["id"].as_str().map(str::to_owned), e["what"].as_str().unwrap_or_default().to_owned())).collect()
-}
-
 /// A line of the distiller's answer.
 fn line(id: &str, topic: &str, short: &str, retire: &str) -> String {
     format!(r#"{{"id":"{id}","topic":"{topic}","short":"{short}","retire":{retire},"doc":false}}"#)
@@ -577,112 +467,6 @@ fn pi_answers(lines: &[String]) -> String {
 fn two_decisions(fx: &Fx) {
     fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
     fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
-}
-
-#[test]
-fn a_duplicate_target_newer_than_the_record_is_invalid() {
-    let fx = fx().one_step();
-    two_decisions(&fx);
-    // hs-d1 (older) is a duplicate of hs-d2 (newer): the first is kept, so this is invalid.
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
-        line("hs-d2", "storage", "sqlite WAL", "null"),
-    ]));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let failed = failures(&error);
-    let bad = failed.iter().find(|(id, _)| id.as_deref() == Some("hs-d1")).unwrap_or_else(|| panic!("hs-d1 is listed: {failed:?}"));
-    assert!(bad.1.contains("hs-d1") && bad.1.contains("hs-d2"), "the error names both ids: {failed:?}");
-    assert!(!failed.iter().any(|(id, _)| id.as_deref() == Some("hs-d2")), "{failed:?}");
-    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
-
-    // The newer one a duplicate of the older is valid.
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-d1", "storage", "sqlite", "null"),
-        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
-    ]));
-    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(retirement_rows(&fx), [(s("hs-d2"), s("duplicate"), s("hs-d1"), s("pending"))]);
-}
-
-#[test]
-fn two_records_naming_each_other_as_duplicates_are_invalid() {
-    let fx = fx().one_step();
-    two_decisions(&fx);
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
-        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
-    ]));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    assert!(!failures(&error).is_empty(), "{error}");
-    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]), "two records never retire each other");
-}
-
-#[test]
-fn a_topic_outside_lowercase_digits_and_hyphen_is_invalid() {
-    let fx = fx().one_step();
-    for n in 1..=6 {
-        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
-    }
-    let too_long = "a".repeat(41);
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-n1", "Storage", "upper case", "null"),
-        line("hs-n2", "two words", "a space", "null"),
-        line("hs-n3", "snake_case", "an underscore", "null"),
-        line("hs-n4", &too_long, "41 characters", "null"),
-        line("hs-n5", "storage-2", "digits and hyphen", "null"),
-        line("hs-n6", "é", "not ascii", "null"),
-    ]));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let ids: Vec<String> = failures(&error).into_iter().filter_map(|(id, _)| id).collect();
-    assert_eq!(ids, ["hs-n1", "hs-n2", "hs-n3", "hs-n4", "hs-n6"], "every bad topic at once, and not hs-n5");
-    assert_eq!(curation_rows(&fx), vec![]);
-
-    // 40 characters of the set are valid.
-    let longest = "a1-".repeat(13) + "a";
-    assert_eq!(longest.len(), 40);
-    fx.env.fake_pi(&pi_answers(&(1..=6).map(|n| line(&format!("hs-n{n}"), &longest, "ok", "null")).collect::<Vec<_>>()));
-    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(curation_rows(&fx).len(), 6);
-}
-
-#[test]
-fn a_short_form_over_120_bytes_is_invalid() {
-    let fx = fx().one_step();
-    for n in 1..=3 {
-        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
-    }
-    // hs-n1: 121 bytes; hs-n2: 120 bytes but an upper case topic (FX3); hs-n3 is fine: all failures at once.
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-n1", "notes", &"x".repeat(121), "null"),
-        line("hs-n2", "Notes", &"x".repeat(120), "null"),
-        line("hs-n3", "notes", &"x".repeat(120), "null"),
-    ]));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let ids: Vec<String> = failures(&error).into_iter().filter_map(|(id, _)| id).collect();
-    assert_eq!(ids, ["hs-n1", "hs-n2"], "{error}");
-    assert_eq!(curation_rows(&fx), vec![]);
-}
-
-#[test]
-fn an_unknown_or_repeated_id_is_invalid() {
-    let fx = fx().one_step();
-    for n in 1..=3 {
-        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
-    }
-    // hs-n1 twice, hs-zz unknown, hs-n3 missing, and a bad topic on hs-n2 (FX3), all listed at once.
-    fx.env.fake_pi(&pi_answers(&[
-        line("hs-n1", "notes", "one", "null"),
-        line("hs-n1", "notes", "one again", "null"),
-        line("hs-zz", "notes", "unknown", "null"),
-        line("hs-n2", "Not A Topic", "two", "null"),
-    ]));
-    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    let failed = failures(&error);
-    for id in ["hs-n1", "hs-n2", "hs-n3"] {
-        assert!(failed.iter().any(|(i, _)| i.as_deref() == Some(id)), "{id} is listed: {failed:?}");
-    }
-    assert!(failed.iter().any(|(_, what)| what.contains("hs-zz")), "the unknown id is named: {failed:?}");
-    assert_eq!(curation_rows(&fx), vec![]);
 }
 
 #[test]
@@ -778,4 +562,325 @@ fn batch_md_stops_at_49152_bytes_and_always_holds_the_first_record() {
     assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n7"], "the first record is always taken, and goes alone");
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n8"]);
+}
+
+// ---- Per-line acceptance (GXD1 to GXD3, hs-d563) ----
+
+/// The `rejected` of a run's JSON, as `(id, line)`.
+fn rejected_of(value: &Value) -> Vec<(Option<String>, u64)> {
+    let list = value["rejected"].as_array().unwrap_or_else(|| panic!("`rejected` is an array: {value}"));
+    list.iter()
+        .map(|r| {
+            assert!(r["what"].as_str().is_some_and(|w| !w.is_empty()), "every rejection says why: {r}");
+            (r["id"].as_str().map(str::to_owned), r["line"].as_u64().unwrap_or_else(|| panic!("`line` is a number: {r}")))
+        })
+        .collect()
+}
+
+/// `n` notes `hs-n1` to `hs-nN`, oldest first.
+fn notes(fx: &Fx, n: i64) {
+    for i in 1..=n {
+        fx.insert(CONTEXT, &format!("hs-n{i}"), &ago(100 - i), &format!("Note {i}."), Draft::Note);
+    }
+}
+
+fn curated_ids(fx: &Fx) -> Vec<String> {
+    curation_rows(fx).into_iter().map(|r| r.0).collect()
+}
+
+fn invalid_file(fx: &Fx) -> PathBuf {
+    fx.digests().join(format!("{}.jsonl.invalid", fx.highest_seq()))
+}
+
+/// The `context-curated` Events' data.
+fn curated_events(fx: &Fx) -> Vec<Value> {
+    let events = fx.cpd(&["events", "list", "--kind", "context-curated"]).ok()["events"].as_array().unwrap().clone();
+    events.into_iter().map(|e| e["data"].clone()).collect()
+}
+
+#[test]
+fn a_short_over_120_bytes_rejects_its_line_and_the_other_lines_are_curated() {
+    let fx = fx().one_step();
+    notes(&fx, 4);
+    // hs-n2: 121 bytes. hs-n3: 120 bytes of 3-byte characters... 40 of them, which is 120 bytes and valid.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n3", "notes", &"€".repeat(40), "null"),
+        line("hs-n4", "notes", "four", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["curated"].clone(), rejected_of(&out)), (json!(3), vec![(Some(s("hs-n2")), 2)]), "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n3", "hs-n4"], "hs-n2 stays uncurated");
+    assert_eq!(curated_events(&fx).len(), 1);
+    assert_eq!(curated_events(&fx)[0]["curated"], 3);
+    assert!(fx.errors().is_empty(), "a run with accepted lines is no failure");
+    // The next run takes the rejected record.
+    fx.env.fake_pi(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
+    let again = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((again["curated"].clone(), rejected_of(&again)), (json!(1), vec![]), "{again}");
+    assert_eq!(curation_rows(&fx).len(), 4);
+}
+
+#[test]
+fn a_duplicate_target_newer_than_the_record_rejects_only_that_line() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
+    // hs-d1 (older) a duplicate of hs-d2 (newer): the first is kept, so that line is rejected.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
+        line("hs-d2", "storage", "sqlite WAL", "null"),
+        line("hs-n3", "locking", "flock", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["curated"].clone(), rejected_of(&out)), (json!(2), vec![(Some(s("hs-d1")), 1)]), "{out}");
+    let what = out["rejected"][0]["what"].as_str().unwrap();
+    assert!(what.contains("hs-d1") && what.contains("hs-d2"), "the reason names both ids: {what}");
+    assert_eq!(curated_ids(&fx), ["hs-d2", "hs-n3"]);
+    assert_eq!(retirement_rows(&fx), vec![], "the rejected line proposes nothing");
+
+    // The newer one a duplicate of the older is accepted.
+    fx.env.fake_pi(&pi_answers(&[line("hs-d1", "storage", "sqlite", "null")]));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(curation_rows(&fx).len(), 3);
+}
+
+#[test]
+fn two_records_naming_each_other_as_duplicates_keep_only_the_newer_records_line() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
+        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
+        line("hs-n3", "locking", "flock", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["curated"].clone(), rejected_of(&out)), (json!(2), vec![(Some(s("hs-d1")), 1)]), "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-d2", "hs-n3"]);
+    assert_eq!(retirement_rows(&fx), [(s("hs-d2"), s("duplicate"), s("hs-d1"), s("pending"))], "two records never retire each other");
+}
+
+#[test]
+fn a_topic_outside_lowercase_digits_and_hyphen_rejects_only_that_line() {
+    let fx = fx().one_step();
+    notes(&fx, 4);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "storage-2", "digits and hyphen", "null"),
+        line("hs-n2", "Storage", "upper case", "null"),
+        line("hs-n3", &"a".repeat(40), "forty characters", "null"),
+        line("hs-n4", "snake_case", "an underscore", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(rejected_of(&out), [(Some(s("hs-n2")), 2), (Some(s("hs-n4")), 4)], "{out}");
+    assert_eq!(out["curated"], 2);
+    assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n3"]);
+
+    // Over 40 characters, a space, and a non-ASCII topic are each one rejected line.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n2", &"a".repeat(41), "41 characters", "null"),
+        line("hs-n4", "two words", "a space", "null"),
+    ]));
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(curation_rows(&fx).len(), 2);
+}
+
+#[test]
+fn a_superseded_target_that_is_not_newer_rejects_only_that_line() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
+    // hs-d2 is superseded by hs-d1, which is older (a lower seq): that line is rejected.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", "null"),
+        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"superseded","target":"hs-d1"}"#),
+        line("hs-n3", "locking", "flock", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["curated"].clone(), rejected_of(&out)), (json!(2), vec![(Some(s("hs-d2")), 2)]), "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-d1", "hs-n3"]);
+    assert_eq!(retirement_rows(&fx), vec![]);
+
+    // The other way round is accepted.
+    fx.env.fake_pi(&pi_answers(&[line("hs-d2", "storage", "sqlite WAL", "null")]));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(curation_rows(&fx).len(), 3);
+}
+
+#[test]
+fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
+    let a = repo_with(&fx, "a", &[("docs/design.md", "We use sqlite, see hs-d1.\n"), ("docs/wal.md", "WAL: hs-d2.\n")]);
+    plan_with_repos(&fx, &[&a]);
+    let (own, other) = (format!("{}:docs/wal.md", a.display()), format!("{}:docs/design.md", a.display()));
+    // hs-d1 names a path that is no hit; hs-d2 names a real hit of its own; hs-n3 names a hit of hs-d1.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", &format!(r#"{{"reason":"documented","target":"{}:docs/invented.md"}}"#, a.display())),
+        line("hs-d2", "storage", "sqlite WAL", &format!(r#"{{"reason":"documented","target":"{own}"}}"#)),
+        line("hs-n3", "locking", "flock", &format!(r#"{{"reason":"documented","target":"{other}"}}"#)),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(rejected_of(&out), [(Some(s("hs-d1")), 1), (Some(s("hs-n3")), 3)], "{out}");
+    assert_eq!(out["curated"], 1);
+    assert_eq!(curated_ids(&fx), ["hs-d2"]);
+    assert_eq!(retirement_rows(&fx), [(s("hs-d2"), s("documented"), own, s("pending"))]);
+}
+
+#[test]
+fn an_unknown_id_is_ignored_and_a_repeated_id_leaves_its_record_uncurated() {
+    let fx = fx().one_step();
+    notes(&fx, 4);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n1", "notes", "one again", "null"),
+        line("hs-zz", "notes", "unknown", "null"),
+        line("hs-n2", "notes", "two", "null"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["curated"], 1, "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-n2"], "hs-n1 twice: neither line; hs-zz: ignored; hs-n3 and hs-n4: missing");
+    let rejected = rejected_of(&out);
+    assert_eq!(rejected.iter().filter(|(id, _)| id.as_deref() == Some("hs-n1")).map(|(_, l)| *l).collect::<Vec<_>>(), [1, 2], "both lines of the repeated id");
+    assert!(!rejected.iter().any(|(id, _)| id.as_deref() == Some("hs-zz")), "an unknown id is ignored, not rejected: {rejected:?}");
+    assert_eq!(curated_events(&fx)[0]["curated"], 1);
+}
+
+#[test]
+fn a_record_missing_from_the_output_stays_uncurated_and_the_run_succeeds() {
+    let fx = fx().one_step();
+    notes(&fx, 3);
+    fx.env.fake_pi(&pi_answers(&[line("hs-n1", "notes", "one", "null"), line("hs-n3", "notes", "three", "null")]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["curated"].clone(), out["remaining"].clone()), (json!(2), json!(1)), "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n3"]);
+    // The next run takes it.
+    fx.env.fake_pi(&pi_keeps_input_and_says(&format!("echo '{}'", line("hs-n2", "notes", "two", "null"))));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n2"]);
+    assert_eq!(curation_rows(&fx).len(), 3);
+}
+
+#[test]
+fn a_run_with_no_accepted_line_is_distill_invalid_listing_every_rejection() {
+    let fx = fx().one_step();
+    notes(&fx, 3);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "Notes", "bad topic", "null"),
+        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        "this is not JSON".to_owned(),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let upto = fx.highest_seq();
+    let details = &error["details"];
+    assert_eq!((details["context"].clone(), details["upto_seq"].clone()), (json!(CONTEXT), json!(upto)));
+    let errors = details["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {details}"));
+    let listed: Vec<(Option<&str>, Option<u64>)> = errors.iter().map(|e| (e["id"].as_str(), e["line"].as_u64())).collect();
+    for want in [(Some("hs-n1"), Some(1)), (Some("hs-n2"), Some(2)), (None, Some(3))] {
+        assert!(listed.contains(&want), "{want:?} is listed: {listed:?}");
+    }
+    assert_eq!(details["invalid"], invalid_file(&fx).display().to_string());
+    assert!(fs::read_to_string(invalid_file(&fx)).unwrap().contains("this is not JSON"));
+    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
+    assert_eq!(fx.errors().len(), 1);
+    assert!(curated_events(&fx).is_empty());
+    let runs = fx.runs();
+    assert_eq!(rejected_of(&runs[0]).len(), 3, "the run log lists the rejections of a failed run too: {runs:?}");
+}
+
+#[test]
+fn the_rejected_lines_are_in_the_output_the_run_log_and_the_kept_raw_text() {
+    let fx = fx().one_step();
+    notes(&fx, 3);
+    let answer = [
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n3", "notes", "three", "null"),
+    ];
+    fx.env.fake_pi(&pi_answers(&answer));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(rejected_of(&out), [(Some(s("hs-n2")), 2)], "{out}");
+    assert_eq!(out["rejected"][0]["id"], "hs-n2");
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!((runs[0]["result"].clone(), runs[0]["kind"].clone()), (json!("valid"), json!("distill")), "{runs:?}");
+    assert_eq!(rejected_of(&runs[0]), [(Some(s("hs-n2")), 2)], "the run log carries the same list");
+    let raw = fs::read_to_string(invalid_file(&fx)).unwrap_or_else(|e| panic!("the raw text is kept: {e}"));
+    assert!(raw.contains(&answer[1]) && raw.contains(&answer[0]), "{raw}");
+    assert_eq!(curated_events(&fx)[0]["rejected"], 1);
+}
+
+#[test]
+fn a_clean_run_removes_the_kept_raw_text() {
+    let fx = fx().one_step();
+    notes(&fx, 3);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n2", "notes", &"x".repeat(121), "null"),
+        line("hs-n3", "notes", "three", "null"),
+    ]));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let kept = invalid_file(&fx);
+    assert!(kept.exists(), "a run with a rejected line keeps its raw text");
+    // The next run takes hs-n2 and is clean: the kept file goes, replaced by nothing.
+    fx.env.fake_pi(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(rejected_of(&out), vec![], "{out}");
+    assert!(!kept.exists(), "{kept:?}");
+    assert!(!fx.digests().read_dir().unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".jsonl.invalid")));
+    let runs = fx.runs();
+    assert_eq!(rejected_of(runs.last().unwrap()), vec![], "{runs:?}");
+}
+
+/// A fake `pi` whose last message stopped with `length` after `answer` (shell).
+fn pi_cut_after(answer: &str) -> String {
+    pi_says(answer).replace(r#""stopReason":"stop""#, r#""stopReason":"length""#)
+}
+
+#[test]
+fn an_answer_cut_at_the_output_limit_keeps_its_complete_lines_and_logs_its_cost() {
+    let fx = fx().one_step();
+    notes(&fx, 4);
+    // Two complete lines, a third cut in the middle (no newline after it).
+    fx.env.fake_pi(&pi_cut_after(&format!(
+        "cat <<'EOF'\n{}\n{}\nEOF\nprintf '%s' '{{\"id\":\"hs-n3\",\"topic\":\"no'",
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n2", "notes", "two", "null"),
+    )));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["curated"], 2, "{out}");
+    assert!(out["cut"] == json!(true) || out["run"]["cut"] == json!(true), "the cut is noted in the output: {out}");
+    assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n2"], "hs-n3 and hs-n4 stay uncurated");
+    assert!(rejected_of(&out).iter().all(|(id, _)| id.as_deref() != Some("hs-n3")), "the cut line is dropped, not a rejection: {out}");
+    assert!(invalid_file(&fx).exists(), "a cut output keeps its raw text");
+    let runs = fx.runs();
+    assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_in"].clone(), runs[0]["cost"].clone()), (json!("valid"), json!(733), json!(0.25)));
+}
+
+#[test]
+fn a_cut_answer_with_no_complete_line_is_distill_failed() {
+    let fx = fx().one_step();
+    notes(&fx, 2);
+    // Text with no newline at all.
+    fx.env.fake_pi(&pi_cut_after("printf '%s' '{\"id\":\"hs-n1\",\"topic\":\"no'"));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!(error["details"]["reason"], "output");
+    assert!(error["message"].as_str().unwrap().contains("length"), "{error}");
+    assert_eq!(curation_rows(&fx), vec![]);
+    let runs = fx.runs();
+    assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_in"].clone(), runs[0]["cost"].clone()), (json!("failed"), json!(733), json!(0.25)));
+
+    // No text at all.
+    fx.env.fake_pi(&pi_cut_after("true"));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!(error["details"]["reason"], "output");
+    assert_eq!(curation_rows(&fx), vec![]);
+
+    // A single complete line, cut right after its newline: nothing is dropped, and it is an answer.
+    fx.env.fake_pi(&pi_cut_after(&format!("echo '{}'", line("hs-n1", "notes", "one", "null"))));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["curated"], 1, "{out}");
+    assert_eq!(curated_ids(&fx), ["hs-n1"]);
 }
