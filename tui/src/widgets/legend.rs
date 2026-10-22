@@ -105,7 +105,7 @@ fn plain(text: &str) -> Line<'static> {
 /// The Context row's precedence line, with the real glyphs (the working one as its first frame).
 fn precedence() -> String {
     format!(
-        "Context row: its most urgent Session: red > yellow > magenta > white > {} > {} > {} > {}",
+        "Context row: its most urgent Session: red > yellow > magenta > blue > white > {} > {} > {} > {}",
         palette::SPINNER[0],
         palette::WAITING,
         palette::IDLE,
@@ -176,6 +176,7 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Red, 0), plain("red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request")],
             vec![dot(Dot::Yellow, 0), plain("yellow: ready to merge, review requested")],
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
+            vec![dot(Dot::Blue, 0), plain("blue: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
             vec![plain(""), plain(&precedence())],
         ],
@@ -215,8 +216,9 @@ pub(crate) fn sections() -> Vec<Section> {
             tier(Urgency::Red, "a blocker only you can clear"),
             tier(Urgency::Yellow, "pull-request work"),
             tier(Urgency::Magenta, "a decision before the work runs"),
-            vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Planning))), plain("a documentation candidate")],
-            vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Planning))), plain("a record to retire")],
+            tier(Urgency::Blue, "a cpd notice: curation, nothing blocks"),
+            vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Notice))), plain("a documentation candidate")],
+            vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Notice))), plain("a record to retire")],
             tier(Urgency::White, "an unread reply"),
         ],
     };

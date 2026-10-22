@@ -147,7 +147,7 @@ pub fn selected_name() -> Style {
     Style::new().fg(FOCUS)
 }
 
-/// The bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4 and 8 has no pair.
+/// The bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4 (the focus colour, hs-d351) and 8 has no pair.
 pub fn bright(c: Color) -> Color {
     match c {
         Color::Red => Color::LightRed,
@@ -162,7 +162,11 @@ pub fn bright(c: Color) -> Color {
 
 /// The colour of a meaning on a clickable mark: its bright pair.
 pub fn color_clickable(m: Meaning) -> Color {
-    bright(color(m))
+    match m {
+        // the notice blue is 12 on a clickable mark (hs-d570 BL3); `bright` keeps the focus blue at 4
+        Meaning::Notice => Color::LightBlue,
+        _ => bright(color(m)),
+    }
 }
 
 /// Clickable text, colour 15.
@@ -368,11 +372,11 @@ pub const NEEDS_YOU: &str = SPINNER[8];
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
 pub const TIER_WHITE: &str = "\u{F0366}";
-/// Magenta: a decision before the work runs (the generic system item).
-pub const TIER_MAGENTA: &str = "\u{F06F1}";
-/// A documentation candidate (an Inbox item of kind `curate-docs`), magenta.
+/// Magenta: a decision before the work runs (the generic system item), U+F173A (hs-d570 returns it from U+F06F1).
+pub const TIER_MAGENTA: &str = "\u{F173A}";
+/// A documentation candidate (an Inbox item of kind `curate-docs`), blue.
 pub const ITEM_DOCS: &str = "\u{F0653}";
-/// A record to retire (an Inbox item of kind `curate-retire`), magenta.
+/// A record to retire (an Inbox item of kind `curate-retire`), blue.
 pub const ITEM_RETIRE: &str = "\u{F116E}";
 /// Blue: a cpd notice that blocks nothing (the generic system item), U+F06F1 (hs-d570).
 pub const TIER_BLUE: &str = "\u{F06F1}";
@@ -388,18 +392,18 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Yellow => (TIER_YELLOW, Meaning::Review),
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
-        Urgency::Blue => (TIER_WHITE, Meaning::NotStarted), // stub (hs-d570): the blue tier is Job blue-impl-tui
+        Urgency::Blue => (TIER_BLUE, Meaning::Notice),
     };
     Span::styled(glyph, fg_clickable(meaning))
 }
 
 /// The glyph of an Inbox item of `kind` and `urgency` (hs-d569 CD5): its tier's glyph, except the two curation kinds, which
-/// draw their own, in the magenta colour.
+/// draw their own, in the blue colour.
 pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'static> {
     use cpd_core::inbox::model::Kind as Item;
     match kind {
-        Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Planning)),
-        Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Planning)),
+        Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Notice)),
+        Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Notice)),
         _ => tier_span(urgency),
     }
 }
@@ -422,7 +426,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
         Dot::Yellow => (NEEDS_YOU, fg_clickable(Meaning::Review)),
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
-        Dot::Blue => (NEEDS_YOU, clickable_text()), // stub (hs-d570)
+        Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),

@@ -66,7 +66,7 @@ impl From<Urgency> for Dot {
             Urgency::Yellow => Dot::Yellow,
             Urgency::Magenta => Dot::Magenta,
             Urgency::White => Dot::White,
-            Urgency::Blue => Dot::White, // stub (hs-d570): Dot::Blue is Job blue-impl-tui
+            Urgency::Blue => Dot::Blue,
         }
     }
 }
