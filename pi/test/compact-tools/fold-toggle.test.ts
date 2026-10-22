@@ -222,11 +222,12 @@ test("an edit's closing row carries its diff counts after the toggle", async () 
 	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
 });
 
-test("while a row runs the head wears ' ╭─' with no dot and the closing row is today's, with no toggle", async () => {
+test("while a row runs the head wears ' ╭─' with no dot and the closing row is the loader, with no toggle", async () => {
 	const toggle = await drawRow(TOGGLE, "bash");
 	assert.ok(firstLine(toggle.running).startsWith(` ${BOX.head}\u2500`), firstLine(toggle.running));
 	assert.ok(!firstLine(toggle.running).includes("\u2981"), "no dot");
-	assert.ok(toggle.running.every((line) => !line.includes(BOX.close)), "no ╰ while running");
+	assert.ok(toggle.running.every((line) => !line.includes("expand") && !line.includes("collapse")), "no toggle while running");
+	assert.equal(toggle.running.filter((line) => line.includes(BOX.close)).length, 1, "the loader's ╰ while running");
 });
 
 test("fold: toggle only acts in the compact style", async () => {
@@ -244,7 +245,8 @@ test("with no fold key every compact row is the toggle's; fold: status brings ba
 	for (const name of ["bash", "read", "edit", "web_search"]) {
 		for (const expanded of [false, true]) {
 			const absent = await drawRow({}, name, { expanded });
-			assert.deepEqual(absent, await drawRow(TOGGLE, name, { expanded }), name);
+			// The running frame carries the loader, which moves with the clock: the finished row is the same.
+			assert.deepEqual(absent.done, (await drawRow(TOGGLE, name, { expanded })).done, name);
 			assert.ok(firstLine(absent.done).startsWith(` ${BOX.head}`), name);
 			const status = await drawRow(STATUS, name, { expanded });
 			assert.ok(firstLine(status.done).startsWith(" "), name);
