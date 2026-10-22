@@ -1,5 +1,5 @@
 //! The worker view's state, keys and drawing: the lines of the Worker's
-//! session file, scrolled, following the end until the User scrolls.
+//! session file, scrolled, following the end until the User scrolls, under the pinned reason header.
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
@@ -10,8 +10,13 @@ use ratatui::widgets::Paragraph;
 use crate::palette;
 use crate::scroll::Scroller;
 
+/// The most rows the header takes (commands.md §13.2).
+const HEADER_ROWS: usize = 5;
+
 pub(super) struct View {
     body: Scroller,
+    /// Why the Job is in its state, empty for none: wrapped at draw, pinned above the body, a blank row after it.
+    pub header: String,
     /// The Attempt's and its Session's state, the foot's text.
     pub status: String,
     /// A failure to read, shown at the foot instead of the status.
@@ -20,7 +25,7 @@ pub(super) struct View {
 
 impl View {
     pub fn new() -> View {
-        View { body: Scroller::new(), status: String::new(), note: String::new() }
+        View { body: Scroller::new(), header: String::new(), status: String::new(), note: String::new() }
     }
 
     pub fn set_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -37,7 +42,11 @@ impl View {
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
-        let [body, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+        let width = usize::from(f.area().width);
+        let header: Vec<Line> = wrap_header(&self.header, width).into_iter().map(|r| Line::styled(r, palette::muted_text())).collect();
+        let rows = if header.is_empty() { 0 } else { header.len() as u16 + 1 };
+        let [top, body, foot] = Layout::vertical([Constraint::Length(rows), Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+        f.render_widget(Paragraph::new(header), top);
         self.body.draw(f, body);
         let line = if self.note.is_empty() {
             Line::styled(format!(" {}", self.status), palette::muted_text())
@@ -46,6 +55,35 @@ impl View {
         };
         f.render_widget(Paragraph::new(line), foot);
     }
+}
+
+/// `text` as rows of at most `width` characters, each after one blank, broken at spaces (a longer word is cut); at most
+/// [`HEADER_ROWS`], the last ending ` …` when text is left out. No rows for no text.
+fn wrap_header(text: &str, width: usize) -> Vec<String> {
+    let room = width.saturating_sub(1).max(1);
+    let mut rows: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let chars: Vec<char> = word.chars().collect();
+        for piece in chars.chunks(room) {
+            let piece: String = piece.iter().collect();
+            match rows.last_mut() {
+                Some(row) if row.chars().count() + 1 + piece.chars().count() <= width => {
+                    row.push(' ');
+                    row.push_str(&piece);
+                }
+                _ => rows.push(format!(" {piece}")),
+            }
+        }
+    }
+    if rows.len() > HEADER_ROWS {
+        rows.truncate(HEADER_ROWS);
+        let last = rows.last_mut().expect("truncated to HEADER_ROWS");
+        while last.chars().count() + 2 > width && last.rfind(' ').is_some_and(|i| i > 0) {
+            last.truncate(last.rfind(' ').expect("checked"));
+        }
+        last.push_str(" …");
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -133,6 +171,18 @@ mod tests {
         v.set_lines(vec![Line::from("0123456789abcdefghijklmnopqrstuvwxyz")]);
         assert_eq!(screen(&draw(&mut v, 16, 4)), ["0123456789abcdef", "      ghijklmnop", "      qrstuvwxyz", ""]);
         assert_eq!(screen(&draw(&mut v, 30, 3))[..2], ["0123456789abcdefghijklmnopqrst", "      uvwxyz"], "a new width wraps again");
+    }
+
+    #[test]
+    fn the_header_is_pinned_wrapped_and_stops_at_five_rows() {
+        let mut v = view(10);
+        v.header = "failed: crashed".to_owned();
+        assert_eq!(screen(&draw(&mut v, 24, 5)), [" failed: crashed", "", "line 9", "line 10", " a-a1 running · working"]);
+        v.header = (1..=20).map(|i| format!("w{i:02}")).collect::<Vec<_>>().join(" ");
+        let rows = wrap_header(&v.header, 12);
+        assert_eq!(rows, [" w01 w02 w03", " w04 w05 w06", " w07 w08 w09", " w10 w11 w12", " w13 w14 …"]);
+        assert_eq!(wrap_header("", 12), Vec::<String>::new());
+        assert_eq!(wrap_header("abcdefghij", 6), [" abcde", " fghij"], "a long word is cut");
     }
 
     #[test]

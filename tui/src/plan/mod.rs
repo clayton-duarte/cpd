@@ -3,8 +3,7 @@
 //!
 //! It shows the Plan of the Lead in the chat slot as one box per PR ([`boxes`], R34 A15), top to bottom by the PRs'
 //! needs, each holding the left-to-right flow chart of its Jobs ([`flow`]). The boxes start at the top of the pane:
-//! there is no top row and there are no tabs (switching Leads is the tree's). Only while the Plan's latest Plan
-//! review is pending is there one row above the boxes ([`ReviewRow`]).
+//! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
 //! Data: one snapshot of the store ([`snapshot`]), then the Events, followed in this process from the snapshot's
 //! cursor (one `events` query every `events.poll_ms`, no subprocess); a snapshot is retaken at most every
@@ -30,27 +29,24 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
-use crate::link::{CUE, link};
-use crate::palette::{self, Meaning};
+use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
-use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
+use super::read::{self, ChatSlot, PlanBoxes, Pulse};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
-use cpd_core::host::addr::review_host;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
@@ -82,58 +78,10 @@ const FRAME: Duration = Duration::from_millis(100);
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 
-/// The row above the boxes while the Plan's latest Plan review is pending (commands.md §13.2): ` Plan review r<n> pending 󰏌`.
-#[derive(Debug, PartialEq, Eq)]
-struct ReviewRow {
-    number: u32,
-    /// `http://<host>:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
-    /// no port: the row shows without the `󰏌`.
-    url: Option<String>,
-}
-
-impl ReviewRow {
-    /// The row of `plan`, if its latest review is pending; reads the port file. `host` is the review host (contract
-    /// §6.5), asked for only when there is a port to link.
-    fn of(plan: &PlanBoxes, home: &CpdHome, host: impl FnOnce() -> String) -> Option<ReviewRow> {
-        let review = plan.review.as_ref().filter(|r| r.status == ReviewStatus::Pending)?;
-        let port: Option<u16> =
-            fs::read_to_string(home.plannotator_port(&plan.plan)).ok().and_then(|text| text.trim().parse().ok());
-        Some(ReviewRow { number: review.number, url: port.map(|port| format!("http://{}:{port}", host())) })
-    }
-
-    fn line(&self) -> Line<'static> {
-        // linked, the row is a hit target: clickable text and the bright pending; unlinked, read-only text and the base
-        let linked = self.url.is_some();
-        let (text, pending) = if linked {
-            (palette::clickable_text(), palette::fg_clickable(Meaning::Planning))
-        } else {
-            (palette::read_only_text(), palette::fg(Meaning::Planning))
-        };
-        let mut spans = vec![Span::styled(format!(" Plan review r{} ", self.number), text), Span::styled("pending", pending)];
-        if linked {
-            spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
-        }
-        Line::from(spans)
-    }
-
-    /// Draws the row in `area` (one row), indented by the chart's margin.
-    fn draw(&self, buf: &mut Buffer, area: Rect) {
-        let area = area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 });
-        let line = self.line();
-        let width = line.width() as u16;
-        line.render(area, buf);
-        if let Some(url) = &self.url {
-            // from `Plan` (after the leading blank) through `󰏌`
-            link(buf, Rect::new(area.x + 1, area.y, width - 1, 1).intersection(area), url);
-        }
-    }
-}
-
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
     slot: ChatSlot,
     plan: PlanBoxes,
-    review: Option<ReviewRow>,
     boxes: Boxes,
     /// The spinner frame `boxes` is drawn at.
     frame: usize,
@@ -166,7 +114,7 @@ struct Snapshot {
 }
 
 /// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
-fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
+fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     if let Some(manager) = read::manager_slot(store)? {
@@ -179,8 +127,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(MARGIN);
-    let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
@@ -275,11 +222,6 @@ impl Ui {
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
         let body = f.area();
         let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
-        if let Some(row) = centre.and_then(|c| c.review.as_ref()) {
-            let [row_area, below] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(window);
-            row.draw(f.buffer_mut(), row_area);
-            window = below;
-        }
         if let Some(text) = message(self.error.as_deref(), centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
             // the pane's last row, indented like the chart's content at scroll (0, 0)
@@ -387,7 +329,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
                         .with("command", "tui view plan")
                 })?
                 .0;
-            let snap = snapshot(&mut store, &home, width, now_ms())?;
+            let snap = snapshot(&mut store, width, now_ms())?;
             let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
@@ -485,7 +427,7 @@ fn show(
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let width = terminal.size().map_or(0, |s| s.width);
-                let next = kept(snapshot(store, home, width, now_ms()), &mut snapshot_error);
+                let next = kept(snapshot(store, width, now_ms()), &mut snapshot_error);
                 stale = snapshot_error.is_some();
                 ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
                 if let Some(next) = next {
@@ -587,11 +529,10 @@ fn show(
         }
         if let Some(key) = open {
             match attempt_of(centre, &key) {
-                None => write(&mut ui, &format!("{key} has not started yet")),
-                Some(attempt) => {
+                attempt => {
                     let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
                     worker.submit(move || {
-                        if let Err(e) = actions.toggle_worker(&plan, &key, &attempt) {
+                        if let Err(e) = actions.toggle_worker(&plan, &key, attempt.as_ref()) {
                             actions.report("Open Worker", &e);
                         }
                     });
@@ -605,9 +546,10 @@ fn show(
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
 
     use super::*;
-    use crate::read::{JobNode, JobStatus, PrNode, PrStatus, Pull, Review};
+    use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
 
@@ -619,182 +561,6 @@ mod tests {
         assert!(!due(false, ms(2000)), "nothing changed: no snapshot (tui-F3)");
         assert!(!due(false, Duration::from_secs(60)));
     }
-
-    const URL: &str = "http://review.test:19433";
-    const OPEN: &str = "\x1b]8;;http://review.test:19433\x07";
-
-    fn test_host() -> String {
-        "review.test".to_owned()
-    }
-
-    fn review(status: ReviewStatus) -> Review {
-        Review {
-            id: "r2".into(),
-            number: 2,
-            status,
-            fingerprint: "0".repeat(64),
-            current: true,
-            feedback: None,
-            requested_at: "2026-01-02T00:00:00.000Z".into(),
-            decided_at: None,
-        }
-    }
-
-    fn centre(review: Option<ReviewRow>) -> Centre {
-        let prs = vec![PrNode {
-            key: PrKey::parse("api").unwrap(),
-            repo_name: "api".into(),
-            base: "main".into(),
-            status: PrStatus::Open,
-            needs: Vec::new(),
-            waiting_on: Vec::new(),
-            superseded_by: None,
-            pull: Some(Pull {
-                number: 12,
-                state: read::PrState::Open,
-                url: "https://github.com/acme/api/pull/12".into(),
-                conflicting: false,
-                clean: false,
-                lead_working: false,
-                update: None,
-            }),
-        }];
-        let plan = PlanBoxes {
-            plan: PlanId::parse("ship").unwrap(),
-            context: ContextId::parse("ctx").unwrap(),
-            prs,
-            jobs: Vec::new(),
-            review: None,
-            needs_user: read::NeedsUser::default(),
-            events_cursor: 0,
-        };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
-        let slot = ChatSlot {
-            session: SessionId::parse("lead-ship").unwrap(),
-            name: "lead".into(),
-            plan: plan.plan.clone(),
-            moved_event: 1,
-        };
-        Centre { slot, plan, review, boxes, frame: 0 }
-    }
-
-    /// A cell's symbol without the OSC 8 link around it.
-    fn plain(symbol: &str) -> String {
-        symbol.replace(OPEN, "").replace("\x1b]8;;https://github.com/acme/api/pull/12\x07", "").replace("\x1b]8;;\x07", "")
-    }
-
-    use ratatui::buffer::CellWidth;
-
-    /// The columns of row `y` covered by a link opened with `open`, a piece's second cell included.
-    fn linked(buf: &Buffer, y: u16, open: &str) -> Vec<u16> {
-        let mut xs = Vec::new();
-        for x in 0..buf.area.width {
-            if buf[(x, y)].symbol().contains(open) {
-                xs.extend(x..x + buf[(x, y)].cell_width().max(1));
-            }
-        }
-        xs
-    }
-
-    /// The pane `centre` draws on a 60 × 8 terminal, and its screen text, one string per row.
-    fn drawn(centre: &Centre) -> (Buffer, Vec<String>, Ui) {
-        let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
-        let mut ui = Ui::default();
-        terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        let rows = (0..8)
-            .map(|y| {
-                let mut covered = 0;
-                (0..60)
-                    .map(|x| {
-                        // the second cell of a link piece is drawn by the piece
-                        if covered > 0 {
-                            covered -= 1;
-                            return String::new();
-                        }
-                        covered = buf[(x, y)].cell_width().saturating_sub(1);
-                        plain(buf[(x, y)].symbol())
-                    })
-                    .collect::<String>()
-                    .trim_end()
-                    .to_owned()
-            })
-            .collect();
-        (buf, rows, ui)
-    }
-
-    #[test]
-    fn a_pending_review_is_a_row_above_the_boxes_which_start_one_row_lower() {
-        let row = ReviewRow { number: 2, url: Some(URL.into()) };
-        assert_eq!(row.line().to_string(), " Plan review r2 pending 󰏌");
-        assert_eq!(row.line().spans[1].style.fg, palette::fg_clickable(Meaning::Planning).fg, "linked: a hit target, magenta 13");
-        assert_eq!(row.line().spans[0].style, palette::clickable_text());
-        let unlinked = ReviewRow { number: 2, url: None }.line();
-        assert_eq!((unlinked.spans[0].style, unlinked.spans[1].style), (palette::read_only_text(), palette::fg(Meaning::Planning)), "unlinked: 7 and magenta 5");
-
-        let without = drawn(&centre(None));
-        let (buf, rows, ui) = drawn(&centre(Some(row)));
-        // the row is indented by the margin, on the pane's first row; the boxes are one row lower than they were
-        assert_eq!(rows[0], "   Plan review r2 pending 󰏌");
-        assert_eq!(rows[1], "", "the boxes' own margin row");
-        assert_eq!(rows[2], without.1[1], "the first border, one row lower");
-        assert_eq!(rows[2], "  ╭ api · api 󱦰 main · #12 open 󰏌 ╮");
-        assert_eq!(without.1[0], "");
-        assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
-        assert_eq!(without.2.body.y, 0);
-        // `pending` is magenta, `󰏌` links to the plannotator page; the title's `󰏌` still links to the pull request
-        assert_eq!(buf[(18, 0)].fg, palette::fg_clickable(Meaning::Planning).fg.unwrap());
-        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `󰏌`, not the blank before it");
-        let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
-        let title: Vec<char> = rows[2].chars().collect();
-        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c.to_string() == CUE).unwrap() as u16);
-        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open 󰏌` links to the pull request");
-    }
-
-    #[test]
-    fn a_review_row_without_a_port_has_no_arrow_and_no_link() {
-        let row = ReviewRow { number: 2, url: None };
-        let (buf, rows, _) = drawn(&centre(Some(row)));
-        assert_eq!(rows[0], "   Plan review r2 pending");
-        assert!((0..60).all(|x| !buf[(x, 0)].symbol().contains("]8;;")));
-        assert!(linked(&buf, 0, "]8;;").is_empty());
-    }
-
-    #[test]
-    fn no_review_row_while_the_review_is_not_pending() {
-        let home = CpdHome::resolve(Some(std::env::temp_dir().join("cpd-plan-view-no-home").into()), None).unwrap();
-        let mut plan = centre(None).plan;
-        assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "no review");
-        for status in [ReviewStatus::Approved, ReviewStatus::Rejected] {
-            plan.review = Some(review(status));
-            assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "{status:?}");
-        }
-        plan.review = Some(review(ReviewStatus::Pending));
-        assert_eq!(ReviewRow::of(&plan, &home, test_host), Some(ReviewRow { number: 2, url: None }), "no port file");
-    }
-
-    #[test]
-    fn the_port_is_the_trimmed_line_of_the_port_file_and_must_be_a_port() {
-        let dir = std::env::temp_dir().join(format!("cpd-plan-view-port-{}", std::process::id()));
-        let home = CpdHome::resolve(Some(dir.clone().into()), None).unwrap();
-        let mut plan = centre(None).plan;
-        plan.review = Some(review(ReviewStatus::Pending));
-        let file = home.plannotator_port(&plan.plan);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        for (text, url) in [
-            ("19433\n", Some(URL)),
-            ("  19433  ", Some(URL)),
-            ("", None),
-            ("nineteen\n", None),
-            ("70000\n", None),
-            ("19433\n19434\n", None),
-        ] {
-            fs::write(&file, text).unwrap();
-            assert_eq!(ReviewRow::of(&plan, &home, test_host).unwrap().url.as_deref(), url, "{text:?}");
-        }
-        fs::remove_dir_all(dir).unwrap();
-    }
-
 
     const PANE: (u16, u16) = (40, 10);
 
@@ -836,7 +602,6 @@ mod tests {
             context: ContextId::parse("ctx").unwrap(),
             prs: vec![node],
             jobs: (0..jobs).map(job).collect(),
-            review: None,
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
@@ -847,7 +612,7 @@ mod tests {
             plan: plan.plan.clone(),
             moved_event: 0,
         };
-        Centre { slot, plan, review: None, boxes, frame: 0 }
+        Centre { slot, plan, boxes, frame: 0 }
     }
 
     fn draw(ui: &mut Ui, centre: &Centre) {
@@ -1161,7 +926,7 @@ mod tests {
             ),
         );
         let now = 1_792_336_050_000;
-        let snap = snapshot(&mut store, &home, 125, now).unwrap();
+        let snap = snapshot(&mut store, 125, now).unwrap();
         let pulse = snap.pulse.expect("the Manager is in the slot");
         assert!(snap.centre.is_none());
         assert_eq!(pulse.context.as_str(), "ctx");
@@ -1169,7 +934,7 @@ mod tests {
         assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 13, "as wide as the pane allows for ids of any width");
 
         fixture(&mut store, &moved("lead"));
-        let snap = snapshot(&mut store, &home, 125, now).unwrap();
+        let snap = snapshot(&mut store, 125, now).unwrap();
         assert!(snap.pulse.is_none());
         assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
     }

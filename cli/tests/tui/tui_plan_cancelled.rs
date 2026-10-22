@@ -11,6 +11,7 @@ use crate::common;
 use std::fs;
 
 use common::{CPD, TestEnv, wait_until};
+use cpd_tui::palette::CANCELLED;
 
 pub(crate) const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -154,23 +155,21 @@ fn box_inside(screen: &[String], title: &str) -> Vec<String> {
 }
 
 #[test]
-fn cancelled_job_is_a_colour_8_pill_with_its_reason_muted() {
+fn a_cancelled_job_pill_is_colour_8_and_nothing_follows_it() {
     let env = env();
-    plan(&env, &[("api", "api")], &[("api", "a", "queued", "work", &[]), ("api", "gone", "cancelled", "work", &[])]);
+    plan(&env, &[("api", "api")], &[("api", "a", "cancelled", "work", &[])]);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains(" a│")));
     let text = screen.join("\n");
-    assert!(text.contains("gone"), "the cancelled Job keeps its place:\n{text}");
-    assert!(text.contains("cancelled"), "with its status:\n{text}");
-    assert!(text.contains("gone is not needed"), "and its reason:\n{text}");
+    // the whole chart row is the pill, to its closing cap: no status word, no reason
+    let row = screen.iter().find(|l| l.contains(" a│")).unwrap();
+    let inside: String = row.chars().skip(3).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned();
+    assert_eq!(inside, format!(" \u{e0b6}{CANCELLED} a│S3\u{e0b4}"), "{text}");
+    assert!(!text.contains("cancelled") && !text.contains("not needed"), "{text}");
     let styled = styled_screen(&env, &pane);
-    // the pill is colour 8 with text 0 (contract §6.1.1: a cancelled Job's pill); the status and the reason beside it are muted, 8
-    for (word, colour) in [("gone", "0"), ("cancelled", "8"), ("gone is not needed", "8")] {
-        let colours = colours_of(&styled, word).unwrap_or_else(|| panic!("{word} not on the styled screen:\n{styled}"));
-        assert!(colours.iter().all(|c| c == colour), "{word} is {colour}: {colours:?}");
-    }
-    // the live Job is not muted
-    assert!(colours_of(&styled, " a│").unwrap().iter().any(|c| c != "8"), "{styled}");
+    // the pill is colour 8 with text 0 (contract §6.1.1: a cancelled Job's pill)
+    let colours = colours_of(&styled, "a│S3").unwrap_or_else(|| panic!("the pill is not on the styled screen:\n{styled}"));
+    assert!(colours.iter().all(|c| c == "0"), "{colours:?}");
 }
 
 #[test]
@@ -202,7 +201,7 @@ fn needs_on_a_cancelled_job_are_not_drawn() {
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains(" b│")));
     let text = screen.join("\n");
-    assert!(text.contains("gone") && text.contains("cancelled"), "the cancelled Job is drawn:\n{text}");
+    assert!(text.contains("gone"), "the cancelled Job is drawn:\n{text}");
     let inside = box_inside(&screen, "api ·").join("\n");
     assert!(
         !inside.contains(['─', '┬', '┴', '├', '┤', '┼', '╭', '╮', '╰', '╯', '󱦳']),

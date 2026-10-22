@@ -696,7 +696,7 @@ A Job stays `running` from the start of its Attempt until it is `merged`, `queue
 
 **Ready.** A `queued` Job whose every Dependency is `merged`, whose PR is `dispatch` or `open` (R34: a Job of a `waiting` PR waits for its PR to start, §3.8), in a Plan whose phase is `dispatch` or `deploy`.
 
-**Display status: waiting** (hs-d521, hs-d523). A Job or PR that is not Ready is shown as `waiting` with its blockers in the Plan view, the plan render, and `cpd context pending` (commands.md §3.11, §4.5, §13.2): a display only, the stored status is unchanged. A Job shown as waiting has a dependency not merged or its PR not started; a PR shown as waiting has a dependency not merged or, when stacked, a base PR not started. The blockers (hs-d521) are the needed Jobs or PRs and the blocked PR's base PR. A `queued` Job whose PR is `waiting` is `waiting` until its PR starts (Ready rule above).
+**Display status: waiting** (hs-d521, hs-d523). A Job or PR that is not Ready is shown as `waiting` with its blockers in the Plan view, the plan render, and `cpd context pending` (commands.md §3.11, §4.5, §13.2): a display only, the stored status is unchanged. A Job shown as waiting has a dependency not merged or its PR not started; a PR shown as waiting has a dependency not merged or, when stacked, a base PR not started. The blockers (hs-d521) are the needed Jobs or PRs and the blocked PR's base PR. A `queued` Job whose PR is `waiting` is `waiting` until its PR starts (Ready rule above). The open Job of a PR is drawn in the chart with a need edge from every Job that `cpd job show` lists among its needs (`core::job::open::shown_needs`; the view derives them, they are not stored), exactly as it draws a stored need (same connectors, same ordering, same transitive reduction) and with no note after its pill (User, hs-d567).
 
 **An `open` or `update` Job has no Dependency rows; its Ready rule is derived** (hs-d340), from the PR's other Jobs at the moment it is read. An `open` Job is Ready when its PR is `dispatch` and every other Job of the PR is `merged` or `cancelled` (none `draft`, `queued`, `running` or `failed`) and at least one is `merged`: a PR with a `draft` Job, an unapproved batch, never opens by itself (User, hs-d173, hs-d174, hs-d179), and a `failed` Job keeps it back as it keeps back a Dependent. An `update` Job is Ready when its PR is `open` and no other Job of the PR is `queued` or `running`: it merges after the Jobs it must contain (the feedback fix Jobs among them, §2.2), and a `draft` or `failed` Job does not hold it back. The `open` and `update` Jobs of a PR do not count each other. `plan show` and `job show` print the `needs` of these Jobs as that derived list. Nothing else differs: E3 schedules them under `concurrency`, and the Lead may `job urgent` one.
 
@@ -2428,8 +2428,7 @@ The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-
 | PR box title: link cue `󰏌` | yes | fg 15 | palette: clickable text |
 | PR box title: PR status before a pull request exists (`waiting`, `dispatch`) | no | fg 8 | palette: muted |
 | ` no Jobs ` in an empty box | no | fg 8 | palette: muted |
-| Plan review row: ` Plan review r2 ` (linked) / unlinked | yes when the port is known | fg 15 / fg 7 | palette: clickable text, read-only text |
-| Plan review row: `pending` (linked) / unlinked | yes when the port is known | fg 13 / fg 5 | palette: meaning |
+
 | Foot lines: ` no Lead session in the centre`, `no PR yet: cpd pr add`, ` no Plans yet`, `no Plan yet` | no | fg 8 | palette: muted |
 | Foot line: the view's error | no | fg 1 | palette: red |
 | Pulse row: Plan id | yes (opens the Lead) | fg 15 | palette: clickable text |

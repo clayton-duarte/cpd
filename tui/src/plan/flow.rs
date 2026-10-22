@@ -95,9 +95,6 @@ pub struct FlowJob {
     pub needs: Vec<String>,
     /// How many Attempts the Job has had; the pill shows `aN` from the second on.
     pub attempt: usize,
-    /// What the row says after its pill, muted (the palette's `Meaning::Nothing`): `waiting on <keys>` for a Job that
-    /// cannot start yet, `cancelled: <reason>` for a cancelled one.
-    pub aside: Option<String>,
 }
 
 pub struct Pill {
@@ -106,11 +103,7 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// The most characters of a cancelled Job's reason a row shows, the rest cut with `…`.
-const REASON_WIDTH: usize = 40;
-
-/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with its
-/// reason; the needs on it, and its own, are not drawn (they count for nothing). `stuck` are the keys of the Jobs with an
+/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `stuck` are the keys of the Jobs with an
 /// open `job-stuck` item.
 pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
     let all: Vec<&JobNode> = jobs.into_iter().collect();
@@ -126,14 +119,6 @@ pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKe
                 j.needs.iter().filter(|n| all.iter().any(|l| &l.key == *n) && !cancelled(n)).map(|n| n.to_string()).collect()
             },
             attempt: j.attempts.len(),
-            aside: match j.status {
-                JobStatus::Cancelled => Some(match &j.cancel_reason {
-                    Some(reason) => format!("cancelled: {}", truncate(reason, REASON_WIDTH)),
-                    None => "cancelled".to_owned(),
-                }),
-                JobStatus::Queued if !j.waiting_on.is_empty() => Some(format!("waiting on {}", j.waiting_on.join(", "))),
-                _ => None,
-            },
         })
         .collect()
 }
@@ -352,15 +337,13 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
     // a column's live pills are as wide as the widest of them; a cancelled Job's is as wide as itself, so it never widens the
-    // others; an aside follows its pill, one column apart, and the column's lines leave after the longest row
+    // others
     let live_w: Vec<u16> = cols
         .iter()
         .map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).filter(|&&i| jobs[i].status != Live::Cancelled).map(|&i| pill_w(i) + 2).max().unwrap_or(0))
         .collect();
     let rect_w = |i: usize, l: usize| if jobs[i].status == Live::Cancelled { pill_w(i) + 2 } else { live_w[l] };
-    let aside_w = |i: usize| jobs[i].aside.as_deref().map_or(0, |n| Line::from(n).width() as u16);
-    let row_w = |i: usize, l: usize| rect_w(i, l) + if aside_w(i) > 0 { aside_w(i) + 1 } else { 0 };
-    let col_w: Vec<u16> = cols.iter().enumerate().map(|(l, cs)| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| row_w(i, l)).max().unwrap_or(0)).collect();
+    let col_w: Vec<u16> = cols.iter().enumerate().map(|(l, cs)| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| rect_w(i, l)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
     let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
@@ -468,10 +451,6 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
                 let body = body_of(rect);
                 Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
                 Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
-                if let Some(aside) = &jobs[i].aside {
-                    let at = Rect::new(rect.right() + 1, rect.y, aside_w(i), 1);
-                    Line::from(aside.as_str()).style(lines).render(at, &mut buf);
-                }
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
@@ -627,7 +606,6 @@ mod tests {
             tier: Some(Tier::parse("S1").unwrap()),
             needs: needs.iter().map(|s| s.to_string()).collect(),
             attempt: 1,
-            aside: None,
         }
     }
 

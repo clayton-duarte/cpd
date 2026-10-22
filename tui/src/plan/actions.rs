@@ -46,7 +46,7 @@ impl Actions {
 
     /// Opens the read-only Worker pane for `job`'s `attempt`, or closes it when it already shows `job`
     /// ([`widgets::toggle_worker`]). Returns whether it is open now.
-    pub fn toggle_worker(&self, plan: &PlanId, job: &str, attempt: &AttemptId) -> Result<bool, CpdError> {
+    pub fn toggle_worker(&self, plan: &PlanId, job: &str, attempt: Option<&AttemptId>) -> Result<bool, CpdError> {
         widgets::toggle_worker(&self.home, &self.tmux, &self.cockpit, plan, job, attempt)
     }
 

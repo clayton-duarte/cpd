@@ -312,17 +312,22 @@ fn mark_worker(tmux: &Tmux, pane: &PaneId, job: &str, attempt: &str) -> Result<(
     Ok(())
 }
 
-/// The Worker pane's program: `tui view worker <attempt> --plan <plan>`, in cpd's home.
-fn worker_spawn(home: &CpdHome, plan: &PlanId, attempt: &str) -> Spawn {
+/// The Worker pane's program, in cpd's home: the Attempt form `tui view worker <attempt> --plan <plan>`, or, for a Job with
+/// no Attempt (`attempt` empty), the Job form `tui view worker --job <job> --plan <plan>`.
+fn worker_spawn(home: &CpdHome, plan: &PlanId, job: &str, attempt: &str) -> Spawn {
+    let target: Vec<&str> = if attempt.is_empty() { vec!["--job", job] } else { vec![attempt] };
+    let mut argv: Vec<String> = [PROGRAM, "tui", "view", "worker"].map(str::to_owned).into();
+    argv.extend(target.into_iter().map(str::to_owned));
+    argv.extend(["--plan", plan.as_str()].map(str::to_owned));
     Spawn {
         cwd: Some(home.root().to_owned()),
         env: BTreeMap::from([("CPD_HOME".to_owned(), home.root().display().to_string())]),
-        argv: [PROGRAM, "tui", "view", "worker", attempt, "--plan", plan.as_str()].map(str::to_owned).into(),
+        argv,
     }
 }
 
 /// Opens the read-only Worker pane beside the chat (`split-window -h -d -l 50%`, so the focus stays) for `job`'s
-/// `attempt`, and retargets it (`respawn-pane -k`) when it already shows a Worker. The plan view's pills and the tree's
+/// `attempt` (none: the Job form, `@cpd_attempt` empty), and retargets it (`respawn-pane -k`) when it already shows a Worker. The plan view's pills and the tree's
 /// `job-stuck` click share it.
 pub(crate) fn open_worker(
     home: &CpdHome,
@@ -330,12 +335,12 @@ pub(crate) fn open_worker(
     cockpit: &str,
     plan: &PlanId,
     job: &str,
-    attempt: &AttemptId,
+    attempt: Option<&AttemptId>,
 ) -> Result<(), CpdError> {
     let panes = main_panes(tmux, cockpit)?;
-    let attempt = attempt.to_string();
+    let attempt = attempt.map(ToString::to_string).unwrap_or_default();
     if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
-        let spawn = worker_spawn(home, plan, &attempt);
+        let spawn = worker_spawn(home, plan, job, &attempt);
         let mut args = ["respawn-pane", "-k", "-t", pane.pane.as_str()].map(str::to_owned).to_vec();
         if let Some(cwd) = &spawn.cwd {
             args.extend(["-c".to_owned(), cwd.display().to_string()]);
@@ -351,7 +356,7 @@ pub(crate) fn open_worker(
     let Some(chat) = chat_slot(&panes, cockpit) else {
         return Err(CpdError::new(ErrorCode::TmuxFailed, "There is no chat slot to open the Worker beside."));
     };
-    let pane = tmux.split_window(&chat.pane, Split::Right, Some("50%"), &worker_spawn(home, plan, &attempt))?;
+    let pane = tmux.split_window(&chat.pane, Split::Right, Some("50%"), &worker_spawn(home, plan, job, &attempt))?;
     tmux.set_pane_view(&pane, View::Worker)?;
     mark_worker(tmux, &pane, job, &attempt)
 }
@@ -363,7 +368,7 @@ pub(crate) fn toggle_worker(
     cockpit: &str,
     plan: &PlanId,
     job: &str,
-    attempt: &AttemptId,
+    attempt: Option<&AttemptId>,
 ) -> Result<bool, CpdError> {
     let panes = main_panes(tmux, cockpit)?;
     if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
