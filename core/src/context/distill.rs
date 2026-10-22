@@ -398,7 +398,7 @@ impl Run<'_> {
             "rejected": rejected_json(&checked.rejected),
             "retire": retire,
             "docs": docs,
-            "remaining": uncurated.len() - batch_records.len(),
+            "remaining": uncurated.len() - curated,
             "run": ran.figures(),
         }))
     }
@@ -802,10 +802,24 @@ mod pi_json {
         total: f64,
     }
 
+    /// The text of a `length` stop up to its last newline (GXD3), and without its final line when that is not a
+    /// complete JSON object: that is the cut line, which is dropped even when a newline follows it. `None` when no
+    /// line is left.
+    fn complete_lines(text: &str) -> Option<String> {
+        let mut lines: Vec<&str> = text[..=text.rfind('\n')?].lines().collect();
+        while lines.last().is_some_and(|l| l.trim().is_empty()) {
+            lines.pop();
+        }
+        if lines.last().is_some_and(|l| !serde_json::from_str::<Value>(l).is_ok_and(|v| v.is_object())) {
+            lines.pop();
+        }
+        if lines.is_empty() { None } else { Some(lines.iter().map(|l| format!("{l}\n")).collect()) }
+    }
+
     /// Reads the stream: strict JSONL (one object per LF-terminated line), where each assistant `message_end`
     /// is a finished message. The answer is the text of the last one, which must have stopped normally
     /// (`stop`: pi exits 0 for an `error`, `aborted` or `length` stop in this mode) and not be blank; a `length`
-    /// stop gives its text up to its last newline (GXD3), `cut`.
+    /// stop gives its complete lines (GXD3, [`complete_lines`]), `cut`.
     /// `Err` when a line is not JSON or an assistant message lacks what pi's docs promise.
     pub fn parse(bytes: &[u8]) -> Result<Output, String> {
         let mut usage: Option<Usage> = None;
@@ -834,10 +848,10 @@ mod pi_json {
                     "stop" if text.trim().is_empty() => Err("the final assistant message has no text".to_owned()),
                     "stop" => Ok(text),
                     // GXD3: the answer is the text up to its last newline; the cut, incomplete line is dropped.
-                    "length" => match text.rfind('\n').map(|i| &text[..=i]).filter(|t| !t.trim().is_empty()) {
+                    "length" => match complete_lines(&text) {
                         Some(complete) => {
                             cut = true;
-                            Ok(complete.to_owned())
+                            Ok(complete)
                         }
                         None => Err("the final assistant message stopped with `length` before its first complete line".to_owned()),
                     },
@@ -956,17 +970,21 @@ mod tests {
     }
 
     #[test]
-    fn a_length_stop_gives_its_text_up_to_the_last_newline() {
-        let out = pi_json::parse(assistant("one\ntwo\nthr", "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
-        assert_eq!((out.answer, out.cut), (Ok("one\ntwo\n".to_owned()), true));
-        let out = pi_json::parse(assistant("one\n", "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
-        assert_eq!((out.answer, out.cut), (Ok("one\n".to_owned()), true));
-        for text in ["", "\n \n", "no newline"] {
-            let out = pi_json::parse(assistant(text, "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
-            assert!(out.answer.unwrap_err().contains("`length`"), "{text:?}");
+    fn a_length_stop_gives_its_complete_lines() {
+        let answer = |text: &str| pi_json::parse(assistant(text, "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+        // The text up to its last newline.
+        let out = answer("{\"a\":1}\n{\"b\":2}\n{\"c\"");
+        assert_eq!((out.answer, out.cut), (Ok("{\"a\":1}\n{\"b\":2}\n".to_owned()), true));
+        // A final line that is not a complete object is the cut line, even with a newline after it.
+        let out = answer("{\"a\":1}\n{\"c\":\n");
+        assert_eq!((out.answer, out.cut), (Ok("{\"a\":1}\n".to_owned()), true));
+        let out = answer("{\"a\":1}\n");
+        assert_eq!((out.answer, out.cut), (Ok("{\"a\":1}\n".to_owned()), true));
+        for text in ["", "\n \n", "{\"a\":1}", "{\"c\":\n"] {
+            assert!(answer(text).answer.unwrap_err().contains("`length`"), "{text:?}");
         }
         let out = pi_json::parse(assistant("one\n", "error", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
-        assert_eq!(out.cut, false);
+        assert!(!out.cut);
         assert!(out.answer.unwrap_err().contains("`error`"));
     }
 

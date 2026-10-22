@@ -448,7 +448,7 @@ fn no_repair_turn_and_no_contradictions_section() {
     for run in &runs {
         assert_eq!(run["kind"], "distill", "{run}");
         assert!(run.get("contradictions").is_none() && run.get("contradictions_dropped").is_none(), "{run}");
-        assert_eq!(run.as_object().unwrap().len(), 11, "{run}");
+        assert_eq!(run.as_object().unwrap().len(), 12, "{run}");
     }
 }
 
