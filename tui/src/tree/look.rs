@@ -1,6 +1,6 @@
 //! The tree column's section look v3, as exact rows (commands.md §13.2 "Rows", "Inbox section", "Clicks"; §17
 //! "Collapsible blocks", "Section titles", "Scroll cues"; hs-d344 to hs-d349). Red until the tree draws them: the
-//! Context blocks fold only their archived rows and close with an arrow row (or a plain `╰─`), the Inbox's title is the
+//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰁚` when no rows; hs-d574), the Inbox's title is the
 //! pill under one empty row, its item rows keep their icon and colour, and its scroll cues are right-aligned.
 //!
 //! The view is drawn on a `TestBackend` and read back cell by cell, so the rows and the styles that matter are pinned
@@ -76,7 +76,7 @@ fn is_muted_line(buf: &Buffer, y: u16, from: u16, to: u16) {
         if cell.symbol() != " " {
             seen = true;
             // the rule glyphs are muted (8); the toggle's arrow and word are read-only text (7)
-            let want = if "╭├╰│─".contains(cell.symbol()) { muted() } else { palette::toggle_text().fg.unwrap() };
+            let want = if "╭├╰│─󰁚".contains(cell.symbol()) { muted() } else { palette::toggle_text().fg.unwrap() };
             assert_eq!(cell.fg, want, "column {x} of row {y} ({:?}) is muted, or the toggle's 7", cell.symbol());
             assert!(!cell.modifier.contains(Modifier::BOLD), "column {x} of row {y} is not bold");
         }
@@ -182,13 +182,13 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
     assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
     assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
-    assert_eq!(got[12], " ╰─", "gamma, with no row at all, keeps its plain closing row: {got:#?}");
+    assert_eq!(got[12], " ╰󰁚", "gamma, with no row at all, ends with the terminator: {got:#?}");
     assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
     for y in [6, 9] {
         is_muted_line(&buf, y, 1, 3);
     }
     is_muted_line(&buf, 12, 1, 4);
-    // nothing to fold: a click on the plain row changes nothing
+    // nothing to fold: a click on the terminator changes nothing
     assert_eq!(click(&mut view, 2, 12), Effect::None);
     assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
@@ -235,10 +235,10 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
         item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"),
         item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"),
         item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"),
-        " ╰─".to_owned(),
+        " ╰󰁚".to_owned(),
         String::new(),
     ];
-    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, a plain close (nothing to fold) and one empty row: {got:#?}");
+    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, the terminator (nothing to fold) and one empty row: {got:#?}");
 }
 
 #[test]
@@ -458,4 +458,23 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
     let got = rows(&draw(&mut view, 43, 24));
     // 41 columns: `│`, one space, the glyph and a space (4), the label, a space, `42s` (3): 33 for the label
     assert_eq!(got[find(&got, "xxx")], format!(" │ \u{F0362} {}… 42s", "x".repeat(32)));
+}
+
+#[test]
+fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_no_word() {
+    const TERMINATOR: &str = "\u{F005A}";
+    let empty = View::new(super::fixture::tree(vec![super::fixture::context("gamma", vec![])]), true);
+    let mut with_three = with_inbox(inbox_items(3));
+    let mut empty = empty;
+    for (name, buf, y) in [("a Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
+        let width = buf.area.width;
+        let cells: Vec<(u16, &str)> = (0..width).map(|x| (x, buf[(x, y)].symbol())).filter(|(_, s)| *s != " ").collect();
+        assert_eq!(cells, [(1, "╰"), (2, TERMINATOR)], "{name}: only the corner and the glyph, no word, no `─`: {:#?}", rows(&buf));
+        for (x, _) in cells {
+            let cell = &buf[(x, y)];
+            assert_eq!(cell.fg, palette::muted_text().fg.unwrap(), "{name}: column {x} is colour 8");
+            assert_eq!(cell.fg, muted(), "{name}: column {x} is the muted colour");
+            assert!(!cell.modifier.contains(Modifier::BOLD), "{name}: column {x} is not bold");
+        }
+    }
 }

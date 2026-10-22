@@ -24,7 +24,7 @@
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
-//! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A Context is a fold ([`crate::fold`]): only a click on its `╰󰁋 expand` / `╰󰁣 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with a plain `╰─`); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
+//! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A Context is a fold ([`crate::fold`]): only a click on its `╰󰁋 expand` / `╰󰁣 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with `╰─`, with no row at all it ends with the terminator `╰󰁚`; hs-d574); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
 
 mod actions;
 mod ask;
