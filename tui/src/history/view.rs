@@ -38,7 +38,8 @@ impl View {
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
-        let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(f.area());
+        // The pane's last row stays empty.
+        let [head, body, _last] = Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
         f.render_widget(Paragraph::new(Line::styled(self.title.as_str(), crate::palette::read_only_text().add_modifier(ratatui::style::Modifier::BOLD))), head);
         self.body.draw(f, body);
     }
@@ -93,7 +94,7 @@ mod tests {
     #[test]
     fn the_top_line_stays_while_the_body_starts_at_the_end() {
         let mut v = view(10);
-        assert_eq!(screen(&draw(&mut v, 30, 4)), ["lead (archived, read-only)", "line 8", "line 9", "line 10"]);
+        assert_eq!(screen(&draw(&mut v, 30, 5)), ["lead (archived, read-only)", "line 8", "line 9", "line 10", ""]);
     }
 
     #[test]
@@ -108,25 +109,25 @@ mod tests {
     #[test]
     fn scrolling_leaves_the_end_and_reaching_it_follows_again() {
         let mut v = view(10);
-        draw(&mut v, 24, 4);
+        draw(&mut v, 24, 5);
         press(&mut v, KeyCode::Up);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[1..], ["line 7", "line 8", "line 9"]);
+        assert_eq!(screen(&draw(&mut v, 24, 5))[1..], ["line 7", "line 8", "line 9", ""]);
         press(&mut v, KeyCode::Char('k'));
         press(&mut v, KeyCode::PageUp);
         press(&mut v, KeyCode::PageUp);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[1], "line 1", "it stops at the top");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[1], "line 1", "it stops at the top");
         wheel(&mut v, MouseEventKind::ScrollDown);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[1], "line 4");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[1], "line 4");
         press(&mut v, KeyCode::Char('G'));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[3], "line 10");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[3], "line 10");
         wheel(&mut v, MouseEventKind::ScrollUp);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[1], "line 5", "the wheel moves 3 rows");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[1], "line 5", "the wheel moves 3 rows");
         press(&mut v, KeyCode::PageDown);
         press(&mut v, KeyCode::Char('j'));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[3], "line 10", "Down to the end follows it");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[3], "line 10", "Down to the end follows it");
         press(&mut v, KeyCode::Char('k'));
         press(&mut v, KeyCode::End);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[3], "line 10", "End follows the end");
+        assert_eq!(screen(&draw(&mut v, 24, 5))[3], "line 10", "End follows the end");
     }
 
     #[test]
