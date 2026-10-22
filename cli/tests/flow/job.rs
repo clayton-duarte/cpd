@@ -43,8 +43,8 @@ fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
-/// O supports efforts 0–5, S 1–5, H 0–3.
-const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
+/// O supports efforts 0–5, S 0–5, H 0–3.
+const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[0,1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.
 fn setup(env: &TestEnv) {
