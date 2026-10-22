@@ -81,7 +81,7 @@ export function createHost(pi: PiApi, options: Options): Host {
         if (r.lastError === key) return;
         r.lastError = key;
       }
-      // hs-d573 cause A: a Lead's errors go to the log and to the Manager, never to its chat. Before a run there is no role: CPD_PLAN is a Lead's pane (§6.5).
+      // A Lead's errors go to the log and to the Manager, never to its chat. Before a run there is no role: CPD_PLAN is a Lead's pane (§6.5).
       const id = r?.id ?? host.env.CPD_SESSION;
       if (id && (r ? r.info.role === "lead" : !!host.env.CPD_PLAN)) {
         const log = (line: string) => {
