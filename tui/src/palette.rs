@@ -189,6 +189,11 @@ pub fn toggle_text() -> Style {
     read_only_text()
 }
 
+/// The input box's border (hs-d575, hs-d576): colour 15 unfocused, bright blue 12 focused.
+pub fn input_border(focused: bool) -> Style {
+    Style::new().fg(if focused { Color::LightBlue } else { Color::White })
+}
+
 /// Muted text and lines (separators, ages, times, scroll cues, placeholders, rails), colour 8; it replaces `DIM`.
 pub fn muted_text() -> Style {
     Style::new().fg(Color::DarkGray)
@@ -257,6 +262,7 @@ pub(crate) mod numbered {
     pub(crate) const C9: Color = Color::LightRed;
     pub(crate) const C10: Color = Color::LightGreen;
     pub(crate) const C11: Color = Color::LightYellow;
+    pub(crate) const C12: Color = Color::LightBlue;
     pub(crate) const C13: Color = Color::LightMagenta;
     pub(crate) const C14: Color = Color::LightCyan;
     pub(crate) const C15: Color = Color::White;

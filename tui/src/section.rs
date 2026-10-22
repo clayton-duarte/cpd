@@ -26,6 +26,8 @@ const RULE: &str = "─";
 const CAP_LEFT: &str = "\u{E0B6}";
 /// U+E0B4: the pill's right cap.
 const CAP_RIGHT: &str = "\u{E0B4}";
+/// The input box's closing corner.
+const BOX_CLOSE: &str = "╮";
 /// The padding: one blank column on each side.
 const PAD: &str = " ";
 
@@ -33,7 +35,7 @@ const PAD: &str = " ";
 /// ` ──<pill>───…` (the padding, a muted `──`, the pill), for every in-pane title that is no collapsible widget's (logs, legend,
 /// the Deploy column's sections, dialog titles).
 pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(PLAIN_LEAD, title, count, width)
+    row(PLAIN_LEAD, palette::muted_text(), title, count, None, width)
 }
 
 /// The **collapsible** section title (hs-d478): a title `width` cells wide, its first and last cell the padding: ` ╭─<pill>───…`
@@ -41,18 +43,26 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
 /// collapsible widget (the Inbox's); its left cap sits three columns from the edge, as [`title`]'s does. A title wider than the room
 /// is cut (a pill narrower than 3 cells is left out); the line never wraps. The count is a grey pill too (hs-d480).
 pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(LEAD, title, count, width)
+    row(LEAD, palette::muted_text(), title, count, None, width)
 }
 
-/// The row both forms share: `lead` (two cells) is all that differs.
-fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    let muted = palette::muted_text();
+/// The input box's top border (contract §6.1.1): ` ╭─<pill>───╮ `, the corner, the lines and `╮` in `border`; `label` is cut to the room,
+/// and no pill is drawn for an empty one.
+pub(crate) fn box_top(label: &str, border: Style, width: usize) -> Line<'static> {
+    row(LEAD, border, label, None, Some(BOX_CLOSE), width)
+}
+
+/// The row the forms share: `lead` (two cells) and `muted`, the style of the lead, the lines and `close`, a closing cell that
+/// takes the place of the count, are what differ.
+fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Option<&str>, width: usize) -> Line<'static> {
     let pill_style = palette::pill_static();
     let cap = Style::new().fg(pill_style.bg.expect("a pill has a colour"));
     let pad = usize::from(width >= 2);
     let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
     let left = width - lead.chars().count();
+    let close = close.filter(|_| left >= 1);
+    let left = left - usize::from(close.is_some());
     let text: String = title.chars().take(left.saturating_sub(2)).collect();
     let pill = left >= 3 && !text.is_empty();
     let left = if pill { left - text.chars().count() - 2 } else { left };
@@ -69,6 +79,9 @@ fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'sta
         spans.push(Span::styled(CAP_LEFT, cap));
         spans.push(Span::styled(count, pill_style));
         spans.push(Span::styled(CAP_RIGHT, cap));
+    }
+    if let Some(close) = close {
+        spans.push(Span::styled(close.to_owned(), muted));
     }
     spans.push(Span::raw(PAD.repeat(pad)));
     Line::from(spans)

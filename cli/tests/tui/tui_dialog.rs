@@ -108,19 +108,21 @@ const INPUT: [&str; 3] = ["--prompt=Fork cpd-ui into a new Plan, name:", "--init
 #[test]
 fn input_types_a_refused_value_stays_open_and_a_fixed_one_is_written() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &INPUT, 60, 9);
+    let (pane, out) = start(&env, "input", &INPUT, 60, 10);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
     assert_eq!(rows[1], tui_titles::title(60, "Title", None));
-    assert_eq!(rows[3..5], [" Fork cpd-ui into a new Plan, name:", " ab"]);
+    assert!(rows[3].contains("Fork cpd-ui into a new Plan, name") && !rows[3].contains("name:"), "{rows:?}");
+    assert!(rows[4].starts_with(" │ ab"), "{rows:?}");
     // "abBad" is no Plan id: refused inside the popup, which stays
     keys(&env, &pane, &["B", "a", "d", "Enter"]);
     let rows = wait_screen(&env, &pane, "the refusal", |r| r.iter().any(|l| l.contains("Invalid Plan id")));
-    assert_eq!(rows[4], " abBad");
+    assert!(rows[4].starts_with(" │ abBad"), "{rows:?}");
+    assert!(rows[6].contains("Invalid Plan id"), "the refusal sits under the box: {rows:?}");
     assert!(!closed(&env));
     assert!(!out.exists());
     // the User keeps typing: y, n and q are text; the refusal goes at the first edit
     keys(&env, &pane, &["BSpace", "BSpace", "BSpace", "y", "n", "q", "-", "1"]);
-    let rows = wait_screen(&env, &pane, "the edit", |r| r.iter().any(|l| l == " abynq-1"));
+    let rows = wait_screen(&env, &pane, "the edit", |r| r.iter().any(|l| l.starts_with(" │ abynq-1")));
     assert!(!rows.iter().any(|l| l.contains("Invalid")), "{rows:?}");
     keys(&env, &pane, &["Enter"]);
     assert_eq!(outcome(&env, &out), json!({"confirmed": true, "value": "abynq-1"}));
@@ -129,7 +131,7 @@ fn input_types_a_refused_value_stays_open_and_a_fixed_one_is_written() {
 #[test]
 fn input_esc_cancels_and_writes_no_value() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &INPUT, 60, 9);
+    let (pane, out) = start(&env, "input", &INPUT, 60, 10);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
     keys(&env, &pane, &["x", "Escape"]);
     assert_eq!(outcome(&env, &out), json!({"confirmed": false}));
@@ -138,21 +140,36 @@ fn input_esc_cancels_and_writes_no_value() {
 #[test]
 fn input_the_ok_button_accepts_and_validates() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &["--prompt=Title: ", "--initial=Old title", "--validate=title"], 60, 9);
+    let (pane, out) = start(&env, "input", &["--prompt=Title: ", "--initial=Old title", "--validate=title"], 60, 10);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
-    // `[OK]` is at 0-based columns 2 to 5, row 8
-    click(&env, &pane, 4, 9);
+    // `[OK]` is at 0-based columns 2 to 5, row 9
+    click(&env, &pane, 4, 10);
     assert_eq!(outcome(&env, &out), json!({"confirmed": true, "value": "Old title"}));
 }
 
 #[test]
 fn input_an_empty_title_is_refused_by_the_titles_check() {
     let env = TestEnv::new();
-    let (pane, _out) = start(&env, "input", &["--prompt=Title: ", "--initial=", "--validate=title"], 60, 9);
+    let (pane, _out) = start(&env, "input", &["--prompt=Title: ", "--initial=", "--validate=title"], 60, 10);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
     keys(&env, &pane, &["Enter"]);
     wait_screen(&env, &pane, "the refusal", |r| r.iter().any(|l| l.contains("1 to 200")));
     assert!(!closed(&env));
+}
+
+#[test]
+fn input_box_in_a_popup_shows_the_label_and_grows_with_the_value() {
+    let env = TestEnv::new();
+    let (pane, _out) = start(&env, "input", &["--prompt=Title: ", "--initial=", "--validate=title"], 44, 14);
+    let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
+    assert_eq!(rows[3], format!(" ╭─\u{E0B6}Title\u{E0B4}{}╮", "─".repeat(32)));
+    assert!(rows[4].starts_with(" │ "), "{rows:?}");
+    assert!(rows[5].starts_with(" ╰"), "{rows:?}");
+    let x = "x".repeat(45);
+    keys(&env, &pane, &["-l", &x]);
+    let rows = wait_screen(&env, &pane, "the box grown", |r| r.get(6).is_some_and(|l| l.starts_with(" ╰")) && r[5].starts_with(&format!(" │ {}", "x".repeat(7))));
+    assert!(rows[4].starts_with(&format!(" │ {}", "x".repeat(38))), "{rows:?}");
+    assert!(rows[5].starts_with(&format!(" │ {}", "x".repeat(7))), "{rows:?}");
 }
 
 fn body() -> String {
