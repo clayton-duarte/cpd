@@ -4070,7 +4070,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
 | the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
-| every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
+| every file the key reads, and this machine's file (contract §8.3 "The machine scope"), is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects: none. One read transaction for the key's rows, then the compiled default and the key's files (`owners/<owner>.toml`, and for a `Repo` key `repos/<owner>/<name>.toml` when it exists), each parsed once. No subprocess.
 
@@ -4089,6 +4089,22 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
    "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "monitor": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""}}}
+```
+
+**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads this machine's file: `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "The machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
+
+```json
+{"machine": {"name": "pro", "mcp": {
+  "source": "machine:/home/clayton/.cpd/policy/machines/pro.toml",
+  "servers": {"slack": {
+    "url": "https://mcp.slack.com/mcp",
+    "description": "Slack: read channels and threads, post messages, and manage reactions.",
+    "exposure": "hidden",
+    "oauth": {"clientId": "1601185624273.8899143856786", "callbackUrl": "http://localhost:3118/callback",
+              "scope": "channels:history chat:write reactions:write"},
+    "toolExposure": {"slack_read_channel": "direct", "slack_read_thread": "direct", "slack_add_reaction": "direct",
+                     "slack_get_reactions": "direct", "slack_search_emojis": "direct",
+                     "slack_read_user_profile": "direct", "slack_send_message": "direct"}}}}}}
 ```
 
 Idempotent: yes; it only reads. It is also the check to run after editing a policy file.

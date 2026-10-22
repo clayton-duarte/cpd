@@ -104,9 +104,10 @@ Exit codes (kept from cpd 1 §2):
 ```
 $CPD_HOME/
   config.toml                     machine config (§8)
-  policy/                         the owner and repo scopes of the policies (§8.3); any file may be a symlink
+  policy/                         the owner, repo and machine scopes of the policies (§8.3); any file may be a symlink
     owners/<owner>.toml           an owner's policy; required for every owner a Context uses
     repos/<owner>/<name>.toml     a repo's policy; optional
+    machines/<machine>.toml       a machine's policy, only its `mcp` servers (§8.3 "The machine scope"); optional; only the file named after this machine is read
   bin/git                         the `git` wrapper first on every Session's `PATH`: refuses `git stash` (§6.5, hs-d310); an executable `sh` script
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
@@ -3514,7 +3515,7 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 | `monitor` | none | Lead, Worker |
 | `instructions` | none | Manager, Lead, Worker |
 
-`mcp` and `hooks` are **planned** domains (policy-architecture.md §1.2, §5.5): until they are built, a file that has either table is refused `policy_invalid`, like any unknown domain.
+`hooks` is a **planned** domain (policy-architecture.md §1.2, §5.5): until it is built, a file that has its table is refused `policy_invalid`, like any unknown domain. `mcp` is not a domain of a policy: an owner or repo file with an `mcp` key is refused `policy_invalid`, and the message says `mcp` is set in a machine file ("The machine scope").
 
 **Adding a domain or a key** (policy-architecture.md §1.4). A domain is one struct with `deny_unknown_fields`, one field of the `Policy` type, its default value in `core/src/policy/default.toml`, its audience in the code's audience table and one row of the table above; loading, validation, resolution, `cpd policy show` and the delivery to agents iterate over `Policy`'s fields, so nothing else changes. A typed key is one field of its domain, its default, the code that branches on it and the decision that asked for it, in its row above. **The test** (prose is not enforcement): a test of `core/src/policy/` reads the table above from `docs/contract.md` and asserts that its domains are exactly `Policy`'s fields and the tables of the parsed `default.toml`, that each row's typed keys and defaults are those of the parsed default, and that each row's audience is the code's.
 
@@ -3533,6 +3534,25 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 - **Any file may be a symlink**; `cpd policy show` prints its realpath.
 - **Every owner a Context uses needs its owner file** (`owner_unknown`). An empty owner file is the explicit "cpd's default in every domain". The repo scope is optional: a repo with no file resolves every domain from its owner and the default.
 - **No policy in a repo's committed files yet**: `.config/cpd.toml` keeps only `protected` (§7.5) and `[tests]` (§7.7), and a policy table there is `config_invalid` as any unknown key (hs-d288).
+
+#### The machine scope
+
+A third kind of file, `$CPD_HOME/policy/machines/<machine>.toml`, where `<machine>` is the config key `machine` of this instance (§8.2), sets one thing: the MCP servers this machine may use (pro-d1, pro-d9; the narrow exception to hs-d263, which holds for every other domain). By design the User's dotfiles sync the file to every machine, and only the machine it is named for reads it.
+
+- **Only this machine's file is read.** Other machines' files are not parsed (a broken one is no error here), but the name of every entry in `machines/` is checked as the names in `owners/` and `repos/` are: a name that is not a valid machine name (§2.1) or an entry that is not `<machine>.toml` is `policy_invalid`.
+- **One table is allowed**, `[mcp.servers.<name>]`. Any other top-level key or table (`[pr]`, `[deploy]`, …) is `policy_invalid`. `mcp` is **not** a seventh domain of the policy: the set of domains stays the six above, and a machine file has its own small type.
+- **No file, no servers.** A missing or empty machine file means no servers: nothing is attachable and nothing is attached by default. The machine scope does not inherit from, merge with or get overridden by the owner and repo scopes, and is not resolved per policy key (it has none): it is this machine's file.
+- **Source labels** are `default` (no file) or `machine:<realpath>`, as the other scopes' (above).
+- **A server name** `<name>` matches `^[a-z][a-z0-9-]{0,31}$`: stricter than pi's rule on purpose, with no `_`, so two names never collide as pi treats `-` and `_` alike.
+- **A server entry** is a closed typed subset of pi's own `mcp.json` entry, with pi's key names verbatim (camelCase), HTTP only. Unknown keys are refused (`deny_unknown_fields`); in particular there is no `headers`, `env`, `command`, `args`, `type`, `enabled`, `timeout`, `auth`, `clientSecret`, `clientName` or `clientRegistration`: cpd holds no credential and starts no process (hs-d107), and a key is added later, documents first. A key left out stays out: cpd adds no default (pi's apply, e.g. `exposure` is pi's `codemode`). Every string is 1 to 500 characters with no NUL. `url` matches `^https://[^/@?#\s]+([/?][^\s#]*)?$` or `^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?([/?][^\s#]*)?$`; `callbackUrl` matches the second form only. The check is on the text; pi validates the rest when it connects. The repo adds no dependency (`Cargo.toml`: later Jobs may not add any), which is why the rule is a pair of patterns and not a URL parser.
+
+**Machine domains.**
+
+| Domain | Typed keys |
+|---|---|
+| `mcp` | `servers.<name>`, a table per server (name rule above), each with: `url` (required); `description` (optional); `exposure` (optional; exactly `codemode`, `deferred`, `direct` or `hidden`); `toolExposure` (optional table, at least one entry when present: a tool name, or a pattern with `*`, to one of those four exposures); `oauth` (optional table with the optional keys `clientId`, `scope`, `callbackUrl`) |
+
+**The test** (prose is not enforcement): a test of `core/src/policy/` reads the table above from `docs/contract.md` and asserts that its keys are those of the machine policy type.
 
 The owner file of `clayton-duarte` comes from the User's dotfiles on every machine (hs-d292). It sets `pr` only: the local Gate, no feedback from GitHub checks (its repos run no GitHub Actions; the Gate is the check, and only mergeability matters, hs-d283), and the conflict procedure of hs-d289 (rebase onto the base, the Gate, push through cpd; the Lead resolves a conflict itself, at once, hs-d269):
 
@@ -3650,6 +3670,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | The distilled Context (hs-d182, hs-d192, hs-d194, hs-n111; D1–D7 of PR `distill`, Plan cross-repo; the pilot of Epic B, hs-n95; D1, D3 and D7 are replaced by the next row, hs-d549 and hs-d551) | D1 the digest files: §1.4, §2.2 Context record, §4.6; D2 records in force: §4.6; D3 validation: §1.2 (`distill_invalid`), §4.6, §5.2 `error`; D4 the engine rebuild: §1.2 (`distill_running`), §3.7 E9, §6.4; D5 the distiller: §4.6, §6.5, §8.2 (`context_distill_tier`, `timeouts.distill_minutes`), §9; D6 consumers: §3.1, §4.6, §6.5; D7: §4.6 "Nothing is lost"; `commands.md` §3.3, §3.12, §4.1, §3.10; `docs/implementing.md` |
 | The curating distiller and the cpd-rendered digest (hs-d549, hs-d551; User, 2026-10-22; Plan curate, PR `distill`; replace the cite-every-decision validation of hs-d244, the repair turn and the `## Contradictions` section; A1–A10) | §1.4 (the files of `run/context-digests/<context>/`); §1.2 (`distill_invalid`); §3.7 E9 (uncurated records, one batch per run); §4.6 "The Context digest" (built by cpd, no model, no file), "The distiller curates", "The distill run" (batch of 60, `batch.md`, `known.md`, `docs.md`, JSON lines, the checks, the ladder kept, `context-curated`), "Consumers", "Nothing is lost"; §6.5 "Distiller"; §8.2 (`context_recent_days`); `commands.md` §3.3 (`--digest`, `--topic`), §3.12, §4.1 |
 | Context curation (hs-d549, hs-d551; User, 2026-10-22; Plan curate, PR `retire`): the Context is a shared working memory, curated by the distiller; "delete" is retirement the User approves, and the distiller's proposals come in the next PR, `distill` | §2.2 Context record (Retired) and the Inbox kinds `curate-retire` and `curate-docs`; §3.7 E8; §4.4 `record_retirements`, `record_curations`, the Inbox kinds and Event kinds; §4.5 migration `curation`; §4.6 "Records in force" and "Retirement"; §5.2 `records-retired`, `docs-decided`, `context-curated`; commands.md §3.3, §3.15 to §3.17, §13.2 (the `checklist` dialog) |
+| Machine policy scope with an `mcp` domain (pro-d1, pro-d9; Plan mcp-policy, PR `mcp`): the narrow exception to hs-d263 | §1.4, §8.3 "The machine scope"; `commands.md` §22.1 |
 | Retier (hs-d506, User 2026-10-20; Plan pi-pin, PR `retier`): Leads at `O2`, Managers at `O4`, running Sessions included: a Session's `tier` is no longer fixed, `session retier` moves it with a `session-retiered` Event, the adapter switches pi's model and thinking level at idle, a relaunch runs on the row's tier | §2.2 Session, §3.1, §4.5 (`event-session-retiered`), §5.2, §5.3, §6.5 "A Session's Tier while it runs", §8.2; `commands.md` §10.2, §10.8, §10.15, §15.3 |
 | Worker Tiers H3 to S3 (hs-d554, User 2026-10-22; Plan tiers, PR tiers): the Worker range of hs-d506 is cut from `S0`–`S4` and `H0`–`H4` to `H3` and `S0`–`S3`, the ladder of a Worker Job ends at `S3`, and the error's rule id is now `hs-d554` for cost | §1.2 (error table, `tier_not_allowed`), §3.7 (E3), §8.2 (`open_tier` config key), §9 ("Tier rules", "Ladder"); `commands.md` §1.2 (Errors table, `config_invalid`, `tier_not_allowed`), §5 ("Tier flag"), §5.1–§5.5 (`tier_not_allowed` rows in command tables), §8.2 (config_show, `open_tier` clause), §14 (`tiers` doctor); `pi/skills/cpd-lead/SKILL.md` (Dividing, Failed Jobs); `pi/skills/cpd-lead/references/spec-files.md` (Tiers section) |
 | A Tier letter G, written GX, for the auxiliaries (hs-d562, User 2026-10-22; Plan tiers, PR tier-g): every auxiliary agent runs GX only, the model is `github-copilot/gemini-3.8-flash`, no effort levels, no config key for the distiller (Plan curate owns the default change), the title writer at `--model <tiers.G>:off`, no cache for G, no migration | §8.2 (config keys `tiers.G`); §9 ("Syntax", "Valid efforts per model" for G, "Tier rules" Auxiliary Tiers, "Ladder" absent for G, `cpd tiers` output); §10 Traceability (this row); `docs/commands.md` §1.2 (Errors table `config_invalid` and `tier_invalid`), §5 ("Tier flag"), §8.2 (config_show), §14 (`tiers` doctor); `pi/skills/cpd-lead/references/spec-files.md` (Tiers section) |
