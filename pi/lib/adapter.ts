@@ -1,4 +1,4 @@
-import { tooLong } from "./askguard.ts";
+import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
@@ -39,13 +39,16 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   // §15.11, §15.12: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
     const role = host.run?.info.role;
     const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
     if (pn) return pn;
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
-      return long === undefined ? undefined : { block: true, reason: long };
+      if (long !== undefined) return { block: true, reason: long };
+      if (role !== "lead" && role !== "manager") return undefined;
+      const unseenReason = unseen(event.input, event.toolCallId, ctx.sessionManager.getBranch());
+      return unseenReason === undefined ? undefined : { block: true, reason: unseenReason };
     }
     if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
