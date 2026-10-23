@@ -149,9 +149,9 @@ Ranked by value (what the User sees first, then lines deleted, then risk removed
   assertions. Risk low.
 - **User sees:** nothing.
 
-### F6. The Worker/history footer height is counted with `div_ceil` while the text is drawn with word wrap.
+### F6. The tree view's error-footer height is counted with `div_ceil` while the text is drawn with word wrap.
 
-- **Where:** `tui/src/tree/view.rs:727-729` (`rows::width(&footer).div_ceil(width)`, then `+ usize::from(wrapped > 1)`), drawn at `view.rs:~752` with
+- **Where:** `tui/src/tree/view.rs:727-729` (`rows::width(&footer).div_ceil(width)`, then `+ usize::from(wrapped > 1)`), drawn at `view.rs` (the `render_widget` after the Inbox) with
   `Paragraph::new(footer)...wrap(Wrap { trim: false })`.
 - **What it does:** the snapshot-error footer reserves `ceil(columns / width)` rows (plus one when more than one).
 - **Why it exists:** unverified: no reason found. `Paragraph::line_count(width)` is the exact count but is behind the unstable feature
