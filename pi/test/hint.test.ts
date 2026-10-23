@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { installHint } from "../lib/hint.ts";
 
-const THEME = new URL("../themes/cpd.json", import.meta.url);
+const THEME = new URL("../themes/dango.json", import.meta.url);
 const LABEL = " ↓ Jump to latest message · Ctrl+End ";
 
 type ThemeLike = { fg(c: string, t: string): string; bg(c: string, t: string): string };

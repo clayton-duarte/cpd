@@ -1,7 +1,7 @@
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
 
-// Contract §6.1.1 Palette: a hint is text only, colour 8, no background.
+// Contract §6.1.1 (the Dango palette): a hint is text only, colour 8, no background.
 // pi draws its jump hint as theme.bg("selectedBg", theme.fg("text", label)); a theme alone does not reach it.
 const KEY = Symbol.for("cpd.hint.original");
 const HINT = /^ ↓ Jump to latest message( · \S+)? $/;
