@@ -61,3 +61,20 @@ priority = 20
 # A custom profile inherits every setting and override of `default`.
 [profile.timing.junit]
 path = "junit.xml"
+
+# The tests that restart a real tmux server (`cpd::tui bare::` and the install
+# script's real-cockpit restart) each start a server, a cockpit and an engine. Run
+# 16 `bare::` tests at once they took 11-41 s, and `install_script::` alone 28 s for
+# its restart test (14 cores); run among the 3,237 tests of the Gate they took
+# 66-77 s and failed or hit the 90 s limit. At most 4 run together, and their limit
+# is 3 x 60 s (77 s at most in the Gate). Only these tests.
+[test-groups]
+tmux-restart = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = '''
+  binary_id(cpd::tui) and test(/^bare::/)
+  | binary_id(cpd::tooling) and test(/^install_script::the_install_restarts_the_engine_of_a_real_cockpit/)
+'''
+test-group = "tmux-restart"
+slow-timeout = { period = "60s", terminate-after = 3 }

@@ -80,8 +80,8 @@
 		"\\e[90m │ {/}\\e[90m 23 {/}\\e[37mline 23{/}",
 		"\\e[90m │ {/}\\e[90m 24 {/}\\e[37mline 24{/}",
 		"\\e[90m │ {/}\\e[90m 25 {/}\\e[37mline 25{/}",
-		"\\e[90m │ {/}\\e[90m[Showing lines 1-25 of 80. Use offset=26{/}",
-		"\\e[90m │ {/}\\e[90mto continue.]{/}",
+		"\\e[90m │ {/}\\e[90m[Showing lines 1-25 of 80. Use{/}",
+		"\\e[90m │ {/}\\e[90moffset=26 to continue.]{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"compact/read/failed/closed/100": [
@@ -100,8 +100,8 @@
 	],
 	"compact/read/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
-		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
+		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory,",
+		"\\e[90m │ {/}\\e[31maccess 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/read@offset/running/closed/100": [
@@ -158,8 +158,8 @@
 	],
 	"compact/read@offset/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
-		"\\e[90m │ {/}\\e[31mtotal){/}",
+		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12",
+		"\\e[90m │ {/}\\e[31mlines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/write/running/closed/100": [
@@ -372,28 +372,30 @@
 	],
 	"compact/edit/failed/closed/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
-		"\\e[90m │ {/}\\e[31mand newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all",
+		"\\e[90m │ {/}\\e[31mwhitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
-		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
-		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in",
+		"\\e[90m │ {/}\\e[31mapp.ts. The old text must match",
+		"\\e[90m │ {/}\\e[31mexactly including all whitespace and",
+		"\\e[90m │ {/}\\e[31mnewlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
-		"\\e[90m │ {/}\\e[31mand newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all",
+		"\\e[90m │ {/}\\e[31mwhitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
-		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
-		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in",
+		"\\e[90m │ {/}\\e[31mapp.ts. The old text must match",
+		"\\e[90m │ {/}\\e[31mexactly including all whitespace and",
+		"\\e[90m │ {/}\\e[31mnewlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit@large/running/closed/100": [
@@ -754,8 +756,8 @@
 	"compact/bash@wide/done/open/100": [
 		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mthe edge of a narrow terminal'{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
@@ -765,13 +767,13 @@
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37m&& echo 'a very long command that keeps g",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37moing well past the edge of a narrow termi",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mnal'{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70",
-		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earendil-",
-		"\\e[90m │ {/}\\e[37mworks/pi-coding-agent/README.md{/}",
+		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earend",
+		"\\e[90m │ {/}\\e[37mil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
@@ -1405,8 +1407,8 @@
 		"\\e[90m │ {/}\\e[90m 23 {/}\\e[37mline 23{/}",
 		"\\e[90m │ {/}\\e[90m 24 {/}\\e[37mline 24{/}",
 		"\\e[90m │ {/}\\e[90m 25 {/}\\e[37mline 25{/}",
-		"\\e[90m │ {/}\\e[90m[Showing lines 1-25 of 80. Use offset=26{/}",
-		"\\e[90m │ {/}\\e[90mto continue.]{/}",
+		"\\e[90m │ {/}\\e[90m[Showing lines 1-25 of 80. Use{/}",
+		"\\e[90m │ {/}\\e[90moffset=26 to continue.]{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"preview/read/failed/closed/100": [
@@ -1416,8 +1418,8 @@
 	],
 	"preview/read/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
-		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
+		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory,",
+		"\\e[90m │ {/}\\e[31maccess 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read/failed/open/100": [
@@ -1427,8 +1429,8 @@
 	],
 	"preview/read/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
-		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
+		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory,",
+		"\\e[90m │ {/}\\e[31maccess 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/running/closed/100": [
@@ -1482,8 +1484,8 @@
 	],
 	"preview/read@offset/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
-		"\\e[90m │ {/}\\e[31mtotal){/}",
+		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12",
+		"\\e[90m │ {/}\\e[31mlines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/failed/open/100": [
@@ -1493,8 +1495,8 @@
 	],
 	"preview/read@offset/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
-		"\\e[90m │ {/}\\e[31mtotal){/}",
+		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12",
+		"\\e[90m │ {/}\\e[31mlines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/write/running/closed/100": [
@@ -1753,28 +1755,30 @@
 	],
 	"preview/edit/failed/closed/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
-		"\\e[90m │ {/}\\e[31mand newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all",
+		"\\e[90m │ {/}\\e[31mwhitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
-		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
-		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in",
+		"\\e[90m │ {/}\\e[31mapp.ts. The old text must match",
+		"\\e[90m │ {/}\\e[31mexactly including all whitespace and",
+		"\\e[90m │ {/}\\e[31mnewlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
-		"\\e[90m │ {/}\\e[31mand newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all",
+		"\\e[90m │ {/}\\e[31mwhitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/open/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
-		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
-		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
-		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
+		"\\e[90m │ {/}\\e[31mCould not find the exact text in",
+		"\\e[90m │ {/}\\e[31mapp.ts. The old text must match",
+		"\\e[90m │ {/}\\e[31mexactly including all whitespace and",
+		"\\e[90m │ {/}\\e[31mnewlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit@large/running/closed/100": [
@@ -2164,8 +2168,8 @@
 	],
 	"preview/bash@wide/done/closed/100": [
 		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
@@ -2173,21 +2177,21 @@
 	"preview/bash@wide/done/closed/44": [
 		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 mor",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37me steps{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70",
-		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earendil-",
-		"\\e[90m │ {/}\\e[37mworks/pi-coding-agent/README.md{/}",
+		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earend",
+		"\\e[90m │ {/}\\e[37mil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/bash@wide/done/open/100": [
 		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mthe edge of a narrow terminal'{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
@@ -2197,13 +2201,13 @@
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37m&& echo 'a very long command that keeps g",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37moing well past the edge of a narrow termi",
 		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mnal'{/}",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70",
-		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earendil-",
-		"\\e[90m │ {/}\\e[37mworks/pi-coding-agent/README.md{/}",
+		"\\e[90m │ {/}\\e[37m/opt/homebrew/lib/node_modules/@earend",
+		"\\e[90m │ {/}\\e[37mil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m │ {/}\\e[37mlast{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],

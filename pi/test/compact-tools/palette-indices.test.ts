@@ -82,7 +82,7 @@ function indexedAt(line: string, needle: string, expected: number): void {
 	assert.equal(paintAt(line, needle).fg, expected, `${needle} is colour ${expected} in ${readable(line)}`);
 }
 
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 
 /** One tool row in the fold language's defaults, driven as Pi drives it, drawn at each stage. */
 function stages(harness: Harness, name: string, id: string, failed: boolean, expanded: boolean) {

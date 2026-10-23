@@ -164,12 +164,14 @@ pub(crate) fn sections() -> Vec<Section> {
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
+    let fixing = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Fixing, f, false)).collect::<Vec<_>>());
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
             vec![frames, plain("the Lead is working (one frame every 100 ms)")],
+            vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 100 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
@@ -338,6 +340,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::numbered::C9;
     use crate::read::Kind;
 
     fn text(line: &Line) -> String {
@@ -412,7 +415,7 @@ mod tests {
         for glyph in [palette::NEEDS_YOU, &palette::SPINNER.concat(), palette::WAITING, palette::IDLE, palette::STOPPED, &precedence] {
             assert!(shown.contains(glyph), "{glyph}: {shown}");
         }
-        for (row, dot) in dots.rows[5..10].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White]) {
+        for (row, dot) in dots.rows[6..11].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White]) {
             assert_eq!(row[0].spans, [palette::dot_span(dot, 0, false)], "{dot:?}");
         }
         assert!(!shown.contains("phase"), "{shown}");
@@ -445,16 +448,16 @@ mod tests {
         let dots = &sections()[2];
         let says: Vec<String> = dots.rows.iter().map(|r| text(&r[1])).collect();
         assert_eq!(
-            says[2],
+            says[3],
             "waiting: an agent waits for another agent (a Worker for its Lead), not for you",
-            "the waiting dot, between working and idle"
+            "the waiting dot, after the loaders, before idle"
         );
-        assert_eq!(dots.rows[2][0].spans, [palette::dot_span(Dot::Waiting, 0, false)]);
+        assert_eq!(dots.rows[3][0].spans, [palette::dot_span(Dot::Waiting, 0, false)]);
         assert_eq!(
-            says[5],
+            says[6],
             "red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"
         );
-        assert_eq!(says[6], "yellow: ready to merge, review requested");
+        assert_eq!(says[7], "yellow: ready to merge, review requested");
         let shown = says.join("\n");
         assert!(!shown.contains("Escalation") && !shown.contains("or pr"), "an Escalation is no item, the phase is deploy: {shown}");
     }
@@ -478,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_is_waiting_and_a_stuck_one_is_red_in_the_pill_and_the_counter() {
+    fn a_failed_job_is_waiting_in_its_pill_and_red_in_its_counter_stuck_or_not() {
         let jobs = &sections()[1];
         let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
@@ -490,7 +493,7 @@ mod tests {
             "a sample pill is the Job pill the Plan view draws (hs-d534)"
         );
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
-        assert_eq!((fg(failed), fg(stuck)), (palette::fg_clickable(Meaning::Waiting).fg, palette::fg_clickable(Meaning::Failed).fg));
+        assert_eq!((fg(failed), fg(stuck)), (Some(C9), Some(C9)), "a failed count is red, stuck or not (hs-d580)");
     }
 
     #[test]
@@ -516,7 +519,8 @@ mod tests {
         assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "failed, stuck", "draft", "counters row"]);
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
-        assert!(!shown.contains("cancelled") && !shown.contains(palette::CANCELLED), "{shown}");
+        assert!(!shown.contains("cancelled"), "{shown}");
+        // no glyph clause: `palette::CANCELLED` is the failed Job's glyph too (hs-d583), which the legend lists on purpose.
     }
 
     #[test]

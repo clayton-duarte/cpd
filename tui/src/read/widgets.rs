@@ -78,7 +78,7 @@ pub struct OpenPr {
     /// GitHub's `owner/name`.
     pub repo: String,
     pub number: i64,
-    /// `pull_requests.url`: what the `󰏌` links to.
+    /// `pull_requests.url`: what the `󱆭` links to.
     pub url: String,
     pub title: String,
     pub draft: bool,

@@ -116,10 +116,10 @@ fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
     }
 }
 
-/// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
+/// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
 /// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, muted. While the Plan's Lead
-/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󰏌`.
+/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`.
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
@@ -240,8 +240,8 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         Block::bordered().border_type(BorderType::Rounded).border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
-            // the title starts after the corner and ends with one space; the `󰏌` is the cell before it, and the link
-            // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󰏌`
+            // the title starts after the corner and ends with one space; the `󱆭` is the cell before it, and the link
+            // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󱆭`
             let dot = if pull.lead_working { 2 } else { 0 };
             let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16 + dot;
             link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
@@ -562,13 +562,13 @@ mod tests {
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 0);
-        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󱆭 ");
         assert_eq!(t.spans[4].style.fg, failed);
         assert_ne!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Failed).fg);
         // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
         let t = title(&p, false, 0);
-        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󱆭 ");
         assert_ne!(t.spans[4].style.fg, failed);
         // merged and closed never read `conflict`
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
@@ -585,13 +585,13 @@ mod tests {
         p.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
         for frame in 0..palette::SPINNER.len() {
             let t = title(&p, false, frame);
-            assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󰏌 ", palette::SPINNER[frame]), "frame {frame}");
+            assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󱆭 ", palette::SPINNER[frame]), "frame {frame}");
             assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
         }
         // the dot goes with the state, in the waiting colour of `conflict` too
         p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 3);
-        assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󰏌 ", palette::SPINNER[3]));
+        assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󱆭 ", palette::SPINNER[3]));
         assert_eq!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Waiting).fg);
     }
 
@@ -601,7 +601,7 @@ mod tests {
         p.pull = Some(pull(12, PrState::Open));
         for frame in 0..palette::SPINNER.len() {
             let text = title(&p, false, frame).to_string();
-            assert_eq!(text, " api · api-repo 󱦰 main · #12 open 󰏌 ");
+            assert_eq!(text, " api · api-repo 󱦰 main · #12 open 󱆭 ");
             assert!(!palette::SPINNER.iter().any(|g| text.contains(g)), "{text}");
         }
         // no pull request yet: nothing to show beside
@@ -679,7 +679,7 @@ mod tests {
         let mut open = pr("api", &[]);
         open.pull = Some(pull(12, PrState::Open));
         let t = title(&open, false, 0);
-        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󱆭 ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
         assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
@@ -713,7 +713,7 @@ mod tests {
         plain
     }
 
-    /// The cells of the title row under the link to the pull request, and the cells of `#` and `󰏌` in the plain chart.
+    /// The cells of the title row under the link to the pull request, and the cells of `#` and `󱆭` in the plain chart.
     /// A piece's second cell keeps its symbol but is covered by the piece.
     fn link_cells(c: &Chart, plain: &Chart) -> (Vec<u16>, u16, u16) {
         let top: Vec<char> = text(plain).lines().next().unwrap().chars().collect();
@@ -736,11 +736,11 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-╭ api · api-repo 󱦰 main · #12 conflict 󰏌 ╮
+╭ api · api-repo 󱦰 main · #12 conflict 󱆭 ╮
 │ no Jobs                                │
 ╰────────────────────────────────────────╯");
         let (covered, first, arrow) = link_cells(&c, &plain);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󰏌` whole, not the key nor the separators");
+        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󱆭` whole, not the key nor the separators");
     }
 
     #[test]
@@ -751,12 +751,12 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-╭ api · api-repo 󱦰 main · #12 open 󰏌 ╮
+╭ api · api-repo 󱦰 main · #12 open 󱆭 ╮
 │ no Jobs                            │
 ╰────────────────────────────────────╯");
-        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󰏌` is two cells longer than `dispatch`");
+        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󱆭` is two cells longer than `dispatch`");
         let (covered, first, arrow) = link_cells(&c, &plain);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󰏌`, not the key nor the separators");
+        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󱆭`, not the key nor the separators");
         assert!(before.buf.content.iter().all(|cell| !cell.symbol().contains("]8;;")), "no pull request, no link");
     }
 

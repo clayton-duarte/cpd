@@ -163,7 +163,7 @@ fn a_cancelled_job_pill_is_colour_8_and_nothing_follows_it() {
     let text = screen.join("\n");
     // the whole chart row is the pill, to its closing cap: no status word, no reason
     let row = screen.iter().find(|l| l.contains(" a│")).unwrap();
-    let inside: String = row.chars().skip(3).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned();
+    let inside: String = row.chars().skip(2).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned();
     assert_eq!(inside, format!(" \u{e0b6}{CANCELLED} a│S3\u{e0b4}"), "{text}");
     assert!(!text.contains("cancelled") && !text.contains("not needed"), "{text}");
     let styled = styled_screen(&env, &pane);

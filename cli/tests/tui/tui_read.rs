@@ -512,7 +512,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
         ("l-stp", Dot::Stopped),
-        ("l-ship", Dot::Working),
+        ("l-ship", Dot::Fixing), // working, and its Plan has a failed Job (`e`): the red loader (hs-d581)
         ("l-rel", Dot::Idle), // blocked in deploy, with a failing pull request, but no item
         ("l-old", Dot::Stopped),
     ] {
@@ -522,6 +522,79 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     // An archived Session keeps its glyph and takes no item.
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'l-red';");
     assert_eq!(dot(&dots(&mut store), "l-red"), Dot::Idle);
+}
+
+#[test]
+fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
+    let (_env, mut store) = fixture();
+    let at = |n: u32| format!("2026-01-02T00:01:{n:02}.000Z");
+    let mut s = context("fix");
+    // (plan, Lead state, Jobs: (key, status))
+    let failed = [("f", "failed")];
+    let rest = [("m", "merged"), ("r", "running"), ("q", "queued"), ("c", "cancelled"), ("d", "draft")];
+    let plans: [(&str, &str, &[(&str, &str)]); 10] = [
+        ("fx", "working", &failed),
+        ("fxr", "working", &failed),
+        ("fxw", "working", &failed),
+        ("nf", "working", &rest),
+        ("nfr", "working", &rest),
+        ("idl", "idle", &failed),
+        ("wai", "waiting", &failed),
+        ("stp", "stopped", &failed),
+        ("fk", "idle", &failed),
+        ("arc", "working", &failed),
+    ];
+    for (n, (plan, state, jobs)) in plans.into_iter().enumerate() {
+        s += &plan_row(plan, "fix", "dispatch", &format!("l-{plan}"), &at(n as u32), None);
+        let label = (state == "waiting").then_some("cpd: asking");
+        s += &session_row(&format!("l-{plan}"), "lead", "fix", plan, None, state, label, &at(n as u32));
+        for (key, status) in jobs {
+            s += &job_row(plan, key, status, "S3", &[]);
+        }
+    }
+    // a working fork of a Plan with a failed Job: not the Plan's Lead
+    s += &session_row("f-fk", "lead", "fix", "fk", None, "working", None, "2026-01-02T00:02:00.000Z");
+    sql(&mut store, &s);
+
+    let dot = |store: &mut Store, id: &str| -> Dot {
+        let tree = read::tree(store).unwrap();
+        let sessions = tree.contexts.iter().filter(|c| c.id.as_str() == "fix").flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
+        sessions.into_iter().find(|n| n.id.as_str() == id).unwrap().dot
+    };
+
+    // (i) a working Lead, a failed Job: the red loader
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
+    assert!(!Dot::Fixing.needs_you(), "the loader is no needs-you dot");
+    // (iv) no failed Job: the cyan loader
+    assert_eq!(dot(&mut store, "l-nf"), Dot::Working);
+    // (v) idle, waiting, stopped: their usual dot
+    assert_eq!((dot(&mut store, "l-idl"), dot(&mut store, "l-wai"), dot(&mut store, "l-stp")), (Dot::Idle, Dot::Waiting, Dot::Stopped));
+    // (vi) a working fork is not the Plan's Lead
+    assert_eq!(dot(&mut store, "f-fk"), Dot::Working);
+
+    inbox(
+        &mut store,
+        &[
+            condition(Kind::Dialog, Urgency::Red, Some("l-fxr"), Some("fxr"), "fix", "session:l-fxr"),
+            condition(Kind::Unread, Urgency::White, Some("l-fxw"), Some("fxw"), "fix", "session:l-fxw"),
+            condition(Kind::Dialog, Urgency::Red, Some("l-nfr"), Some("nfr"), "fix", "session:l-nfr"),
+        ],
+        T0,
+    );
+    // (ii) a red item of its own keeps the static red dot; (iii) a white one does not
+    assert_eq!(dot(&mut store, "l-fxr"), Dot::Red);
+    assert_eq!(dot(&mut store, "l-fxw"), Dot::Fixing);
+    // (iv) no failed Job: own state first, whatever the items (hs-d183)
+    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
+
+    // (viii) an archived Lead keeps its glyph
+    sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'l-arc';");
+    assert_eq!(dot(&mut store, "l-arc"), Dot::Working);
+
+    // (vii) the failed Job is queued again: the cyan loader
+    sql(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE plan = 'fx';");
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Working);
 }
 
 #[test]

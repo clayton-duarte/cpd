@@ -161,7 +161,7 @@ pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize
         let mut leads: Vec<SessionNode> = sessions(conn, "s.context = ?1 AND s.role = 'lead'", &[&context.as_str()])?;
         // The Lead's dot comes from the Inbox, as in the tree (§17).
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        super::tree::fill_dots(&super::tree::visible_items(conn, &now)?, &mut leads);
+        super::tree::fill_dots(&super::tree::visible_items(conn, &now)?, &heads, &mut leads);
 
         // Window: count, kind, merges per (plan, bucket), from the counts of each Event kind.
         let mut window: BTreeMap<(String, usize), Bucket> = BTreeMap::new();

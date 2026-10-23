@@ -19,12 +19,12 @@ use crate::read::{Dot, OpenPr, ReviewDecision, UpdateState};
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
 
-/// What a click on an owned PR reaches: its two lines, except the `󰏌` cell (the terminal opens that link).
+/// What a click on an owned PR reaches: its two lines, except the `󱆭` cell (the terminal opens that link).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
     /// The PR's two rows, the column's full width.
     pub area: Rect,
-    /// The `󰏌` cell, inside `area`.
+    /// The `󱆭` cell, inside `area`.
     pub arrow: Position,
     /// The merge icon's cell, inside `area`, when the PR shows one, or the spinner's while its merge runs: no click on
     /// it reaches the Lead.
@@ -142,8 +142,8 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
-/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
+/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󱆭` in the last column, then
+/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󱆭`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
 /// A conflicting one adds ` conflict` after the review. A pull request a Plan owns is clickable, so its colourless text is 15 and
 /// its coloured marks the bright pairs, and it draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them,
@@ -302,7 +302,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
     let mut hits = vec![];
     let mut icons = vec![];
     let mut rows = vec![];
-    // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
+    // The `󱆭` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width), frame));

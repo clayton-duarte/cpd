@@ -28,6 +28,10 @@ mod input_box_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;
+#[cfg(test)]
+mod moon_tests;
+#[cfg(test)]
+mod icons_tests;
 pub mod merge;
 pub mod palette;
 #[cfg(test)]

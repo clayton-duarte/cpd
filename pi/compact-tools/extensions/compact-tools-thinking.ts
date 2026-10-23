@@ -162,8 +162,7 @@ function renderThinkingSections(
 				: [];
 			if (view === "detail" && detail) {
 				const styleDetailPrefix = options.styleDetailPrefix ?? ((prefix: string) => prefix);
-				const connector = `${styleDetailPrefix("│")}  `;
-				const detailOutput = `${title}  \n${connector}\n${compactDetail(detail, availableWidth, styleDetailPrefix)}`;
+				const detailOutput = `${title}  \n${compactDetail(detail, availableWidth - 2, styleDetailPrefix)}`;
 				return controlLines.length > 0 ? `${detailOutput}\n${hardBreak(controlLines)}` : detailOutput;
 			}
 			return hardBreak([title, ...controlLines]);
@@ -197,7 +196,7 @@ const bound: ThinkingCycleController[] = [];
 
 type ThinkingMessage = {
 	thinkingVisibilityOverrides: Map<number, boolean>;
-	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; text?: string; setText?: (text: string) => void } }> };
+	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string }; text?: string; setText?: (text: string) => void } }> };
 	updateContent(message: unknown, isStreaming?: boolean): void;
 };
 
@@ -218,6 +217,9 @@ function patchedUpdate(original: (message: unknown, isStreaming?: boolean) => vo
 		if (!owner) return;
 		for (const { child } of this.contentContainer.children) {
 			if (!child) continue;
+			// Emphasis spans (*em*, _em_, quotes) take their italic from the Markdown's theme: give this thinking
+			// child a theme whose italic is the identity (links, lists, tables inherit it; the reply is untouched).
+			if (child.theme) child.theme = { ...child.theme, italic: (text) => text };
 			if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
 			else if (typeof child.text === "string" && child.setText) child.setText(child.text.replace(/\x1b\[2?3m/gu, ""));
 		}

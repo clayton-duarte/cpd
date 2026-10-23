@@ -11,10 +11,11 @@ import { WorkingStatusIndicator } from "../../../node_modules/@earendil-works/pi
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { ProgressController } from "../../compact-tools/extensions/compact-tools-progress.ts";
 import { restoreClocks, timerClock } from "./indicator-harness.ts";
+import { MOON_FRAMES } from "./loader-frames.ts";
 
 test.after(() => restoreClocks());
 
-const LOADER = [0xf0766, 0xf0a9e, 0xf0a9f, 0xf0aa0, 0xf0aa1, 0xf0aa2, 0xf0aa3, 0xf0aa4, 0xf0aa5].map((code) => String.fromCodePoint(code));
+const LOADER = MOON_FRAMES;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
 const strip = (value: string) => value.replace(/\x1b\[[0-9;]*m/gu, "");
@@ -76,17 +77,17 @@ test("the pill has caps 6, bg 6 and text 0 and no padding inside the caps", () =
 	} finally { w.dispose(); }
 });
 
-test("the loader frame sits inside the pill in text 0 and steps through the nine frames at 100 ms", () => {
+test("the loader frame sits inside the pill in text 0 and steps through the eight moon phases at 100 ms", () => {
 	const w = working();
 	try {
 		for (let step = 0; step < LOADER.length + 1; step++) {
 			const row = w.row();
 			const plain = strip(row);
 			const body = plain.slice(plain.indexOf(LEFT_CAP) + 1, plain.indexOf(RIGHT_CAP));
-			assert.ok(body.startsWith(LOADER[step % 9]!), `frame ${step % 9} opens the pill, got ${JSON.stringify(body)}`);
+			assert.ok(body.startsWith(LOADER[step % 8]!), `frame ${step % 8} opens the pill, got ${JSON.stringify(body)}`);
 			assert.ok(!plain.slice(0, plain.indexOf(LEFT_CAP)).match(/[\u{f0000}-\u{fffff}]/u), "no loader frame outside the pill");
 			const bodyRaw = row.slice(row.indexOf("\x1b[46m"));
-			assert.ok(!bodyRaw.slice(0, bodyRaw.indexOf(LOADER[step % 9]!)).includes("\x1b[36m"), "the frame has no colour of its own");
+			assert.ok(!bodyRaw.slice(0, bodyRaw.indexOf(LOADER[step % 8]!)).includes("\x1b[36m"), "the frame has no colour of its own");
 			timerClock.tick(100);
 		}
 	} finally { w.dispose(); }

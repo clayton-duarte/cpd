@@ -92,18 +92,16 @@ fn fakes_shadow_the_real_programs_and_record_calls() {
 #[test]
 fn tmux_server_is_private_and_killed_on_drop() {
     let env = TestEnv::new();
-    let socket_dir = env.root().join("tmux");
+    let socket_dir = env.tmux_tmpdir();
     let out = env.tmux(&["new-session", "-d", "-s", "t", "sleep 60"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(env.tmux(&["has-session", "-t", "=t"]).status.success());
     assert_ne!(env.tmux_socket(), "cpd");
 
     // The socket file is under this env's TMUX_TMPDIR, not the user's.
-    let found = std::fs::read_dir(&socket_dir)
-        .unwrap()
-        .flat_map(|uid_dir| std::fs::read_dir(uid_dir.unwrap().path()).unwrap())
-        .any(|entry| entry.unwrap().file_name() == env.tmux_socket());
-    assert!(found, "no socket {} under {}", env.tmux_socket(), socket_dir.display());
+    let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(env.root()).unwrap());
+    let socket = socket_dir.join(format!("tmux-{uid}")).join(env.tmux_socket());
+    assert!(socket.exists(), "no socket {} under {}", env.tmux_socket(), socket_dir.display());
 
     let pid = String::from_utf8(env.tmux(&["display-message", "-p", "#{pid}"]).stdout).unwrap();
     let pid = pid.trim().to_owned();
@@ -308,12 +306,27 @@ struct Up {
 /// in that session.
 fn detached(env: &TestEnv, argv: &[&str]) -> u32 {
     let mut cmd = env.command("sh");
-    cmd.args(["-c", r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"]).args(argv);
+    // macOS has no `setsid` command: perl's POSIX::setsid, then exec, is the same process in a new session.
+    let script = if cfg!(target_os = "macos") {
+        r#"perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$@" </dev/null >/dev/null 2>&1 & echo $!"#
+    } else {
+        r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#
+    };
+    cmd.args(["-c", script, "sh"]).args(argv);
     let out = common::output(&mut cmd).unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pid: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
     // `/proc/<pid>/stat`: `<pid> (<comm>) <state> <ppid> <pgrp> <session> ...`.
-    let session = || std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?.rsplit_once(") ")?.1.split(' ').nth(3)?.parse::<u32>().ok();
+    let session = || {
+        if cfg!(target_os = "macos") {
+            // POSIX.pm has no getsid and `ps -o sess=` prints 0: a setsid'd process leads its own group,
+            // and a background job of a non-interactive sh does not, so pgid == pid shows the new session.
+            let out = std::process::Command::new("ps").args(["-o", "pgid=", "-p", &pid.to_string()]).output().ok()?;
+            String::from_utf8(out.stdout).ok()?.trim().parse::<u32>().ok()
+        } else {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?.rsplit_once(") ")?.1.split(' ').nth(3)?.parse::<u32>().ok()
+        }
+    };
     common::wait_until(&format!("process {pid} to be in a session of its own"), || session() == Some(pid));
     pid
 }
@@ -366,7 +379,9 @@ fn put_up(env: &TestEnv) -> Up {
     common::wait_until("the driver to trap SIGTERM", || trapped.exists());
     record_driver(env, driver);
     // A distill run the engine started, recorded as the engine records it.
-    let distill = detached(env, &["sleep", "100"]);
+    // Its command line holds the env's dir (the teardown stops a recorded pid only if it is the env's, and a platform
+    // binary like `sleep` shows nothing of it on macOS); the `:` after the sleep keeps the shell from exec'ing it.
+    let distill = detached(env, &["sh", "-c", &format!("sleep 100; : '{}'", env.root().display())]);
     let home = cpd_core::home::CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let pid_file = home.distill_pid(&cpd_core::ids::ContextId::parse("ctx").unwrap());
     std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
@@ -380,6 +395,12 @@ fn put_up(env: &TestEnv) -> Up {
 }
 
 fn alive(pid: u32) -> bool {
+    if cfg!(target_os = "macos") {
+        // `kill -0` finds the pid; `ps -o stat=` prints nothing for a gone process and Z for a zombie.
+        let signalled = std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        let stat = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
+        return signalled && !stat.is_empty() && !stat.starts_with('Z');
+    }
     // A zombie is dead; an unreadable /proc entry is gone.
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
@@ -389,6 +410,16 @@ fn alive(pid: u32) -> bool {
 /// A scan of all of /proc: the tests' own check, never the teardown's.
 fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
     let needle = dir.to_string_lossy().into_owned().into_bytes();
+    if cfg!(target_os = "macos") {
+        // BSD `ps` has no /proc: `pid=,command=` of every process.
+        let out = std::process::Command::new("ps").args(["-axo", "pid=,command="]).output().unwrap();
+        return String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim_start().split_once(' '))
+            .filter(|(_, cmd)| cmd.contains(dir.to_string_lossy().as_ref()))
+            .filter_map(|(pid, _)| pid.parse::<u32>().ok())
+            .collect();
+    }
     std::fs::read_dir("/proc")
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
@@ -698,6 +729,24 @@ fn a_process_that_leaves_the_group_and_is_not_recorded_outlives_the_teardown() {
 }
 
 #[test]
+fn a_recorded_pid_that_is_not_the_envs_is_spared() {
+    // A pid cpd recorded for a driver that has ended is another process by the time of the teardown (pids are recycled
+    // within minutes on macOS). Such a process hides its environment (an Apple platform binary does), and has nothing
+    // of the env in its command line: the teardown must not signal it.
+    use std::os::unix::process::CommandExt;
+    let env = TestEnv::new();
+    let mut other = std::process::Command::new("/bin/sleep");
+    other.arg("600").env_clear().process_group(0).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let mut other = other.spawn().unwrap();
+    record_driver(&env, other.id());
+    env.teardown();
+    let outlived = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(outlived, "the teardown stopped a recorded pid that is not the env's");
+}
+
+#[test]
 fn teardown_is_idempotent_and_spares_the_test_process() {
     let env = TestEnv::new();
     env.teardown();
@@ -790,4 +839,77 @@ fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
     let empty = TestEnv::empty();
     // main's harness gives every env the owner policy `acme` (policy/owners/acme.toml): no store is what makes it empty.
     assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
+}
+
+#[test]
+fn the_tmux_dir_stays_in_the_env_unless_its_socket_path_would_pass_100_characters() {
+    let uid = 501;
+    let socket = "cpdt-s";
+    let base = tempfile::Builder::new().prefix("tt-").tempdir_in("/tmp").unwrap();
+    let base_path = std::fs::canonicalize(base.path()).unwrap();
+    let tail = format!("/tmux/tmux-{uid}/{socket}").len();
+    // A root whose canonical socket path is `total` characters long.
+    let root_with = |total: usize| {
+        let pad = total - base_path.as_os_str().len() - 1 - tail;
+        let root = base_path.join("p".repeat(pad));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    };
+    let length = |root: &std::path::Path| std::fs::canonicalize(root).unwrap().join(format!("tmux/tmux-{uid}/{socket}")).as_os_str().len();
+
+    let short = base_path.join("env");
+    std::fs::create_dir_all(&short).unwrap();
+    assert_eq!(common::tmux_tmpdir_for(&short, uid, socket), short.join("tmux"), "a short root keeps its tmux dir");
+
+    let exact = root_with(100);
+    assert_eq!(length(&exact), 100);
+    assert_eq!(common::tmux_tmpdir_for(&exact, uid, socket), exact.join("tmux"), "exactly 100 characters stays in the env");
+
+    let over = root_with(101);
+    assert_eq!(length(&over), 101);
+    assert_eq!(common::tmux_tmpdir_for(&over, uid, socket), std::path::PathBuf::from("/tmp"), "101 characters falls back to /tmp");
+}
+
+#[test]
+fn a_command_does_not_inherit_zdotdir() {
+    let env = TestEnv::new();
+    let cmd = env.command("true");
+    let removed = cmd.get_envs().any(|(key, value)| key == "ZDOTDIR" && value.is_none());
+    assert!(removed, "ZDOTDIR is not removed from the command's environment: {:?}", cmd.get_envs().collect::<Vec<_>>());
+}
+
+#[test]
+fn the_env_gitconfig_turns_automatic_maintenance_off() {
+    let env = TestEnv::new();
+    let get = |key: &str| {
+        let out = common::output(env.command("git").args(["config", "--global", key])).expect("run git");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    assert_eq!(get("maintenance.auto"), "false", "maintenance.auto");
+    assert_eq!(get("gc.auto"), "0", "gc.auto");
+}
+
+#[test]
+fn the_flock_shim_holds_the_lock_across_exec_and_n_fails_fast_while_it_is_held() {
+    let env = TestEnv::new();
+    let dir = env.root().join("shim");
+    std::fs::create_dir_all(&dir).unwrap();
+    common::write_flock_shim(&dir);
+    let shim = dir.join("flock");
+    assert!(shim.is_file(), "write_flock_shim wrote no {}", shim.display());
+    let lock = dir.join("lock");
+    let marker = dir.join("held");
+    let mut holder = common::spawn(
+        env.command(&shim).arg(&lock).args(["sh", "-c"]).arg(format!("touch '{}'; exec sleep 60", marker.display())),
+    )
+    .expect("spawn the shim");
+    common::wait_until("the command to run under the lock", || marker.exists());
+    let second = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the second shim");
+    assert_eq!(second.status.code(), Some(1), "-n exits 1 at once while the lock is held");
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    let third = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the third shim");
+    assert_eq!(third.status.code(), Some(0), "-n runs the command once the lock is free");
+    let bad = common::output(env.command(&shim).arg("-w").arg("1").arg(&lock).arg("true")).expect("run the shim with another option");
+    assert_eq!(bad.status.code(), Some(64), "any other option exits 64");
 }

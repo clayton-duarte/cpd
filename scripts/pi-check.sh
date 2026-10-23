@@ -53,6 +53,14 @@ esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-check.XXXXXX")
 socket="pi-check-${GATE_RUN:-x}-$$"
+uid=$(id -u)
+# tmux's socket is <TMUX_TMPDIR>/tmux-<uid>/<socket>; past 100 characters it nears sun_path (104 on macOS).
+tmux_tmpdir="$tmp/tmux"
+long_path=
+if [ "$(printf '%s' "$tmp/tmux/tmux-$uid/$socket" | wc -c | tr -d ' ')" -gt 100 ]; then
+  tmux_tmpdir=/tmp
+  long_path=1
+fi
 
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
@@ -65,9 +73,11 @@ for name in PATH LANG LC_ALL LC_CTYPE TERM; do
   allow="$allow $name=$(shq "$value")"
 done
 # GATE_RUN (the Gate's run id, scripts/gate-run.sh) stays, so the run finds this check's processes; TMUX_TMPDIR is inside
-# $tmp, so the server's socket is removed with it (tmux leaves a socket file when its server exits; hygiene.md bug 4).
+# $tmp, so the server's socket is removed with it (tmux leaves a socket file when its server exits; hygiene.md bug 4);
+# only when the socket path <TMUX_TMPDIR>/tmux-<uid>/<socket> would pass 100 characters (a long macOS TMPDIR) it is /tmp,
+# which scripts/gate-run.sh scans, and the cleanup removes that socket file.
 if [ -n "${GATE_RUN:-}" ]; then allow="$allow GATE_RUN=$(shq "$GATE_RUN")"; fi
-allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") TMUX_TMPDIR=$(shq "$tmp/tmux") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
+allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") TMUX_TMPDIR=$(shq "$tmux_tmpdir") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
 cleanenv() { eval "env -i $allow \"\$@\""; }
 tmx() { cleanenv tmux -u -L "$socket" "$@"; }
 
@@ -102,6 +112,7 @@ cleanup() {
   set +e
   record_panes
   tmx kill-server >/dev/null 2>&1
+  if [ -n "$long_path" ]; then rm -f "/tmp/tmux-$uid/$socket"; fi
   if ! wait_panes 20; then
     for pid in $pane_pids; do kill -9 -- "-$pid" 2>/dev/null; done
     wait_panes 10
