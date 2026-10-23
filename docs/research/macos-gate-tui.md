@@ -13,7 +13,7 @@ Logs: `~/gatemac-tui-work/` (A, B, alone-1..3, unit, nozdotdir).
 | alone x3 | the 54 names, `-j1`, `--retries 0`, short TMPDIR (the 3 passes ran at the same time, one test each) | 5-6 pass, 44-45 fail, 4 timed out per pass | 1666-1695 s each | 7 → 3 |
 
 Classes of the 236 failures of A: **path-length 182** (C1); of the 54 that fail in B: **test-assumption 38** (C2 34, of which 2 also C3; C5 4), **macos-code 10** (C4), **other 1** (C6), **load-flake 5** (C7 = 4 `tui` + 1 `bare`; the 54 = 38 + 10 + 1 + 5). `timeout` as a class: 0 (the 4 C5 tests end at the nextest limit, a symptom of their cause).
-H1 holds: every test of the 182 that starts a tmux server fails in A with `File name too long` and passes in B. Nothing of this area is in `gate_run.rs`, `pi_check.rs` or `cargo_script.rs`: **Covered elsewhere**: none.
+H1 holds: the A logs show `File name too long` for the tmux calls of the 182 (spot-checked, not each one), and all 182 pass in B. Nothing of this area is in `gate_run.rs`, `pi_check.rs` or `cargo_script.rs`: **Covered elsewhere**: none.
 
 ## Clusters
 
