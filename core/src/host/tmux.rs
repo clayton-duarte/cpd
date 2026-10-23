@@ -1075,6 +1075,11 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
 
+pub mod pill;
+
+#[cfg(test)]
+mod pill_tests;
+
 #[cfg(test)]
 mod no_inbox;
 
