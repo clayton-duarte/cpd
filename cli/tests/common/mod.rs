@@ -113,26 +113,55 @@ pub const PLAN_POLLS: [(&str, &str); 6] = [
 /// `sh teardown.sh <pgid>` tears the env down and removes its directory; `sh teardown.sh watch
 /// <pid>` (the reaper, the group's leader) waits until `<pid>` is gone or the directory is, and
 /// then tears down, from a session of its own, if the directory is still there. `dir`, `socket`,
-/// `tmuxdir` and `sqlite3` are prepended by [`TestEnv::new`]. Linux only (`/proc`). Idempotent.
+/// `tmuxdir` and `sqlite3` are prepended by [`TestEnv::new`]. Idempotent.
+///
+/// On Linux liveness and the environment come from `/proc` and the second stage starts with
+/// `setsid`. On macOS (`uname` is Darwin; no /proc, no `setsid`) `alive` is `kill -0` plus
+/// `ps -o stat=` (a Z is dead), `mine` reads `ps -E -o command=` (an Apple platform binary hides its
+/// environment there: with none shown `mine` is true, as only recorded pids and tmux's are asked), and the second
+/// stage starts a session with perl's `POSIX::setsid`.
 const TEARDOWN_SH: &str = r#"
 home=$dir/cpd-home
 
 # alive PID: running (a zombie is dead).
 alive() {
+  if [ "$(uname)" = Darwin ]; then
+    kill -0 "$1" 2>/dev/null || return 1
+    _l=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+    case $_l in ""|*Z*|*X*) return 1 ;; esac
+    return 0
+  fi
   _l=
   { read -r _l < "/proc/$1/stat"; } 2>/dev/null || return 1
   case ${_l##*) } in Z*|X*) return 1 ;; esac
 }
 
 # mine PID: PID runs with this env's CPD_HOME.
-mine() { grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null; }
+mine() {
+  if [ "$(uname)" = Darwin ]; then
+    _l=$(ps -E -p "$1" -o command= 2>/dev/null) || return 1
+    case $_l in *" CPD_HOME=$home"|*" CPD_HOME=$home "*) return 0 ;; esac
+    # An environment shown without this CPD_HOME is another's; none shown (no PATH or HOME) is a
+    # platform binary hiding it: a pid cpd recorded, which is taken as the env's.
+    case $_l in *" PATH="*|*" HOME="*) return 1 ;; esac
+    return 0
+  fi
+  grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null
+}
 
 # The pids cpd records for its detached children: the drivers of the Attempts not ended, the
 # engine's distill runs and its tmux restart. Not checked with `mine` yet.
 recorded() {
   if [ -f "$home/cpd.db" ]; then
-    "$sqlite3" -readonly -cmd '.timeout 5000' "$home/cpd.db" \
-      "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    # macOS: a WAL store with no -wal/-shm file cannot be opened -readonly (CANTOPEN); it is opened
+    # for writing with query_only, which creates the two files in the env's directory.
+    if [ "$(uname)" = Darwin ]; then
+      "$sqlite3" -cmd 'PRAGMA query_only=1' -cmd '.timeout 5000' "$home/cpd.db" \
+        "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    else
+      "$sqlite3" -readonly -cmd '.timeout 5000' "$home/cpd.db" \
+        "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    fi
   fi
   for _f in "$home"/run/context-digests/*/distill.pid "$home/run/tmux-restart.pid"; do
     [ -f "$_f" ] && read -r _p < "$_f" && printf '%s\n' "$_p"
@@ -197,6 +226,11 @@ if [ "${1-}" = watch ]; then
   while [ -d "$dir" ] && alive "$2"; do sleep 1; done
   [ -d "$dir" ] || exit 0
   # The teardown stops this group, so it runs outside it.
+  if [ "$(uname)" = Darwin ]; then
+    # No setsid command: perl forks (this process leads its group, so it cannot setsid), the
+    # child starts a session and runs the teardown, the parent returns at once, like setsid.
+    exec perl -MPOSIX -e 'fork and exit 0; POSIX::setsid() != -1 or exit 1; exec @ARGV' sh "$0" "$$" </dev/null >/dev/null 2>&1
+  fi
   exec setsid sh "$0" "$$" </dev/null >/dev/null 2>&1
 fi
 teardown "$1"
