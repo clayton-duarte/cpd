@@ -1288,7 +1288,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
     let precedence = format!(
-        "red > yellow > magenta > blue > white > {} > {} > {} > {}",
+        "red > yellow > magenta > cyan > white > {} > {} > {} > {}",
         palette::SPINNER[0],
         palette::WAITING,
         palette::IDLE,
