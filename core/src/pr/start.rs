@@ -319,8 +319,13 @@ fn prepare_as(home: &CpdHome, config: &Config, plan: &PlanId, pr: &PrRow, stacke
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
     };
-    let prepare = if stacked { git::worktree::prepare_stacked_lead_worktree } else { git::prepare_lead_worktree };
-    match prepare(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, &setup) {
+    let repo = Path::new(&pr.repo);
+    let prepared = match (&pr.head_ref, stacked) {
+        (Some(head_ref), _) => git::prepare_adopted_lead_worktree(repo, plan, &path, &pr.lead_branch, &pr.base, head_ref, &setup),
+        (None, true) => git::worktree::prepare_stacked_lead_worktree(repo, plan, &path, &pr.lead_branch, &pr.base, &setup),
+        (None, false) => git::prepare_lead_worktree(repo, plan, &path, &pr.lead_branch, &pr.base, &setup),
+    };
+    match prepared {
         Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());

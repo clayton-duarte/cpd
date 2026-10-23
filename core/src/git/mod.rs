@@ -16,7 +16,7 @@ pub use snapshot::{GateHooks, GateWorktree, Refused, gate, gate_worktree_path, s
 pub use tamper::{check as tamper_check, protected_list, repo_tests, touched_protected};
 pub use worktree::{
     Created, Kept, LeadRemoval, Prepared, Push, Remote, Setup, StartFailure, Step, attempt_branch, attempt_worktree_path, create_attempt_worktree,
-    create_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, merge_conflicts, pr_lead_worktree_path, prepare_lead_worktree,
+    create_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, merge_conflicts, pr_lead_worktree_path, prepare_adopted_lead_worktree, prepare_lead_worktree,
     push_commit, push_lead_branch, remove_merged_attempt, remove_merged_lead,
 };
 

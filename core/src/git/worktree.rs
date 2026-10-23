@@ -254,6 +254,8 @@ pub enum Remote {
     Absent,
     /// `origin/<branch>` exists and does not conflict with `origin/<base>`.
     Reusable,
+    /// An adopted PR's Lead Branch: cut from `origin/<head_ref>`, which is the pull request's own branch; nothing is pushed.
+    Adopted,
 }
 
 /// Whether `origin` has branch `name`: `ls-remote --exit-code --heads` exits 0 (it has) or 2 (it has not);
@@ -422,7 +424,7 @@ impl Prepared {
     pub fn push(&self) -> Result<bool, CpdError> {
         match self.remote {
             Remote::Absent => push_lead_branch(&self.path, &self.branch).map(|()| true),
-            Remote::None | Remote::Reusable => Ok(false),
+            Remote::None | Remote::Reusable | Remote::Adopted => Ok(false),
         }
     }
 }
@@ -447,7 +449,7 @@ pub fn prepare_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare(repo, plan, path, branch, base, false, setup)
+    prepare(repo, plan, path, branch, base, Cut::Base, setup)
 }
 
 /// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
@@ -461,7 +463,30 @@ pub fn prepare_stacked_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare(repo, plan, path, branch, base, true, setup)
+    prepare(repo, plan, path, branch, base, Cut::Stacked, setup)
+}
+
+/// [`prepare_lead_worktree`] of an **adopted** PR (contract §7.2): `origin <head_ref>` is fetched (a failure is
+/// step `remote`) and the branch is cut from `origin/<head_ref>`. No conflict check against `base`, nothing is pushed,
+/// and the User's own local branch of the head's name is never read.
+pub fn prepare_adopted_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    head_ref: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    prepare(repo, plan, path, branch, base, Cut::Adopted(head_ref), setup)
+}
+
+/// Where a Lead Branch is cut from.
+#[derive(Clone, Copy)]
+enum Cut<'a> {
+    Base,
+    Stacked,
+    Adopted(&'a str),
 }
 
 fn prepare(
@@ -470,7 +495,7 @@ fn prepare(
     path: &Path,
     branch: &str,
     base: &str,
-    stacked: bool,
+    cut: Cut<'_>,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
     let at = |step| move |error| StartFailure { step, error };
@@ -496,7 +521,10 @@ fn prepare(
         }
     }
 
-    let (remote, start) = if stacked {
+    let (remote, start) = if let Cut::Adopted(head_ref) = cut {
+        fetch(repo, &["origin", head_ref]).map_err(at(Step::Remote))?;
+        (Remote::Adopted, format!("origin/{head_ref}"))
+    } else if matches!(cut, Cut::Stacked) {
         check_stacked(repo, branch, base)?
     } else {
         let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
