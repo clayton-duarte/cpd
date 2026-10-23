@@ -19,7 +19,7 @@ test("EOF restarts the follower with the in-memory cursor, also past Events hand
   t.after(() => f.close());
   await started(f);
   f.emit(ev(101, "job-added"), ev(102, "session-state"));
-  f.file("exit-next", "0"); // the fake prints every line of the file before it exits, so both are read first
+  f.exitNext(0); // the fake prints every line of the file before it exits, so both are read first
   await waitFor("a restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 102]);
   assert.deepEqual(f.pi.sent, [], "a clean EOF is no error, and the ignored kinds are no message");
@@ -35,7 +35,7 @@ test("restarts back off from restartInitialMs up to restartMaxMs", async (t) => 
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   for (let n = 2; n <= 5; n++) {
-    f.file("exit-next", "0");
+    f.exitNext(0);
     await waitFor(`start ${n}`, () => f.follows().length === n);
   }
   assert.deepEqual(delays.slice(0, 4), [30, 60, 120, 120], "doubling from restartInitialMs, capped at restartMaxMs");
@@ -45,7 +45,7 @@ test("a failure line is delivered once per code until a line is read again; the 
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
-  f.file("follow-failure.json", JSON.stringify({ line: failure("store_too_new"), exit: 3 }));
+  f.failFollower(failure("store_too_new"), 3);
   await waitFor("three starts", () => f.follows().length >= 3);
   await waitFor("the error", () => errorsOf(f, "store_too_new").length === 1);
   const e = errorsOf(f, "store_too_new")[0]!;
@@ -55,10 +55,10 @@ test("a failure line is delivered once per code until a line is read again; the 
   assert.equal(errorsOf(f, "follower_exit").length, 0, "the exit after a failure line adds nothing");
   assert.equal(errorsOf(f, "store_too_new").length, 1, "once, however often it restarts");
 
-  f.remove("follow-failure.json");
+  f.clearFollowerFailure();
   f.emit(ev(101, "job-merged", { data: { turn: true } }));
   await waitFor("a line is read again", () => f.pi.delivered().length === 1);
-  f.file("follow-failure.json", JSON.stringify({ line: failure("store_too_new"), exit: 3 }));
+  f.failFollower(failure("store_too_new"), 3);
   await waitFor("restarted again", () => f.follows().length >= 5);
   assert.equal(errorsOf(f, "store_too_new").length, 1, "the same what and code is not shown again (§15.1)");
 });
@@ -70,7 +70,7 @@ test("a permanent failure line is reported once and the follower is not restarte
       // The restarts the follower asks for: a restart is scheduled when the follower's end is handled, so none once it has exited is none at all.
       const restarts: number[] = [];
       await started(f, { schedule: (run: () => void, ms: number) => (restarts.push(ms), setTimeout(run, ms)) });
-      f.file("follow-failure.json", JSON.stringify({ line: failure(code), exit: 4 }));
+      f.failFollower(failure(code), 4);
       await waitFor("the error", () => errorsOf(f, code).length === 1);
       await f.exited();
       await f.quiet();
@@ -87,12 +87,12 @@ test("a non-zero exit without a failure line is delivered as an error, once per 
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
-  f.file("exit-next", "2");
+  f.exitNext(2);
   await waitFor("the error", () => errorsOf(f, "follower_exit").length === 1);
   assert.deepEqual([errorsOf(f, "follower_exit")[0]!.what, errorsOf(f, "follower_exit")[0]!.session], ["events follow", ID]);
   assert.match(errorsOf(f, "follower_exit")[0]!.message!, /exit 2/);
   assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
-  f.file("exit-next", "2");
+  f.exitNext(2);
   await waitFor("a third start", () => f.follows().length >= 3); // the second exit was reported (or not) before this start
   assert.equal(errorsOf(f, "follower_exit").length, 1);
 });
@@ -115,13 +115,13 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
   assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
   assert.equal((f.pi.delivered()[0]!.message.details as any).id, 104);
 
-  f.file("exit-next", "0");
+  f.exitNext(0);
   await waitFor("restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 104]);
 
   // a bad line with an id alone: the restart skips past it too
   f.emit({ ...ev(110, "job-merged", { data: { turn: true } }), at: 5 });
-  f.file("exit-next", "0");
+  f.exitNext(0);
   await waitFor("restart", () => f.follows().length === 3);
   assert.equal(f.sinces()[2], 110);
 });
@@ -138,7 +138,7 @@ test("an Event of an unknown kind is skipped silently; the cursor moves past it 
 
   // the cursor is past the unknown Event: an unknown kind last still moves it
   f.emit({ ...ev(104, "job-merged", { data: { turn: true } }), kind: "from-the-future" });
-  f.file("exit-next", "0"); // the fake prints every line emitted before it, then exits: 104 is read before the restart
+  f.exitNext(0); // the fake prints every line emitted before it, then exits: 104 is read before the restart
   await waitFor("restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 104]);
   assert.equal(f.pi.errors().length, 0);

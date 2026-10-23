@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
 import { fileURLToPath } from "node:url";
 import { identityOf, LONG_REFUSAL_NOTICE, LOAD_TIMEOUT_MS, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
-import { Fixture, ID, planShow, waitFor } from "./fake.ts";
+import { Fixture, ID, notify, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
 
@@ -56,7 +56,7 @@ function clock(t: Hooks, f: Fixture) {
   const poll = pollAdapter({
     dir: f.adapterDir,
     intervalMs: 20,
-    validate: async () => (retries++, "never validates"),
+    validate: async () => (retries++, notify(), "never validates"),
     refusal: () => undefined,
     trigger: () => {},
     onRefused: () => {},
