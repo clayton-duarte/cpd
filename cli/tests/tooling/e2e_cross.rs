@@ -289,20 +289,17 @@ impl Fx {
 /// and a bare `origin` holding `main`.
 fn repo(env: &TestEnv, name: &str) -> Repo {
     let path = env.keyed_repo(name).canonicalize().unwrap();
-    fs::create_dir_all(path.join(".config")).unwrap();
     let log = env.root().join(format!("{name}.hooks.log"));
-    fs::write(
-        path.join(".config/wt.toml"),
-        format!(
-            "pre-start = \"echo pre-start {{{{ branch }}}} >> {log}\"\n\
+    env.repo_policy(
+        "acme",
+        name,
+        &format!(
+            "[hooks]\npre-start = \"echo pre-start {{{{ branch }}}} >> {log}\"\n\
              pre-commit = \"echo pre-commit {{{{ branch }}}} >> {log}\"\n\
              pre-merge = \"echo pre-merge {{{{ branch }}}} >> {log}\"\n",
             log = log.display()
         ),
-    )
-    .unwrap();
-    env.git(&path, &["add", "-A"]);
-    env.git(&path, &["commit", "-q", "-m", "hooks"]);
+    );
     let origin = env.root().join(format!("{name}.git"));
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
     env.local_origin(&path, &origin);

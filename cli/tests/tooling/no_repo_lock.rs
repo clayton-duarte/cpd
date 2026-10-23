@@ -63,6 +63,8 @@ fn fx() -> Fx {
     // Every test here is about the Gate, which runs only under `pr.gate = "local"` (contract §8.3).
     env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.git_repo("pay").canonicalize().unwrap();
+    // The PRs below are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     // git runs in this process too (the worktrees), whose environment is not the TestEnv's.
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
@@ -143,8 +145,8 @@ impl Fx {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{id}', 'ctx', 'Plan {id}', '{phase}', 'lead{id}', 't', 't');
              {pull_request}
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
-               VALUES ('{id}', 'repo', '{repo}', 'main', '{status}', '{branch}', '{lead}', cpd_txn(), 't', 't'{values});",
+             INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+               VALUES ('{id}', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', '{lead}', cpd_txn(), 't', 't'{values});",
             repo = self.repo.display(),
             branch = created.branch,
             lead = created.path.display(),
@@ -399,11 +401,8 @@ fn paused_gate(root: &Path) -> String {
 fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_push() {
     let fx = fx();
     let pay = fx.plan("pay", true);
-    // The Gate's hooks on the Lead Branch, pushed: the PR's head and the lease.
-    fs::create_dir_all(pay.path.join(".config")).unwrap();
-    fs::write(pay.path.join(".config/wt.toml"), paused_gate(fx.env.root())).unwrap();
-    fx.git(&pay.path, &["add", "-A"]);
-    fx.git(&pay.path, &["commit", "-q", "-m", "hooks"]);
+    // The Gate's hooks are the repo file's; the Lead Branch is pushed: the PR's head and the lease.
+    fx.env.repo_policy("acme", "pay", &format!("[hooks]\n{}", paused_gate(fx.env.root())));
     fx.git(&pay.path, &["push", "-q", "origin", &pay.branch]);
     let api = fx.submitted(&pay, "api");
     // The base moved: the rebase rewrites the Lead Branch.

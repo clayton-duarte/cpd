@@ -39,6 +39,13 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
     fixture_kind(files, "work", None)
 }
 
+/// [`fixture`] whose repo policy file is `file` (its `[hooks]`).
+fn hooked(file: &str) -> Fx {
+    let fx = fixture(&[]);
+    fx.env.repo_policy("acme", "pay", file);
+    fx
+}
+
 /// [`fixture`] with Job `api` of `kind` and, for a `test` Job, its `(tests, test_files)` as JSON arrays.
 fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>) -> Fx {
     fixture_needing(files, kind, tests, None)
@@ -65,15 +72,17 @@ fn fixture_needing(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     let mut fx = Fx { env, home, repo, lead, work: PathBuf::new() };
     fx.env.sql(&format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{}', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
         fx.repo.display(),
         fx.lead.display()
     ));
@@ -126,9 +135,10 @@ impl Fx {
         }
         self.env.git(&lead, &["add", "-A"]);
         self.env.git(&lead, &["commit", "-q", "-m", "setup", "--allow-empty"]);
+        self.env.repo_policy("acme", key, "");
         self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
@@ -395,7 +405,8 @@ fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
 #[test]
 fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
     let fx = fixture(&[]);
-    let web = fx.add_pr("web", &[(".config/wt.toml", "[pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n")]);
+    let web = fx.add_pr("web", &[]);
+    fx.env.repo_policy("acme", "web", "[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
     let ui = fx.attempt_in(&web, "ui", "running");
     fs::write(ui.join("ui.txt"), "ui\n").unwrap();
     fx.env.git(&ui, &["add", "-A"]);
@@ -414,7 +425,7 @@ fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
 
 #[test]
 fn submit_runs_the_quick_check_and_keeps_its_tail() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n");
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
@@ -426,7 +437,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
 
 #[test]
 fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n");
     fx.commit("a.txt", "a\n");
     let error = refused(&fx.submit(), "check_failed", 3);
     assert!(error["details"]["tail"].as_str().unwrap().contains("broken"), "{error}");
@@ -439,13 +450,13 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
 
 #[test]
 fn submit_refuses_a_quick_check_that_could_not_run() {
-    let killed = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo before; kill -9 $$\"\n")]);
+    let killed = hooked("[hooks.pre-commit]\ncheck = \"echo before; kill -9 $$\"\n");
     killed.commit("a.txt", "a\n");
     let error = refused(&killed.submit(), "check_error", 1);
     assert!(error["details"]["tail"].as_str().unwrap().contains("before"), "{error}");
     assert_eq!(killed.status(), "running");
 
-    let invalid = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n")]);
+    let invalid = hooked("[hooks.pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n");
     invalid.commit("a.txt", "a\n");
     let error = refused(&invalid.submit(), "check_error", 1);
     assert!(error["details"]["reason"].as_str().unwrap().contains("hook_invalid"), "{error}");
@@ -739,8 +750,9 @@ fn only_an_impl_job_is_guarded_and_only_the_files_of_the_test_jobs_it_needs() {
 
 #[test]
 fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
-    let toml = ("[pre-commit]\ncheck = \"exit 7\"\n", "[tests]\nbuild = \"echo building\"\nrun = \"false\"\n");
-    let fx = fixture_kind(&[(".config/wt.toml", toml.0), (".config/cpd.toml", toml.1)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    let toml = ("[hooks.pre-commit]\ncheck = \"exit 7\"\n", "[tests]\nbuild = \"echo building\"\nrun = \"false\"\n");
+    let fx = fixture_kind(&[(".config/cpd.toml", toml.1)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    fx.env.repo_policy("acme", "pay", toml.0);
     fx.commit("tests/t.rs", "// red\n");
     refused(&fx.submit(), "check_failed", 3);
     assert!(!fx.tests_log("build").exists(), "the tests did not run");
@@ -875,7 +887,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
 
 #[test]
 fn show_names_the_check_log_once_a_quick_check_has_run() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo hi\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo hi\"\n");
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let out = fx.cpd(&["show", "api-a1"]).ok();
