@@ -15,7 +15,6 @@ mod interface;
 mod layout;
 mod no_repo_lock;
 mod npm_fresh;
-mod pi_check;
 mod preview_script;
 mod prune_script;
 mod slot;

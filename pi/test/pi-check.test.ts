@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -31,10 +31,10 @@ const copyCheckout = (dir: string): void => {
   cpSync(join(ROOT, "pi"), join(dir, "pi"), { recursive: true, filter: (src) => !src.includes("node_modules") });
 };
 
-/** The script and its pty runner (the runner only when the checkout has one). */
+/** The script and its pty runner. */
 const copyScripts = (dir: string): void => {
   mkdirSync(join(dir, "scripts"), { recursive: true });
-  for (const name of ["pi-check.sh", "pi-check-pty.py"]) if (existsSync(join(ROOT, "scripts", name))) cpSync(join(ROOT, "scripts", name), join(dir, "scripts", name));
+  for (const name of ["pi-check.sh", "pi-check-pty.py"]) cpSync(join(ROOT, "scripts", name), join(dir, "scripts", name));
 };
 
 const run = (script: string, args: string[], cwd: string, env: Record<string, string>) =>
@@ -179,7 +179,7 @@ test("a pi that exits before it follows fails step 3 at once, says how it exited
     const r = run(join(ROOT, "scripts", "pi-check.sh"), [recordingPi(dir, out, "process.exit(3);")], dir, baseEnv());
 
     assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /pi-check: FAIL: step 3 \(activation\).*exit(ed)? (status |code )?3/);
+    assert.match(r.stderr, /pi-check: FAIL: step 3 \(activation\).*pi exited with status 3/);
     assert.doesNotMatch(r.stdout, /pi-check: ok/);
     assert.equal(alive(seen(out).child), false, "a child of pi outlived the check");
   } finally {
@@ -291,7 +291,7 @@ exec cpd events follow --session "$CPD_SESSION" --since 0
 const toolsWithout = (dir: string, without: string[]): string => {
   const tools = join(dir, "tools");
   mkdirSync(tools);
-  for (const tool of ["sh", "env", "mktemp", "mkdir", "rm", "cat", "tr", "dirname", "basename", "grep", "tail", "head", "sed", "awk", "uname", "uuidgen", "chmod", "ls", "kill", "cp", "mv", "ln", "date", "id", "wc", "sort", "python3", "node"]) {
+  for (const tool of ["sh", "env", "mktemp", "mkdir", "rm", "cat", "tr", "dirname", "basename", "grep", "tail", "head", "sed", "awk", "mkfifo", "uname", "uuidgen", "chmod", "ls", "kill", "cp", "mv", "ln", "date", "id", "wc", "sort", "python3", "node"]) {
     if (without.includes(tool)) continue;
     try {
       symlinkSync(lookup(tool), join(tools, tool));
