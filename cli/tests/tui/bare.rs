@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -99,13 +99,18 @@ fn run_in_terminal<'a>(env: &'a TestEnv, name: &str, inside: bool, redirect: &st
     t
 }
 
+/// How long a `cpd` in a terminal may take to exit: a restart of a real tmux server that brings every session back.
+/// Alone these tests take 11-41 s (16 `bare::` tests at once, 14 cores); in the Gate they ran 66-77 s and the 30 s
+/// of `common::WAIT` was not enough. Only `bare::` waits this long (see the test group in `.config/nextest.toml`).
+const EXIT_WAIT: Duration = Duration::from_secs(90);
+
 impl Terminal<'_> {
     /// Waits for the command to exit; its exit code. The shell creates the file before it
     /// writes the code (`echo $? > file`), so the file existing is not the code being there:
     /// the wait is for the whole line.
     fn exit_code(&self) -> i32 {
         let mut code = None;
-        wait_until("the command to exit", || {
+        wait_until_for("the command to exit", EXIT_WAIT, || {
             code = fs::read_to_string(&self.code).ok().and_then(|text| text.strip_suffix('\n')?.parse().ok());
             code.is_some()
         });
