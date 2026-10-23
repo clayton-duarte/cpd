@@ -4,9 +4,9 @@ use cpd_core::host::tmux::{BORDER_FORMAT, SERVER_OPTIONS, STATUS_FORMAT};
 
 /// The value of the server option `name` (set with `set -g` or `set -gq`).
 fn option(name: &str) -> &'static str {
-    let found: Vec<&&[&str]> = SERVER_OPTIONS.iter().filter(|o| o[0] == "set" && o[2] == name).collect();
+    let found: Vec<&Vec<String>> = SERVER_OPTIONS.iter().filter(|o| o[0] == "set" && o[2] == name).collect();
     assert_eq!(found.len(), 1, "{name} is set once");
-    found[0][3]
+    &found[0][3]
 }
 
 #[test]
@@ -18,7 +18,7 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
 
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const CAP: &str = "#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[reverse]";
+    const CAP: &str = "#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]";
     let pill = |title: &str| format!("{CAP}{title}#[noreverse]\u{e0b4}");
     let want = format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
@@ -29,7 +29,7 @@ fn border_format_title_pills_follow_the_rule() {
              #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
         ),
     );
-    assert_eq!(BORDER_FORMAT, want);
+    assert_eq!(*BORDER_FORMAT, want);
     let colour_zero = format!("colour{}", 0);
     assert_eq!(BORDER_FORMAT.matches("#[reverse]").count(), 2, "one #[reverse] per pill");
     assert_eq!(BORDER_FORMAT.matches("#[noreverse]").count(), 2, "one #[noreverse] per pill");
@@ -65,8 +65,8 @@ fn status_line_pills_follow_the_rule() {
     // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.
     let fill = want.find("#[fg=colour8]#{R:").expect("the fill") + "#[fg=colour8]".len();
     let right = want.find("#[default]#[align=right]").expect("the right group");
-    assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {STATUS_FORMAT}");
-    assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {STATUS_FORMAT}");
+    assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {}", *STATUS_FORMAT);
+    assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {}", *STATUS_FORMAT);
     for old in ["colour236", "push-default", "pop-default"] {
         assert!(!STATUS_FORMAT.contains(old), "{old} is gone from the status format");
     }
