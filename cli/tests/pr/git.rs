@@ -830,7 +830,8 @@ fn the_list_is_the_policys_never_the_attempts() {
     let (env, repo) = tamper_repo();
     // The Attempt edits verify.sh and also "protects" its own file by writing a list in its tree.
     on_att(&env, &repo, |r| {
-        fs::write(r.join(".config/cpd.toml"), "protected = [\"mine.txt\"]\n").ok();
+        fs::create_dir_all(r.join(".config")).unwrap();
+        fs::write(r.join(".config/cpd.toml"), "protected = [\"mine.txt\"]\n").unwrap();
         fs::write(r.join("verify.sh"), "weakened\n").unwrap();
         fs::write(r.join("mine.txt"), "mine\n").unwrap();
     });
@@ -921,7 +922,7 @@ fn a_protected_file_deleted_in_the_attempt_alone_is_tampered() {
 
 #[test]
 fn base_ref_is_origin_slash_base_only_with_an_origin() {
-    let (env, repo) = tamper_repo(None);
+    let (env, repo) = tamper_repo();
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "main");
     env.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "origin/main");
