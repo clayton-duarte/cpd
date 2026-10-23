@@ -6,8 +6,8 @@ use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind, Urgency};
 use cpd_core::session::State;
 
-/// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Blue > White >
-/// Working > Waiting > Idle > Stopped` (§17, Precedence); `Magenta > Blue > White` since hs-d570.
+/// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Cyan > White >
+/// Working > Waiting > Idle > Stopped` (§17, Precedence); `Magenta > Cyan > White` since hs-d570.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
     /// `palette::STOPPED`: pi stopped.
@@ -21,8 +21,8 @@ pub enum Dot {
     Working,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
     White,
-    /// `palette::NEEDS_YOU` blue: an Inbox item of urgency `blue` (hs-d570).
-    Blue,
+    /// `palette::NEEDS_YOU` cyan: an Inbox item of urgency `cyan` (hs-d570).
+    Cyan,
     /// `palette::NEEDS_YOU` magenta.
     Magenta,
     /// `palette::NEEDS_YOU` yellow.
@@ -66,7 +66,7 @@ impl From<Urgency> for Dot {
             Urgency::Yellow => Dot::Yellow,
             Urgency::Magenta => Dot::Magenta,
             Urgency::White => Dot::White,
-            Urgency::Blue => Dot::Blue,
+            Urgency::Cyan => Dot::Cyan,
         }
     }
 }
@@ -135,12 +135,12 @@ mod tests {
 
     #[test]
     fn an_item_gives_its_urgency_colour_unless_the_session_is_working() {
-        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
+        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
             assert_eq!(Dot::of(State::Working, Some(urgency)), Dot::Working, "own state first (hs-d183): {urgency:?}");
         }
         for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             for (urgency, dot) in
-                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Blue, Dot::Blue), (Urgency::White, Dot::White)]
+                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Cyan, Dot::Cyan), (Urgency::White, Dot::White)]
             {
                 assert_eq!(Dot::of(state, Some(urgency)), dot, "{state:?} {urgency:?}");
                 assert!(dot.needs_you());
@@ -218,24 +218,24 @@ mod tests {
         assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None);
     }
 
-    /// hs-d570 BL5: a Session whose strongest open item is blue shows the blue dot, between magenta and white.
+    /// hs-d570 BL5: a Session whose strongest open item is cyan shows the cyan dot, between magenta and white.
     #[test]
-    fn a_blue_item_gives_its_session_a_blue_dot_between_magenta_and_white() {
-        assert_eq!(Dot::from(Urgency::Blue), Dot::Blue);
-        assert_eq!(Dot::of(State::Idle, Some(Urgency::Blue)), Dot::Blue);
-        assert!(Dot::Blue.needs_you());
-        assert!(Dot::Magenta > Dot::Blue && Dot::Blue > Dot::White);
+    fn a_cyan_item_gives_its_session_a_cyan_dot_between_magenta_and_white() {
+        assert_eq!(Dot::from(Urgency::Cyan), Dot::Cyan);
+        assert_eq!(Dot::of(State::Idle, Some(Urgency::Cyan)), Dot::Cyan);
+        assert!(Dot::Cyan.needs_you());
+        assert!(Dot::Magenta > Dot::Cyan && Dot::Cyan > Dot::White);
         let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
         let dialog = item(Kind::Dialog, Urgency::Magenta, Some("s-lead"), None);
-        let blue_dialog = item(Kind::Dialog, Urgency::Blue, Some("s-lead"), None);
-        assert_eq!(urgency(&[unread.clone(), blue_dialog.clone()], &id("s-lead"), None), Some(Urgency::Blue), "blue beats white");
-        assert_eq!(urgency(&[dialog, blue_dialog], &id("s-lead"), None), Some(Urgency::Magenta), "magenta beats blue");
+        let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
+        assert_eq!(urgency(&[unread.clone(), cyan_dialog.clone()], &id("s-lead"), None), Some(Urgency::Cyan), "cyan beats white");
+        assert_eq!(urgency(&[dialog, cyan_dialog], &id("s-lead"), None), Some(Urgency::Magenta), "magenta beats cyan");
     }
 
     #[test]
     fn the_order_is_the_precedence() {
-        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Working, Dot::Waiting, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > blue > white > working > waiting > idle > stopped");
+        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White, Dot::Working, Dot::Waiting, Dot::Idle, Dot::Stopped];
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > cyan > white > working > waiting > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 5, "the needs-you dots are the five colours");
     }

@@ -858,11 +858,11 @@ mod tests {
 
     #[test]
     fn a_curate_item_draws_its_own_glyph_in_the_blue_colour_and_another_blue_item_the_generic_one() {
-        let blue = Some(palette::color_clickable(Meaning::Notice));
-        let row = |kind| glyph_of(&item(1, kind, Urgency::Blue, "alpha: 2", OPENED));
-        assert_eq!(row(Kind::CurateDocs), ("\u{F0653}".to_owned(), blue), "a documentation candidate");
-        assert_eq!(row(Kind::CurateRetire), ("\u{F116E}".to_owned(), blue), "a record to retire");
-        assert_eq!(row(Kind::Unread), ("\u{F06F1}".to_owned(), blue), "the generic system item is the blue tier's");
+        let cyan = Some(palette::color_clickable(Meaning::Notice));
+        let row = |kind| glyph_of(&item(1, kind, Urgency::Cyan, "alpha: 2", OPENED));
+        assert_eq!(row(Kind::CurateDocs), ("\u{F0653}".to_owned(), cyan), "a documentation candidate");
+        assert_eq!(row(Kind::CurateRetire), ("\u{F116E}".to_owned(), cyan), "a record to retire");
+        assert_eq!(row(Kind::Unread), ("\u{F06F1}".to_owned(), cyan), "the generic system item is the cyan tier's");
         // the other tiers: magenta is back to U+F173A
         let tier = |u| glyph_of(&item(1, Kind::PlanReview, u, "x", OPENED)).0;
         assert_eq!(

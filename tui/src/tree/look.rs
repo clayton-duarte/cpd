@@ -370,7 +370,7 @@ fn tiers() -> [(Urgency, &'static str, Color); 5] {
         (Urgency::Red, "\u{F0362}", palette::color_clickable(Meaning::Failed)),
         (Urgency::Yellow, "\u{F069A}", palette::color_clickable(Meaning::Review)),
         (Urgency::Magenta, "\u{F173A}", palette::color_clickable(Meaning::Planning)),
-        (Urgency::Blue, "\u{F06F1}", palette::color_clickable(Meaning::Notice)),
+        (Urgency::Cyan, "\u{F06F1}", palette::color_clickable(Meaning::Notice)),
         (Urgency::White, "\u{F0366}", palette::color_clickable(Meaning::NotStarted)),
     ]
 }
@@ -399,9 +399,9 @@ fn an_item_row_is_the_muted_line_one_space_its_tier_glyph_in_its_colour_a_space_
 }
 
 #[test]
-fn the_tier_glyphs_are_red_f0362_yellow_f069a_magenta_f173a_blue_f06f1_white_f0366() {
+fn the_tier_glyphs_are_red_f0362_yellow_f069a_magenta_f173a_cyan_f06f1_white_f0366() {
     assert_eq!(
-        [palette::TIER_RED, palette::TIER_YELLOW, palette::TIER_MAGENTA, palette::TIER_BLUE, palette::TIER_WHITE],
+        [palette::TIER_RED, palette::TIER_YELLOW, palette::TIER_MAGENTA, palette::TIER_CYAN, palette::TIER_WHITE],
         ["\u{F0362}", "\u{F069A}", "\u{F173A}", "\u{F06F1}", "\u{F0366}"]
     );
     for (urgency, glyph, colour) in tiers() {

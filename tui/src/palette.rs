@@ -41,7 +41,7 @@ pub enum Meaning {
     Nothing,
     /// A Session that waits for another agent, not for the User (hs-d303): the waiting dot.
     Waiting,
-    /// A cpd notice that blocks nothing: the blue Inbox tier and its Session dot (hs-d570). Not in [`Meaning::ALL`].
+    /// A cpd notice that blocks nothing: the cyan Inbox tier and its Session dot (hs-d570, pro-d16). Not in [`Meaning::ALL`].
     Notice,
 }
 
@@ -88,7 +88,9 @@ pub fn color(m: Meaning) -> Color {
         Meaning::Nothing => Color::DarkGray,
         // Cyan, not blue: blue is focus and selection only; agent activity is cyan.
         Meaning::Waiting => Color::Cyan,
-        Meaning::Notice => Color::Blue,
+        // The notice tier shares cyan 6 with `Waiting`: two meanings, one colour, because the Inbox tier is read from its glyph and
+        // position and the Inbox draws no waiting state (pro-d16).
+        Meaning::Notice => Color::Cyan,
     }
 }
 
@@ -163,8 +165,8 @@ pub fn bright(c: Color) -> Color {
 /// The colour of a meaning on a clickable mark: its bright pair.
 pub fn color_clickable(m: Meaning) -> Color {
     match m {
-        // the notice blue is 12 on a clickable mark (hs-d570 BL3); `bright` keeps the focus blue at 4
-        Meaning::Notice => Color::LightBlue,
+        // the notice cyan is 14 on a clickable mark (pro-d16); `Waiting` shares it, see [`color`]
+        Meaning::Notice => Color::LightCyan,
         _ => bright(color(m)),
     }
 }
@@ -391,12 +393,12 @@ pub const NEEDS_YOU: &str = SPINNER[8];
 pub const TIER_WHITE: &str = "\u{F0366}";
 /// Magenta: a decision before the work runs (the generic system item), U+F173A (hs-d570 returns it from U+F06F1).
 pub const TIER_MAGENTA: &str = "\u{F173A}";
-/// A documentation candidate (an Inbox item of kind `curate-docs`), blue.
+/// A documentation candidate (an Inbox item of kind `curate-docs`), cyan.
 pub const ITEM_DOCS: &str = "\u{F0653}";
-/// A record to retire (an Inbox item of kind `curate-retire`), blue.
+/// A record to retire (an Inbox item of kind `curate-retire`), cyan.
 pub const ITEM_RETIRE: &str = "\u{F116E}";
-/// Blue: a cpd notice that blocks nothing (the generic system item), U+F06F1 (hs-d570).
-pub const TIER_BLUE: &str = "\u{F06F1}";
+/// Cyan: a cpd notice that blocks nothing (the generic system item), U+F06F1 (hs-d570).
+pub const TIER_CYAN: &str = "\u{F06F1}";
 /// Yellow: pull-request work.
 pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
@@ -409,13 +411,13 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Yellow => (TIER_YELLOW, Meaning::Review),
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
-        Urgency::Blue => (TIER_BLUE, Meaning::Notice),
+        Urgency::Cyan => (TIER_CYAN, Meaning::Notice),
     };
     Span::styled(glyph, fg_clickable(meaning))
 }
 
 /// The glyph of an Inbox item of `kind` and `urgency` (hs-d569 CD5): its tier's glyph, except the two curation kinds, which
-/// draw their own, in the blue colour.
+/// draw their own, in the cyan colour.
 pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'static> {
     use cpd_core::inbox::model::Kind as Item;
     match kind {
@@ -443,7 +445,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
         Dot::Yellow => (NEEDS_YOU, fg_clickable(Meaning::Review)),
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
-        Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
+        Dot::Cyan => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
@@ -554,16 +556,16 @@ mod tests {
         }
     }
 
-    /// hs-d570 BL3: the notice colour is blue 4, bright 12 on a clickable row; the focus block stays 4.
+    /// hs-d570 BL3: the notice colour is cyan 6, bright 14 on a clickable row (pro-d16); the focus block stays 4.
     #[test]
-    fn the_notice_meaning_is_blue_4_and_bright_12_on_a_clickable_row() {
-        assert_eq!(color(Meaning::Notice), numbered::C4);
-        assert_eq!(color_clickable(Meaning::Notice), Color::LightBlue, "12");
+    fn the_notice_meaning_is_cyan_6_and_bright_14_on_a_clickable_row() {
+        assert_eq!(color(Meaning::Notice), Color::Cyan);
+        assert_eq!(color_clickable(Meaning::Notice), Color::LightCyan, "14");
         assert_eq!(selected().bg, Some(numbered::C4), "the focus block is still 4");
         assert_eq!(selected().fg, Some(numbered::C0), "a mark on the cursor's blue block draws text 0");
-        assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::Notice)));
-        assert_eq!(dot_span(Dot::Blue, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
-        assert_eq!(dot_span(Dot::Blue, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
+        assert_eq!(tier_span(Urgency::Cyan), Span::styled(TIER_CYAN, fg_clickable(Meaning::Notice)));
+        assert_eq!(dot_span(Dot::Cyan, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
+        assert_eq!(dot_span(Dot::Cyan, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
     }
 
     #[test]
@@ -612,7 +614,7 @@ mod tests {
             (Dot::Red, Color::LightRed),
             (Dot::Yellow, Color::LightYellow),
             (Dot::Magenta, Color::LightMagenta),
-            (Dot::Blue, Color::LightBlue),
+            (Dot::Cyan, Color::LightCyan),
             (Dot::White, Color::White),
         ] {
             assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
@@ -674,7 +676,7 @@ mod tests {
             (Dot::Red, NEEDS_YOU),
             (Dot::Yellow, NEEDS_YOU),
             (Dot::Magenta, NEEDS_YOU),
-            (Dot::Blue, NEEDS_YOU),
+            (Dot::Cyan, NEEDS_YOU),
             (Dot::White, NEEDS_YOU),
             (Dot::Waiting, WAITING),
             (Dot::Idle, IDLE),

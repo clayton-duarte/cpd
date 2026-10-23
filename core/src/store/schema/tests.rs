@@ -1033,7 +1033,7 @@ fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
     let item = |urgency: &str| {
         format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');")
     };
-    for urgency in ["white", "blue", "magenta", "yellow", "red"] {
+    for urgency in ["white", "cyan", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
     }
     assert!(write(&mut store, &item("cyan")).is_err());
