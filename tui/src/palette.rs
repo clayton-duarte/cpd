@@ -14,7 +14,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
 
@@ -140,9 +140,14 @@ pub fn ui(u: Ui) -> Color {
 /// The one colour for in focus and selection: blue, as the cockpit's `pane-active-border-style fg=blue`.
 const FOCUS: Color = Color::Blue;
 
-/// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text 0, in place of reverse video.
+/// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text inverted, in place of reverse video.
 pub fn selected() -> Style {
-    Style::new().bg(FOCUS).fg(Color::Black)
+    block(FOCUS)
+}
+
+/// A block (a pill, a selection): reverse video, the colour as foreground over the terminal's own background.
+fn block(c: Color) -> Style {
+    Style::new().fg(c).bg(Color::Reset).add_modifier(Modifier::REVERSED)
 }
 
 /// The selected tree row's name: blue text (hs-d351, hs-d534), where [`selected`] is the block of a cursor.
@@ -207,7 +212,7 @@ pub fn archived_text() -> Style {
     muted_text()
 }
 
-/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text 0. A draft is
+/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text inverted. A draft is
 /// magenta. `merging` is a running Job whose Attempt is merging; A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
 pub fn job_pill(status: JobStatus, merging: bool, _stuck: bool) -> Style {
     pill_clickable(job_status(status, merging).1)
@@ -223,35 +228,35 @@ pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
 }
 
-/// A pill: text 0 on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
+/// A pill: text inverted on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
 pub fn pill(m: Meaning) -> Style {
-    Style::new().fg(Color::Black).bg(color(m))
+    block(color(m))
 }
 
-/// A clickable pill: text 0 on the bright pair of a meaning.
+/// A clickable pill: text inverted on the bright pair of a meaning.
 pub fn pill_clickable(m: Meaning) -> Style {
-    Style::new().fg(Color::Black).bg(color_clickable(m))
+    block(color_clickable(m))
 }
 
-/// A read-only pill (hs-d534 rule (3)): background 7 (`Gray`), text 0 (`Black`); its caps are drawn in its background colour.
+/// A read-only pill (hs-d534 rule (3)): colour 7 (`Gray`), text inverted; its caps are drawn in its background colour.
 pub fn pill_static() -> Style {
-    Style::new().bg(Color::Gray).fg(Color::Black)
+    block(Color::Gray)
 }
 
-/// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text 0 (`Black`); its caps are drawn in its background colour.
+/// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text inverted; its caps are drawn in its background colour.
 pub fn pill_interactive() -> Style {
-    Style::new().bg(Color::White).fg(Color::Black)
+    block(Color::White)
 }
 
-/// The selected button's pill (hs-d578, hs-d534): text 0 on bright blue 12, its caps drawn in its background colour.
+/// The selected button's pill (hs-d578, hs-d534): text inverted on bright blue 12, its caps drawn in its background colour.
 pub fn pill_selected() -> Style {
-    Style::new().bg(Color::LightBlue).fg(Color::Black)
+    block(Color::LightBlue)
 }
 
-/// The input box's label pill (hs-d578 F9): text 0 on the colour of the box's border (15 unfocused, 12 focused), its caps
+/// The input box's label pill (hs-d578 F9): text inverted on the colour of the box's border (15 unfocused, 12 focused), its caps
 /// drawn in that colour.
 pub fn label_pill(focused: bool) -> Style {
-    Style::new().bg(input_border(focused).fg.expect("a border has a colour")).fg(Color::Black)
+    block(input_border(focused).fg.expect("a border has a colour"))
 }
 
 /// The focused pane's title pill: the blue block, as [`selected`].
@@ -263,7 +268,6 @@ pub fn pill_focus() -> Style {
 #[cfg(test)]
 pub(crate) mod numbered {
     use ratatui::style::Color;
-    pub(crate) const C0: Color = Color::Black;
     pub(crate) const C1: Color = Color::Red;
     pub(crate) const C2: Color = Color::Green;
     pub(crate) const C3: Color = Color::Yellow;
@@ -286,10 +290,10 @@ pub(crate) mod numbered {
 pub(crate) mod check {
     use ratatui::buffer::Cell;
 
-    /// The cell is part of a blue block: background 4, text 0 (a cursor or a selection).
+    /// The cell is part of a blue block: colour 4, reversed (a cursor or a selection).
     pub(crate) fn is_selected(cell: &Cell) -> bool {
         let block = super::selected();
-        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg)
+        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg) && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
     }
 
     /// The cell's text is muted, colour 8.
@@ -556,8 +560,8 @@ mod tests {
     fn the_notice_meaning_is_blue_4_and_bright_12_on_a_clickable_row() {
         assert_eq!(color(Meaning::Notice), numbered::C4);
         assert_eq!(color_clickable(Meaning::Notice), Color::LightBlue, "12");
-        assert_eq!(selected().bg, Some(numbered::C4), "the focus block is still 4");
-        assert_eq!(selected().fg, Some(numbered::C0), "a mark on the cursor's blue block draws text 0");
+        assert_eq!(selected().fg, Some(numbered::C4), "the focus block is still 4");
+        assert_eq!(selected().bg, Some(Color::Reset), "a block is reversed over the terminal's background");
         assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::Notice)));
         assert_eq!(dot_span(Dot::Blue, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
         assert_eq!(dot_span(Dot::Blue, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
@@ -745,7 +749,7 @@ mod tests {
         assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
     }
 
-    /// No other file of the cockpit's views names a colour. `moon_tests.rs` is exempt: it pins the dots' colours (hs-d579) and draws nothing.
+    /// No other file of the cockpit's views names a colour. `moon_tests.rs` is exempt: it pins the dots' colours (hs-d579) and draws nothing; so are `pill_colours.rs` and `palette/`, which pin the palette's own styles.
     #[test]
     fn no_colour_outside_the_palette() {
         fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
@@ -757,7 +761,7 @@ mod tests {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     walk(&path, offenders);
-                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs" && n != "moon_tests.rs") {
+                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs" && n != "moon_tests.rs" && n != "pill_colours.rs") && !path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette")) {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for (n, line) in text.lines().enumerate() {
                         if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {
@@ -773,9 +777,9 @@ mod tests {
     }
 
     #[test]
-    fn a_pill_is_black_on_the_colour() {
-        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
-        assert_eq!(pill_clickable(Meaning::Review), Style::new().fg(Color::Black).bg(Color::LightYellow));
+    fn a_pill_is_the_colour_inverted() {
+        assert_eq!(pill(Meaning::Review), block(Color::Yellow));
+        assert_eq!(pill_clickable(Meaning::Review), block(Color::LightYellow));
     }
 
     #[test]

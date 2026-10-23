@@ -127,7 +127,9 @@ fn the_label_pill_is_the_border_colour_blue_12_focused_and_white_15_unfocused() 
         let reset = ratatui::buffer::Cell::EMPTY.bg;
         assert_eq!((buf[(3, 0)].symbol(), buf[(3, 0)].fg, buf[(3, 0)].bg), (L, border, reset));
         for x in 4..9 {
-            assert_eq!((buf[(x, 0)].bg, buf[(x, 0)].fg), (border, numbered::C0), "pill {x}");
+            let cell = &buf[(x, 0)];
+            assert_eq!((cell.fg, cell.bg), (border, reset), "pill {x}");
+            assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED), "pill {x} is reversed: {cell:?}");
         }
         assert_eq!((buf[(9, 0)].symbol(), buf[(9, 0)].fg, buf[(9, 0)].bg), (R, border, reset));
         for x in [3, 4, 5] {

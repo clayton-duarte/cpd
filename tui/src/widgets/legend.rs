@@ -34,7 +34,7 @@ const CAP_R: &str = "\u{e0b4}";
 /// A sample pill with its rounded caps: the caps in the pill's colour on the default background, as the Plan view draws
 /// a Job pill (`plan/flow.rs`).
 fn capped(body: String, pill: Style) -> Line<'static> {
-    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
+    let cap = Style::new().fg(pill.fg.expect("a pill has a colour"));
     Line::from(vec![Span::styled(CAP_L, cap), Span::styled(body, pill), Span::styled(CAP_R, cap)])
 }
 

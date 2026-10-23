@@ -443,7 +443,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
                 // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job's is colour 8
                 let style = jobs[i].status.pill();
-                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
                 buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
                 buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
                 let body = body_of(rect);
@@ -577,7 +577,7 @@ impl Chart {
         if let Some(pill) = selected.map(|i| self.pills[i].rect) {
             let window = Rect::new(ox, oy, area.width, area.height);
             // the body is the blue block, bold; the caps are blue too (the block's colour as foreground)
-            let blue = Style::new().fg(palette::pill_focus().bg.expect("a pill has a colour"));
+            let blue = Style::new().fg(palette::pill_focus().fg.expect("a pill has a colour"));
             for (rect, style) in [
                 (body_of(pill), palette::pill_focus().add_modifier(Modifier::BOLD)),
                 (Rect::new(pill.x, pill.y, 1, 1), blue),
@@ -633,7 +633,7 @@ mod tests {
             // a rounded cap on each end: the status colour on the default background
             for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
                 let cap = &c.buf[(x, p.rect.y)];
-                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, status.pill().bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, status.pill().fg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
             }
         }
     }
@@ -981,7 +981,7 @@ mod tests {
         // the pill's body is the blue block, bold; its caps are blue text on the terminal's background
         assert_eq!((dst[(4, 1)].bg, dst[(4, 1)].fg), (palette::pill_focus().bg.unwrap(), palette::pill_focus().fg.unwrap()));
         assert!(dst[(4, 1)].modifier.contains(Modifier::BOLD));
-        assert_eq!((dst[(3, 1)].fg, dst[(3, 1)].bg), (palette::pill_focus().bg.unwrap(), ratatui::buffer::Cell::default().bg));
+        assert_eq!((dst[(3, 1)].fg, dst[(3, 1)].bg), (palette::pill_focus().fg.unwrap(), ratatui::buffer::Cell::default().bg));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
     }
 

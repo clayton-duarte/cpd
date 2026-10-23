@@ -1018,9 +1018,9 @@ mod tests {
                 assert_eq!(reversed(&buf, row), vec![row == y; 44], "{selected:?}, row {row}");
             }
         }
-        // no mark keeps a colour of its own: every cell of the row is text 0 on the blue block
+        // no mark keeps a colour of its own: every cell of the row is the blue block
         let buf = render(&tree, &mut state_for(&tree, &[], &["alpha", "ship"]), 44, 9, true);
-        assert!((0..44).all(|x| fg(&buf, x, 1) == palette::selected().fg.unwrap()), "the zero, a separator, the running Jobs: all text 0");
+        assert!((0..44).all(|x| fg(&buf, x, 1) == palette::selected().fg.unwrap()), "the zero, a separator, the running Jobs: all the block's blue");
     }
 
     #[test]
@@ -1052,9 +1052,9 @@ mod tests {
         (0..buf.area.height).find(|&y| text(buf, y).contains(needle)).unwrap_or_else(|| panic!("no row says {needle:?}: {:?}", lines(buf)))
     }
 
-    /// Every cell of `buf` whose foreground is blue.
+    /// Every cell of `buf` whose foreground is blue, a cursor's block apart.
     fn blue_cells(buf: &Buffer) -> Vec<(u16, u16)> {
-        (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y))).filter(|&(x, y)| fg(buf, x, y) == blue()).collect()
+        (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y))).filter(|&(x, y)| fg(buf, x, y) == blue() && !crate::palette::check::is_selected(&buf[(x, y)])).collect()
     }
 
     /// The cells `x0..x0 + width` of row `y`, the width of `name`, with the name drawn there.
