@@ -1,0 +1,13 @@
+cpd's ask-user-question is a copy of @juicesharp/rpiv-ask-user-question, MIT licensed (see LICENSE beside this file, upstream's text byte for byte).
+
+Upstream:  https://github.com/juicesharp/rpiv-mono, directory packages/rpiv-ask-user-question
+Base:      tag v2.13.8, commit afc21bc25f7d07cae9fb3103dc309240a16b9f49
+
+What came in: the 43 .ts files, under the same relative names. Not copied: locales/, docs/, README.md, package.json, CHANGELOG.md, the tests.
+
+The changes cpd made on top:
+(1) Erasable syntax only: the 8 constructor parameter properties (view/components/multi-select-view.ts, view/components/submit-picker.ts, view/components/tab-bar.ts, view/tab-content-strategy.ts) are explicit fields assigned in the constructor.
+(2) The i18n imports are gone: the @juicesharp/rpiv-i18n block of index.ts is removed and `t` of state/i18n-bridge.ts is the identity (it returns the fallback).
+(3) config.ts reads collapseKey itself, from $XDG_CONFIG_HOME/rpiv-ask-user-question/config.json else ~/.config/rpiv-ask-user-question/config.json; the @juicesharp/rpiv-config import and the `guidance` config (GuidanceFields, validateGuidanceFields and their two call sites in ask-user-question.ts) are gone.
+(6) Comments that cited the removed packages are reworded; no comment cites a record id.
+(7) Relative imports end in .ts, not .js (every file that has one), so node runs the copy as the tests import it; one comment of tool/response-envelope.ts is reworded so the import scan of pi/test/ask-user-question/notice.test.ts does not read it as an import.
