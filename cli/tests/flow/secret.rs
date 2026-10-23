@@ -37,6 +37,7 @@ impl Fx {
     pub fn new() -> Fx {
         let env = TestEnv::new();
         let fx = Fx { env };
+        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
         let fp = "0".repeat(64);
         let job = |plan: &str, key: &str, pr: &str| {
             format!(
