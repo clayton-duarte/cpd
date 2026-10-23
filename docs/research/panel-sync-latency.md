@@ -22,11 +22,10 @@ and of the tmux probe T (18:49 to 19:10 EDT, section 2.3). Every number says its
 - On the live cockpit the engine's `cpd pr poll` child takes 4.8 to 7.8 s of wall time (n=26) and E8 comes after it:
   polls start 9.9 to 12.8 s apart (n=24), so E8 runs in two bursts per cycle and the gap to the next one is up to
   12.8 s (derived, n=26). That reproduces `panel-sync-cost.md`'s median 6.1 s and p95 12.6 s for the Inbox lag.
-- tmux shows an option within 1 to 22 ms of its being set (n=26, 40 and 40, section 5): not a source of seconds.
-- The spread between two views of the same commit: tree against plan up to 213 ms; plan against widgets up to 412 ms;
-  Inbox row against plan median 2.4 to 3.4 s, max 4.9 s (PR changes).
-- A fresh run of A (n=40) agrees with the raw data within 28 ms of median; the fresh B within 472 ms (a uniform 0 to
-  5 s wait, n=20 per direction).
+- tmux shows an option within 1 to 22 ms of its being set (n=26, 40, 40): not a source of seconds.
+- Spread between views for one commit: tree against plan up to 213 ms; plan against widgets up to 412 ms; the Inbox row
+  against the plan view median 2.4 to 3.4 s, max 4.9 s.
+- A fresh run of A (n=40) agrees with the raw data within 28 ms of median; the fresh B within 472 ms (a uniform wait).
 
 ## 1. Method and tools
 
@@ -57,30 +56,17 @@ Probe (design in the Appendix; harness lost with `/tmp` after this Job, so the A
   thread**. An idle check holds the read mark 0.17 to 0.18 ms (median; n=4 709 and 8 332; under strace, so an upper
   bound). The CPU of the views is `panel-sync-cost.md` section 1 (tree 0.37 %, plan 0.36 %, widgets 0.14 %).
 - **Machine load and nice 19** (hs-d528): the probe's processes (views, engine, observers) all ran at nice 19; the
-  live cockpit does not. `/proc/loadavg` (1 min) at the start and end of each run and the lowest and highest 1-min value
-  read before a commit:
-
-| Run | Local time | loadavg start to end | per-commit min to max |
-|---|---|---|---|
-| A-bug | 17:23 to 17:30 | 0.73 to 0.85 | 0.73 to 1.40 |
-| A-main | 17:30 to 17:36 | 0.89 to 1.41 | 0.82 to 1.69 |
-| B-bug | 17:36 to 17:54 | 1.30 to 10.90 | 0.80 to 24.66 |
-| B-bug2 | 17:55 to 18:12 | 17.10 to 2.03 | 0.81 to 16.85 |
-| B-main | 18:14 to 18:19 | 1.49 to 8.88 | 1.38 to 11.73 |
-| C-main | 18:19 to 18:24 | 10.33 to 1.15 | 1.07 to 11.46 |
-| Q-main | 18:24 to 18:29 | 1.05 to 0.67 | 0.52 to 1.19 |
-| A-strace | 18:30 to 18:33 | 0.69 to 1.12 | 0.59 to 1.25 |
-| C-strace | 18:33 to 18:37 | 1.03 to 1.26 | 0.71 to 1.47 |
-| Q-outer | 18:39 to 18:44 | 0.48 to 1.19 | 0.55 to 1.19 |
-| T | 18:44 to 18:47 | 1.00 to 2.72 (per commit) | 1.00 to 2.72 |
-| fresh A | 18:49 to 18:55 | 1.19 to 1.34 | 0.92 to 2.68 |
-| fresh B | 18:55 to 19:00 | 0.78 to 1.45 | 0.74 to 1.54 |
-
-  Effect of nice 19: B-main and C-main ran at 1-min loads up to 11.7 on 16 cores; their capture cost rose (p95 9.0 ms
+  live cockpit does not. `/proc/loadavg` per run:
+  Runs (local time; loadavg start to end; range of the 1-min value read before each commit): A-bug 17:23, 0.73 to 0.85
+  (0.73 to 1.40); A-main 17:30, 0.89 to 1.41 (0.82 to 1.69); B-bug 17:36, 1.30 to 10.90 (0.80 to 24.66); B-bug2 17:55,
+  17.10 to 2.03 (0.81 to 16.85); B-main 18:14, 1.49 to 8.88 (1.38 to 11.73); C-main 18:19, 10.33 to 1.15 (1.07 to 11.46);
+  Q-main 18:24, 1.05 to 0.67 (0.52 to 1.19); A-strace 18:30, 0.69 to 1.12 (0.59 to 1.25); C-strace 18:33, 1.03 to 1.26
+  (0.71 to 1.47); Q-outer 18:39, 0.48 to 1.19 (0.55 to 1.19); T 18:44 (no summary; 1.00 to 2.72 per commit); fresh A 18:49,
+  1.19 to 1.34 (0.92 to 2.68); fresh B 18:55, 0.78 to 1.45 (0.74 to 1.54); fresh T 19:01 (0.43 to 1.02 per commit).
+- **Effect of nice 19**: B-main and C-main ran at 1-min loads up to 11.7 on 16 cores; their capture cost rose (p95 9.0 ms
   against 3.0 ms) but the view hop did not: tree draw minus engine event is 337 and 339 ms median in B-main (n=20 each)
-  at load up to 11.7 and 337 ms in the fresh B (n=40) at load 1.5. The engine's own timing was not delayed either (ticks
-  5 000 to 5 018 ms in 12 runs, n=1 046 intervals). No run shows a wakeup waiting for a nice-0 process (a delay of more than a
-  frame would show; none did); the 16 cores were not saturated (guess: nothing runnable waited).
+  against 337 ms in the fresh B (n=40) at load 1.5; ticks stayed 5 000 to 5 018 ms in 12 runs (n=1 046). No run shows a
+  wakeup waiting for a nice-0 process (it would show as a frame or more; none did; guess: the 16 cores had idle ones).
 
 Percentiles are linear interpolation over the n samples (`derive.py`). "seen/n" is the share of commits whose text
 appeared before the 22 s deadline (6 s fixed window for widgets in A).
@@ -125,18 +111,31 @@ Triggers (each alternates two commits, 20 each; gaps between commits uniform 1 t
 The `n` of each cell is the `seen` count; "C conflict tree 19/19" is 19 commits with a tree predicate (the first has
 none: no item to close yet). The A "working" widgets cell: the predicate was **already true before the commit in 20 of
 20** (the pane showed a spinner from the seed's `working` Lead and never updated), so the harness did not wait for it;
-see 2.4. The `Q-outer` run (same commits, Q) gives the same: tree 226 to 510 (median 354, n=20), option up 410 to
-4 567 (median 2 738), option down 604 to 4 651 (median 2 409); with the outer tmux in section 5.
+see 2.4. `Q-outer` (Q again, with an outer tmux, section 5): tree 226 to 510 (median 354, n=20), option up 410 to
+4 567 (median 2 738), down 604 to 4 651 (median 2 409).
 
-### 2.2 The other runs (previous Attempt)
+### 2.2 The other runs (previous Attempt; what the `-bug` and `-strace` files were about)
 
-| Run | What | Result (median, min to max, n) |
-|---|---|---|
-| A-bug | first A run, 17:23 | plan idle 304 (212 to 519, 20), tree 351 (220 to 534, 20), plan working 345 (213 to 489, 20), widgets 0/40 |
-| A-strace | A with strace on the views | plan idle 322 (241 to 518, 10), plan working 311 (209 to 456, 10), widgets 0/10 |
-| C-strace | C with strace | tree 3 537 (919 to 4 995, 14) and 2 306 (1 414 to 5 141, 15); plan 323 and 333 (215 to 512, 15 each); widgets 309 and 220 (32 to 513, 15 each) |
-| B-bug, B-bug2 | B with a defect | see 2.4: tree 0/40 in both; engine Events 1/20 and 19/20 |
-| T | tmux probe (`set -p @cpd_title`, outer view) | 26/26 seen, 2 to 21 (median 7), n=26; the run was killed at 26 of 40 commits, no summary line |
+The previous Attempt left no notes; this is what the files show (median, min to max, n):
+
+- `A-bug`: trigger A, first run (17:23, before `A-main`): plan idle 304 (212 to 519, 20), tree 351 (220 to 534, 20),
+  plan working 345 (213 to 489, 20); widgets 0/40. Plan and tree agree with `A-main` and the fresh run. The only
+  difference is the widgets surface (0/40 here, "already true" in 20/20 of `A-main`): the harness's widgets
+  predicate changed in between (guess: the files do not say how). The widgets result does not depend on it (2.4).
+- `A-strace`, `C-strace`: A and C again with `strace` on the three views (`s_<view>.txt`: `pread64`, `fcntl`, `write`
+  with epoch microseconds) to split the latency into hops (section 4). Plan A idle 322 (241 to 518, 10), working 311
+  (209 to 456, 10); C: tree 3 537 (919 to 4 995, 14) and 2 306 (1 414 to 5 141, 15), plan 323 and 333 (215 to 512, 15
+  each), widgets 309 and 220 (32 to 513, 15 each). The totals agree with the runs without strace (plan C 323 and 333
+  against 350 and 350), so strace did not visibly slow the loops; only the read hop is inflated. In `A-strace` the tree
+  and widgets predicates were already true before each working commit (10/10), so only plan is reported (cause unestablished).
+- `B-bug`: tree 0/40 and the engine's `inbox-*` Event in 2 of 40 commits: from the 3rd commit on no engine transaction
+  falls between the probe's (`txn` ids 87, 89, 91, 92, 93 ... in `B-bug.jsonl`, verified) while ticks went on; load
+  rose to 24.7. `B-bug2` (17:55 to 18:12): Events 19/20 and 18/20 but tree 0/40. The throwaway home and views were
+  rebuilt at 18:13 (`home.txt`) and `B-main` gave 20/20. Causes not recorded; guess: a reused `--pn` key (no new item
+  to open) in `B-bug`; in `B-bug2` the old views had hit `timeout 3000` or the Inbox-count predicate was fixed. Not a
+  cpd defect that I could find; `B-main` and the fresh B are the data.
+- `T`: the tmux probe (`set -p @cpd_title`, outer view): 26/26 seen, 2 to 21 (median 7), n=26; killed at 26 of 40
+  commits, so no summary line.
 
 ### 2.3 Fresh run (this Job), same harness, same binary
 
@@ -163,31 +162,7 @@ the 40-draw hop after the engine is the same: tree minus engine Event 337 ms med
 run against 337 and 339 (n=20 each) in the raw data. The engine's Event lands 12 ms (11 to 16, n=40) after the tick
 start in the fresh run, 12 ms (11 to 23, n=40) in the raw. **Agreement.**
 
-### 2.4 What the `-bug`, `-strace` and `-main` files were about
-
-The previous Attempt left no notes; what the files show:
-
-- `A-bug` is trigger A, first run (17:23 to 17:30), before `A-main` (17:30 to 17:36). Plan and tree agree with `A-main`
-  and the fresh run (medians 304 and 351 against 337 and 359). The only difference is the widgets surface (0/40 in
-  `A-bug`, "already true" in 20/20 of `A-main`); the harness's widgets predicate was changed in between (guess: the
-  file does not say which). The widgets result of section 2.1 does not depend on it: the fresh run and a hand check
-  (section 2.5) agree.
-- `B-bug`: the tree never showed the Inbox count (0/20 per direction) and the engine wrote an `inbox-*` Event in 1 of
-  20 commits: after the 4th commit no engine transaction appears between the probe's commits (the `txn` ids run
-  87, 89, 91, 92, 93, ..., verified in `B-bug.jsonl`), while the ticks continued. Load went to 24.7 (a build of another
-  Worker). Cause not recorded; guess: the review's `--pn` key was reused, so there was no new item to open.
-  `B-bug2` (17:55 to 18:12): the engine acted in 19 and 18 of 20 commits, but the tree still showed 0/20; the throwaway
-  home and the views were rebuilt at 18:13 (`home.txt`, 18:13) and `B-main` then gave 20/20. Cause not recorded (guess:
-  the views of the old home had been running 50 min and reached their `timeout 3000`, or the Inbox-count observer was
-  fixed in between; unverified). None of the three is a defect of cpd that I could find; `B-main` and the fresh B are the data.
-- `A-strace` and `C-strace`: triggers A and C again with `strace` on the three view processes (the `s_<view>.txt`
-  files: `pread64`, `fcntl` and `write` lines with epoch timestamps to the microsecond), to split the latency into
-  hops (section 4). The totals agree with the runs without strace (plan A idle 322 against 337, plan C 323 and 333
-  against 350 and 350; n=10 to 15), so strace did not visibly slow the loops; only the read hop is inflated. In
-  `A-strace` the tree and widgets predicates were already true before every working commit (10/10), so only plan is
-  reported there (cause unestablished).
-
-### 2.5 The widgets view and a Lead's state (hand check, 1 run)
+### 2.4 The widgets view and a Lead's state (hand check, 1 run)
 
 In the fresh store: `session state working` then 8 s of captures every 1 s: the widgets row stayed `open 󰮔 ...` (no
 spinner); then `UPDATE pull_requests SET changed_at=now` (no Event) and the spinner appeared 0.6 s later (frames 󰽨, 󰽣,
@@ -261,7 +236,7 @@ engine touches at each tick's start (`engine.rs`: `lock.touch()` before `tick()`
 
 Ticks: 5 000 to 5 018 ms apart in the 12 runs with a summary (n=1 046 intervals; E5 off). The wait from a cause to
 the next tick start is uniform: 11 to 4 961 ms (median 2 132 to 2 983 ms, n=29 to 40 per run). So in the probe:
-cause to Inbox row = wait to the next tick (0 to 5 s) + 12 ms (engine) + 337 ms (view: median, n=80; 217 to 624 ms).
+cause to Inbox row = wait to the next tick (0 to 5 s) + 12 ms (engine) + 338 ms (view: median, n=80; 132 to 624 ms).
 
 ## 5. tmux
 
@@ -279,12 +254,12 @@ server's screen; the inner's pane border format reads `T=#{@cpd_title}` (`T`) an
 The option is drawn on the next redraw, within one observer period (20 ms) of being set: **not a source of seconds**
 (a median of 7 and 11 ms in two runs is the observer's own 0 to 20 ms sampling wait plus the capture). In Q-outer the
 border text and the status text of the outer server both moved within 18 ms of the option read (n=40).
-The engine sets `@cpd_workers` at the start of each tick (first step after the restart drain): measured as 20 ms median
-after the tick start (11 to 31 ms, n=80), so its lag is the tick wait. Titles (`@cpd_title` of a Lead's pane) are
-written by `titles::run`, which spawns a process per session and only when a turn is older than 10 minutes (read
-in `titles.rs`, `due()`); their write cost and path were not measured. The real cockpit's tmux config (status off,
-`pane-border-status top`, the format in `core/src/host/tmux.rs`) is not the probe's inner config (unverified that it
-redraws as fast as the probe's `T=#{@cpd_title}` border).
+The engine sets `@cpd_workers` at the start of each tick (first step after the restart drain): measured as 22 ms median
+after the tick start (11 to 31 ms, n=80), so its lag is the tick wait. A Lead's `@cpd_title` is
+written by `cpd session retitle` (a pi run) which E10 starts for an idle Lead whose latest finished turn is newer than
+its title and whose title is at least 10 minutes old (read in `titles.rs`, `due()`, `THROTTLE`): its lag is that throttle
+and the run, not tmux (the run was not measured). The real cockpit's tmux config (status off, `pane-border-status top`,
+`core/src/host/tmux.rs`) is not the probe's inner config (unverified that it redraws as fast as the probe's border).
 
 ## 6. The GitHub path (E5)
 
@@ -293,8 +268,8 @@ redraws as fast as the probe's `T=#{@cpd_title}` border).
   only when `pr_poll_seconds` (5) have passed since the previous poll ended; the next tick starts at the earlier of
   tick start + 5 s and E5's due time, so a tick that ran a 6 s poll is followed at once by the next tick. `pr poll`
   writes `pull_requests` with no Event (contract 7.6); the views notice it by the `pull_requests` mark
-  (`count(*)`, `max(changed_at)`) in the same poll as the Events. A poll that changes nothing writes nothing, and
-  E5 logs (`run/watch.log`) only a poll that changed, fed back or merged something.
+  (`count(*)`, `max(changed_at)`) in the same poll as the Events. E5 logs (`run/watch.log`) only a poll that changed, fed back or merged something; guess: most polls commit
+  nothing (cost.md counts 3 791 `pr poll` commits in 7 days against about 52 000 polls at 11.5 s).
 - **Cadence on the live engine, measured, read-only**: `/proc` scanned every 100 ms for 2 windows of 150 s
   (18:50 and 18:54 EDT, live engine pid 2438527, children whose argv is `pr poll`) and `locks/watch.lock`'s mtime
   stat every 50 ms (window 2). Poll children: 26 spans (13 + 13), duration 4.8 to 7.8 s (median 6.7 and 6.8 s; the
@@ -320,11 +295,11 @@ redraws as fast as the probe's `T=#{@cpd_title}` border).
 | Claim | Verdict | Evidence |
 |---|---|---|
 | A view sees a change within about 0.7 s | **Confirmed** for tree and plan: max 534 ms (n=40 per view per run, 3 runs) | 2.1 to 2.3 |
-| ... for the widgets view | **Confirmed** for `pull_requests` changes (32 to 513 ms, n=70); **corrected** for a Lead's state: never drawn (0/70 in 6 s) until another Event or PR change | 2.1, 2.5 |
+| ... for the widgets view | **Confirmed** for `pull_requests` changes (32 to 513 ms, n=70); **corrected** for a Lead's state: never drawn (0/70 in 6 s) until another Event or PR change | 2.1, 2.4 |
 | The tree and plan view check every 200 ms, snapshot at most every 500 ms | **Corrected in detail**: the check is every 200 or 300 ms (mean 252 ms, n=3 950), widgets 505 ms; the snapshot starts 100 ms after the poll, no 500 ms hold in 1 to 9 s gaps (the burst case is not measured) | 1, 4 |
-| The engine's 5 s tick includes Inbox items | **Confirmed**: item opened or closed 12 ms (11 to 23, n=148) after a tick's start; tree shows it median 337 ms later | 4 |
+| The engine's 5 s tick includes Inbox items | **Confirmed**: item opened or closed 12 ms (11 to 23, n=148) after a tick's start; tree shows it median 338 ms later (n=80) | 4 |
 | ... includes Job transitions | **Unverified**: the harness's Job write (Q) was a store write; no engine-derived Job transition (E3, E4) was triggered | - |
-| ... includes engine-set tmux options | **Confirmed** for `@cpd_workers`: 20 ms median after the tick start (n=80); tmux draws it within 20 ms | 4, 5 |
+| ... includes engine-set tmux options | **Confirmed** for `@cpd_workers`: 22 ms median after the tick start (n=80); tmux draws it within 20 ms | 4, 5 |
 | The Inbox is up to about 5 s later | **Confirmed** as a bound in the probe (cause to Inbox row max 5.3 s, n=148, E5 off); **corrected** on the live cockpit: E5 blocks the tick for about 6.5 s, so the gap between E8 runs is up to 12.8 s and the lag median about 6 s (cost.md: 6.1 s, p95 12.6 s) | 4, 6 |
 | GitHub data arrives at the PR poll every 5 s | **Corrected**: 5 s after the previous poll *ends*, and the poll takes 4.8 to 7.8 s, so polls start 9.9 to 12.8 s apart (n=24) | 6 |
 | ... slower after transient errors | **Not measured** | - |
@@ -347,18 +322,150 @@ Ranked by measured share of the commit-to-draw time of the surface that waits lo
 
 ## 9. Not measured, unverified
 
-- Read cost and draw on live-size data (cost.md section 2 has the reader CPU per commit); this store is a seed of tens of rows.
-- Coalescing under bursts (the 500 ms `COALESCE` / `SNAPSHOT_EVERY`): every commit in the harness was at least 1 s apart.
-- The E8 moment itself on the live engine (derived from tick starts and the poll's span, unverified); E8 behind `pr poll`
-  in a probe engine (E5 was off); what a poll's 5 to 8 s is made of.
-- Release build: all probe runs are a debug build (the live cockpit's views are release).
-- Job transitions, Inbox kinds other than the ones B and C trigger, titles (`@cpd_title` by `titles::run`) and their cost,
-  the real cockpit's tmux config, the pi chat pane.
-- The `B-bug`, `B-bug2`, `A-bug` causes (section 2.4), and why the tree and widgets predicates were already true in `A-strace`.
-- Only one afternoon, one machine; loads of 0.5 to 25 (per-run table in 1); nothing was run at nice 0.
-- The previous Attempt's runs are labelled `previous Attempt` and were re-derived from its files, not re-run, except
-  A and B and T (fresh).
+- Read cost and draw on live-size data (cost.md section 2): this store is a seed of tens of rows. Release build: all
+  probe runs are a debug build (the live views are release).
+- Coalescing under bursts (the 500 ms `COALESCE` / `SNAPSHOT_EVERY`): every commit was at least 1 s after the previous one.
+- E8's own moment on the live engine (derived from tick starts and the poll span, unverified); E8 behind a real
+  `pr poll` in a probe engine (E5 was off); what a poll's 5 to 8 s is made of; GitHub data age.
+- Job transitions, Inbox kinds other than the ones B and C trigger, titles and their cost, the real cockpit's tmux
+  config, the pi chat pane, slower polling after transient errors.
+- Causes of the `B-bug`, `B-bug2`, `A-bug` runs (2.2) and why tree and widgets predicates were already true in `A-strace`.
+- One afternoon, one machine; loads of 0.4 to 25 (section 1); nothing at nice 0. The previous Attempt's runs were
+  re-derived from its files, not re-run; only A, B and T were run again.
 
 ## Appendix: repeat it
 
-APPENDIX_PLACEHOLDER
+The harness lived in `/tmp/lag-a1-scratch` and is removed with this Job; this is what is needed to rebuild it.
+`B` is a built `cpd` (here `target/debug/cpd`), `S` a scratch dir, `H` the throwaway home. All probe commands name a
+throwaway `CPD_HOME` and a private tmux socket; **never** `/home/clayton/.cpd`, **never** the socket `cpd`.
+
+**Design.** One writer thread commits (CLI or SQL, T0 = the `txns.at` it wrote); one observer thread per surface runs
+`tmux capture-pane -p` every 20 ms and records the first capture whose text matches that surface's regex (T1 = the middle
+of the call); a DB thread (read-only) records `inbox-*` Events and each change of `locks/watch.lock`'s mtime (a tick
+start). The commits alternate two directions, with random gaps of 1 to 9 s; a commit's record holds T1 minus T0 per
+surface, the engine Event's `at` minus T0, the time to the next and since the last tick start, and `/proc/loadavg`.
+
+```sh
+# 1. setup (once per run): private server + throwaway home + seed + views + engine, all under timeout
+S=/tmp/probe; mkdir -p $S/bin $S/out; printf '#!/bin/sh\nexit 0\n' > $S/bin/gh; chmod +x $S/bin/gh   # gh stub
+SOCK=sync-probe-lag-$$; H=$(mktemp -d /tmp/lag-a1-home.XXXX); B=$PWD/target/debug/cpd
+printf 'version = 1\nmachine = "probe"\n[tmux]\nsocket = "%s"\n[watch]\npr_poll_seconds = 4294967295\n' $SOCK > $H/config.toml
+CPDX="env -u CPD_ATTEMPT -u CPD_PLAN -u CPD_SESSION CPD_HOME=$H $B"; $CPDX context list >/dev/null   # creates the store
+tmux -L $SOCK -f /dev/null new-session -d -s x -x 285 -y 50 "timeout 4000 sleep 3600"   # pane %0: the Lead's pane
+python3 cpdw.py $H "<seed SQL below, with PANE=%0>"
+E="env CPD_HOME=$H CPD_TUI_TRACE=1 PATH=$S/bin:$PATH"
+tmux -L $SOCK new-window -d -t x -n v "exec timeout 1800 $E $B tui view tree"                 # %1, 34 columns
+tmux -L $SOCK split-window -d -h -t x:v   -l 250 "exec timeout 1800 $E $B tui view plan"      # %2
+tmux -L $SOCK split-window -d -h -t x:v.1 -l 33  "exec timeout 1800 $E $B tui view widgets"   # %3
+tmux -L $SOCK new-window -d -t x -n e "exec timeout 1800 $E $B watch"                          # the engine
+# 2. run (nice 19, bounded): probe.py <A|B|C|Q|T> <n per direction>; 20 gives 40 commits, about 5 minutes
+nice -n19 timeout 900 python3 probe.py A 20
+# 3. derive, then tear down and check
+python3 derive.py $S A B; tmux -L $SOCK kill-server; tmux -L $SOCK ls; pgrep -af sync-probe; rm -rf $H $S
+```
+
+`cpdw.py` (the write helper: one transaction the way `Store::write` does, `cpd_txn()` returning the txn id):
+
+```python
+import sqlite3, sys, os, datetime
+def write(home, sql):                      # statements are separated by ";;"
+    assert home.startswith("/tmp/lag-a1-home."), home            # never the live home
+    c = sqlite3.connect(os.path.join(home, "cpd.db"), isolation_level=None, timeout=5)
+    c.execute("PRAGMA foreign_keys=ON"); c.execute("PRAGMA synchronous=NORMAL"); cur = {}
+    c.create_function("cpd_txn", 0, lambda: cur["id"]); c.execute("BEGIN IMMEDIATE")
+    cur["id"] = tid = c.execute("SELECT coalesce(max(id),0)+1 FROM txns").fetchone()[0]
+    now = datetime.datetime.now(datetime.timezone.utc); at = now.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (now.microsecond // 1000)
+    c.execute("INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (?,?,?,?,NULL,'/')", (tid, at, "probe", os.getpid()))
+    [c.execute(s) for s in sql.split(";;") if s.strip()]; c.execute("COMMIT"); c.close(); return tid
+```
+
+Seed (with `Z='2026-10-23T00:00:00.000Z'`; the `ghost` Plan and its 30 draft Jobs `g1` to `g30` only for Q):
+
+```sql
+INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx','Ctx',Z,'probe');;
+INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at) VALUES ('pay','ctx','Pay','deploy','lead1',Z,Z);;
+INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at) VALUES ('lead1','lead','ctx','pay','Lead','/','O3','%0','working',Z,Z);;
+INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, mergeable, merge_state, authored) VALUES (1,'o/repo',1,'https://github.com/o/repo/pull/1','Probe PR one',0,'open','none','pending',Z,Z,'mergeable','blocked',1);;
+INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at) VALUES ('pay','repo','/nowhere','main','open','cpd/pay','/nowhere/lead',1,'https://github.com/o/repo/pull/1',Z,1,cpd_txn(),Z,Z);;
+INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('pay','repo','d1','Draft job one','draft',0,cpd_txn(),Z);;
+INSERT INTO events (txn, at, kind, context, plan, session, text, data) VALUES (cpd_txn(),'2026-10-23T00:00:01.000Z','session-moved','ctx',NULL,'lead1','f','{"pane":"%0","window":"@0","place":"chat"}');;
+-- ghost: plans (id 'ghost', phase 'plan', lead_session 'lead2'), sessions ('lead2', state 'stopped', tmux_pane NULL),
+-- prs ('ghost','repo','/nowhere','main','waiting','cpd/ghost'), jobs g1..g30 (status 'draft'), same columns as above
+```
+
+Observer and loop (condensed pseudo-code from `probe.py`; `T` is the trigger generator, `preds` a regex per surface):
+
+```python
+class Obs(threading.Thread):                       # one per surface; PERIOD = 0.020
+    def run(self):
+        while not self.stop:
+            t0 = time.time(); txt = subprocess.run(self.cmd, capture_output=True, text=True).stdout; t1 = time.time()
+            if self.pred and self.hit is None and self.pred(txt): self.hit = (t0, t1)    # T1 = (t0+t1)/2
+            time.sleep(max(0, PERIOD - (time.time() - t0)))
+cap = lambda pane: ["tmux", "-L", SOCK, "capture-pane", "-p", "-t", pane]       # tree %1, plan %2, widgets %3
+opt = ["tmux", "-L", SOCK, "show", "-gv", "@cpd_workers"]                         # the engine-set option
+# DB thread (sqlite3 file:$H/cpd.db?mode=ro): rows of events WHERE kind IN ('inbox-opened','inbox-closed') AND id > last,
+# and os.stat($H/locks/watch.lock).st_mtime appended to `ticks` whenever it changes (a tick start).
+for k in range(2 * n):
+    label, preds, commit, inbox = next(gen); time.sleep(random.uniform(1, 4) + random.uniform(0, 5))
+    already = [s for s, p in preds.items() if p(obs[s].last_text)]    # true before the commit: not waited for
+    arm(obs, preds - already); tid, T0 = commit()                      # T0 = txns.at of the commit, read back
+    wait until every armed observer has a hit (22 s deadline); sleep 0.15
+    record(label, T0, {s: (hit_mid - T0) * 1000}, engine_event_ms, next_tick_ms = ticks_after(T0) - T0, loadavg)
+```
+
+Triggers (generators of `(label, preds, commit)`; `DOTS` = the 8 spinner glyphs 󰽤󰽧󰽡󰽨󰽢󰽦󰽣󰽥):
+
+```text
+A  cpd session state idle|working --session lead1      plan: '#1 open\s+󱆭' (idle) | '#1 open\s+[DOTS]\s*󱆭' (working);
+                                                       tree: pay's glyph is a spinner frame; widgets: '^\s+open\s+󰮔' | '^\s+open\s+[DOTS]\s'
+B  cpd review open|close --session lead1 --pn pn-<unique each> --kind plan --subject x --port 20001
+                                                       tree: the number at the end of the line holding "Inbox" is 1 | 0
+C  UPDATE pull_requests SET mergeable='conflicting', merge_state='dirty', changed_at=now WHERE id=1   (or 'mergeable','clean')
+                                                       plan '#1 conflict' | '#1 open'; widgets 'open.*conflict' | no 'conflict'; tree Inbox 0 | 1
+Q  UPDATE jobs SET status='queued', ... WHERE plan='ghost' AND key='g<20+i>' + a 'job-added' Event; then cpd job cancel g<..> --plan ghost
+                                                       tree: 'ghost\s+<N-i>⋅'; option: ' · 1 queued' | ' · 0 queued'; outer: same text
+T  tmux -L $SOCK set -p -t %0 @cpd_title t<i>          outer top line matches 'T=t<i>\b'   (T0 = wall clock before the command; setup below)
+```
+
+tmux probe (T and Q-outer): an outer server shows the inner client's screen; the inner draws the option in its border.
+
+```sh
+tmux -L $SOCK set -g pane-border-status top; tmux -L $SOCK set -g pane-border-format 'T=#{@cpd_title}'
+tmux -L $OUTER -f /dev/null new-session -d -s o -x 285 -y 50 "timeout 1000 tmux -L $SOCK attach -t x"   # observe: capture-pane -t o
+```
+
+`derive.py <dir> <name>...` (the numbers of sections 2 and 3 come from it, in `<dir>/out/<name>.jsonl`):
+
+```python
+import json, sys, statistics, collections
+def pct(v, p):  # linear interpolation
+    v = sorted(v); k = (len(v) - 1) * p; f = int(k); c = min(f + 1, len(v) - 1); return v[f] + (v[c] - v[f]) * (k - f)
+def row(v, tot): return f"{len(v)}/{tot} | " + (" | ".join(f"{x:.0f}" for x in (min(v), statistics.median(v), pct(v, .95), max(v))) if v else "- | - | - | -")
+SURF = ("tree", "plan", "widgets", "opt", "otop", "ostat")
+for name in sys.argv[2:]:
+    R = [r for r in map(json.loads, open(f"{sys.argv[1]}/out/{name}.jsonl")) if "label" in r]
+    G = collections.defaultdict(list)
+    for r in R: G[r["label"]].append(r)
+    for lab, rs in G.items():
+        for s in SURF:
+            h = [r for r in rs if s in r]
+            if h: print(f"| {lab} | {s} | {row([r[s]['t1_mid_ms'] for r in h if r[s]], len(h))} |")
+        e = [r for r in rs if "engine_event_ms" in r]
+        if e: print(f"| {lab} | engine event | {row([r['engine_event_ms'] for r in e if r['engine_event_ms'] is not None], len(e))} |")
+        sp = [max(v) - min(v) for r in rs if len(v := [r[s]["t1_mid_ms"] for s in SURF if s in r and r[s]]) >= 2]
+        if sp: print(f"| {lab} | spread over surfaces | {row(sp, len(sp))} |")
+```
+
+Hops (`hops.py`, section 4): strace the three views (`strace -f -ttt -e trace=pread64,fcntl,write -p <pid>`; guess: the
+exact flags were not recorded, the file format is `<tid> <epoch.us> <call>(...)`). Per view, the loop thread is the one that
+writes to fd 1, the follower thread the one that takes `fcntl(F_SETLK)` locks at offset 124 (the WAL read mark).
+A "burst" is the syscalls of a thread with gaps of at most 3 ms. For each commit: poll = the first burst with data after
+T0 (for the Inbox row: after the engine Event's `at`), snapshot = the next burst with at least 15 `pread64`, draw = the
+first `write(1, ...)` of the loop thread after the snapshot's last read. Hops: poll minus T0, snapshot start minus poll,
+snapshot end minus start (the read), draw minus snapshot end, T1 minus draw. Widgets has one thread: its first burst
+with at least 15 `pread64` is the snapshot, and there is no separate poll.
+
+Live cadence (read-only, `/proc` and `stat` only; section 6): every 100 ms list `/proc/<pid>` whose parent is the live
+engine and whose cmdline has `pr poll`, keep first and last seen; every 50 ms `os.stat("~/.cpd/locks/watch.lock").st_mtime_ns`,
+print each change.
