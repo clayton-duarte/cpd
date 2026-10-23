@@ -524,7 +524,8 @@ pub fn prepare_pr_lead_worktree(
         let start = match remote {
             Remote::None => base.to_owned(),
             Remote::Absent => format!("origin/{base}"),
-            Remote::Reusable => format!("origin/{branch}"),
+            // `check_remote` never answers `Adopted`: that start is cut above.
+            Remote::Reusable | Remote::Adopted => format!("origin/{branch}"),
         };
         (remote, start)
     };
