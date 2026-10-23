@@ -188,7 +188,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
     assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
-    assert!(border.contains("#[bg=default]") && !border.contains("#[reverse]"), "{border}");
+    assert!(border.contains("#[reverse]") && !border.contains("#[bg="), "{border}");
     // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
     // (the colours, grey or blue, are the pane's focus: `pane_active`)
@@ -633,8 +633,7 @@ fn pill(row: &str, title: &str) -> (usize, String, String) {
             .map_or(String::new(), str::to_owned)
     };
     let (right, _) = after.split_once('\u{e0b4}').unwrap_or_else(|| panic!("a right cap after {title} in {row:?}"));
-    let first = right.split_once('m').map_or(String::new(), |(p, _)| p.to_owned());
-    (visible(before).chars().count(), in_force(before), first)
+    (visible(before).chars().count(), in_force(before), in_force(right))
 }
 
 #[test]
@@ -1114,7 +1113,7 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
         assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.trim_end().ends_with("\x1b[90m\x1b[49m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
+        assert!(styled.trim_end().ends_with("\x1b[0m\x1b[90m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
     }
 }
 
