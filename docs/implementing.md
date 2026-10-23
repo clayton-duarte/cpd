@@ -147,6 +147,8 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
 
 Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependencies]`, and used with `x.workspace = true` in the `Cargo.toml` of each crate that uses it (`core/`, `engine/`, `cli/`, `tui/`); a crate declares only what its own code imports. `ratatui` and `tui-tree-widget` are declared only in `cpd-tui`; `tempfile` is a dev-dependency of the crates whose tests use it. **Later Jobs may not add, remove or change dependencies or features**, so parallel Jobs never conflict on `Cargo.lock`. The TUI Job (`tui-cockpit`) added the last planned ones, ratatui and tui-tree-widget. If you need something not listed, ask the Lead.
 
+**The tree view's use of `tui-tree-widget`.** The `tree` view draws its own rows from a flat visible list (the open rule: a Context's children show iff the Context's path is in `TreeState::opened`). The `rows::draw` function renders these rows using ratatui, returns click geometry as `Hits` (the rows' rectangle and the path drawn on each row), and the View stores it alongside other saved rectangles (`tree_area`, `pane`, `inbox_area`). A click resolves against `Hits`, never against the widget's last render. `tui-tree-widget` is used only for `TreeState`, the open and selected sets (`open`, `close`, `toggle`, `select`).
+
 | Crate | Features | Why |
 |---|---|---|
 | `rusqlite` 0.40 | `bundled`, `functions` | the database (§4.1): SQLite bundled into the binary (3.53, so `STRICT` and JSON functions exist); `functions` registers `cpd_txn()` (§4.3) |
@@ -161,7 +163,7 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
 | `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
 | `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui` (history); crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
-| `tui-tree-widget` 0.24 | | the `tree` view's collapsible Context → Plan → Session tree, as on `cpd/cpd-ui` |
+| `tui-tree-widget` 0.24 | | `TreeState`, the open and selected store for the `tree` view (`opened`, `selected`, `open`, `close`, `toggle`, `select`); the view paints rows from its own flat list |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
 
 Removed: `sha1` 0.10, which named the per-repo lock `repo-<sha1>.lock`; hs-d243 removed the lock (contract §1.4, §7), and with it `CpdHome::repo_lock` and the dependency (the one exception to the rule above, decided with the lock's removal).
