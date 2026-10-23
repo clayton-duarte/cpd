@@ -450,6 +450,7 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
 fn add_stores_the_name_parsed_from_origin_lowercased() {
     let fx = fx("grounding");
     fx.env.git(&fx.web, &["remote", "set-url", "origin", "git@github.com:ACME/Web.Site.git"]);
+    fx.env.repo_policy("acme", "web.site", "");
     let out = fx.add("web", &fx.web, &[]).ok();
     assert_eq!(out["pr"]["name"], "web.site");
     assert_eq!(fx.env.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "web.site");
@@ -507,6 +508,7 @@ fn edit_repo_keys_the_new_repo_and_stores_its_name() {
     fx.env.git(&fx.pay, &["remote", "set-url", "origin", "git@github-work:acme/pay.git"]);
     fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "repo_unkeyed", 1, writes);
     fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/Payments.git"]);
+    fx.env.repo_policy("acme", "payments", "");
     fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]).ok();
     assert_eq!(fx.env.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "payments");
 }
