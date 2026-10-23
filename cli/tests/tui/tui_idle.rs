@@ -242,13 +242,15 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Idle)> {
         let mut seen: Vec<std::collections::HashSet<String>> = started.iter().map(|_| Default::default()).collect();
         if cfg!(target_os = "macos") {
             // the spinner's frames: the pane's text, sampled over the window
-            let end = std::time::Instant::now() + window;
-            while std::time::Instant::now() < end {
+            // `poll` never gets a value, so it runs the whole window
+            common::poll(window, || {
                 for ((_, pane, _), set) in started.iter().zip(&mut seen) {
                     set.insert(tmux_out(env, &["capture-pane", "-p", "-t", pane]));
                 }
+                // time-claim: one sample of the frames every 100 ms
                 std::thread::sleep(Duration::from_millis(100));
-            }
+                None::<()>
+            });
         } else {
             std::thread::sleep(window);
         }
