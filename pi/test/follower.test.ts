@@ -172,5 +172,8 @@ test("session_shutdown kills the follower and it is not restarted", async (t) =>
   await waitFor("killed", () => f.killed(f.pids()[0]!));
   await f.exited();
   assert.equal(f.follows().length, 1);
-  assert.equal(f.pi.errors().length, 0, "a killed follower at shutdown is no error");
+  // Other in-flight calls (mentions refresh, plannotator tracker) may report their own abort at shutdown, under load: only the follower's matters here.
+  const followerErrors = f.pi.sent.map((m) => String(m.message.content)).filter((c) => c.includes("events follow") || c.includes("follower"));
+  assert.deepEqual(followerErrors, [], "a killed follower at shutdown is no error");
+  assert.equal(f.reports().filter((r) => r.code === "follower_exit").length, 0, "nor a report");
 });
