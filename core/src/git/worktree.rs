@@ -255,6 +255,8 @@ pub enum Remote {
     Absent,
     /// `origin/<branch>` exists and does not conflict with `origin/<base>`.
     Reusable,
+    /// An adopted PR's Lead Branch: cut from `origin/<head_ref>`, which is the pull request's own branch; nothing is pushed.
+    Adopted,
 }
 
 /// Whether `origin` has branch `name`: `ls-remote --exit-code --heads` exits 0 (it has) or 2 (it has not);
@@ -423,7 +425,7 @@ impl Prepared {
     pub fn push(&self) -> Result<bool, CpdError> {
         match self.remote {
             Remote::Absent => push_lead_branch(&self.path, &self.branch).map(|()| true),
-            Remote::None | Remote::Reusable => Ok(false),
+            Remote::None | Remote::Reusable | Remote::Adopted => Ok(false),
         }
     }
 }
@@ -448,7 +450,7 @@ pub fn prepare_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_pr_lead_worktree(repo, plan, path, branch, base, false, setup, &Pipeline::default())
+    prepare_pr_lead_worktree(repo, plan, path, branch, base, Cut::Base, setup, &Pipeline::default())
 }
 
 /// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
@@ -462,10 +464,21 @@ pub fn prepare_stacked_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare_pr_lead_worktree(repo, plan, path, branch, base, true, setup, &Pipeline::default())
+    prepare_pr_lead_worktree(repo, plan, path, branch, base, Cut::Stacked, setup, &Pipeline::default())
 }
 
-/// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], when `stacked`) running `pre_start`, the PR's policy
+/// Where a Lead Branch is cut from: `origin/<base>` (or the branch already on the remote), a stacked PR's base PR's
+/// Lead Branch, or, for an **adopted** PR (contract §7.2), `origin/<head_ref>`: `origin <head_ref>` is fetched (a failure
+/// is step `remote`), no conflict check against `base` runs, nothing is pushed, and the User's own local branch of the
+/// head's name is never read.
+#[derive(Clone, Copy)]
+pub enum Cut<'a> {
+    Base,
+    Stacked,
+    Adopted(&'a str),
+}
+
+/// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], for `Cut::Stacked`; `Cut::Adopted` for an adopted PR) running `pre_start`, the PR's policy
 /// `hooks.pre-start` (§7.3), after the worktree is created. The two above run no hook: they are for a caller with none.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_pr_lead_worktree(
@@ -474,7 +487,7 @@ pub fn prepare_pr_lead_worktree(
     path: &Path,
     branch: &str,
     base: &str,
-    stacked: bool,
+    cut: Cut<'_>,
     setup: &Setup,
     pre_start: &Pipeline,
 ) -> Result<Prepared, StartFailure> {
@@ -501,7 +514,10 @@ pub fn prepare_pr_lead_worktree(
         }
     }
 
-    let (remote, start) = if stacked {
+    let (remote, start) = if let Cut::Adopted(head_ref) = cut {
+        fetch(repo, &["origin", head_ref]).map_err(at(Step::Remote))?;
+        (Remote::Adopted, format!("origin/{head_ref}"))
+    } else if matches!(cut, Cut::Stacked) {
         check_stacked(repo, branch, base)?
     } else {
         let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
