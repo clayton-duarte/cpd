@@ -49,6 +49,15 @@ pub struct Plannotator {
     pub url_host: String,
 }
 
+impl Plannotator {
+    /// What a Lead's and a Manager's pi gets: it will give `PLANNOTATOR_PORT` the configured range
+    /// (`plannotator_ports`) and the review host `url_host`. Stub: no port yet.
+    pub fn from_config(config: &crate::config::Config, url_host: String) -> Plannotator {
+        let _ = config;
+        Plannotator { port: None, url_host }
+    }
+}
+
 /// A Lead's pi launch.
 #[derive(Clone, Debug)]
 pub struct LeadLaunch<'a> {
