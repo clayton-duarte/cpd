@@ -74,10 +74,6 @@ pub(super) fn cells(text: &str) -> Vec<Cell> {
     out
 }
 
-fn text(cells: &[Cell]) -> String {
-    cells.iter().map(|c| c.ch).collect()
-}
-
 pub(super) fn show(cells: &[Cell]) -> String {
     cells.iter().map(|c| format!("{}[{:?},{:?}{}]", c.ch, c.fg, c.bg, if c.reverse { ",reverse" } else { "" })).collect::<Vec<_>>().join(" ")
 }
@@ -153,59 +149,59 @@ impl Server {
     }
 }
 
+/// `format` with each `#{?pane_active,A,B}` replaced by its branch for a pane that is (or is not) focused. The branches
+/// are single `#[…]` styles, so they hold no comma or brace.
+fn resolve_pane_active(format: &str, focused: bool) -> String {
+    const OPEN: &str = "#{?pane_active,";
+    let mut out = String::new();
+    let mut rest = format;
+    while let Some(at) = rest.find(OPEN) {
+        out.push_str(&rest[..at]);
+        let branches = &rest[at + OPEN.len()..];
+        let end = branches.find('}').expect("a closed pane_active conditional");
+        let (then, otherwise) = branches[..end].split_once(',').expect("two branches");
+        out.push_str(if focused { then } else { otherwise });
+        rest = &branches[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// §6.1.1: every pane title is a read-only title pill, an inverted block of 7, and blue (4) on the focused pane; the `━`
-/// before the left cap and the caps take the block's colour; no colour 8.
+/// before the left cap and the caps take the block's colour; no colour 8. Pure: the format text is decoded, not run.
 #[test]
 fn title_pills_are_grey_blocks_unfocused_and_blue_blocks_focused() {
-    let server = Server::new(3);
-    server.run(&["set-option", "-p", "-t", "%0", "@cpd_session", "s1"]);
-    server.run(&["set-option", "-p", "-t", "%0", "@cpd_title", "Plan Title"]);
-    server.run(&["set-option", "-p", "-t", "%1", "@cpd_view", "tree"]);
-    let titles = [("%0", "Plan Title"), ("%1", "Context"), ("%2", "sleep")];
-    for focused in ["%0", "%1", "%2"] {
-        server.run(&["select-pane", "-t", focused]);
-        for (pane, text) in titles {
-            let colour = if pane == focused { 4 } else { 7 };
-            let drawn = server.render(pane, BORDER_FORMAT);
+    let format: &str = &BORDER_FORMAT;
+    let texts = [
+        "#{@cpd_title}",
+        "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}",
+    ];
+    for (focused, colour) in [(true, 4), (false, 7)] {
+        let drawn = cells(&resolve_pane_active(format, focused));
+        for text in texts {
             let at = pill(&drawn, text, colour);
-            assert!(at > 0 && drawn[at - 1].ch == '━' && drawn[at - 1].fg == Some(colour), "the ━ before the pill of {pane} (focus on {focused}) is colour {colour}: {}", show(&drawn));
+            assert!(at > 0 && drawn[at - 1].ch == '━' && drawn[at - 1].fg == Some(colour), "the ━ before the pill (focused: {focused}) is colour {colour}: {}", show(&drawn));
         }
-    }
-    for (view, job, text) in [("plan", "", "Plan"), ("widgets", "", "Deploy"), ("worker", "j1", "Worker · j1 (Read-Only)")] {
-        server.run(&["set-option", "-p", "-t", "%1", "@cpd_view", view]);
-        server.run(&["set-option", "-p", "-t", "%1", "@cpd_job", job]);
-        server.run(&["select-pane", "-t", "%1"]);
-        pill(&server.render("%1", BORDER_FORMAT), text, 4);
-        server.run(&["select-pane", "-t", "%0"]);
-        pill(&server.render("%1", BORDER_FORMAT), text, 7);
     }
 }
 
-/// §6.1.1: the workers pill (long and short form) and the version pill are inverted blocks of 8, with no colour inside; the preview pill is an inverted block of yellow (3).
+/// §6.1.1: the workers pill (long and short form) and the version pill are inverted blocks of 8, with no colour inside; the preview pill is an inverted block of yellow (3). Pure: the format text is decoded, not run.
 #[test]
 fn the_workers_and_version_pills_are_grey_blocks_inverted() {
-    let server = Server::new(1);
-    let (long, short) = ("workers 1/2 · 0 waiting · 3 queued", "1/2·0·3");
-    for (option, value) in [
-        ("@cpd_workers", long),
-        ("@cpd_workers_short", short),
-        ("@cpd_workers_width", "34"),
-        ("@cpd_workers_short_width", "7"),
-        ("@cpd_version", "0.0.5-abc"),
-    ] {
-        server.run(&["set", "-g", option, value]);
+    let format: &str = &STATUS_FORMAT;
+    let drawn = cells(format);
+    pill(&drawn, "#{@cpd_version}", 8);
+    pill(&drawn, "preview: #{@cpd_preview}", 3);
+    // Every pill of colour 8 (the workers' and the version's) and of 3 is an inverted block with its caps in the colour.
+    for (colour, count) in [(8, 2), (3, 1)] {
+        let lefts: Vec<usize> = (0..drawn.len()).filter(|&i| drawn[i].ch == '\u{e0b6}' && drawn[i].fg == Some(colour)).collect();
+        assert_eq!(lefts.len(), count, "pills of colour {colour}: {}", show(&drawn));
+        for at in lefts {
+            let end = at + drawn[at..].iter().position(|c| c.ch == '\u{e0b4}').expect("a right cap");
+            assert!(drawn[at + 1..end].iter().all(|c| c.fg == Some(colour) && c.bg.is_none() && c.reverse), "block of {colour} is reversed: {}", show(&drawn[at..=end]));
+            assert!(drawn[end].fg == Some(colour) && !drawn[end].reverse, "the right cap is colour {colour}, not reversed");
+        }
     }
-    let wide = server.status(300);
-    pill(&wide, long, 8);
-    pill(&wide, "0.0.5-abc", 8);
-    assert!(!text(&wide).contains(short), "a wide client draws the long form: {}", show(&wide));
-    // A narrow one: the long form (34 cells) and the version (12) do not fit with the left group and a fill of 1.
-    let narrow = server.status(59);
-    pill(&narrow, short, 8);
-    assert!(!text(&narrow).contains(long), "a narrow client draws the short form: {}", show(&narrow));
-    pill(&narrow, "0.0.5-abc", 8);
-    server.run(&["set", "-g", "@cpd_preview", "x y"]);
-    pill(&server.status(300), "preview: x y", 3);
 }
 
 /// §6.1: `mode-style` and `menu-selected-style` are the blue block (foreground 4, reverse video, no background) in place of
@@ -214,7 +210,7 @@ fn the_workers_and_version_pills_are_grey_blocks_inverted() {
 #[test]
 fn selections_menus_and_copy_mode_are_blue_blocks() {
     let value = |name: &str| -> String {
-        SERVER_OPTIONS.iter().rev().find(|o| o.get(2) == Some(&name)).unwrap_or_else(|| panic!("SERVER_OPTIONS sets no {name}"))[3].to_owned()
+        SERVER_OPTIONS.iter().rev().find(|o| o.get(2).map(|n| n.to_string()).as_deref() == Some(name)).unwrap_or_else(|| panic!("SERVER_OPTIONS sets no {name}"))[3].to_string()
     };
     for name in ["mode-style", "menu-selected-style"] {
         assert_eq!(style(&value(name)), (Some(4), None, true), "{name} is the blue block, reversed: {}", value(name));

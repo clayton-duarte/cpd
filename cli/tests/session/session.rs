@@ -155,7 +155,7 @@ pub(crate) fn cockpit(env: &TestEnv) {
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
     let sleep = format!("sleep {SLEEP_SECONDS}");
-    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().copied().chain([";"])).collect();
+    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().map(String::as_str).chain([";"])).collect();
     args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
     let tree = ok(&args);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);

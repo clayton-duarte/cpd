@@ -129,7 +129,7 @@ fn assert_status_line(env: &TestEnv) {
     assert_eq!(shown("cpd", "#{status}").trim(), "on");
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
     let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
-    assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
+    assert_eq!(format.trim_end_matches('\n'), *STATUS_FORMAT);
     for range in [
         "#[range=user|reset]",
         "#[range=user|legend]",
@@ -275,8 +275,9 @@ fn pane_pid(pid: &str) -> Option<u32> {
 /// Asserts the server has every option, binding and hook `host` sets at a
 /// server start (contract §6.1; their values are pinned in `tests/host.rs`).
 fn assert_server_options(env: &TestEnv) {
-    for option in SERVER_OPTIONS {
-        match option {
+    for option in SERVER_OPTIONS.iter() {
+        let option: Vec<&str> = option.iter().map(String::as_str).collect();
+        match option.as_slice() {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
             // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
             ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {

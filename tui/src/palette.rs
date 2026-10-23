@@ -20,6 +20,7 @@ use ratatui::{
 
 use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
 use cpd_core::inbox::model::Urgency;
+use cpd_core::pill::spec;
 use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
@@ -77,22 +78,52 @@ impl Meaning {
     }
 }
 
-/// The base colour of a meaning, on what cannot be clicked (hs-d534, §6.1.1 rule (1)); [`color_clickable`] is its bright pair.
-/// Grounding has no colour of its own: grey, the default when no meaning applies, like not started.
-pub fn color(m: Meaning) -> Color {
-    match m {
-        Meaning::NotStarted => Color::Gray,
-        Meaning::InProgress => Color::Cyan,
-        Meaning::Review => Color::Yellow,
-        Meaning::Done => Color::Green,
-        Meaning::Failed => Color::Red,
-        Meaning::Planning => Color::Magenta,
-        Meaning::Grounding => Color::Gray,
-        Meaning::Nothing => Color::DarkGray,
-        // Cyan, not blue: blue is focus and selection only; agent activity is cyan.
-        Meaning::Waiting => Color::Cyan,
-        Meaning::Notice => Color::Blue,
+/// The one place a colour is named: the terminal colour of an index 1..=15 (`Color::Red`..`Color::White` are 1..=15 in order).
+fn index_color(i: u8) -> Color {
+    match i {
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::Gray,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
+        10 => Color::LightGreen,
+        11 => Color::LightYellow,
+        12 => Color::LightBlue,
+        13 => Color::LightMagenta,
+        14 => Color::LightCyan,
+        15 => Color::White,
+        _ => unreachable!("a colour index is 1..=15 (0 is never drawn), the spec parser checks it"),
     }
+}
+
+/// The index 0..=15 of a colour made by [`index_color`].
+fn color_index(c: Color) -> u8 {
+    (1..=15).find(|&i| index_color(i) == c).expect("a palette colour has an index")
+}
+
+/// The spec's index of a meaning (`pi/lib/pill-spec.json`, `meanings`).
+fn meaning_index(m: Meaning) -> u8 {
+    let s = &spec().meanings;
+    match m {
+        Meaning::NotStarted | Meaning::Grounding => s.plain,
+        Meaning::InProgress | Meaning::Waiting => s.in_progress,
+        Meaning::Review => s.review,
+        Meaning::Done => s.done,
+        Meaning::Failed => s.failed,
+        Meaning::Planning => s.planning,
+        Meaning::Nothing => s.nothing,
+        Meaning::Notice => s.focus,
+    }
+}
+
+/// The base colour of a meaning, on what cannot be clicked (hs-d534, §6.1.1 rule (1)), read from the pill spec; [`color_clickable`] is its bright pair.
+/// Grounding has no colour of its own: grey, the default when no meaning applies, like not started. Waiting is cyan, not blue: blue is focus and selection only.
+pub fn color(m: Meaning) -> Color {
+    index_color(meaning_index(m))
 }
 
 /// Foreground in the base colour of a meaning: for what cannot be clicked.
@@ -130,19 +161,21 @@ pub enum Ui {
 
 pub fn ui(u: Ui) -> Color {
     match u {
-        Ui::Note => Color::Yellow,
-        Ui::Tool => Color::Cyan,
-        Ui::You => Color::Gray,
-        Ui::Agent => Color::Cyan,
+        Ui::Note => index_color(3),
+        Ui::Tool => index_color(6),
+        Ui::You => index_color(7),
+        Ui::Agent => index_color(6),
     }
 }
 
 /// The one colour for in focus and selection: blue, as the cockpit's `pane-active-border-style fg=blue`.
-const FOCUS: Color = Color::Blue;
+fn focus() -> Color {
+    index_color(spec().meanings.focus)
+}
 
 /// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text inverted, in place of reverse video.
 pub fn selected() -> Style {
-    block(FOCUS)
+    block(focus())
 }
 
 /// A block (a pill, a selection): reverse video, the colour as foreground over the terminal's own background.
@@ -152,39 +185,30 @@ fn block(c: Color) -> Style {
 
 /// The selected tree row's name: blue text (hs-d351, hs-d534), where [`selected`] is the block of a cursor.
 pub fn selected_name() -> Style {
-    Style::new().fg(FOCUS)
+    Style::new().fg(focus())
 }
 
-/// The bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4 (the focus colour, hs-d351) and 8 has no pair.
+/// The bright pair of a base colour, as the spec's `clickable` says (n+8 on 1..=7, so `Red` -> `LightRed`, `Gray` -> `White`); the focus blue stays 4 (hs-d351) and 8 has no pair.
 pub fn bright(c: Color) -> Color {
-    match c {
-        Color::Red => Color::LightRed,
-        Color::Green => Color::LightGreen,
-        Color::Yellow => Color::LightYellow,
-        Color::Magenta => Color::LightMagenta,
-        Color::Cyan => Color::LightCyan,
-        Color::Gray => Color::White,
-        other => other,
+    if c == focus() {
+        return c;
     }
+    index_color(spec().clickable(color_index(c)))
 }
 
-/// The colour of a meaning on a clickable mark: its bright pair.
+/// The colour of a meaning on a clickable mark: its bright pair. The notice blue is 12 on a clickable mark (hs-d570 BL3), the spec's `clickable` applied to the focus index.
 pub fn color_clickable(m: Meaning) -> Color {
-    match m {
-        // the notice blue is 12 on a clickable mark (hs-d570 BL3); `bright` keeps the focus blue at 4
-        Meaning::Notice => Color::LightBlue,
-        _ => bright(color(m)),
-    }
+    index_color(spec().clickable(meaning_index(m)))
 }
 
 /// Clickable text, colour 15.
 pub fn clickable_text() -> Style {
-    Style::new().fg(Color::White)
+    Style::new().fg(index_color(15))
 }
 
 /// Read-only text, colour 7.
 pub fn read_only_text() -> Style {
-    Style::new().fg(Color::Gray)
+    Style::new().fg(index_color(7))
 }
 
 /// An asleep Session's row, colour 7.
@@ -199,12 +223,12 @@ pub fn toggle_text() -> Style {
 
 /// The input box's border (hs-d575, hs-d576): colour 15 unfocused, bright blue 12 focused.
 pub fn input_border(focused: bool) -> Style {
-    Style::new().fg(if focused { Color::LightBlue } else { Color::White })
+    Style::new().fg(if focused { index_color(12) } else { index_color(15) })
 }
 
 /// Muted text and lines (separators, ages, times, scroll cues, placeholders, rails), colour 8; it replaces `DIM`.
 pub fn muted_text() -> Style {
-    Style::new().fg(Color::DarkGray)
+    Style::new().fg(index_color(8))
 }
 
 /// An archived row, colour 8.
@@ -240,17 +264,17 @@ pub fn pill_clickable(m: Meaning) -> Style {
 
 /// A read-only pill (hs-d534 rule (3)): colour 7 (`Gray`), text inverted; its caps are drawn in its background colour.
 pub fn pill_static() -> Style {
-    block(Color::Gray)
+    block(index_color(7))
 }
 
 /// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text inverted; its caps are drawn in its background colour.
 pub fn pill_interactive() -> Style {
-    block(Color::White)
+    block(index_color(15))
 }
 
 /// The selected button's pill (hs-d578, hs-d534): text inverted on bright blue 12, its caps drawn in its background colour.
 pub fn pill_selected() -> Style {
-    block(Color::LightBlue)
+    block(index_color(12))
 }
 
 /// The input box's label pill (hs-d578 F9): text inverted on the colour of the box's border (15 unfocused, 12 focused), its caps

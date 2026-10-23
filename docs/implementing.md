@@ -45,6 +45,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | `pr` | rs-pr | `pr …` (§9): `pr open`, `pr poll`, `pr rebase`, and since R34 `pr add`, `pr edit`, `pr cancel`, `pr start` (§9.4–§9.7); owns the tables `prs` and `pr_needs`, the PR selection by `--pr` (§1.3) and the PR start (contract §3.8, §7.2), which `plan lock` and engine E7 call | §2.5, §3.8, §7.2, §7.6 |
 | `watch` | rs-watch | `watch` (§12) | §3.7 (E1–E9) |
 | `inbox` | Plan inbox | `inbox list/show/snooze/dismiss` (§21) | §2.2 Inbox item, §3.7 (E8) |
+| `pill` | pill-spec-data | none | §6.1.1 (hs-d598) |
 | `doctor` | rs-doctor | `doctor` (§14.1) | |
 | `tui` | the TUI Job | `tui`, `tui view` (§13) | §6.2 |
 
@@ -57,6 +58,8 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 - `core/src/context/distill_prompt.md`: the distiller's prompt rules (FX9: ids from headers, batch.md record order, duplicate target is older, topic lowercase/digits/dash only, answer short form names question, doc flag rule, four examples, hs-d549, hs-d551), embedded with `include_str!`;
 - engine E9 in `engine/src/watch/distill.rs` (FX4: batch parameter, retry smaller batches 60-30-15-5-1 on failure, hs-d549, hs-d551; it only decides and spawns, as E3 does);
 - paths through new `CpdHome` methods (`context_distill_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
+
+**The pill spec (hs-d598)** lives in the `pill` area (`core/src/pill.rs`, the loader; contract §6.1.1). The one source is `pi/lib/pill-spec.json`, read at compile time by Rust (`include_str!`) and at load time by pi (`readFileSync`). Both readers reject an unknown or missing key and an index outside 1-15. The spec file holds the caps (U+E0B6, U+E0B4), the colour number for each meaning key (plain, in_progress, review, done, failed, planning, nothing, focus), and the clickable rule (base colour n in 1-7 becomes n+8; 8 stays 8). The three adapters call functions and constants from the spec: ratatui `tui/src/pill.rs` (`pill(text, block)` returns three `Span`s, `cap_style(block)`, and `CAPS_COLUMNS` = 2); tmux `core/src/host/tmux/pill.rs` (pure string functions `fg(index)`, `fg_if(cond, then, otherwise)`, `pill(fg, lead, text)`, `range(name, inner)`, which print colours as `colourN`); pi `pi/lib/pill.ts` (`pill(index, text)` builds an ANSI string, `clickable(n)` applies the rule, `meaning(name)` maps spec keys to indices). The Rust `Meaning` enum in `palette.rs` stays and only maps domain facts to spec keys, so the palette always reads the spec. Padding is 0 (a code constant in each adapter, not data) and reverse video is always used for blocks (code constant, pinned by tests). The guard of contract §6.1.1: no U+E0B6 or U+E0B4 in non-test source outside `pi/lib/pill-spec.json`, and no hand-assembled pill.
 
 ## The command tree
 
@@ -120,7 +123,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `session` | `session*`, `host`, `board`, `pill_lines` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pi_check` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pi_check`, `pill_parity`, `pill_sites` |
 
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
