@@ -91,26 +91,34 @@ pub(crate) struct Centre {
 }
 
 impl Centre {
-    /// A Job runs: its pill's icon is the spinner, which turns with the clock.
+    /// Whether a spinner is on screen (R1): the ONE function that names every spinner the plan view draws, one line each.
     pub(crate) fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running)
+        let pulls = || self.plan.prs.iter().filter_map(|p| p.pull.as_ref());
+        false
+            || self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running) // a Running Job's pill icon
+            || pulls().any(|p| p.lead_working) // a PR box title's Lead dot
     }
 
-    /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
-    /// frame is not the one drawn. Whether it did.
+    /// Turn the spinners to `frame`, from the layout already done (R2: no layout at a frame change), when a spinner is on
+    /// screen and the frame is not the one drawn. Whether it did.
     #[cfg(test)]
     pub(crate) fn turn(&mut self, frame: usize) -> bool {
         self.turn_traced(frame, &mut Trace::new(None))
     }
 
-    /// [`Centre::turn`], adding the layout's time to `trace`.
-    fn turn_traced(&mut self, frame: usize, trace: &mut Trace) -> bool {
+    /// [`Centre::turn`]; it lays nothing out, so the trace's `layout_us` stays 0. Only the glyph cells change: every frame is one cell wide
+    /// and the plan view draws a `palette::SPINNER` glyph nowhere but at a spinner, so the cells holding the drawn
+    /// frame's glyph (alone, or inside the link's escapes) get the new one's.
+    fn turn_traced(&mut self, frame: usize, _trace: &mut Trace) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            let began = trace.is_on().then(Instant::now);
-            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(CHART_MARGIN);
-            if let Some(b) = began {
-                trace.add_layout(b.elapsed());
+            let (from, to) = (palette::SPINNER[self.frame % palette::SPINNER.len()], palette::SPINNER[frame % palette::SPINNER.len()]);
+            for cell in &mut self.boxes.chart.buf.content {
+                // a cell under the pull request's link holds the glyph inside its hyperlink escapes
+                if cell.symbol().contains(from) {
+                    let turned = cell.symbol().replace(from, to);
+                    cell.set_symbol(&turned);
+                }
             }
             self.frame = frame;
         }
