@@ -123,7 +123,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `session` | `session*`, `host`, `board`, `pill_lines` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pi_check` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pi_check`, `pill_parity`, `pill_sites` |
 
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
