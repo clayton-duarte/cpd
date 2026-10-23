@@ -10,7 +10,7 @@ const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const TERM = "\u{F0B2A}";
-const PILL = `\x1b[35m${CAP_L}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_R}\x1b[39m`;
+const PILL = `\x1b[35m${CAP_L}\x1b[7mcpd\x1b[27m${CAP_R}\x1b[39m`;
 const GREY = (s: string): string => `\x1b[90m${s}\x1b[39m`;
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -22,7 +22,7 @@ const summaryMessage = (): RenderedMessage =>
 const draw = (m: RenderedMessage, o: { expanded?: boolean; outputPad?: number; width?: number } = {}): string[] =>
   (new Rendering().render(m, { expanded: o.expanded ?? false, outputPad: o.outputPad ?? 1 }, theme) as Component).render(o.width ?? 80);
 
-test("the cpd pill holds only the word cpd with caps 5 and text 0", () => {
+test("the cpd pill holds only the word cpd, inverted, with caps 5", () => {
   for (const expanded of [false, true])
     for (const outputPad of [1, 0]) {
       const head = draw(cpdMessage("Worker of Job x"), { expanded, outputPad })[0]!;

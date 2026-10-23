@@ -7,7 +7,7 @@ import type { Theme } from "../lib/pi.ts";
 import { Rendering } from "../lib/render.ts";
 import { ev, ID } from "./fake.ts";
 
-/** contract §6.1.1 (hs-d530 R1): cpd's message title pill is background 8, text 7, caps 8, drawn with explicit SGR. */
+/** contract §6.1.1 (hs-d530 R1): cpd's message title pill is inverted (reverse video), caps 8, drawn with explicit SGR. */
 
 // A theme that paints a recognisable code for `muted`, so that a leftover `theme.fg("muted")` shows.
 const theme: Theme = {
@@ -19,12 +19,11 @@ const theme: Theme = {
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 
-test("a cpd message title pill is magenta 5 with text 0", () => {
+test("a cpd message title pill is magenta 5, inverted", () => {
   const m = eventMessage(ev(7, "job-merged", { text: "Job api-1 merged." }) as unknown as CpdEvent, ID);
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   const row = (rendering.render(m, { expanded: false, outputPad: 1 }, theme) as Component).render(200)[0]!;
   const title = "cpd";
-  assert.ok(row.includes(`\x1b[35m${CAP_L}\x1b[45m\x1b[30m${title}\x1b[49m\x1b[35m${CAP_R}\x1b[39m`), JSON.stringify(row));
-  assert.ok(!row.includes("\x1b[7m"), "no reverse video");
+  assert.ok(row.includes(`\x1b[35m${CAP_L}\x1b[7m${title}\x1b[27m${CAP_R}\x1b[39m`), JSON.stringify(row));
   assert.ok(!row.includes("<muted>" + CAP_L) && !row.includes(`<muted>${title}`), "the pill is no theme-muted block");
 });
