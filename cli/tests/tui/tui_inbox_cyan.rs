@@ -58,11 +58,26 @@ fn start(env: &TestEnv) {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+/// `text` without its OSC 8 hyperlink sequences (`ESC ] 8 ; ; <url>` ended by BEL or ST): tmux 3.8's `capture-pane -e` writes them
+/// around each piece of a link kind's label, and the rows are read as SGR text only.
+fn strip_osc8(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\x1b]8;;") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let end = tail[5..].find(['\x07', '\x1b']).map(|i| if tail.as_bytes()[5 + i] == 0x07 { 5 + i + 1 } else { 5 + i + 2 });
+        rest = &tail[end.unwrap_or(tail.len())..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The screen with its escapes, once the three rows are drawn.
 fn styled_screen(env: &TestEnv) -> String {
     common::wait_some("the Inbox's three rows", common::WAIT, || {
         let out = env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap();
+        let text = strip_osc8(&String::from_utf8(out.stdout).unwrap());
         if ["red label", "cyan label", "white label"].iter().all(|l| text.contains(l)) { Ok(text) } else { Err(text) }
     })
 }
