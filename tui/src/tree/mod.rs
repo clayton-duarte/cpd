@@ -50,7 +50,8 @@ mod view;
 #[cfg(test)]
 mod fixture;
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
@@ -58,6 +59,7 @@ use ratatui::crossterm::event::{self, Event};
 use time::OffsetDateTime;
 
 use super::background::Background;
+use super::pace::{self, Reads};
 use super::runner::kept;
 use super::{Capture, run_view};
 use super::{palette, read};
@@ -76,10 +78,18 @@ use crate::trace::Trace;
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
-/// How long the loop waits for a key or a click before it looks at the follower and the clock again. The spinner turns
-/// every 100 ms (`palette::frame`): while one is on screen ([`View::animated`]) the tree is redrawn that often, else only
-/// when something changed.
-const TICK: Duration = Duration::from_millis(100);
+/// What one poll of the reader thread found: each read apart, so each has its own error (`runner::kept`).
+struct Polled {
+    changes: Result<read::Changes, CpdError>,
+    engine: Result<bool, CpdError>,
+    merging: Result<BTreeSet<String>, CpdError>,
+}
+
+/// What the reader thread brings back.
+enum Read {
+    Poll(Polled),
+    Snapshot(Result<(Option<OffsetDateTime>, read::Tree), CpdError>),
+}
 
 /// A new snapshot is due: an Event came, or a pull request row changed (a pull request's checks change with no Event,
 /// §17), and `since` the last snapshot reaches [`SNAPSHOT_EVERY`]. With nothing changed none is ever due.
@@ -96,24 +106,25 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let snooze_end = read::snooze_end(&mut store)?;
-            let view = View::new(read::tree(&mut store)?, false);
+            let mut view = View::new(read::tree(&mut store)?, false);
+            // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
+            view.set_merging(crate::merge::marker::live(&home, &read::open_pulls(&mut store).unwrap_or_default()));
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             let runner = Arc::new(Runner::new(home.clone(), &config));
-            Ok((store, home, view, (follow, snooze_end), poll, runner))
+            // the reads after them run on the reader thread, with a store of its own (R4)
+            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+            Ok((home, view, (reader, snooze_end), poll, runner))
         },
-        |terminal, (mut store, home, view, follow, poll, runner)| {
-            Ok(event_loop(terminal, &mut store, &home, view, follow, poll, &runner)?)
-        },
+        |terminal, (home, view, reader, poll, runner)| Ok(event_loop(terminal, &home, view, reader, poll, &runner)?),
     )
 }
 
 fn event_loop(
     terminal: &mut DefaultTerminal,
-    store: &mut Store,
     home: &CpdHome,
     mut view: View,
-    (mut follow, mut snooze_end): (read::Follow, Option<OffsetDateTime>),
+    (reader, mut snooze_end): (Arc<Mutex<pace::Owned<read::Follow>>>, Option<OffsetDateTime>),
     poll: Duration,
     runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
@@ -134,7 +145,9 @@ fn event_loop(
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
     let mut actions = Background::<Result<String, Failed>>::new();
     let mut popups = Background::<Result<(), String>>::new();
-    view.set_merging(crate::merge::marker::live(home, &read::open_pulls(store).unwrap_or_default()));
+    // the reads run on the reader thread (R4), one at a time: none is asked for while one is out
+    let mut reads = Reads::<Read>::new();
+    let mut reading = false;
     for line in view.keep_folds(FoldsFile::at(home)) {
         show(log.line(&line), &mut popups, runner);
     }
@@ -152,31 +165,53 @@ fn event_loop(
                 show(log.line(&format!("failed: popup: {why}")), &mut popups, runner);
             }
         }
-        if last_poll.elapsed() >= poll {
-            last_poll = Instant::now();
-            dirty |= kept(trace.read(|| follow.poll_changes(store)), &mut follow_error).is_some_and(|changes| changes.any());
-            // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17)
-            dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
-            dirty |= kept(trace.read(|| model::engine_running(home)), &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
-            // a merge starts and ends with no Event: its marker (hs-d495) is read on each poll
-            if let Some(open) = kept(trace.read(|| read::open_pulls(store)), &mut open_error) {
-                redraw |= view.set_merging(trace.read(|| crate::merge::marker::live(home, &open)));
+        while let Some(done) = trace.read(|| reads.take()) {
+            reading = false;
+            match done {
+                Read::Poll(poll) => {
+                    dirty |= kept(poll.changes, &mut follow_error).is_some_and(|changes| changes.any());
+                    dirty |= kept(poll.engine, &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
+                    if let Some(merging) = kept(poll.merging, &mut open_error) {
+                        redraw |= view.set_merging(merging);
+                    }
+                }
+                Read::Snapshot(next) => {
+                    if let Some((end, tree)) = kept(next, &mut snapshot_error) {
+                        snooze_end = end;
+                        let t = &view.tree;
+                        if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
+                            view.refresh(tree);
+                            redraw = true;
+                        }
+                    }
+                }
             }
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone()).or_else(|| open_error.clone());
         }
-        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {
-            let next = trace.read(|| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?))));
-            if let Some((end, tree)) = kept(next, &mut snapshot_error) {
-                snooze_end = end;
-                let t = &view.tree;
-                if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
-                    view.refresh(tree);
-                    redraw = true;
-                }
-            }
+        if last_poll.elapsed() >= poll && !reading {
+            last_poll = Instant::now();
+            // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17); a merge
+            // starts and ends with no Event: its marker (hs-d495) is read on each poll
+            dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
+            let (shared, home) = (Arc::clone(&reader), home.clone());
+            reading = true;
+            reads.request(move || {
+                let (changes, merging) = (
+                    pace::Owned::read(&shared, |store, follow| follow.poll_changes(store)),
+                    pace::Owned::read(&shared, |store, _| read::open_pulls(store)).map(|open| crate::merge::marker::live(&home, &open)),
+                );
+                Read::Poll(Polled { changes, engine: model::engine_running(&home), merging })
+            });
+        }
+        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) && !reading {
+            // what comes while the snapshot is read (an action's end) is seen by the next
             dirty = false;
             last_snapshot = Instant::now();
-            view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone()).or_else(|| open_error.clone());
+            let shared = Arc::clone(&reader);
+            reading = true;
+            reads.request(move || {
+                Read::Snapshot(pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)))))
+            });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
         // lines go to the log, never to the terminal or the frame; a log that cannot be written is a dialog.
@@ -200,7 +235,7 @@ fn event_loop(
             }
             (redraw, drawn_frame, drawn_second) = (false, frame, second);
         }
-        if !event::poll(TICK)? {
+        if !event::poll(pace::wait_now())? {
             continue;
         }
         redraw = true; // a key, a click, a resize, the focus
@@ -331,10 +366,5 @@ mod tests {
         assert!(!snapshot_due(false, Duration::from_secs(3600)));
         assert!(!snapshot_due(true, ms(499)), "at most one snapshot per 500 ms");
         assert!(snapshot_due(true, ms(500)));
-    }
-
-    #[test]
-    fn the_loop_redraws_at_least_every_frame() {
-        assert!(TICK <= Duration::from_millis(100));
     }
 }
