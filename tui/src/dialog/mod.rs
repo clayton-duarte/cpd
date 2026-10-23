@@ -125,8 +125,20 @@ struct Select {
 
 /// The options of a `select` on the command line: at least one, each non-empty, one line, no control character, at most
 /// 70 characters, all distinct; otherwise `args_invalid`.
-fn check_options(_options: &[String]) -> Result<(), CpdError> {
-    todo!("select: check the options")
+fn check_options(options: &[String]) -> Result<(), CpdError> {
+    let bad = |why: String| CpdError::new(ErrorCode::ArgsInvalid, format!("Cannot use the select options: {why}."));
+    if options.is_empty() {
+        return Err(bad("there is none".into()));
+    }
+    for (n, o) in options.iter().enumerate() {
+        if o.is_empty() || o.chars().any(char::is_control) || o.chars().count() > 70 {
+            return Err(bad(format!("{o:?} is empty, longer than 70 characters or has a control character")));
+        }
+        if options[..n].contains(o) {
+            return Err(bad(format!("{o:?} is repeated")));
+        }
+    }
+    Ok(())
 }
 
 /// How a dialog closed: the result file's content. `value` is the typed text of an accepted `input`, and only then.
@@ -175,7 +187,11 @@ impl Kind {
                 let dialog = Dialog::new(a.common.title.clone(), a.prompt, mode);
                 (a.common, dialog)
             }
-            Kind::Select(_) => todo!("select: the kind"),
+            Kind::Select(a) => {
+                check_options(&a.options)?;
+                let dialog = Dialog::new(a.common.title.clone(), a.prompt, Mode::Select { options: a.options, cursor: 0 });
+                (a.common, dialog)
+            }
             Kind::Text(a) => {
                 let dialog = Dialog::new(a.common.title.clone(), a.body, Mode::Text);
                 (a.common, dialog)
@@ -400,8 +416,17 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
 
 /// A radio list of `options` in a popup, under the question `prompt`. The option chosen, `None` when the User cancelled.
 #[allow(dead_code)] // the tree's New Context… (Job tui-nc)
-pub(crate) fn select(_tmux: &Tmux, _title: &str, _prompt: &str, _options: &[String]) -> Result<Option<String>, CpdError> {
-    todo!("select: the opener")
+pub(crate) fn select(tmux: &Tmux, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
+    let mut fields = vec![("prompt", prompt)];
+    fields.extend(options.iter().map(|o| ("option", o.as_str())));
+    let natural = widest(prompt).max(options.iter().map(|o| 4 + o.chars().count()).max().unwrap_or(0));
+    let size = |client, title: &str| popup_size(client, title, natural, |width| wrap(prompt, width).len() + options.len());
+    let outcome = ask(tmux, On::Newest, title, "select", &fields, size)?;
+    match (outcome.confirmed, outcome.value) {
+        (false, _) => Ok(None),
+        (true, Some(value)) => Ok(Some(value)),
+        (true, None) => Err(CpdError::new(ErrorCode::Internal, "The select dialog confirmed with no value.")),
+    }
 }
 
 /// What a `checklist` closed with: whether it was approved, and the ids ticked and not.

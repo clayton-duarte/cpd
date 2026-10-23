@@ -158,7 +158,7 @@ pub enum View {
     Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
-    /// A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup)
+    /// A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup)
     Dialog(dialog::Args),
     /// The chat slot's placeholder
     Chat,
