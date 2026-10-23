@@ -18,7 +18,7 @@ Protected, found and not touched: pid 5683 (`tmux -u -L cpd ... new-session -d -
 
 ### Class A: `tmux -u -L cpd` servers of `provider_flow::*` (34), `new-session -d -s cpd -n park-pl ... -- cpd session run <uuid>`
 
-`NEXTEST_BINARY_ID=cpd::flow`, no `GATE_RUN`, `CPD_HOME=<cwd dir>/cpd-home`, `TMUX_TMPDIR=<cwd dir>/tmux`. Five tests, run by seven targeted runs in `cpd.bifrost--provider-impl-a1` (Oct 22 22:09-22:25). Test name (last segment) -> pids:
+`NEXTEST_BINARY_ID=cpd::flow`, no `GATE_RUN`, `CPD_HOME=<cwd dir>/cpd-home`, `TMUX_TMPDIR=<cwd dir>/tmux`. Five tests, run by several targeted runs in `cpd.bifrost--provider-impl-a1` (Oct 22 22:09-22:25, six batches). Test name (last segment) -> pids:
 
 - `a_context_without_an_owner_is_owner_unset_and_an_owner_without_a_policy_file_is_owner_unknown_for_tiers` (6): 22690, 28861, 52859, 81177, 84671, 89483
 - `an_owner_policy_without_a_model_table_is_github_copilot_and_behaves_as_before` (7): 22861, 29104, 52927, 70980, 81089, 84564, 89304
@@ -67,7 +67,7 @@ Full table:
 
 ### Class B: `tmux -L cpdt-<pid>-<n> new-session ... cpd tui view <view>` servers of `tui_idle::*` (9)
 
-`NEXTEST_BINARY_ID=cpd::tui`, no `GATE_RUN`, targeted runs in `cpd.bifrost--cyan-impl-a1` (Oct 22 22:12-22:26) and `cpd.gatemac--g3-tests-proc-a1` (23:00). Each server has 2-6 `cpd tui view ...` pane processes (tree, plan, widgets, logs, worker) as children, cwd the deleted env dir (38 pane processes listed by `lsof` cwd, all older than 13 h).
+`NEXTEST_BINARY_ID=cpd::tui`, no `GATE_RUN`, targeted runs in `cpd.bifrost--cyan-impl-a1` (Oct 22 22:12-22:26) and `cpd.gatemac--g3-tests-proc-a1` (23:00). Each server has 2-6 `cpd tui view ...` pane processes (tree, plan, widgets, logs, worker) as children, cwd the deleted env dir (the pane processes are listed by `lsof` cwd, all older than 13 h).
 
 | pid | etime | test (NEXTEST_TEST_NAME) | worktree (CARGO_MANIFEST_DIR) | cwd dir |
 |---|---|---|---|---|
@@ -153,3 +153,39 @@ Verified: a manual `-vv` server of a Worker's debug session (`/private/tmp/tmuxl
 `/tmp/tmux-503/cpdt-abcdef-<pid>-<n>-outer-*` (the `bare.rs`/`tui_merge.rs` derived sockets `<socket>-outer-<name>`), all with no server behind, from Oct 22 (e.g. 23:15). Their teardown glob is `$tmuxdir/tmux-*/$socket-*`, which removes them only when `$tmuxdir` is the same directory as the one tmux used; they remained. Same cause as D (`abcdef`).
 
 ## Step 3: cleanup
+
+Selection command (saved as a script, `/tmp/leak-a1-select.sh`, prints the pids; the logic, verbatim):
+
+```sh
+ps -axww -o pid=,ppid=,etime=,command= | awk '
+  ($3 ~ /-/ || $3 ~ /^[0-9]+:[0-9]+:[0-9]+$/) {
+    cmd=$0; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/, "", cmd)
+    if (cmd ~ /cpd-test-|cpdt-|gate-run\.|sleep 120/ || (cmd ~ /^tmux -u -L cpd / && cmd ~ /park-pl/))
+      if ($1!=5683 && $1!=5582 && $1!=65309 && cmd !~ /^[^ ]*(sh|bash) .*gate-run\.sh/ && cmd !~ /^(cpd|[^ ]*\/cpd) watch/ && cmd !~ /^(rg|awk|ps|\/bin\/bash -c for i)/) print $1 }'
+```
+
+(etime of an hour or more; a test path or socket in the command; the cockpit server and clients, `gate-run.sh` and `cpd watch` processes themselves excluded. The `-L cpd` servers match through `cpd-test-` in their `-c` directory and the `park-pl` clause.) Before the kill the selection printed the same 55 pids as the table above (diffed). No selected process had `CPD_HOME=/Users/Clayton.Duarte/.cpd` (checked with `ps eww` for each).
+
+| | before | after |
+|---|---|---|
+| selected leftovers (A 34, B 9, C 3, D 8, E 1) | 55 | 0 |
+| processes with etime >= 1 h in `ps -axo pid,etime,command` that match the acceptance pattern (`cpd-test-`, `cpdt-`, `sleep 120`) | the 55 plus their panes (`cpd tui view`, `cpd watch`, `cpd session run`) | 0 |
+| stale sockets `/tmp/tmux-503/cpdt-*` older than 1 h | 54 | 0 |
+| stale dirs older than 1 h | 1 (`cpd-test-n48CtM`) | 0 |
+
+Done:
+
+1. `kill -TERM` of the 55 pids (by pid only, the tmux servers; their panes, `cpd tui view`, `cpd watch`, `cpd session run`, died with them: not signalled by me). All 55 were gone 3 s later; no SIGKILL was needed.
+2. **Side effect, verified**: the eight class D shells ran their SIGTERM trap, as designed, and each started a new `tmux -L cpdt-... new-session -d "sleep 100 # <dir>"` server (pids 30156, 30157, 30272, 30312, 30321, 30369, 30485, 30487, ppid 1, with a `sleep 100` child). That is what the driver shell is for, and it proves they had never received the TERM. I killed those 8 servers by pid (SIGTERM; their sleeps went with them) and removed their 8 sockets. Nothing of them is left.
+3. `rm -rf /var/folders/7_/.../T/cpd-test-n48CtM` (class E env dir, 11 h old, no process held it: `lsof +D` empty); deleted the 54 sockets `/tmp/tmux-503/cpdt-*` older than 60 min (`find -mmin +60 -type s -delete`; 53 were the `cpdt-abcdef-*-outer-*` ones, one the class E `cpdt-3348-0`).
+
+Left alone, and why:
+
+- Cockpit server 5683 (`-L cpd`, `-s cpd-work`, CPD_HOME=/Users/Clayton.Duarte/.cpd) and clients 5582, 65309: still running after the cleanup (verified). The socket `/tmp/tmux-503/cpd`, `osct`, `sda1` (not cpdt; not asked).
+- The live Gates of other Plans (younger than 1 h when looked at): `scripts/gate-run.sh` 68558/16557/65909, their `cpd-test-*` and `cpdt-APTvei-*`/`cpdt-LGF1Da-*` servers and reapers, and the dirs `/tmp/cg3/gate-run.APTvei`, `.../T/gate-run.U34zVA`, `.../T/gate-run.qVTjrp` (each younger than 1 h). The dirs `/tmp/cg`, `/tmp/g1`, `/private/tmp/g1` do not exist any more; `/tmp/cg3` is a live Gate's.
+- `cpd watch` processes: none touched by me. The three old ones (30605, 53425, 56677, test CPD_HOMEs) died with their tmux server; 44238 (`CPD_HOME=/Users/Clayton.Duarte/.cpd`, child of 5683) is the cockpit's.
+- `/private/tmp/tmuxlog/tmux-client-*.log` (the Worker's `-vv` logs of class E): not in the list of what to remove.
+
+## Acceptance check (after)
+
+- `ps -axo pid,etime,command | rg 'cpd-test-|cpdt-|sleep 120'` lists only processes younger than 1 h (the live Gates); the selection prints 0; 5683, 5582 and 65309 run.
