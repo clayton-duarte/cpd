@@ -77,13 +77,13 @@ pub const OPT_VIEW: &str = "@cpd_view";
 pub const OPT_HISTORY: &str = "@cpd_history";
 
 // A pane's title pill (§6.1.1 R3): the `━` before it, the caps and the block are colour 7, or blue on the focused pane, the text
-// is colour 0; one attribute per `#[…]`, since a comma inside a conditional would split the branch.
+// is reversed (the terminal's background on the block); one attribute per `#[…]`, since a comma inside a conditional would split the branch.
 macro_rules! title_pill {
     ($($text:expr),+) => {
         concat!(
-            "#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}",
+            "#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[reverse]",
             $($text,)+
-            "#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4}"
+            "#[noreverse]\u{e0b4}"
         )
     };
 }
@@ -93,7 +93,7 @@ macro_rules! title_pill {
 /// nothing; the chat placeholder and a history pane have none, since pi and
 /// the placeholder say what they are; the views have their column titles; any
 /// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
-/// text (colour 0) on a block with no padding, between a rounded cap on each
+/// text (reversed) on a block with no padding, between a rounded cap on each
 /// side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 7, hs-d534)
 /// and blue on the focused pane, set in the format itself (`pane_active`), so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
@@ -171,8 +171,8 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     // Menus and copy mode follow the palette (hs-d534): entries are clickable text, the border a muted line, a selection the blue block.
     &["set", "-gq", "menu-style", "fg=colour15"],
     &["set", "-gq", "menu-border-style", "fg=colour8"],
-    &["set", "-gq", "menu-selected-style", "bg=blue,fg=colour0"],
-    &["set", "-gq", "mode-style", "bg=blue,fg=colour0"],
+    &["set", "-gq", "menu-selected-style", "fg=blue,reverse"],
+    &["set", "-gq", "mode-style", "fg=blue,reverse"],
     &["set", "-g", "remain-on-exit", "on"],
     &["set", "-g", "set-titles", "on"],
     &["set", "-g", "set-titles-string", SET_TITLES_STRING],
@@ -251,16 +251,16 @@ macro_rules! fill {
     };
 }
 // A join: one grey `─`, outside the click ranges.
-// An interactive pill (R2): a click range, bg 15, text 0, caps 15.
+// An interactive pill (R2): a click range, block 15 drawn reversed, caps 15.
 macro_rules! button {
     ($range:literal, $glyph:expr) => {
-        concat!("#[range=user|", $range, "]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]", $glyph, "#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]")
+        concat!("#[range=user|", $range, "]#[fg=colour15]\u{e0b6}#[reverse]", $glyph, "#[noreverse]\u{e0b4}#[default]#[norange]")
     };
 }
-// A non-interactive pill (R3): its colour as the block, text 0, caps in the colour. `$colour` is a literal such as `"colour7"`.
+// A non-interactive pill (R3): its colour as the block drawn reversed, caps in the colour. `$colour` is a literal such as `"colour7"`.
 macro_rules! pill {
     ($colour:literal, $($text:expr),+) => {
-        concat!("#[fg=", $colour, "]\u{e0b6}#[fg=colour0]#[bg=", $colour, "]", $($text,)+ "#[fg=", $colour, "]#[bg=default]\u{e0b4}#[default]")
+        concat!("#[fg=", $colour, "]\u{e0b6}#[reverse]", $($text,)+ "#[noreverse]\u{e0b4}#[default]")
     };
 }
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
@@ -1105,9 +1105,9 @@ mod tests {
         assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
-        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour8") && tail.contains("\u{e0b4}"), "{tail}");
+        assert!(tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("bg=colour8]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
