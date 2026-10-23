@@ -288,7 +288,7 @@ impl Config {
             Ok(tier)
         })?;
         let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
-        let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 0, u32::MAX))?;
+        let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
