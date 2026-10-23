@@ -306,12 +306,27 @@ struct Up {
 /// in that session.
 fn detached(env: &TestEnv, argv: &[&str]) -> u32 {
     let mut cmd = env.command("sh");
-    cmd.args(["-c", r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"]).args(argv);
+    // macOS has no `setsid` command: perl's POSIX::setsid, then exec, is the same process in a new session.
+    let script = if cfg!(target_os = "macos") {
+        r#"perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' "$@" </dev/null >/dev/null 2>&1 & echo $!"#
+    } else {
+        r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#
+    };
+    cmd.args(["-c", script, "sh"]).args(argv);
     let out = common::output(&mut cmd).unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pid: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
     // `/proc/<pid>/stat`: `<pid> (<comm>) <state> <ppid> <pgrp> <session> ...`.
-    let session = || std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?.rsplit_once(") ")?.1.split(' ').nth(3)?.parse::<u32>().ok();
+    let session = || {
+        if cfg!(target_os = "macos") {
+            // POSIX.pm has no getsid and `ps -o sess=` prints 0: a setsid'd process leads its own group,
+            // and a background job of a non-interactive sh does not, so pgid == pid shows the new session.
+            let out = std::process::Command::new("ps").args(["-o", "pgid=", "-p", &pid.to_string()]).output().ok()?;
+            String::from_utf8(out.stdout).ok()?.trim().parse::<u32>().ok()
+        } else {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?.rsplit_once(") ")?.1.split(' ').nth(3)?.parse::<u32>().ok()
+        }
+    };
     common::wait_until(&format!("process {pid} to be in a session of its own"), || session() == Some(pid));
     pid
 }
@@ -378,6 +393,12 @@ fn put_up(env: &TestEnv) -> Up {
 }
 
 fn alive(pid: u32) -> bool {
+    if cfg!(target_os = "macos") {
+        // `kill -0` finds the pid; `ps -o stat=` prints nothing for a gone process and Z for a zombie.
+        let signalled = std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        let stat = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).unwrap_or_default();
+        return signalled && !stat.is_empty() && !stat.starts_with('Z');
+    }
     // A zombie is dead; an unreadable /proc entry is gone.
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
@@ -387,6 +408,16 @@ fn alive(pid: u32) -> bool {
 /// A scan of all of /proc: the tests' own check, never the teardown's.
 fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
     let needle = dir.to_string_lossy().into_owned().into_bytes();
+    if cfg!(target_os = "macos") {
+        // BSD `ps` has no /proc: `pid=,command=` of every process.
+        let out = std::process::Command::new("ps").args(["-axo", "pid=,command="]).output().unwrap();
+        return String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim_start().split_once(' '))
+            .filter(|(_, cmd)| cmd.contains(dir.to_string_lossy().as_ref()))
+            .filter_map(|(pid, _)| pid.parse::<u32>().ok())
+            .collect();
+    }
     std::fs::read_dir("/proc")
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
