@@ -28,7 +28,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -555,6 +555,15 @@ impl GitWrapper {
     }
 }
 
+/// The `TMUX_TMPDIR` for an env rooted at `root`: `<root>/tmux`, or `/tmp` when the socket path would pass 100
+/// characters. STUB (g3-tests-h1): always `<root>/tmux`.
+pub fn tmux_tmpdir_for(root: &Path, _uid: u32, _socket: &str) -> PathBuf {
+    root.join("tmux")
+}
+
+/// Writes the perl `flock` shim into `dir`. STUB (g3-tests-h1): writes nothing.
+pub fn write_flock_shim(_dir: &Path) {}
+
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
@@ -711,6 +720,16 @@ impl TestEnv {
     /// The directory first on `PATH`, holding the fake programs.
     pub fn bin(&self) -> PathBuf {
         self.root().join("bin")
+    }
+
+    /// The `TMUX_TMPDIR` of this env's private tmux server. STUB (g3-tests-h1): the impl Job makes it short.
+    pub fn tmux_tmpdir(&self) -> PathBuf {
+        tmux_tmpdir_for(self.root(), fs::metadata(self.root()).expect("stat the env").uid(), self.tmux_socket())
+    }
+
+    /// The `flock` the env's commands run. STUB (g3-tests-h1): the impl Job returns the shim in `bin/`.
+    pub fn flock(&self) -> PathBuf {
+        PathBuf::from("flock")
     }
 
     /// The private tmux server's socket name (`tmux -L <name>`), to put in

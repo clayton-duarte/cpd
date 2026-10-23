@@ -92,7 +92,7 @@ fn fakes_shadow_the_real_programs_and_record_calls() {
 #[test]
 fn tmux_server_is_private_and_killed_on_drop() {
     let env = TestEnv::new();
-    let socket_dir = env.root().join("tmux");
+    let socket_dir = env.tmux_tmpdir();
     let out = env.tmux(&["new-session", "-d", "-s", "t", "sleep 60"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(env.tmux(&["has-session", "-t", "=t"]).status.success());
@@ -790,4 +790,77 @@ fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
     let empty = TestEnv::empty();
     // main's harness gives every env the owner policy `acme` (policy/owners/acme.toml): no store is what makes it empty.
     assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
+}
+
+#[test]
+fn the_tmux_dir_stays_in_the_env_unless_its_socket_path_would_pass_100_characters() {
+    let uid = 501;
+    let socket = "cpdt-s";
+    let base = tempfile::Builder::new().prefix("tt-").tempdir_in("/tmp").unwrap();
+    let base_path = std::fs::canonicalize(base.path()).unwrap();
+    let tail = format!("/tmux/tmux-{uid}/{socket}").len();
+    // A root whose canonical socket path is `total` characters long.
+    let root_with = |total: usize| {
+        let pad = total - base_path.as_os_str().len() - 1 - tail;
+        let root = base_path.join("p".repeat(pad));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    };
+    let length = |root: &std::path::Path| std::fs::canonicalize(root).unwrap().join(format!("tmux/tmux-{uid}/{socket}")).as_os_str().len();
+
+    let short = base_path.join("env");
+    std::fs::create_dir_all(&short).unwrap();
+    assert_eq!(common::tmux_tmpdir_for(&short, uid, socket), short.join("tmux"), "a short root keeps its tmux dir");
+
+    let exact = root_with(100);
+    assert_eq!(length(&exact), 100);
+    assert_eq!(common::tmux_tmpdir_for(&exact, uid, socket), exact.join("tmux"), "exactly 100 characters stays in the env");
+
+    let over = root_with(101);
+    assert_eq!(length(&over), 101);
+    assert_eq!(common::tmux_tmpdir_for(&over, uid, socket), std::path::PathBuf::from("/tmp"), "101 characters falls back to /tmp");
+}
+
+#[test]
+fn a_command_does_not_inherit_zdotdir() {
+    let env = TestEnv::new();
+    let cmd = env.command("true");
+    let removed = cmd.get_envs().any(|(key, value)| key == "ZDOTDIR" && value.is_none());
+    assert!(removed, "ZDOTDIR is not removed from the command's environment: {:?}", cmd.get_envs().collect::<Vec<_>>());
+}
+
+#[test]
+fn the_env_gitconfig_turns_automatic_maintenance_off() {
+    let env = TestEnv::new();
+    let get = |key: &str| {
+        let out = common::output(env.command("git").args(["config", "--global", key])).expect("run git");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    assert_eq!(get("maintenance.auto"), "false", "maintenance.auto");
+    assert_eq!(get("gc.auto"), "0", "gc.auto");
+}
+
+#[test]
+fn the_flock_shim_holds_the_lock_across_exec_and_n_fails_fast_while_it_is_held() {
+    let env = TestEnv::new();
+    let dir = env.root().join("shim");
+    std::fs::create_dir_all(&dir).unwrap();
+    common::write_flock_shim(&dir);
+    let shim = dir.join("flock");
+    assert!(shim.is_file(), "write_flock_shim wrote no {}", shim.display());
+    let lock = dir.join("lock");
+    let marker = dir.join("held");
+    let mut holder = common::spawn(
+        env.command(&shim).arg(&lock).args(["sh", "-c"]).arg(format!("touch '{}'; exec sleep 60", marker.display())),
+    )
+    .expect("spawn the shim");
+    common::wait_until("the command to run under the lock", || marker.exists());
+    let second = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the second shim");
+    assert_eq!(second.status.code(), Some(1), "-n exits 1 at once while the lock is held");
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    let third = common::output(env.command(&shim).arg("-n").arg(&lock).arg("true")).expect("run the third shim");
+    assert_eq!(third.status.code(), Some(0), "-n runs the command once the lock is free");
+    let bad = common::output(env.command(&shim).arg("-w").arg("1").arg(&lock).arg("true")).expect("run the shim with another option");
+    assert_eq!(bad.status.code(), Some(64), "any other option exits 64");
 }
