@@ -458,15 +458,14 @@ pub fn separator() -> Span<'static> {
     Span::styled("⋅", muted_text())
 }
 
-/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero.
+/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero. A
+/// failed count is red (hs-d580), where its pill is waiting until `job-stuck` opens.
 pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
-    if n == 0 { muted_text() } else { fg_clickable(job_status(status, merging).1) }
-}
-
-/// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
-/// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
-pub fn failed_count_style(n: usize, stuck: bool) -> Style {
-    if stuck && n > 0 { fg_clickable(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+    match (n, status) {
+        (0, _) => muted_text(),
+        (_, JobStatus::Failed) => fg_clickable(JOB_STUCK.1),
+        _ => fg_clickable(job_status(status, merging).1),
+    }
 }
 
 /// Meaning of a PR's state.

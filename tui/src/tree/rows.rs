@@ -55,7 +55,6 @@ use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, Place, PlanNode, SessionNode, Tree};
-use cpd_core::inbox::model::Kind;
 use super::actions::{Action, Subject};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
@@ -263,35 +262,28 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
-/// Whether a Plan has a Job with an open `job-stuck` item among the tree's visible items: its failed Jobs need the User.
-fn has_stuck_job(tree: &Tree, plan: &PlanNode) -> bool {
-    tree.inbox.iter().any(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(&plan.head.id))
-}
-
-/// `36⋅0⋅0⋅1⋅5`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
-/// The failed count is in the waiting colour while the Lead handles the failed Jobs, red when `stuck`: one of them has an
-/// open `job-stuck` item (audit Q3).
-pub fn counters(plan: &PlanNode, stuck: bool) -> Line<'static> {
+/// `36⋅0⋅0⋅1⋅5`: each count in its status colour (colour 8 when zero), `⋅` between. The failed count is always red.
+pub fn counters(plan: &PlanNode) -> Line<'static> {
     let phase = plan.head.phase;
     let mut spans = Vec::new();
     for (i, n) in plan.head.counts.counters(phase).into_iter().enumerate() {
         if i > 0 {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n, stuck)));
+        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
     }
     Line::from(spans)
 }
 
-/// Style of the `index`th counter of `JobCounts::counters`: its status colour, or nothing when the count is zero. The
-/// first counter is the queued Jobs, in phase `plan` the drafts. The failed one is red only when `stuck`.
-fn counter_style(index: usize, phase: Phase, n: usize, stuck: bool) -> Style {
+/// Style of the `index`th counter of `JobCounts::counters`: its status colour, or colour 8 when the count is zero. The
+/// first counter is the queued Jobs, in phase `plan` the drafts.
+fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
     let (status, merging) = match index {
         0 if phase == Phase::Plan => (JobStatus::Draft, false),
         0 => (JobStatus::Queued, false),
         1 => (JobStatus::Running, false),
         2 => (JobStatus::Running, true),
-        3 => return palette::failed_count_style(n, stuck),
+        3 => (JobStatus::Failed, false),
         _ => (JobStatus::Merged, false),
     };
     palette::count_style(status, merging, n)
@@ -361,7 +353,7 @@ fn context_text(c: &ContextNode, frame: usize) -> Line<'static> {
 fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
     let muted = c.is_archived() || p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p, false).width() /* the width is the same in any colour */, muted },
+        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p).width() /* the width is the same in any colour */, muted },
         width,
     );
     (p.head.id.to_string(), text)
@@ -528,18 +520,28 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             let cell = if x + shift < rect.right() { buf[(x + shift, y)].clone() } else { Cell::EMPTY };
             buf[(x, y)] = cell;
         }
+        // an asleep row's counters (separators too) are colour 8 whatever the count: the muted restyle skips them
+        let mut counter_cols = 0..0;
         if let Row::Plan(_, plan) = row {
-            counters(plan, has_stuck_job(tree, plan)).right_aligned().render(Rect { width: rect.width.saturating_sub(RIGHT_PAD), ..rect }, buf);
+            let line = counters(plan);
+            let width = rect.width.saturating_sub(RIGHT_PAD);
+            let start = rect.x + width.saturating_sub(u16::try_from(line.width()).unwrap_or(u16::MAX));
+            counter_cols = start..rect.x + width;
+            line.right_aligned().render(Rect { width, ..rect }, buf);
         }
         if row.muted() {
-            // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) staying 8; either way
-            // except the selected name: selection beats the muted colour
+            // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) and the counters
+            // staying 8; either way except the selected name: selection beats the muted colour
             let archived = row.archived();
             let style = if archived { palette::archived_text() } else { palette::asleep_text() };
             for x in rect.x..rect.right() {
                 let branch = x < rect.x + 3 && "╭├╰│─".contains(buf[(x, y)].symbol());
-                if buf[(x, y)].fg != palette::selected_name().fg.unwrap_or_default() && (archived || !branch) {
-                    buf[(x, y)].set_style(style);
+                if buf[(x, y)].fg != palette::selected_name().fg.unwrap_or_default() {
+                    if archived || !branch && !counter_cols.contains(&x) {
+                        buf[(x, y)].set_style(style);
+                    } else if counter_cols.contains(&x) {
+                        buf[(x, y)].set_style(palette::archived_text());
+                    }
                 }
             }
         }
