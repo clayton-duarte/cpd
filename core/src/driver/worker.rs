@@ -137,7 +137,8 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
-    let quick_check = spec::quick_check(&target.worktree)?;
+    let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
+    let quick_check = spec::quick_check(&policy.hooks.pre_commit);
     let protected = git::protected_list(&target.worktree, &target.lead_branch)?;
     let job_spec = job.require_spec()?;
     let (touches, acceptance, out_of_scope) = (

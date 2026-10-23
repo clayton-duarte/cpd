@@ -10,7 +10,7 @@ use super::row::{self, Attempt};
 use super::{Env, SubmitArgs, kind, span};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git::{self, HookOutcome, Operation, run_hook};
+use crate::git::{self, HookOutcome, Operation, Pipeline, run_hook};
 use crate::home::Hook;
 use crate::ids::{AttemptId, PlanId};
 use crate::output::Output;
@@ -81,7 +81,8 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         git::tamper::check_over(&root, &lead, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), &base, &sha)?;
         // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
         kind::guard_tests(&mut env, &plan, &job, &root, &lead, &base, &sha)?;
-        let tail = quick_check(&env, &plan, &id, &root, &lead)?;
+        let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, &plan, &attempt.job))?;
+        let tail = quick_check(&env, &policy.hooks.pre_commit, &plan, &id, &root, &lead)?;
         // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[tests]`.
         if kind::has_checks(&job) {
             kind::check(&mut env, &plan, &id, &job, &root, &lead, &sha)?;
@@ -227,11 +228,11 @@ fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdErro
 
 /// The quick check of §7.3: `pre-commit` in the worktree. Its last 60 lines for `check_tail`;
 /// `None` when nothing ran. Refuses `check_failed` (exit 3) or `check_error` (exit 1).
-fn quick_check(env: &Env, plan: &PlanId, id: &AttemptId, root: &Path, lead: &str) -> Result<Option<String>, CpdError> {
+fn quick_check(env: &Env, pipeline: &Pipeline, plan: &PlanId, id: &AttemptId, root: &Path, lead: &str) -> Result<Option<String>, CpdError> {
     let log = env.home.hook_log(plan, id, Hook::PreCommit);
     let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
     let operation = Operation { branch: lead };
-    let result = run_hook(Hook::PreCommit, root, Some(&operation), timeout, &log)?;
+    let result = run_hook(Hook::PreCommit, pipeline, root, Some(&operation), timeout, &log)?;
     let refuse = |code: ErrorCode, message: String| {
         let mut e = CpdError::new(code, message).with("attempt", id.to_string()).with("tail", result.tail.clone());
         if result.tail.is_some() {

@@ -332,7 +332,14 @@ impl Driver {
             timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
             log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
         };
-        let created = match git::create_attempt_worktree(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup) {
+        let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key)) {
+            Ok(policy) => policy,
+            Err(e) => {
+                let detail = format!("Reading the policy of the PR failed: {}", e.message());
+                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+            }
+        };
+        let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
             Ok(created) => created,
             Err(e) => {
                 let detail = format!("Setting up the worktree failed: {}", e.message());

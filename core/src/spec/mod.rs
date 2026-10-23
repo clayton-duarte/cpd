@@ -4,8 +4,7 @@
 //!
 //! The driver gathers the facts (the Job, the earlier Attempts, the answered
 //! Escalations, the protected list of [`crate::git::protected_list`]) and calls
-//! [`render`] or [`write`]; [`quick_check`] reads the one fact that lives in
-//! the worktree.
+//! [`render`] or [`write`]; [`quick_check`] lists the commands of the PR's policy `hooks.pre-commit`.
 
 use std::path::{Path, PathBuf};
 
@@ -14,10 +13,9 @@ use minijinja::value::Value;
 use minijinja::{Environment, UndefinedBehavior};
 
 use crate::config::Tier;
-use crate::error::{CpdError, ErrorCode};
-use crate::git::HookError;
-use crate::git::hooks::load;
-use crate::home::{CpdHome, Hook};
+use crate::error::CpdError;
+use crate::git::Pipeline;
+use crate::home::CpdHome;
 use crate::ids::{AttemptId, EscalationId, PlanId};
 
 const TEMPLATE: &str = include_str!("worker.md");
@@ -173,7 +171,7 @@ pub struct Input<'a> {
     pub touches: &'a [String],
     pub acceptance: &'a [String],
     pub out_of_scope: &'a [String],
-    /// The commands of the worktree's `pre-commit`, as [`quick_check`] reads them;
+    /// The commands of the PR's `hooks.pre-commit`, as [`quick_check`] lists them;
     /// empty when the repo defines none.
     pub quick_check: &'a [String],
     /// The repo's own protected list (§7.5); the always-protected paths are added here.
@@ -184,19 +182,10 @@ pub struct Input<'a> {
     pub answers: &'a [Answer],
 }
 
-/// The commands of `pre-commit` in `<worktree>/.config/wt.toml`, verbatim and in
-/// file order; empty when the file or the table is missing (R20: no fallback to
-/// `pre-merge`).
-pub fn quick_check(worktree: &Path) -> Result<Vec<String>, CpdError> {
-    let pipeline = load(worktree, Hook::PreCommit).map_err(|e| {
-        let code = match e {
-            HookError::Invalid(_) => ErrorCode::HookInvalid,
-            _ => ErrorCode::StoreFailed,
-        };
-        CpdError::new(code, format!("Cannot read the quick check of {}: {e}", worktree.display()))
-            .with("worktree", worktree.display().to_string())
-    })?;
-    Ok(pipeline.commands().map(|c| c.template.clone()).collect())
+/// The commands of `pipeline` (the policy's `hooks.pre-commit`), verbatim and in file order; empty when it is not
+/// set (R20: no fallback to `pre-merge`).
+pub fn quick_check(pipeline: &Pipeline) -> Vec<String> {
+    pipeline.commands().map(|c| c.template.clone()).collect()
 }
 
 /// Six spaces of indent: a code block under a list item.

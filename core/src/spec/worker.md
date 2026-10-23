@@ -37,7 +37,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 - Your submit builds the branch and runs the named tests: the build must succeed and the tests must pass.
 {% endif %}
 {% if quick_check %}
-- Before submitting, run the quick check yourself, from this worktree. It is the `pre-commit` hook of `.config/wt.toml`; its commands, verbatim:
+- Before submitting, run the quick check yourself, from this worktree. It is `hooks.pre-commit` of the repo's policy file; its commands, verbatim:
 
 {% for command in quick_check %}
 {{ command }}
