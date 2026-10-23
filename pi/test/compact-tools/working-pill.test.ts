@@ -46,15 +46,15 @@ const LABELS: Array<[string, (handlers: Map<string, Handler>) => void]> = [
 	["Processing results…", (h) => { h.get("tool_execution_start")!({ toolCallId: "1", toolName: "bash", args: {} }); h.get("tool_execution_end")!({ toolCallId: "1" }); }],
 ];
 
-test("the working label is a pill with caps 6, bg 6 and text 0", () => {
+test("the working label is a pill with caps 6 and its text inverted", () => {
 	const { messages } = drive((h) => h.get("agent_start")!({}));
 	const message = messages.at(-1)!;
 	assert.ok(message, "a label is set");
 	assert.ok(message.includes(LEFT_CAP) && message.includes(RIGHT_CAP), "both caps are drawn");
 	assert.match(message, /\x1b\[36m\ue0b6/u, "the left cap is 6 on the terminal background");
 	assert.match(message, /\x1b\[36m\ue0b4/u, "the right cap is 6 on the terminal background");
-	assert.ok(message.includes("\x1b[46m"), "the body is bg 6");
-	assert.ok(message.includes("\x1b[30m"), "the text is 0");
+	assert.ok(message.includes("\x1b[7m") && message.includes("\x1b[27m"), "the text is inverted");
+	assert.ok(!message.includes("\x1b[46m") && !message.includes("\x1b[30m"), "no bg 6, no text 0");
 	assert.ok(strip(message).startsWith(LEFT_CAP) && strip(message).endsWith(RIGHT_CAP));
 	const inside = strip(message).slice(1, -1);
 	assert.equal(inside, inside.trim(), "no padding space inside the caps (hs-d475)");
@@ -91,10 +91,10 @@ test("the label pill uses only indexed SGR 0-7", () => {
 		for (const match of message.matchAll(/\x1b\[([0-9;]*)m/gu)) {
 			const params = match[1]!.split(";").map(Number);
 			const [first] = params;
-			const allowed = (first! >= 30 && first! <= 37) || (first! >= 40 && first! <= 47) || first === 39 || first === 49 || first === 0 || first === 22 || first === 23 || first === 24 || first === 27;
+			const allowed = (first! >= 30 && first! <= 37) || (first! >= 40 && first! <= 47) || first === 39 || first === 49 || first === 0 || first === 22 || first === 23 || first === 24 || first === 27 || first === 7;
 			const indexed = (first === 38 || first === 48) && params[1] === 5 && params[2]! < 8;
 			assert.ok(allowed || indexed, `SGR ${match[1]} is outside the indexed 0-7 set`);
-			assert.ok(![2, 3, 7].includes(first!), `SGR ${first} is forbidden`);
+			assert.ok(![2, 3].includes(first!), `SGR ${first} is forbidden`);
 		}
 	}
 });
@@ -110,6 +110,6 @@ test("a label that changes from Thinking to Responding stays a pill", () => {
 	assert.ok(strip(responding).includes("Responding…"));
 	for (const message of [thinking!, responding]) {
 		assert.ok(message.includes(LEFT_CAP) && message.includes(RIGHT_CAP), "caps");
-		assert.ok(message.includes("\x1b[46m") && message.includes("\x1b[30m"), "bg 6 and text 0");
+		assert.ok(message.includes("\x1b[7m") && !message.includes("\x1b[30m"), "inverted text");
 	}
 });

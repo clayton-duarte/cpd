@@ -16,6 +16,7 @@ use super::scroll::Scroll;
 use super::validate::Validator;
 use crate::input_box;
 use crate::palette;
+use crate::pill;
 
 /// The label of the second button of `confirm` and `input` (the checklist's is [`LATER`]).
 pub(crate) const CANCEL: &str = "Cancel";
@@ -24,11 +25,6 @@ const OK: &str = "OK";
 const CLOSE: &str = "Close";
 /// Rows an `input` reserves under its field for a refusal.
 pub(crate) const REFUSAL_ROWS: usize = 2;
-/// The pill's caps (U+E0B6, U+E0B4).
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
-/// The columns a pill takes besides its label: the two caps.
-const CAPS: u16 = 2;
 
 /// What kind of dialog this is, with the state that kind has.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,10 +173,9 @@ fn frame_top(title: &str, width: usize) -> Line<'static> {
     let pill = !text.is_empty() && left >= text.chars().count() + 3;
     let fill = left - if pill { text.chars().count() + 2 } else { 0 };
     let style = palette::pill_static();
-    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
     let mut spans = vec![Span::styled(lead, muted)];
     if pill {
-        spans.extend([Span::styled(CAP_LEFT, cap), Span::styled(text, style), Span::styled(CAP_RIGHT, cap)]);
+        spans.extend(pill::pill(text, style));
     }
     spans.push(Span::styled("─".repeat(fill), muted));
     if close == 1 {
@@ -203,8 +198,7 @@ fn frame_wall(width: usize) -> Line<'static> {
 
 /// A button as a pill: the caps around the label.
 fn pill(label: &str, style: Style, rect: Rect, f: &mut Frame) {
-    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
-    let line = Line::from(vec![Span::styled(CAP_LEFT, cap), Span::styled(label.to_owned(), style), Span::styled(CAP_RIGHT, cap)]);
+    let line = Line::from(pill::pill(label.to_owned(), style));
     f.render_widget(Paragraph::new(line), rect);
 }
 
@@ -313,7 +307,7 @@ impl Dialog {
             .iter()
             .enumerate()
             .map(|(n, label)| {
-                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX).saturating_add(CAPS);
+                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX).saturating_add(pill::CAPS_COLUMNS);
                 let x = if n == 0 { area.x.saturating_add(2) } else { end.saturating_sub(width) };
                 Rect::new(x, row.y, width, 1).intersection(row)
             })

@@ -73,9 +73,10 @@ fn env() -> TestEnv {
     env
 }
 
-/// Whether the styled screen has the blue block of a selection (hs-d534, §6.1.1): background 4, as tmux prints it.
+/// Whether the styled screen has the blue block of a selection (hs-d534, hs-d594, §6.1.1): colour 4, inverted, so its caps are
+/// foreground 4 (the text is reversed, tmux prints no background), as tmux prints it.
 fn is_selected(styled: &str) -> bool {
-    styled.contains("48;5;4m") || styled.contains(";44m") || styled.contains("[44m")
+    styled.contains("38;5;4m") || styled.contains("[34m") || styled.contains(";34m")
 }
 
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {

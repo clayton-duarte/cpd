@@ -129,7 +129,7 @@ fn assert_status_line(env: &TestEnv) {
     assert_eq!(shown("cpd", "#{status}").trim(), "on");
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
     let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
-    assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
+    assert_eq!(format.trim_end_matches('\n'), *STATUS_FORMAT);
     for range in [
         "#[range=user|reset]",
         "#[range=user|legend]",
@@ -188,11 +188,11 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
     assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
-    assert!(border.contains("#[bg=default]") && !border.contains("#[reverse]"), "{border}");
+    assert!(border.contains("#[reverse]") && !border.contains("#[bg="), "{border}");
     // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
     // (the colours, grey or blue, are the pane's focus: `pane_active`)
-    assert!(expanded.contains("#[fg=colour0]#[bg=colour7]Context#[fg=colour7]#[bg=default]"), "{expanded}");
+    assert!(expanded.contains("#[reverse]Context#[noreverse]"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -275,8 +275,9 @@ fn pane_pid(pid: &str) -> Option<u32> {
 /// Asserts the server has every option, binding and hook `host` sets at a
 /// server start (contract §6.1; their values are pinned in `tests/host.rs`).
 fn assert_server_options(env: &TestEnv) {
-    for option in SERVER_OPTIONS {
-        match option {
+    for option in SERVER_OPTIONS.iter() {
+        let option: Vec<&str> = option.iter().map(String::as_str).collect();
+        match option.as_slice() {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
             // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
             ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
@@ -633,8 +634,7 @@ fn pill(row: &str, title: &str) -> (usize, String, String) {
             .map_or(String::new(), str::to_owned)
     };
     let (right, _) = after.split_once('\u{e0b4}').unwrap_or_else(|| panic!("a right cap after {title} in {row:?}"));
-    let first = right.split_once('m').map_or(String::new(), |(p, _)| p.to_owned());
-    (visible(before).chars().count(), in_force(before), first)
+    (visible(before).chars().count(), in_force(before), in_force(right))
 }
 
 #[test]
@@ -1114,7 +1114,7 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
         assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.trim_end().ends_with("\x1b[90m\x1b[49m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
+        assert!(styled.trim_end().ends_with("\x1b[0m\x1b[90m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
     }
 }
 
@@ -1132,6 +1132,42 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
     }
 }
 
+/// The SGR state (foreground 0-15, background 0-15, reverse) in force over the first cell of `text` in `styled`, which
+/// holds `ESC[…m` sequences; the byte order tmux emits them in is not pinned.
+fn sgr_state_at(styled: &str, text: &str) -> (Option<u8>, Option<u8>, bool) {
+    let at = styled.find(text).unwrap_or_else(|| panic!("no {text:?} in {styled:?}"));
+    let (mut fg, mut bg, mut reverse) = (None, None, false);
+    let mut rest = &styled[..at];
+    while let Some(start) = rest.find("\x1b[") {
+        let body = &rest[start + 2..];
+        let end = body.find('m').expect("an unclosed SGR");
+        let params: Vec<u32> = body[..end].split(';').map(|p| p.parse().unwrap_or(0)).collect();
+        let mut i = 0;
+        while i < params.len() {
+            match params[i] {
+                0 => (fg, bg, reverse) = (None, None, false),
+                7 => reverse = true,
+                27 => reverse = false,
+                n @ 30..=37 => fg = Some((n - 30) as u8),
+                n @ 90..=97 => fg = Some((n - 90 + 8) as u8),
+                39 => fg = None,
+                n @ 40..=47 => bg = Some((n - 40) as u8),
+                n @ 100..=107 => bg = Some((n - 100 + 8) as u8),
+                49 => bg = None,
+                n @ (38 | 48) => {
+                    let colour = Some(params[i + 2] as u8);
+                    if n == 38 { fg = colour } else { bg = colour }
+                    i += 2;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        rest = &body[end + 1..];
+    }
+    (fg, bg, reverse)
+}
+
 const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
 
 // The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
@@ -1146,7 +1182,8 @@ fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_o
         assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");
         assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
-        assert!(styled.contains(&format!("\x1b[30m\x1b[43mpreview: {PREVIEW}")), "colour 0 on 3, unpadded: {styled:?}");
+        let (fg, bg, reverse) = sgr_state_at(&styled, &format!("preview: {PREVIEW}"));
+        assert!(reverse && fg == Some(3) && bg.is_none(), "reverse, foreground 3, no background, unpadded: {styled:?}");
     }
 }
 

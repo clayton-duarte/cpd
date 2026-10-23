@@ -42,6 +42,9 @@ pub mod pace;
 #[cfg(test)]
 mod pace_tests;
 pub mod palette;
+pub mod pill;
+#[cfg(test)]
+mod pill_tests;
 #[cfg(test)]
 mod updating_label;
 #[cfg(test)]

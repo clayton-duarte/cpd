@@ -14,6 +14,8 @@ mod install_script;
 mod interface;
 mod layout;
 mod no_repo_lock;
+mod pill_parity;
+mod pill_sites;
 mod npm_fresh;
 mod preview_script;
 mod prune_script;

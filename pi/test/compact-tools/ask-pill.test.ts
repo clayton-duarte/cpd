@@ -9,7 +9,7 @@ import { advance, announce, CASES, loadExtension, makeRow, shutdown, text } from
 
 const ESC = "\x1b[";
 const pillOf = (n: number, name: string) =>
-	`${ESC}${30 + n}m\uE0B6${ESC}39m${ESC}${40 + n}m${ESC}30m${name}${ESC}39m${ESC}49m${ESC}${30 + n}m\uE0B4${ESC}39m`;
+	`${ESC}${30 + n}m\uE0B6${ESC}7m${name}${ESC}27m${ESC}${30 + n}m\uE0B4${ESC}39m`;
 const ARGS = { questions: [{ question: "Which one?", header: "Pick", options: ["a", "b"] }] };
 let sequence = 0;
 
@@ -66,18 +66,18 @@ test("an answered or failed ask_user_question takes the finished colours", async
 	assert.ok(failed.includes(pillOf(1, "ask_user_question")), `red in ${JSON.stringify(failed)}`);
 	// ...and the magenta window is what distinguishes it: it was magenta while open.
 	const open = await head("ask_user_question", "started");
-	assert.ok(open.includes(`${ESC}45m`), `magenta while open in ${JSON.stringify(open)}`);
+	assert.ok(open.includes(`${ESC}35m\uE0B6${ESC}7m`), `magenta while open in ${JSON.stringify(open)}`);
 });
 
 test("no other tool's pill turns magenta while it runs", async () => {
 	// Guard against a blanket change: the ask pill must be magenta while open AND bash must not be.
 	const open = await head("ask_user_question", "started");
-	assert.ok(open.includes(`${ESC}45m`), `ask is magenta while open: ${JSON.stringify(open)}`);
+	assert.ok(open.includes(`${ESC}35m\uE0B6${ESC}7m`), `ask is magenta while open: ${JSON.stringify(open)}`);
 	for (const [name, outcome] of Object.entries(CASES).filter(([key]) => key !== "powershell")) {
 		for (const stage of ["streaming", "started", "partial"] as const) {
 			const line = await head(name, stage, outcome.args);
 			assert.ok(!line.includes(`${ESC}45m`) && !line.includes(`${ESC}35m`), `${name}/${stage} not magenta: ${JSON.stringify(line)}`);
-			assert.ok(line.includes(`${ESC}46m`), `${name}/${stage} keeps the running colour: ${JSON.stringify(line)}`);
+			assert.ok(line.includes(`${ESC}36m\uE0B6${ESC}7m`), `${name}/${stage} keeps the running colour: ${JSON.stringify(line)}`);
 		}
 	}
 });
