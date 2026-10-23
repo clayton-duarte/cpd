@@ -190,16 +190,18 @@ stop() {
 # supervising hooks go first: a hook that runs while the server dies starts a new server, where
 # no teardown looks (hygiene.md 3a).
 stop_tmux() {
-  for _s in "$tmuxdir"/tmux-*/"$socket"; do
-    [ -S "$_s" ] || return 0
+  # The env's socket and the ones a test derives from its name (`<socket>-outer-<name>`).
+  for _s in "$tmuxdir"/tmux-*/"$socket" "$tmuxdir"/tmux-*/"$socket"-*; do
+    [ -S "$_s" ] || continue
+    _n=${_s##*/}
     for _h in pane-died window-unlinked; do
-      TMUX_TMPDIR="$tmuxdir" tmux -L "$socket" set-hook -gu "$_h" >/dev/null 2>&1
+      TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" set-hook -gu "$_h" >/dev/null 2>&1
     done
     _g=
-    for _p in $(TMUX_TMPDIR="$tmuxdir" tmux -L "$socket" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
+    for _p in $(TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
       _g="$_g -$_p"
     done
-    TMUX_TMPDIR="$tmuxdir" tmux -L "$socket" kill-server >/dev/null 2>&1
+    TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" kill-server >/dev/null 2>&1
     stop $_g
   done
 }
@@ -218,7 +220,7 @@ teardown() {
   stop $_r
   stop_tmux
   # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
-  [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket"
+  [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
   rm -rf "$dir"
 }
 
@@ -592,6 +594,17 @@ impl GitWrapper {
     }
 }
 
+/// Room the env's `TMUX_TMPDIR` policy leaves for the sockets a test derives from [`TestEnv::tmux_socket`] (`bare.rs`:
+/// `<socket>-outer-<name>`, at most 7 + 10 characters; `tui_merge.rs`: `<socket>-outer`): they live in the same
+/// directory, so they must fit in `sun_path` too. The teardown removes them (`<socket>-*`).
+const DERIVED_SOCKET_ROOM: usize = 20;
+
+/// The `TMUX_TMPDIR` of the env rooted at `root` whose socket is `socket`: [`tmux_tmpdir_for`] with [`DERIVED_SOCKET_ROOM`].
+fn env_tmux_tmpdir(root: &Path, socket: &str) -> PathBuf {
+    let uid = fs::metadata(root).expect("stat the env").uid();
+    tmux_tmpdir_for(root, uid, &format!("{socket}{}", "-".repeat(DERIVED_SOCKET_ROOM)))
+}
+
 /// The `TMUX_TMPDIR` for an env rooted at `root`: `<root>/tmux`, or `/tmp` when the socket path would pass 100
 /// characters (measured on the canonical path, which tmux resolves; macOS's `sun_path` holds 103).
 pub fn tmux_tmpdir_for(root: &Path, uid: u32, socket: &str) -> PathBuf {
@@ -713,7 +726,7 @@ impl TestEnv {
             None => format!("cpdt-{}-{n}", std::process::id()),
         };
         let script = dir.path().join("teardown.sh");
-        let tmuxdir = tmux_tmpdir_for(dir.path(), dir.path().metadata().expect("stat the env").uid(), &tmux_socket);
+        let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
         fs::write(
             &script,
             format!(
@@ -797,7 +810,7 @@ impl TestEnv {
 
     /// The `TMUX_TMPDIR` of this env's private tmux server: in the env, or `/tmp` when its socket path would be too long.
     pub fn tmux_tmpdir(&self) -> PathBuf {
-        tmux_tmpdir_for(self.root(), fs::metadata(self.root()).expect("stat the env").uid(), self.tmux_socket())
+        env_tmux_tmpdir(self.root(), self.tmux_socket())
     }
 
     /// The `flock` the env's commands run: the shim in `bin/` where the system has none, else the real one.
