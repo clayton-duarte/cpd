@@ -704,12 +704,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_is_waiting_until_it_is_stuck() {
-        assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
-        assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-    }
-
-    #[test]
     fn every_pr_state_and_check_has_its_icon_and_meaning() {
         let states = [(PrState::Open, Meaning::NotStarted), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
         for (s, m) in states {

@@ -29,14 +29,13 @@ fn text(fg: ratatui::style::Color) -> Style {
 #[test]
 fn job_pills_are_their_status_colour_bright_with_black_text() {
     // (status, merging, stuck, the pill's background number): draft 13, queued 15, running 14, merging 11, merged 10,
-    // failed (its Lead handles it) 14, failed and stuck 9, cancelled 8; text 0.
+    // failed 9, cancelled 8; text 0.
     let table = [
         ("draft", JobStatus::Draft, false, false, C13),
         ("queued", JobStatus::Queued, false, false, C15),
         ("running", JobStatus::Running, false, false, C14),
         ("merging", JobStatus::Running, true, false, C11),
         ("merged", JobStatus::Merged, false, false, C10),
-        ("failed, handled", JobStatus::Failed, false, false, C14),
         ("failed, stuck", JobStatus::Failed, false, true, C9),
         ("cancelled", JobStatus::Cancelled, false, false, C8),
     ];

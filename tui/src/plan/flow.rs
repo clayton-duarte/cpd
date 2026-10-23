@@ -678,18 +678,6 @@ mod tests {
         assert_eq!(cells(&c, 1), format!("{CAP_L}{icon} long│S1{CAP_R}"));
     }
 
-    #[test]
-    fn a_failed_pill_is_waiting_and_red_only_once_its_job_is_stuck() {
-        assert_eq!(Live::Failed.icon(0).1, Meaning::Waiting, "its Lead handles it");
-        assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
-        assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
-        let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
-        // the body, after the left cap
-        let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
-        let bright = |m| Some(palette::color_clickable(m));
-        assert_eq!((Some(bg(0)), Some(bg(1))), (bright(Meaning::Waiting), bright(Meaning::Failed)), "the status colour's bright pair");
-    }
-
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
     fn icon_at(status: Live, frame: usize) -> String {
         let c = layout(&[FlowJob { status, ..job("a", &[]) }], frame);

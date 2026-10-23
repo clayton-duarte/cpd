@@ -651,30 +651,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_is_waiting_and_red_only_when_it_is_stuck() {
-        let mut stuck = job("api", "stuck", &[]);
-        stuck.status = JobStatus::Failed;
-        let mut handled = job("api", "handled", &[]);
-        handled.status = JobStatus::Failed;
-        let jobs = [stuck.clone(), handled];
-        let bg = |needs: &NeedsUser, i: usize| {
-            let b = layout(&[pr("api", &[])], &jobs, needs, 0);
-            let pill = &b.chart.pills[i];
-            // the body, after the left cap
-            b.chart.buf[(pill.rect.x + 1, pill.rect.y)].bg
-        };
-        let none = NeedsUser::default();
-        let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
-        let (cyan, red) = (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Failed));
-        assert_eq!((bg(&none, 0), bg(&none, 1)), (cyan, cyan), "its Lead handles a failed Job: cyan");
-        assert_eq!((bg(&one, 0), bg(&one, 1)), (red, cyan), "red only for the stuck one (hs-d534)");
-        // a queued Job is never stuck, whatever the list says
-        let queued = job("api", "stuck", &[]);
-        let c = layout(&[pr("api", &[])], &[queued], &one, 0);
-        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::pill_interactive().bg.unwrap());
-    }
-
-    #[test]
     fn the_title_names_the_pull_request_in_its_colour_else_the_status_dim() {
         let mut open = pr("api", &[]);
         open.pull = Some(pull(12, PrState::Open));

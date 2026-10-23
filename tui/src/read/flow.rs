@@ -63,11 +63,13 @@ pub struct NeedsUser {
     pub stuck_jobs: Vec<JobKey>,
     /// The Plan's Lead has an open `dialog` item: it asks the User (about a closed pull request, say).
     pub lead_dialog: bool,
+    /// The Plan's Lead is working (`sessions.state = 'working'`, hs-d586): every failed pill turns while it does.
+    pub lead_working: bool,
 }
 
 impl NeedsUser {
     /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead`.
-    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId) -> NeedsUser {
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId, lead_working: bool) -> NeedsUser {
         NeedsUser {
             stuck_jobs: visible
                 .iter()
@@ -75,6 +77,7 @@ impl NeedsUser {
                 .filter_map(|i| i.job.clone())
                 .collect(),
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
+            lead_working,
         }
     }
 }
@@ -272,7 +275,7 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
-        let needs_user = NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?);
+        let needs_user = NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?, lead_working);
         Ok(PlanBoxes {
             needs_user,
             context: id("Context id", &context, ContextId::parse)?,
