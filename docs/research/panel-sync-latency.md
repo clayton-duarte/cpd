@@ -10,7 +10,7 @@ and of the tmux probe T (18:49 to 19:10 EDT, section 2.3). Every number says its
 
 - Tree and plan draw a store change in 209 to 534 ms (plan median 332, n=120; tree 350, n=60; 3 runs): about 0.1 s of
   poll wait, 2 x 100 ms of frame waits, 2 to 4 ms of read. The handoff's "within about 0.7 s" holds (max 534 ms).
-- The widgets view (the Dispatch column) does **not** draw a Lead's state change: 0 of 70 in 6 s. Its `KINDS` has no
+- The widgets view (the Dispatch column) does **not** draw a Lead's state change: 0 of 70 idle commits (4 runs: 20, 20, 10, 20) within 6 s. Its `KINDS` has no
   `session-state` (source; hand check, 1 run); it re-reads only on a listed Event or a `pull_requests` change, and for
   a `pull_requests` change it is the fastest view (32 to 513 ms, n=70).
 - The Inbox row and the engine-set tmux option follow the engine's tick: its Inbox step lands 11 to 23 ms after the
@@ -279,7 +279,7 @@ and the run, not tmux (the run was not measured). The real cockpit's tmux config
 | Claim | Verdict | Evidence |
 |---|---|---|
 | A view sees a change within about 0.7 s | **Confirmed** for tree and plan: max 534 ms (n=40 per view per run, 3 runs) | 2.1 to 2.3 |
-| ... for the widgets view | **Confirmed** for `pull_requests` changes (32 to 513 ms, n=70); **corrected** for a Lead's state: never drawn (0/70 in 6 s) until another Event or PR change | 2.1, 2.4 |
+| ... for the widgets view | **Confirmed** for `pull_requests` changes (32 to 513 ms, n=70); **corrected** for a Lead's state: never drawn (0/70 idle commits in 6 s) until another Event or PR change | 2.1, 2.4 |
 | The tree and plan view check every 200 ms, snapshot at most every 500 ms | **Corrected in detail**: the check is every 200 or 300 ms (mean 252 ms, n=3 950), widgets 505 ms; the snapshot starts 100 ms after the poll, no 500 ms hold in 1 to 9 s gaps (the burst case is not measured) | 1, 4 |
 | The engine's 5 s tick includes Inbox items | **Confirmed**: item opened or closed 12 ms (11 to 23, n=148) after a tick's start; tree shows it median 338 ms later (n=80) | 4 |
 | ... includes Job transitions | **Unverified**: the harness's Job write (Q) was a store write; no engine-derived Job transition (E3, E4) was triggered | - |
@@ -297,7 +297,7 @@ Ranked by measured share of the commit-to-draw time of the surface that waits lo
    median cause-to-row time is 2.0 to 3.5 s, of which the tick wait is 2.1 to 3.0 s (about 85 to 90 %) and the view hop
    0.34 s (10 to 15 %). On the live cockpit E5 adds the 6.5 s blocking poll to every other tick: mean wait 5.7 s,
    up to 12.8 s (section 6, derived).
-2. **The widgets view never redraws a Lead's state change** (0/70 in 6 s): unbounded until the next listed Event or PR change.
+2. **The widgets view never redraws a Lead's state change** (0/70 idle commits in 6 s): unbounded until the next listed Event or PR change.
 3. **Frame waits of the loops**: 2 x 100 ms in the tree and plan views (about 60 % of their median 310 to 330 ms:
    100 ms poll answer to snapshot, 97 ms read to draw), the poll wait 0 to 300 ms (median about 110 ms, 34 %), the read 2 to
    4 ms (1 %) and the draw to a visible capture below 20 ms.
@@ -453,3 +453,5 @@ with at least 15 `pread64` is the snapshot, and there is no separate poll.
 Live cadence (read-only, `/proc` and `stat` only; section 6): every 100 ms list `/proc/<pid>` whose parent is the live
 engine and whose cmdline has `pr poll`, keep first and last seen; every 50 ms `os.stat("~/.cpd/locks/watch.lock").st_mtime_ns`,
 print each change.
+
+Cleanup: `tmux -L` of the leaked `sync-probe-lag-2847422` and `-outer` and of this Job's own `sync-probe-lag2-*` servers: `ls` fails on all four, `pgrep -af sync-probe` shows none; removed `/tmp/lag-a1-home.mlcL`, `/tmp/lag-a1-scratch`, `/tmp/lag-a1-build.log` and this Job's `/tmp/lag2-*`, `/tmp/lag-rep`.
