@@ -229,7 +229,7 @@ fn lock_path(env: &TestEnv) -> PathBuf {
 }
 
 fn lock_held(env: &TestEnv) -> bool {
-    !Command::new("flock").arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
+    !Command::new(env.flock()).arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
 }
 
 /// An old engine: a process holding the lock for `secs` seconds. `--no-fork`: flock execs the
@@ -237,7 +237,7 @@ fn lock_held(env: &TestEnv) -> bool {
 /// the `Child` killed only flock and the `sleep` lived on, holding the test's pipes (LEAK).
 fn old_engine(env: &TestEnv, secs: &str) -> Child {
     fs::create_dir_all(lock_path(env).parent().unwrap()).unwrap();
-    let child = spawn(Command::new("flock").arg("--no-fork").arg(lock_path(env)).args(["sleep", secs])).unwrap();
+    let child = spawn(Command::new(env.flock()).arg("--no-fork").arg(lock_path(env)).args(["sleep", secs])).unwrap();
     wait_until("the old engine holds the lock", || lock_held(env));
     child
 }
@@ -402,7 +402,7 @@ fn running_old_engine(env: &TestEnv) {
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     for args in [
         vec!["new-session".to_owned(), "-d".into(), "-s".into(), "cock".into(), "-n".into(), "main".into(), format!("sleep {SLEEP_SECONDS}")],
-        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec flock --no-fork '{}' sleep {SLEEP_SECONDS}", lock.display())],
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec '{}' --no-fork '{}' sleep {SLEEP_SECONDS}", env.flock().display(), lock.display())],
     ] {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = env.tmux(&args);
@@ -902,12 +902,13 @@ fn path_without_python3(env: &TestEnv) -> String {
     let path = common::inherited_path();
     for tool in [
         "git", "sed", "grep", "cmp", "basename", "dirname", "cp", "mv", "rm", "mkdir", "mktemp", "cat", "chmod", "date", "find", "ln", "readlink", "sleep", "kill", "tr",
-        "uname", "env", "tmux", "flock", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
+        "uname", "env", "tmux", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
     ] {
         if let Some(found) = std::env::split_paths(path).map(|d| d.join(tool)).find(|p| p.is_file()) {
             let _ = symlink(found, tools.join(tool));
         }
     }
+    let _ = symlink(env.flock(), tools.join("flock"));
     assert!(!tools.join("python3").exists());
     let path = format!("{}:{}", env.bin().display(), tools.display());
     let probe = Command::new("/bin/sh").args(["-c", "command -v python3"]).env("PATH", &path).output().unwrap();

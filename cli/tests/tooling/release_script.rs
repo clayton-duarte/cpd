@@ -55,7 +55,7 @@ impl Fixture {
             "cargo",
             r#"[ "$1" = release ] || exit 97
 [ "$2" = --version ] && exit 0
-sed -i "s/^version = .*/version = \"$2\"/" Cargo.toml
+sed "s/^version = .*/version = \"$2\"/" Cargo.toml > Cargo.toml.new && mv Cargo.toml.new Cargo.toml
 echo "version $2" > Cargo.lock
 hook=$(sed -n 's/^pre-release-hook = \["sh", "-c", "\(.*\)"\]$/\1/p' release.toml | sed 's/\\"/"/g')
 if [ -n "$hook" ]; then
