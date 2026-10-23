@@ -280,4 +280,8 @@ else
     fi
   fi
 fi
+# Last step: tag the version. It never fails the install; the next install retries.
+if ! "$root/scripts/tag-version.sh"; then
+  echo "the next install retries the tag" >&2
+fi
 [ "$failed" -eq 0 ] || exit 1

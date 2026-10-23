@@ -1,5 +1,6 @@
 /** The working label is a pill in 6 and the working indicator is the cockpit loader (contract 6.1.1, 6.9). */
 import "./pinned-themes.ts";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -9,8 +10,8 @@ import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dis
 
 test.after(() => restoreClocks());
 
-/** The cockpit loader's nine code points, written out so this test does not depend on the module. */
-const LOADER = [0xf0766, 0xf0a9e, 0xf0a9f, 0xf0aa0, 0xf0aa1, 0xf0aa2, 0xf0aa3, 0xf0aa4, 0xf0aa5].map((code) => String.fromCodePoint(code));
+/** The cockpit loader's eight code points, written out so this test does not depend on the module. */
+const LOADER = MOON_FRAMES;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
 
@@ -75,7 +76,7 @@ test("the working indicator frames are the cockpit loader, plain, at 100 ms", ()
 	const { indicator } = drive((h) => h.get("agent_start")!({}));
 	assert.ok(indicator, "an indicator is set");
 	assert.equal(indicator!.intervalMs, 100);
-	assert.equal(indicator!.frames.length, 9);
+	assert.equal(indicator!.frames.length, 8);
 	indicator!.frames.forEach((frame, index) => {
 		assert.equal(strip(frame), LOADER[index], `frame ${index}`);
 		assert.equal(frame, LOADER[index], `frame ${index} has no colour of its own: the pill paints it in text 0`);

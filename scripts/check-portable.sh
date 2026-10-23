@@ -15,11 +15,10 @@ set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # What a Mac runs (dotfiles' install and sync, bare cpd, a Worker or Lead there, the Gate there).
-covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh test-changed tests.sh"
+covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh sync-version.sh tag-version.sh test-changed tests.sh"
 
 # Linux-only, not covered, each with its reason; a script in neither list fails.
-linux_only="release.sh: hs only, its header says so
-prune-worktrees.sh: a one-time cleanup run on hs
+linux_only="prune-worktrees.sh: a one-time cleanup run on hs
 test-time.sh: measures the Gate's run on hs (a fractional-second clock, uptime)
 gate-run.sh: finds a run's processes in /proc on Linux; its macOS branch (ps -E) is unverified (hygiene.md, The Gate leak check)"
 
