@@ -229,7 +229,7 @@ fn lock_path(env: &TestEnv) -> PathBuf {
 }
 
 fn lock_held(env: &TestEnv) -> bool {
-    !Command::new("flock").arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
+    !Command::new(env.flock()).arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
 }
 
 /// An old engine: a process holding the lock for `secs` seconds. `--no-fork`: flock execs the
@@ -237,7 +237,7 @@ fn lock_held(env: &TestEnv) -> bool {
 /// the `Child` killed only flock and the `sleep` lived on, holding the test's pipes (LEAK).
 fn old_engine(env: &TestEnv, secs: &str) -> Child {
     fs::create_dir_all(lock_path(env).parent().unwrap()).unwrap();
-    let child = spawn(Command::new("flock").arg("--no-fork").arg(lock_path(env)).args(["sleep", secs])).unwrap();
+    let child = spawn(Command::new(env.flock()).arg("--no-fork").arg(lock_path(env)).args(["sleep", secs])).unwrap();
     wait_until("the old engine holds the lock", || lock_held(env));
     child
 }
@@ -402,7 +402,7 @@ fn running_old_engine(env: &TestEnv) {
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     for args in [
         vec!["new-session".to_owned(), "-d".into(), "-s".into(), "cock".into(), "-n".into(), "main".into(), format!("sleep {SLEEP_SECONDS}")],
-        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec flock --no-fork '{}' sleep {SLEEP_SECONDS}", lock.display())],
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec '{}' --no-fork '{}' sleep {SLEEP_SECONDS}", env.flock().display(), lock.display())],
     ] {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = env.tmux(&args);
@@ -581,6 +581,64 @@ fn the_install_restarts_the_engine_of_a_real_cockpit_for_a_caller_without_a_utf8
         }
     }
     assert!(failures.is_empty(), "the install fails without a UTF-8 locale:\n{}", failures.join("\n"));
+}
+
+// ---- The tag step (scripts/tag-version.sh runs once, at the end of a successful install; a failure of it only warns) ----
+
+/// A recording `scripts/tag-version.sh` in the checkout: appends a line to `tag-version.log` of the TempDir, prints `stderr_line`
+/// on stderr (when not empty) and exits `code`.
+fn recording_tagger(env: &TestEnv, checkout: &Checkout, code: i32, stderr_line: &str) -> PathBuf {
+    let log = env.root().join("tag-version.log");
+    let body = format!("#!/bin/sh\necho ran >> '{}'\n[ -z '{line}' ] || echo '{line}' >&2\nexit {code}\n", log.display(), line = stderr_line);
+    common::write_executable(&checkout.root.join("scripts/tag-version.sh"), &body);
+    log
+}
+
+fn tagger_runs(log: &Path) -> usize {
+    fs::read_to_string(log).unwrap_or_default().lines().count()
+}
+
+#[test]
+fn a_successful_install_runs_tag_version_once_at_the_end() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    let log = recording_tagger(&env, &checkout, 0, "");
+
+    let run = install(&env, &checkout, &version("null"));
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(env.home().join(".local/bin/cpd").exists(), "the fake cpd is installed");
+    assert_eq!(tagger_runs(&log), 1, "scripts/tag-version.sh ran once");
+}
+
+#[test]
+fn a_failing_tag_step_warns_and_does_not_fail_the_install() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    let log = recording_tagger(&env, &checkout, 1, "tag-version: boom");
+
+    let run = install(&env, &checkout, &version("null"));
+
+    assert_eq!(tagger_runs(&log), 1, "scripts/tag-version.sh ran once");
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(env.home().join(".local/bin/cpd").exists(), "the fake cpd is installed");
+    assert!(run.stderr.contains("tag-version: boom"), "{}", run.stderr);
+}
+
+#[test]
+fn a_refused_install_does_not_run_tag_version() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    let log = recording_tagger(&env, &checkout, 0, "");
+
+    let refused = install(&env, &checkout, &refusing("store_failed", "not a store"));
+
+    assert_eq!(refused.exit, 1, "{}", refused.stderr);
+    assert_eq!(tagger_runs(&log), 0, "the tag step ran in a refused install");
+    // Control: the same recorder runs in an install that is not refused.
+    let accepted = install(&env, &checkout, &version("null"));
+    assert_eq!(accepted.exit, 0, "{}", accepted.stderr);
+    assert_eq!(tagger_runs(&log), 1, "the recorder is wired: an accepted install runs it once");
 }
 
 // ---- The adapter swap (hs-d355; contract §3.7 "The adapter swap", docs/implementing.md "The adapter swap") ----
@@ -902,12 +960,13 @@ fn path_without_python3(env: &TestEnv) -> String {
     let path = common::inherited_path();
     for tool in [
         "git", "sed", "grep", "cmp", "basename", "dirname", "cp", "mv", "rm", "mkdir", "mktemp", "cat", "chmod", "date", "find", "ln", "readlink", "sleep", "kill", "tr",
-        "uname", "env", "tmux", "flock", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
+        "uname", "env", "tmux", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
     ] {
         if let Some(found) = std::env::split_paths(path).map(|d| d.join(tool)).find(|p| p.is_file()) {
             let _ = symlink(found, tools.join(tool));
         }
     }
+    let _ = symlink(env.flock(), tools.join("flock"));
     assert!(!tools.join("python3").exists());
     let path = format!("{}:{}", env.bin().display(), tools.display());
     let probe = Command::new("/bin/sh").args(["-c", "command -v python3"]).env("PATH", &path).output().unwrap();
@@ -1146,11 +1205,11 @@ fn copied_scripts() -> tempfile::TempDir {
 
 #[test]
 fn the_covered_scripts_of_the_repository_pass() {
-    // The Gate's run: no argument checks the covered list (eleven scripts; the Linux-only ones are listed with a reason each).
+    // The Gate's run: no argument checks the covered list (thirteen scripts; the Linux-only ones are listed with a reason each).
     let root = Path::new(SCRIPTS).join("..");
     let run = run_check(&Path::new(SCRIPTS).join("check-portable.sh"), &root, &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (11 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (13 files, "), "{}", run.all());
 }
 
 #[test]
@@ -1159,7 +1218,7 @@ fn a_script_in_neither_list_fails_so_a_new_script_cannot_skip_the_decision() {
     let script = dir.path().join("scripts/check-portable.sh");
     let before = run_check(&script, dir.path(), &[]);
     assert_eq!(before.exit, 0, "the copy passes before the new script: {}", before.stderr);
-    assert!(before.all().contains("check-portable: ok (11 files, "), "{}", before.all());
+    assert!(before.all().contains("check-portable: ok (13 files, "), "{}", before.all());
 
     fs::write(dir.path().join("scripts/brand-new.sh"), "#!/bin/sh\nexit 0\n").unwrap();
     let run = run_check(&script, dir.path(), &[]);
@@ -1179,7 +1238,7 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     fs::write(dir.path().join("scripts/test-time.sh"), text).unwrap();
     let run = run_check(&script, dir.path(), &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (11 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (13 files, "), "{}", run.all());
 
     let mut text = fs::read_to_string(dir.path().join("scripts/npm-fresh.sh")).unwrap();
     text.push_str("\nreadlink -f \"$0\"\n");

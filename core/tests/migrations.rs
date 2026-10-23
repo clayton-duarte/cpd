@@ -555,6 +555,12 @@ fn script_tree(existing: &[&str]) -> (tempfile::TempDir, PathBuf) {
     fs::create_dir_all(&scripts).unwrap();
     fs::create_dir_all(&migrations).unwrap();
     fs::copy(repo_root().join("scripts/new-migration.sh"), scripts.join("new-migration.sh")).unwrap();
+    fs::copy(repo_root().join("scripts/sync-version.sh"), scripts.join("sync-version.sh")).unwrap();
+    // sync-version.sh, which new-migration.sh runs, reads and rewrites these.
+    fs::create_dir_all(dir.path().join("core/src/events")).unwrap();
+    for f in ["core/src/events/kind.rs", "Cargo.toml", "Cargo.lock"] {
+        fs::copy(repo_root().join(f), dir.path().join(f)).unwrap();
+    }
     for name in existing {
         fs::write(migrations.join(name), "-- cpd-migration: additive\n").unwrap();
     }

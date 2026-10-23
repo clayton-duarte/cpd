@@ -92,16 +92,31 @@ impl PaneWatch {
     }
 }
 
-/// Whether process `pid` runs: `kill(pid, 0)` finds it and, where `/proc`
-/// exists, it is not a zombie (ended, not yet reaped by tmux).
+/// Whether process `pid` runs: `kill(pid, 0)` finds it and it is not a
+/// zombie (ended, not yet reaped by tmux). Linux reads `/proc/<pid>/stat`;
+/// macOS reads the BSD status through `libproc` (`SZOMB`).
 fn alive(pid: u32) -> bool {
     let Ok(raw) = i32::try_from(pid) else { return false };
     if matches!(kill(Pid::from_raw(raw), None), Err(Errno::ESRCH)) {
         return false;
     }
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
-    // `pid (comm) state …`; comm may hold spaces and parentheses.
-    stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+    #[cfg(target_os = "macos")]
+    {
+        use libproc::bsd_info::BSDInfo;
+        // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
+        const SZOMB: u32 = 5;
+        return match libproc::proc_pid::pidinfo::<BSDInfo>(raw, 0) {
+            Ok(info) => info.pbi_status != SZOMB,
+            // `kill` found it, `libproc` does not: it was reaped between the two.
+            Err(_) => false,
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
+        // `pid (comm) state …`; comm may hold spaces and parentheses.
+        stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+    }
 }
 
 /// What A5 does at a poll of the Worker.

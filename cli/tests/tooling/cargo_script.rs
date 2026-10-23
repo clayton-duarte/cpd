@@ -133,3 +133,120 @@ fn an_empty_rustc_wrapper_opts_out() {
     let path_dir = wrapper_path(tmp.path(), true);
     assert_eq!(run_ok(&path_dir, &[("RUSTC_WRAPPER", "")]), "RUSTC_WRAPPER=\n");
 }
+
+/// A PATH dir with a fake cargo and a fake sccache. Each appends one line to
+/// the returned log (`sccache <args>` / `cargo <args>`), in call order, and
+/// the fake cargo prints the `RUSTC_WRAPPER` it sees. The fake sccache writes
+/// its environment (`env`) to `<log>.env`, and runs `on_call` (a shell snippet,
+/// with `$@` the arguments) after logging.
+fn logging_path(tmp: &Path, on_call: &str) -> (PathBuf, PathBuf) {
+    let path_dir = tmp.join("path");
+    let log = tmp.join("calls.log");
+    fs::create_dir_all(&path_dir).unwrap();
+    write_executable(
+        &path_dir.join("cargo"),
+        &format!("#!/bin/sh\necho cargo \"$@\" >> {log}\necho RUSTC_WRAPPER=${{RUSTC_WRAPPER-unset}}\n", log = log.display()),
+    );
+    write_executable(
+        &path_dir.join("sccache"),
+        &format!(
+            "#!/bin/sh\necho sccache \"$@\" >> {log}\n/usr/bin/env > {log}.env\n{on_call}\n",
+            log = log.display()
+        ),
+    );
+    (path_dir, log)
+}
+
+fn read_or_empty(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+/// What this Mac's sccache 0.18.0 does on a second `--start-server` with the
+/// server already up (measured on a private port): stdout `sccache: Starting
+/// the server...`, stderr `sccache: error: Server startup failed: Address in
+/// use`, exit status 2.
+const RUNNING_SERVER_START: &str = r#"case "$1" in
+  --start-server)
+    echo "sccache: Starting the server..."
+    echo "sccache: error: Server startup failed: Address in use" >&2
+    exit 2 ;;
+esac"#;
+
+#[test]
+fn sccache_on_path_has_its_server_started_once_before_cargo_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = logging_path(tmp.path(), "exit 0");
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stderr.as_str()), (0, ""));
+    assert_eq!(stdout, "RUSTC_WRAPPER=sccache\n", "stdout is cargo's alone");
+    let calls = read_or_empty(&log);
+    let lines: Vec<&str> = calls.lines().collect();
+    assert_eq!(lines.iter().filter(|l| **l == "sccache --start-server").count(), 1, "{calls}");
+    assert_eq!(lines.last(), Some(&"cargo build --workspace"), "{calls}");
+    assert_eq!(lines.len(), 2, "{calls}");
+    assert_eq!(lines[0], "sccache --start-server", "{calls}");
+}
+
+#[test]
+fn the_sccache_server_starts_in_a_clean_environment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, log) = logging_path(tmp.path(), "exit 0");
+    let home = tmp.path().join("home");
+    run(
+        &path_dir,
+        &[
+            ("CARGO_BUILD_JOBS", "3"),
+            ("RUSTFLAGS", "-Dwarnings"),
+            ("CARGO_TARGET_DIR", "/x"),
+            ("NEXTEST_PROFILE", "p"),
+            ("FOO", "bar"),
+            ("SCCACHE_DIR", "/d"),
+            ("HOME", home.to_str().unwrap()),
+        ],
+    );
+    let env = read_or_empty(&PathBuf::from(format!("{}.env", log.display())));
+    assert!(!env.is_empty(), "the fake sccache was never run: {}", read_or_empty(&log));
+    let names: Vec<&str> = env.lines().filter_map(|l| l.split_once('=')).map(|(k, _)| k).collect();
+    for gone in ["CARGO_BUILD_JOBS", "RUSTFLAGS", "CARGO_TARGET_DIR", "NEXTEST_PROFILE", "FOO"] {
+        assert!(!names.contains(&gone), "{gone} leaked into the server: {env}");
+    }
+    assert!(env.lines().any(|l| l == "SCCACHE_DIR=/d"), "{env}");
+    assert!(env.lines().any(|l| l == format!("HOME={}", home.display())), "{env}");
+    assert!(env.lines().any(|l| l == format!("PATH={}", path_dir.display())), "{env}");
+}
+
+#[test]
+fn a_failed_sccache_start_warns_and_cargo_runs_without_the_wrapper() {
+    let tmp = tempfile::tempdir().unwrap();
+    let on_call = "case \"$1\" in --start-server) echo 'boom: cannot start' >&2; exit 1 ;; esac";
+    let (path_dir, _log) = logging_path(tmp.path(), on_call);
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!(exit, 0, "{stderr}");
+    assert_eq!(stdout, "RUSTC_WRAPPER=unset\n", "stderr: {stderr}");
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    assert!(lines[0].starts_with("scripts/cargo.sh: warning:"), "{stderr}");
+    assert!(lines[0].contains("sccache"), "{stderr}");
+}
+
+/// Guard (passes before the fix): a preset or empty `RUSTC_WRAPPER` starts no server.
+#[test]
+fn a_preset_or_empty_rustc_wrapper_starts_no_server() {
+    for wrapper in ["other", ""] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (path_dir, log) = logging_path(tmp.path(), "exit 0");
+        let (exit, stdout, _) = run(&path_dir, &[("RUSTC_WRAPPER", wrapper)]);
+        assert_eq!((exit, stdout.as_str()), (0, format!("RUSTC_WRAPPER={wrapper}\n").as_str()));
+        let calls = read_or_empty(&log);
+        assert!(!calls.contains("sccache"), "RUSTC_WRAPPER={wrapper:?}: {calls}");
+    }
+}
+
+/// Guard (passes before the fix): a server already running is left alone.
+#[test]
+fn a_running_sccache_server_is_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (path_dir, _log) = logging_path(tmp.path(), RUNNING_SERVER_START);
+    let (exit, stdout, stderr) = run(&path_dir, NO_VARS);
+    assert_eq!((exit, stdout.as_str(), stderr.as_str()), (0, "RUSTC_WRAPPER=sccache\n", ""));
+}

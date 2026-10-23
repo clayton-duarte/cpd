@@ -249,11 +249,12 @@ fn view_command(kind: &str, title: &str, out: &Path, fields: &[(&str, &str)]) ->
     command
 }
 
-/// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, border included.
+/// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, with no tmux border (`-B`): the view draws its own frame.
 fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
+        "-B".to_owned(),
         "-w".to_owned(),
         size.0.to_string(),
         "-h".to_owned(),
@@ -267,14 +268,15 @@ fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
 const MIN_INNER: usize = 40;
 const MAX_INNER: usize = 76;
 
-/// The popup's size `(columns, rows)`, border included, for content `natural` columns wide whose body is
-/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is an empty row, the title, an empty
-/// row, the body, a blank row and the buttons.
+/// The popup's size `(columns, rows)` for content `natural` columns wide whose body is `body_rows(width)` rows at `width`
+/// text columns. The popup is exactly the dialog's frame: `inside + 2` columns, at most the client's width less one
+/// column of margin on each side, and `body + 5` rows (the top border, a blank row, the body, a blank row, the buttons and
+/// the bottom border), at most the client's height.
 fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl Fn(usize) -> usize) -> (u16, u16) {
     let inner = (natural + 2).max(title.chars().count() + 6).clamp(MIN_INNER, MAX_INNER);
     let rows = body_rows(inner - 2) + 5;
-    let fit = |wanted: usize, cap: u16| u16::try_from(wanted + 2).unwrap_or(u16::MAX).min(cap);
-    (fit(inner, client.0), fit(rows, client.1))
+    let to_u16 = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    (to_u16(inner + 2).min(client.0.saturating_sub(2)).max(1), to_u16(rows).min(client.1))
 }
 
 /// The popup's size `(columns, rows)` for an `input`: wide enough for the label and the initial text, tall enough for the
@@ -451,162 +453,4 @@ pub(crate) fn report(tmux: &Tmux, log: &ViewLog, what: &str, err: &CpdError) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A `tmux` that records its arguments, one per line, in `<dir>/calls` and lists one attached client of 100 x 30. It
-    /// writes no dialog outcome, so a dialog's result is the "no usable result" error of a popup closed some other way.
-    fn recording_tmux(dir: &tempfile::TempDir) -> (Tmux, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        let calls = dir.path().join("calls");
-        let program = dir.path().join("tmux");
-        let script = format!(
-            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
-             case \" $* \" in *\" list-clients \"*) echo '1 100 30';; esac\n",
-            calls = calls.display()
-        );
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (Tmux::new("test").with_program(&program), calls)
-    }
-
-    /// The arguments of the `display-popup` call in `calls`.
-    fn popup_of(calls: &Path) -> Vec<String> {
-        let text = std::fs::read_to_string(calls).unwrap();
-        let popup: Vec<String> = text.lines().skip_while(|l| *l != "display-popup").map(str::to_owned).collect();
-        assert_eq!(popup.first().map(String::as_str), Some("display-popup"), "{text}");
-        popup
-    }
-
-    #[test]
-    fn show_error_opens_a_text_popup_titled_with_what_failed_and_saying_why() {
-        let dir = tempfile::tempdir().unwrap();
-        let (tmux, calls) = recording_tmux(&dir);
-        let _ = show_error(&tmux, "session open l-ship", "no_cockpit: No cockpit.");
-        let popup = popup_of(&calls);
-        assert!(!popup.contains(&"-T".to_owned()), "the popup passes no tmux title: the view draws it once: {popup:?}");
-        let command = popup.last().unwrap();
-        assert!(command.starts_with("cpd tui view dialog text --title='session open l-ship' --out="), "{command}");
-        assert!(command.ends_with("--body='no_cockpit: No cockpit.'"), "the body is why: {command}");
-    }
-
-    #[test]
-    fn a_failed_command_of_a_view_is_a_log_line_and_the_error_dialog() {
-        let dir = tempfile::tempdir().unwrap();
-        let (tmux, calls) = recording_tmux(&dir);
-        let home = cpd_core::home::CpdHome::resolve(Some(dir.path().join("home").into()), None).unwrap();
-        let log = ViewLog::of(&home, "plan");
-        let err = CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached.");
-        report(&tmux, &log, "Open Worker", &err);
-        let logged = std::fs::read_to_string(dir.path().join("home/run/tui/plan.log")).unwrap();
-        let first = logged.lines().next().unwrap();
-        assert!(first.ends_with(" failed: Open Worker: tmux_failed: No tmux client is attached."), "{logged}");
-        let popup = popup_of(&calls);
-        assert!(popup.last().unwrap().ends_with("--body='tmux_failed: No tmux client is attached.'"), "{popup:?}");
-    }
-
-    #[test]
-    fn the_outcome_is_a_small_json_value() {
-        let json = |o: &Outcome| serde_json::to_string(o).unwrap();
-        assert_eq!(json(&Outcome::confirmed()), r#"{"confirmed":true}"#);
-        assert_eq!(json(&Outcome::cancelled()), r#"{"confirmed":false}"#);
-        assert_eq!(json(&Outcome::value("a \"b\"".into())), r#"{"confirmed":true,"value":"a \"b\""}"#);
-    }
-
-    #[test]
-    fn a_result_file_is_read_and_deleted() {
-        let dir = tempfile::tempdir().unwrap();
-        for outcome in [Outcome::confirmed(), Outcome::cancelled(), Outcome::value("v é".into())] {
-            let path = dir.path().join("out.json");
-            write_outcome(&path, &outcome).unwrap();
-            assert_eq!(read_outcome(&path).unwrap(), outcome);
-            assert!(!path.exists());
-        }
-    }
-
-    #[test]
-    fn a_missing_or_bad_result_file_is_an_error_never_a_cancel() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.json");
-        assert_eq!(read_outcome(&path).unwrap_err().code(), ErrorCode::Internal);
-        for bad in ["", "{", "[]", r#"{"confirmed":"yes"}"#, r#"{}"#, r#"{"confirmed":false,"value":"x"}"#, r#"{"confirmed":true,"extra":1}"#] {
-            std::fs::write(&path, bad).unwrap();
-            let err = read_outcome(&path).unwrap_err();
-            assert_eq!(err.code(), ErrorCode::Internal, "{bad:?}");
-            assert!(!path.exists(), "{bad:?}: the file is deleted");
-        }
-    }
-
-    #[test]
-    fn a_result_file_that_cannot_be_written_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = write_outcome(&dir.path().join("no/such/dir/out.json"), &Outcome::confirmed()).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::Internal);
-    }
-
-    #[test]
-    fn temporary_files_are_under_the_temp_dir_with_the_process_id_and_differ() {
-        let (a, b) = (temp_path(), temp_path());
-        assert_ne!(a, b);
-        assert!(a.starts_with(std::env::temp_dir()));
-        assert!(a.file_name().unwrap().to_str().unwrap().starts_with(&format!("cpd-dialog-{}-", std::process::id())));
-    }
-
-    #[test]
-    fn the_popup_runs_the_view_with_every_value_quoted_and_named_by_equals() {
-        let command = view_command("confirm", "Archive", Path::new("/tmp/o.json"), &[("text", "It's -x?"), ("yes-label", "Archive")]);
-        assert_eq!(
-            command,
-            r"cpd tui view dialog confirm --title='Archive' --out='/tmp/o.json' --text='It'\''s -x?' --yes-label='Archive'"
-        );
-        assert_eq!(
-            popup_args((50, 7), &command),
-            ["display-popup", "-E", "-w", "50", "-h", "7", command.as_str()]
-        );
-    }
-
-    #[test]
-    fn the_popup_is_sized_to_its_content_and_capped_at_the_client() {
-        let client = (200, 60);
-        // short content: the narrowest inside (40), empty + title + empty + 1 row + blank + buttons = 6, and the border
-        assert_eq!(popup_size(client, "T", 10, |_| 1), (42, 8));
-        // long content: the widest inside (76), wrapped
-        assert_eq!(popup_size(client, "T", 300, |w| 300usize.div_ceil(w)), (78, 5 + 5 + 2));
-        // a long title widens it
-        assert_eq!(popup_size(client, &"t".repeat(50), 10, |_| 1).0, 58);
-        // capped
-        assert_eq!(popup_size((30, 5), "T", 300, |_| 40), (30, 5));
-    }
-
-    #[test]
-    fn the_widest_line_is_the_longest_in_characters() {
-        let (a, b) = (widest("ab\nabcd\nabc"), widest(""));
-        assert_eq!((a, b), (4, 0));
-    }
-
-    #[test]
-    fn the_command_line_takes_the_kinds_and_their_fields() {
-        use clap::Parser;
-        #[derive(Parser, Debug)]
-        struct Cli {
-            #[command(flatten)]
-            args: Args,
-        }
-        let parse = |argv: &[&str]| Cli::try_parse_from(std::iter::once("dialog").chain(argv.iter().copied()));
-        assert!(parse(&["confirm", "--title=T", "--out=/o", "--text=Q?"]).is_ok());
-        assert!(parse(&["confirm", "--title=T", "--out=/o", "--text=-Q?", "--yes-label=Go"]).is_ok());
-        assert!(parse(&["input", "--title=T", "--out=/o", "--prompt=P", "--initial=", "--validate=plan-id"]).is_ok());
-        assert!(parse(&["input", "--title=T", "--out=/o", "--prompt=P", "--validate=name"]).is_ok());
-        assert!(parse(&["text", "--title=T", "--out=/o", "--body=B"]).is_ok());
-        for bad in [
-            &["input", "--title=T", "--out=/o", "--prompt=P"][..],
-            &["input", "--title=T", "--out=/o", "--prompt=P", "--validate=anything"],
-            &["confirm", "--title=T", "--text=Q"],
-            &["text", "--out=/o", "--body=B"],
-            &["other", "--title=T", "--out=/o"],
-            &[],
-        ] {
-            assert!(parse(bad).is_err(), "{bad:?}");
-        }
-    }
-}
+mod tests;

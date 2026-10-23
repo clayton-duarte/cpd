@@ -120,15 +120,19 @@ fn start(env: &TestEnv, name: &str, view: &[&str]) -> (String, u32) {
     (pane.to_owned(), pid.parse().unwrap())
 }
 
-/// What `/proc/<pid>/io` and `/proc/<pid>/stat` say the process has done so far.
+/// What the process has done so far: `/proc/<pid>/io` and `/proc/<pid>/stat` on Linux; `ps` on macOS, which has no /proc
+/// and no counter of bytes read or `write` calls (decision pro-d3), so only the CPU time.
 #[derive(Clone, Copy, Debug)]
 struct Usage {
-    rchar: u64,
-    syscw: u64,
-    /// utime + stime, in clock ticks.
+    /// Linux only.
+    rchar: Option<u64>,
+    /// Linux only.
+    syscw: Option<u64>,
+    /// utime + stime, in milliseconds (Linux: clock ticks of 10 ms; macOS: `ps -o time=`, 10 ms resolution).
     cpu: u64,
 }
 
+#[cfg(not(target_os = "macos"))]
 fn usage(pid: u32) -> Usage {
     let io = fs::read_to_string(format!("/proc/{pid}/io")).unwrap();
     let field = |name: &str| -> u64 {
@@ -137,9 +141,43 @@ fn usage(pid: u32) -> Usage {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
     let after_name: Vec<&str> = stat[stat.rfind(')').unwrap() + 2..].split(' ').collect();
     // fields 14 and 15 of the line are the 12th and 13th after the `)` and the state
-    let cpu = after_name[11].parse::<u64>().unwrap() + after_name[12].parse::<u64>().unwrap();
-    Usage { rchar: field("rchar:"), syscw: field("syscw:"), cpu }
+    let ticks = after_name[11].parse::<u64>().unwrap() + after_name[12].parse::<u64>().unwrap();
+    Usage { rchar: Some(field("rchar:")), syscw: Some(field("syscw:")), cpu: ticks * 10 }
 }
+
+#[cfg(target_os = "macos")]
+fn usage(pid: u32) -> Usage {
+    let out = std::process::Command::new("ps").args(["-o", "time=", "-p", &pid.to_string()]).output().unwrap();
+    assert!(out.status.success(), "ps -p {pid}: {}", String::from_utf8_lossy(&out.stderr));
+    Usage { rchar: None, syscw: None, cpu: parse_ps_time(String::from_utf8(out.stdout).unwrap().trim()) }
+}
+
+/// `ps -o time=`: `M:SS.cc`, or `H:MM:SS` (or `D-H:MM:SS`), in milliseconds.
+#[cfg(target_os = "macos")]
+fn parse_ps_time(text: &str) -> u64 {
+    let (days, rest) = text.split_once('-').map_or((0, text), |(d, r)| (d.parse::<u64>().unwrap(), r));
+    let parts: Vec<&str> = rest.split(':').collect();
+    let secs = |s: &str| (s.parse::<f64>().unwrap_or_else(|_| panic!("ps time {text:?}")) * 1000.0).round() as u64;
+    let whole = |s: &str| s.parse::<u64>().unwrap_or_else(|_| panic!("ps time {text:?}")) * 1000;
+    let ms = match parts[..] {
+        [m, s] => whole(m) * 60 + secs(s),
+        [h, m, s] => (whole(h) * 60 + whole(m)) * 60 + secs(s),
+        _ => panic!("ps time {text:?}"),
+    };
+    ms + days * 86_400_000
+}
+
+/// What a view did over the window with no change.
+struct Idle {
+    used: Usage,
+    /// How many different screens the pane showed over the window (macOS only: the spinner's own observable).
+    screens: usize,
+}
+
+/// The most CPU an idle view may use on macOS, of the window (decision pro-d3: the tests assert CPU time there).
+/// guess: Linux has no CPU budget in this file; 20 % is far over an idle view's draw of a spinner at 4 frames a second.
+#[cfg(target_os = "macos")]
+const CPU_SHARE_PERCENT: u64 = 20;
 
 /// The views `(name, args)` this file runs: one pane each.
 const VIEWS: [(&str, &[&str]); 5] = [
@@ -156,7 +194,7 @@ fn window() -> Duration {
 }
 
 /// Runs `views`, waits for each to draw and settle, and returns what each did over the window with no change.
-fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
+fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Idle)> {
     let window = window();
     let started: Vec<(String, String, u32)> = VIEWS
         .iter()
@@ -172,7 +210,16 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
         });
     }
     let stop = AtomicBool::new(false);
-    let (before, after) = std::thread::scope(|scope| {
+    // a panic below (a pid `usage` cannot read) ends the noise thread too, or the scope never returns
+    struct Stop<'a>(&'a AtomicBool);
+    impl Drop for Stop<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let (before, after, screens) = std::thread::scope(|scope| {
+        // inside the scope, which joins the noise thread before it lets a panic out
+        let _stop = Stop(&stop);
         scope.spawn(|| {
             let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
             for n in 0.. {
@@ -192,20 +239,48 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
         // time-claim: the first reads, and what follows them, are over within 3 s; the window measured starts after
         std::thread::sleep(Duration::from_secs(3));
         let before: Vec<Usage> = started.iter().map(|(.., pid)| usage(*pid)).collect();
-        std::thread::sleep(window);
+        let mut seen: Vec<std::collections::HashSet<String>> = started.iter().map(|_| Default::default()).collect();
+        if cfg!(target_os = "macos") {
+            // the spinner's frames: the pane's text, sampled over the window
+            // `poll` never gets a value, so it runs the whole window
+            common::poll(window, || {
+                for ((_, pane, _), set) in started.iter().zip(&mut seen) {
+                    set.insert(tmux_out(env, &["capture-pane", "-p", "-t", pane]));
+                }
+                // time-claim: one sample of the frames every 100 ms
+                std::thread::sleep(Duration::from_millis(100));
+                None::<()>
+            });
+        } else {
+            std::thread::sleep(window);
+        }
         let after: Vec<Usage> = started.iter().map(|(.., pid)| usage(*pid)).collect();
         stop.store(true, Ordering::Relaxed);
-        (before, after)
+        (before, after, seen.iter().map(|s| s.len()).collect::<Vec<_>>())
     });
     started
         .into_iter()
-        .zip(before.into_iter().zip(after))
-        .map(|((name, ..), (b, a))| {
-            let used = Usage { rchar: a.rchar - b.rchar, syscw: a.syscw - b.syscw, cpu: a.cpu - b.cpu };
-            eprintln!("idle {name}: {window:?}: read {} B, {} writes, {} ticks of CPU", used.rchar, used.syscw, used.cpu);
-            (name, used)
+        .zip(before.into_iter().zip(after).zip(screens))
+        .map(|((name, ..), ((b, a), screens))| {
+            let diff = |a: Option<u64>, b: Option<u64>| Some(a? - b?);
+            let used = Usage { rchar: diff(a.rchar, b.rchar), syscw: diff(a.syscw, b.syscw), cpu: a.cpu - b.cpu };
+            eprintln!("idle {name}: {window:?}: read {:?} B, {:?} writes, {} ms of CPU, {screens} screens", used.rchar, used.syscw, used.cpu);
+            (name, Idle { used, screens })
         })
         .collect()
+}
+
+/// On macOS the CPU time of the window is under `CPU_SHARE_PERCENT` of it (decision pro-d3); Linux asserts its counters.
+fn assert_cpu(name: &str, idle: &Idle) {
+    #[cfg(target_os = "macos")]
+    assert!(
+        idle.used.cpu * 100 <= window().as_millis() as u64 * CPU_SHARE_PERCENT,
+        "{name} used {} ms of CPU in {:?} while nothing changed",
+        idle.used.cpu,
+        window()
+    );
+    #[cfg(not(target_os = "macos"))]
+    let _ = (name, idle);
 }
 
 /// tui-F1: the widgets view re-read the whole Dispatch model every 2 s (1.9 MB on the live store; the StatusBar is
@@ -214,8 +289,12 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
 fn idle_dispatch_views_read_next_to_nothing() {
     let env = env();
     env.sql(&fixture());
-    for (name, used) in idle(&env, &["widgets"]) {
-        assert!(used.rchar < READ_LIMIT, "{name} read {} B while nothing changed", used.rchar);
+    for (name, idle) in idle(&env, &["widgets"]) {
+        assert_cpu(&name, &idle);
+        // macOS has no counter of bytes read: only the CPU time is asserted there (decision pro-d3)
+        if let Some(rchar) = idle.used.rchar {
+            assert!(rchar < READ_LIMIT, "{name} read {rchar} B while nothing changed");
+        }
     }
 }
 
@@ -224,8 +303,12 @@ fn idle_dispatch_views_read_next_to_nothing() {
 fn idle_tree_and_plan_read_next_to_nothing() {
     let env = env();
     env.sql(&fixture());
-    for (name, used) in idle(&env, &["tree", "plan"]) {
-        assert!(used.rchar < READ_LIMIT, "{name} read {} B while nothing changed", used.rchar);
+    for (name, idle) in idle(&env, &["tree", "plan"]) {
+        assert_cpu(&name, &idle);
+        // macOS has no counter of bytes read: only the CPU time is asserted there (decision pro-d3)
+        if let Some(rchar) = idle.used.rchar {
+            assert!(rchar < READ_LIMIT, "{name} read {rchar} B while nothing changed");
+        }
     }
 }
 
@@ -235,9 +318,13 @@ fn idle_tree_and_plan_read_next_to_nothing() {
 fn idle_views_write_nothing_to_the_terminal() {
     let env = env();
     env.sql(&fixture());
-    for (name, used) in idle(&env, &["tree", "plan", "widgets", "logs", "worker"]) {
-        let allowed = if name == "widgets" { 2 + window().as_secs() / 2 } else { 0 };
-        assert!(used.syscw <= allowed, "{name} wrote {} times while nothing changed", used.syscw);
+    for (name, idle) in idle(&env, &["tree", "plan", "widgets", "logs", "worker"]) {
+        assert_cpu(&name, &idle);
+        // macOS has no counter of write calls: only the CPU time is asserted there (decision pro-d3)
+        if let Some(syscw) = idle.used.syscw {
+            let allowed = if name == "widgets" { 2 + window().as_secs() / 2 } else { 0 };
+            assert!(syscw <= allowed, "{name} wrote {syscw} times while nothing changed");
+        }
     }
 }
 
@@ -247,7 +334,11 @@ fn a_spinner_on_screen_keeps_turning() {
     let env = env();
     env.sql(&fixture());
     env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead-ship'; UPDATE jobs SET status = 'running' WHERE plan = 'ship' AND key = 'k1';");
-    for (name, used) in idle(&env, &["tree", "plan"]) {
-        assert!(used.syscw >= 10, "{name} wrote {} times in the window: the spinner stopped", used.syscw);
+    for (name, idle) in idle(&env, &["tree", "plan"]) {
+        match idle.used.syscw {
+            Some(syscw) => assert!(syscw >= 10, "{name} wrote {syscw} times in the window: the spinner stopped"),
+            // macOS (decision pro-d3): no write counter; what the spinner shows is the pane text, which changes each frame
+            None => assert!(idle.screens >= 3, "{name} showed {} screens in the window: the spinner stopped", idle.screens),
+        }
     }
 }

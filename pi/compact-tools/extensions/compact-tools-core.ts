@@ -1,6 +1,7 @@
 /** Pure timing and text helpers for compact tool rendering. */
 
-export type RowStatus = "pending" | "running" | "success" | "error";
+export type RowStatus = "pending" | "running" | "asking" | "success" | "error";
+// "asking": a tool waits for the User to decide (the ask_user_question window); only its pill is painted differently.
 
 export function indicatorGlyph(_status: RowStatus, _frame = 0): string {
 	return "⦁";

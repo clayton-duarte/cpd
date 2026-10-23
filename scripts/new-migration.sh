@@ -7,6 +7,7 @@
 # n = how many migration files (legacy included) sort before the new name.
 # Refuses a slug that is not [a-z][a-z0-9-]{0,39} and a name that exists.
 set -eu
+LC_ALL=C; export LC_ALL
 
 usage() {
   echo "usage: scripts/new-migration.sh <slug> [additive|breaking]" >&2
@@ -60,4 +61,5 @@ else
 fi
 
 printf '%s\n' "$header" > "$file"
+"$root/scripts/sync-version.sh" >&2
 echo "$file"

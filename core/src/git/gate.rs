@@ -115,19 +115,26 @@ mod tests {
         let (dir, slots, log) = slots(1);
         let path = dir.path().join("run").join("test-0.lock");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // `exec sleep` keeps the pid, so the kill below ends the one process that holds the descriptor.
-        let mut holder = std::process::Command::new("sh")
-            .args(["-c", "exec 9>>\"$0\"; flock --nonblock 9 || exit 1; echo held; exec sleep 600"])
-            .arg(&path)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        {
-            use std::io::BufRead;
-            let mut line = String::new();
-            std::io::BufReader::new(holder.stdout.take().unwrap()).read_line(&mut line).unwrap();
-            assert_eq!(line, "held\n");
+        // The test takes the lock, `sleep` inherits the descriptor, and the test closes its own copy:
+        // the child alone holds it, so the kill below ends the one process that does.
+        use std::os::fd::{AsRawFd, BorrowedFd};
+        use std::os::unix::process::CommandExt;
+        let held = File::options().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+        assert!(lock::try_lock(&held).unwrap());
+        let fd = held.as_raw_fd();
+        let mut command = std::process::Command::new("sleep");
+        command.arg("600");
+        // SAFETY: the closure runs in the forked child before exec and only makes an async-signal-safe
+        // system call; it allocates nothing. Same purpose as `driver::lock`: the descriptor survives exec.
+        unsafe {
+            command.pre_exec(move || {
+                nix::fcntl::fcntl(BorrowedFd::borrow_raw(fd), nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()))
+                    .map(drop)
+                    .map_err(std::io::Error::from)
+            });
         }
+        let mut holder = command.spawn().unwrap();
+        drop(held);
         let probe = File::options().read(true).write(true).open(&path).unwrap();
         assert!(!lock::try_lock(&probe).unwrap(), "the holder has the slot");
         drop(probe);
