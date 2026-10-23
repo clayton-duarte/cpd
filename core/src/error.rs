@@ -202,7 +202,7 @@ error_codes! {
     MergeNotClean = "merge_not_clean" => Refused,
     OwnerMismatch = "owner_mismatch" => Refused,
     OwnerUnset = "owner_unset" => Refused,
-    OwnerSet = "owner_set" => Refused,
+    OwnerInUse = "owner_in_use" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -467,7 +467,7 @@ mod tests {
             (ErrorCode::RepoUnkeyed, 1),
             (ErrorCode::OwnerMismatch, 3),
             (ErrorCode::OwnerUnset, 3),
-            (ErrorCode::OwnerSet, 3),
+            (ErrorCode::OwnerInUse, 3),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");

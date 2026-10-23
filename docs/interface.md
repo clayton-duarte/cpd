@@ -18,7 +18,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
-| `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
+| `cpd context owner` | Set or change the owner of a Context (§3.13) | Lead, Manager | |
 | `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
 | `cpd context curation` | List the pending retirements and documentation candidates (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
