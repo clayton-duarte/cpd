@@ -518,6 +518,7 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()]);
     // Keyed by its GitHub URL; git still reaches the local repo.
     env.git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/clone.git"]);
+    env.repo_policy("acme", "clone", "");
     env.git(&clone, &["config", &format!("url.{}.insteadOf", origin.display()), "https://github.com/acme/clone.git"]);
     // From a subdirectory of a linked worktree: the repo is the main worktree.
     let linked = env.root().join("repos").join("clone-linked");
