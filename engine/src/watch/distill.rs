@@ -13,6 +13,8 @@ use time::format_description::well_known::Rfc3339;
 use super::engine::{Engine, stopping};
 use super::record_detached;
 use super::report::{About, Step};
+use cpd_core::config::Config;
+use cpd_core::context::curation::not_curable;
 use cpd_core::context::distill::{State, log_path, running};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ids::ContextId;
@@ -33,7 +35,7 @@ fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
 }
 
 /// The ids of the live (not archived) Contexts.
-const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL ORDER BY id";
+const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL ORDER BY id";
 
 pub(super) fn run(engine: &mut Engine) {
     let contexts = engine.store.read(|conn| {
@@ -72,6 +74,10 @@ const BATCHES: [u8; 5] = [60, 30, 15, 5, 1];
 /// the next smaller batch (60, 30, 15, 5, 1) and records the batch with the state; after a failed run of batch 1
 /// nothing starts until the state changes or the engine restarts. So a state has at most five runs.
 fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -> Result<(), CpdError> {
+    let floor = Config::load(&engine.home)?.context_curation_min_records;
+    if engine.store.read(|conn| not_curable(conn, context, floor))?.is_some() {
+        return Ok(());
+    }
     let state = engine.store.read(|conn| State::read(conn, context))?;
     let uncurated = state.uncurated();
     let Some(newest) = uncurated.last() else { return Ok(()) };

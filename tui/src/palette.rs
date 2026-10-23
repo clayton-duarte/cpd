@@ -1,4 +1,7 @@
-//! The palette: the one place with colours and status icons, ported from the
+//! The code of the Dango palette (the 16 terminal colour indices of contract §6.1.1, hs-d591): the one place with
+//! colours and status icons. The module is still called `palette` because that is the module path of every
+//! `palette::...` call under `tui/` and it holds more than the colours (the status icons too); renaming it would touch
+//! every view for no behaviour. Ported from the
 //! spike's `palette.rs` (branch `cpd/cpd-ui`) on cpd 2's typed statuses. Every
 //! view takes them from here, so changing one meaning (or one icon) changes it
 //! in the tree, the Plan chart, the Dispatch column and the legend alike.

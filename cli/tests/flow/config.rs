@@ -46,6 +46,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_recent_days": 1,
+            "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "S2",
             "lead_pi_packages": [
@@ -196,6 +197,7 @@ machine = "a1234567"
 concurrency = 1
 test_concurrency = 64
 context_recent_days = 3650
+context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
 lead_tier = "H0"
@@ -1094,6 +1096,27 @@ fn context_recent_days_defaults_to_1_and_refuses_0() {
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
         assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
+    }
+}
+
+/// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
+#[test]
+fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
+    let env = TestEnv::new();
+    let out = config_with(&env, MINIMAL).ok();
+    assert_eq!(out["config"]["context_curation_min_records"], 25, "{out}");
+    assert_eq!(out["sources"]["context_curation_min_records"], "default", "{out}");
+
+    let out = config_with(&env, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
+    assert_eq!(out["config"]["context_curation_min_records"], 7, "{out}");
+    assert_eq!(out["sources"]["context_curation_min_records"], "file", "{out}");
+
+    for bad in ["0", "-3", "2.5", "\"ten\"", "true"] {
+        let run = config_with(&env, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{bad}");
+        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
+        assert_eq!(err["details"]["key"], "context_curation_min_records", "{bad}: {err}");
     }
 }
 

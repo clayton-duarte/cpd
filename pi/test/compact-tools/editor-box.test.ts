@@ -1,4 +1,4 @@
-/** The input widget: pi's Editor drawn as a rounded box in the cockpit palette (contract 6.1.1, 6.9 "The input widget"). */
+/** The input widget: pi's Editor drawn as a rounded box in the Dango palette (contract 6.1.1, 6.9 "The input widget"). */
 import "./pinned-themes.ts";
 import { MOON_FRAMES } from "./loader-frames.ts";
 import assert from "node:assert/strict";

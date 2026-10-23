@@ -3918,3 +3918,65 @@ fn e9_starts_again_at_60_when_the_state_changes() {
     engine.stop();
     assert_eq!(batch_sizes(&fx)[..6], [60, 30, 15, 5, 1, 60]);
 }
+
+// ---- E9 and the curation floor (hs-d592 R2, R5) ----
+
+/// The fake pi of the floor tests: curates every record of its batch.
+fn curating_pi(fx: &Fx) {
+    fx.env.fake_pi(&common::pi_says(common::CURATES_ALL));
+}
+
+/// No curation anywhere: no pi call, no `record_curations` row, no `context-curated` or `error` Event.
+fn assert_nothing_curated(fx: &Fx) {
+    assert!(fx.env.calls("pi").is_empty(), "pi was called: {:?}", fx.env.calls("pi"));
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
+    assert_eq!(fx.count("context-curated"), 0);
+    assert_eq!(fx.count("error"), 0);
+}
+
+#[test]
+fn e9_skips_an_archived_context() {
+    let fx = fx_bare("context_curation_min_records = 5");
+    old_notes(&fx, 1, 30);
+    fx.fixture("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'ctx';");
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+    assert_nothing_curated(&fx);
+}
+
+#[test]
+fn e9_skips_a_context_under_the_floor_until_it_reaches_it() {
+    let fx = fx_bare("context_curation_min_records = 5");
+    old_notes(&fx, 1, 4);
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    assert_nothing_curated(&fx);
+    old_notes(&fx, 5, 1);
+    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 5);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert!(!fx.env.calls("pi").is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 5);
+    assert_eq!(fx.count("context-curated"), 1);
+}
+
+#[test]
+fn e9_reads_the_floor_from_config_toml_at_every_tick() {
+    let fx = fx_bare("context_curation_min_records = 100");
+    old_notes(&fx, 1, 30);
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    assert_nothing_curated(&fx);
+    // rewrite the floor, every other line kept, with the engine running
+    let path = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("context_curation_min_records = 100"), "{text}");
+    fs::write(&path, text.replace("context_curation_min_records = 100", "context_curation_min_records = 25")).unwrap();
+    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 30);
+    engine.stop();
+    assert_eq!(fx.count("context-curated"), 1);
+}

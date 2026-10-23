@@ -28,7 +28,7 @@ fn fx() -> Fx {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
              [watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
             common::TICK_SECONDS,
             env.tmux_socket()
@@ -196,9 +196,15 @@ fn pi_that_cannot_start_is_distill_failed_spawn() {
 fn a_context_with_nothing_in_force_has_nothing_to_do() {
     let fx = fx();
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!((out["already"].clone(), out["digest"].clone()), (json!(true), Value::Null));
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 0, "floor": 1}), "{out}");
     assert_eq!(fx.pi_calls(), 0);
     assert!(fx.digest_files().is_empty());
+
+    floor_notes(&fx, 1);
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["already"].clone(), out["digest"].clone()), (json!(true), Value::Null));
+    assert_eq!(fx.pi_calls(), 1);
 }
 
 #[test]
@@ -904,4 +910,140 @@ fn a_failed_pi_run_fails_the_run_with_no_second_step() {
     let events = fx.errors();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["data"]["code"], "distill_failed");
+}
+
+// ---- The curation floor (contract §8.1, §8.2, §4.6; hs-d592) ----
+
+/// Sets `context_curation_min_records` in the fixture's config.toml.
+fn set_floor(fx: &Fx, floor: u32) {
+    let path = fx.env.cpd_home().join("config.toml");
+    let text: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|l| if l.starts_with("context_curation_min_records = ") { format!("context_curation_min_records = {floor}\n") } else { format!("{l}\n") })
+        .collect();
+    assert!(text.contains(&format!("context_curation_min_records = {floor}\n")), "{text}");
+    fs::write(path, text).unwrap();
+}
+
+/// `n` notes in the Context, oldest first.
+fn floor_notes(fx: &Fx, n: usize) {
+    for i in 1..=n {
+        fx.insert(CONTEXT, &format!("hs-n{i}"), &ago(100), &format!("Note number {i}."), Draft::Note);
+    }
+}
+
+fn events_count(fx: &Fx) -> i64 {
+    fx.env.read(|conn| conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)))
+}
+
+fn files_named(dir: &std::path::Path, names: &[&str], found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files_named(&path, names, found);
+        } else if names.contains(&path.file_name().unwrap().to_str().unwrap()) {
+            found.push(path);
+        }
+    }
+}
+
+/// Nothing a skipped run must not leave: no pi call, no row, no Event (compared with `events_before`), no lock or log file.
+fn assert_nothing_done(fx: &Fx, events_before: i64) {
+    assert_eq!(fx.pi_calls(), 0, "the fake pi was never called");
+    assert_eq!(curation_rows(fx), vec![], "no record_curations row");
+    assert_eq!(events_count(fx), events_before, "no Event appended");
+    let mut found = Vec::new();
+    files_named(&fx.env.cpd_home(), &["distill.lock", "distill.log"], &mut found);
+    files_named(&fx.env.home(), &["distill.lock", "distill.log"], &mut found);
+    assert_eq!(found, Vec::<PathBuf>::new(), "no lock or log file");
+}
+
+fn archive_context(fx: &Fx) {
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = ?1", [CONTEXT])?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn an_archived_context_is_skipped_by_distill() {
+    let fx = fx().one_step();
+    set_floor(&fx, 1);
+    floor_notes(&fx, 3);
+    archive_context(&fx);
+    let before = events_count(&fx);
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "archived"}), "{out}");
+    assert_nothing_done(&fx, before);
+
+    // Archived is checked first: under the floor it still reports `archived`.
+    set_floor(&fx, 50);
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "archived"}), "{out}");
+    assert_nothing_done(&fx, before);
+}
+
+#[test]
+fn a_context_under_the_floor_is_skipped_by_distill() {
+    let fx = fx().one_step();
+    set_floor(&fx, 5);
+    floor_notes(&fx, 4);
+    let before = events_count(&fx);
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 4, "floor": 5}), "{out}");
+    assert_nothing_done(&fx, before);
+}
+
+#[test]
+fn a_context_at_the_floor_is_curated_by_distill() {
+    let fx = fx().one_step();
+    floor_notes(&fx, 5);
+    // One above the count: skipped; at the count: curated (a changed floor applies at the next run).
+    set_floor(&fx, 6);
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 5, "floor": 6}), "{out}");
+    assert_eq!(fx.pi_calls(), 0);
+    set_floor(&fx, 5);
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert!(out.get("skipped").is_none(), "{out}");
+    assert_eq!(fx.pi_calls(), 1);
+    assert_eq!(curation_rows(&fx).len(), 5);
+    let events = fx.cpd(&["events", "list", "--kind", "context-curated"]).ok()["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), 1, "{events:?}");
+}
+
+#[test]
+fn the_floor_counts_retired_and_superseded_records() {
+    let fx = fx().one_step();
+    set_floor(&fx, 5);
+    // 4 records: under the floor, skipped.
+    floor_notes(&fx, 4);
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["skipped"], "young", "{out}");
+    assert_eq!(fx.pi_calls(), 0);
+
+    // The fifth record supersedes hs-n1; hs-n2 is retired by an approved retirement: 5 rows, 3 in force.
+    fx.insert(CONTEXT, "hs-d5", &ago(50), "Newer.", Draft::Decision { supersedes: Some(RecordId::parse("hs-n1").unwrap()) });
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at)
+                 VALUES ('ctx', 'hs-n2', 'duplicate', 'hs-n3', 'pending', 't')",
+                [],
+            )?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    fx.cpd(&["context", "retire", "--context", CONTEXT, "--approve", "hs-n2"]).ok();
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert!(out.get("skipped").is_none(), "retired and superseded records count: {out}");
+    assert_eq!(fx.pi_calls(), 1);
 }
