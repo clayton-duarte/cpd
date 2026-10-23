@@ -228,10 +228,7 @@ pub struct Tmux {
     pub work_session: String,
 }
 
-const DEFAULT_LEAD_PI_PACKAGES: [&str; 2] = [
-    "npm:@plannotator/pi-extension@0.28.17",
-    "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-];
+const DEFAULT_LEAD_PI_PACKAGES: [&str; 1] = ["npm:@plannotator/pi-extension@0.28.17"];
 
 impl Config {
     /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,
