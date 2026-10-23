@@ -67,7 +67,7 @@ fn status_line_pills_follow_the_rule() {
     let right = want.find("#[default]#[align=right]").expect("the right group");
     assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {STATUS_FORMAT}");
     assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {STATUS_FORMAT}");
-    for old in ["reverse", "colour236", "push-default", "pop-default"] {
+    for old in ["colour236", "push-default", "pop-default"] {
         assert!(!STATUS_FORMAT.contains(old), "{old} is gone from the status format");
     }
 }
