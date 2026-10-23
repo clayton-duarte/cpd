@@ -92,7 +92,7 @@ test("a file overrides field by field: tools, one glyph, previewLines", () => {
 });
 
 test("glyphs written as JSON escapes (surrogate pairs) are the same code points", () => {
-	files('{"toggle": {"expand": "\\uDB80\\uDC4B", "collapse": "\\uDB80\\uDC63"}}', undefined, (cwd) => {
+	files('{"toggle": {"expand": "\\uDB82\\uDF26", "collapse": "\\uDB82\\uDF2C"}}', undefined, (cwd) => {
 		assert.deepEqual(loadConfig(cwd, false).toggle, { expand: EXPAND, collapse: COLLAPSE });
 	});
 });

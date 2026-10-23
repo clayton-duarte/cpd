@@ -65,7 +65,7 @@ test("toggle overrides the glyphs field by field, code points and JSON escapes a
 	assert.deepEqual(foldOf(merged({ toggle: { expand: "+" } }).config).toggle, { expand: "+", collapse: PLAIN.collapse });
 	assert.deepEqual(foldOf(merged({ toggle: { collapse: "-" } }).config).toggle, { expand: PLAIN.expand, collapse: "-" });
 	// A config file is JSON.parse'd, which turns the escapes into the code points.
-	const parsed = JSON.parse(`{"toggle":{"expand":"\\uDB80\\uDC4B","collapse":"\\uDB80\\uDC63"}}`);
+	const parsed = JSON.parse(`{"toggle":{"expand":"\\uDB82\\uDF26","collapse":"\\uDB82\\uDF2C"}}`);
 	assert.deepEqual(parsed.toggle, NERD_JSON);
 	assert.deepEqual(foldOf(merged(parsed).config).toggle, NERD);
 	assert.equal([...NERD.expand][0]!.codePointAt(0), 0xF0B26);
