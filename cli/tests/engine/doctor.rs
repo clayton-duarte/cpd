@@ -394,7 +394,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
     let adapter = env.root().join("adapter").display().to_string();
     let settings = env.home().join(".pi/agent/settings.json");
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
-    fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0", {"source": "npm:@juicesharp/rpiv-ask-user-question"}]}"#).unwrap();
+    fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0"]}"#).unwrap();
     let run = doctor(&env);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
@@ -404,7 +404,6 @@ fn lead_packages_say_how_a_lead_gets_each() {
         json!([
             {"package": adapter, "by": "-e"},
             {"package": "npm:@plannotator/pi-extension@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
-            {"package": "npm:@juicesharp/rpiv-ask-user-question@2.13.8", "by": by_settings["by"], "settings": by_settings["settings"]},
         ])
     );
 

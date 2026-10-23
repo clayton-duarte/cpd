@@ -49,10 +49,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "S2",
-            "lead_pi_packages": [
-                "npm:@plannotator/pi-extension@0.28.17",
-                "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
-            ],
+            "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
             "plannotator_ports": "19432-19441",
             "tiers": {
