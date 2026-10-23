@@ -94,7 +94,7 @@ fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
     assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
 
     // A wider window takes the old record in.
-    env.write_config("version = 1\nmachine = \"m1\"\ncontext_recent_days = 60\n");
+    env.write_config("version = 1\nmachine = \"m1\"\ncontext_recent_days = 60\ncontext_curation_min_records = 1\n");
     assert!(markdown(&digest(&env)).contains("- [m1-n1] old uncited fact"));
 }
 
