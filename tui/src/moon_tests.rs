@@ -17,8 +17,8 @@ const NEW_MOON: &str = "\u{F0F64}";
 const FIRST_QUARTER: &str = "\u{F0F61}";
 const FULL_MOON: &str = "\u{F0F62}";
 
-const ALL_DOTS: [Dot; 9] =
-    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working, Dot::White, Dot::Blue, Dot::Red, Dot::Yellow, Dot::Magenta];
+const ALL_DOTS: [Dot; 10] =
+    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working, Dot::Fixing, Dot::White, Dot::Blue, Dot::Red, Dot::Yellow, Dot::Magenta];
 
 fn is_circle_slice(c: char) -> bool {
     ('\u{F0A9E}'..='\u{F0AA5}').contains(&c)

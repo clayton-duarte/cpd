@@ -269,7 +269,7 @@ impl View {
     /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| s.dot == Dot::Working && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
+        sessions.any(|s| matches!(s.dot, Dot::Working | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
     }
 
     /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when

@@ -435,7 +435,7 @@ pub fn frame(now: SystemTime) -> usize {
 }
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
-/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working; [`WAITING`] in the colour of
+/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working, red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan with a failed Job); [`WAITING`] in the colour of
 /// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the first
 /// frame when working), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
@@ -446,6 +446,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Fixing => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
         Dot::Stopped => (STOPPED, muted_text()),
@@ -458,15 +459,14 @@ pub fn separator() -> Span<'static> {
     Span::styled("⋅", muted_text())
 }
 
-/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero.
+/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero. A
+/// failed count is red (hs-d580), where its pill is waiting until `job-stuck` opens.
 pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
-    if n == 0 { muted_text() } else { fg_clickable(job_status(status, merging).1) }
-}
-
-/// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
-/// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
-pub fn failed_count_style(n: usize, stuck: bool) -> Style {
-    if stuck && n > 0 { fg_clickable(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+    match (n, status) {
+        (0, _) => muted_text(),
+        (_, JobStatus::Failed) => fg_clickable(JOB_STUCK.1),
+        _ => fg_clickable(job_status(status, merging).1),
+    }
 }
 
 /// Meaning of a PR's state.
@@ -704,13 +704,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
+    fn a_failed_job_is_waiting_until_it_is_stuck() {
         assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
         assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::LightCyan));
-        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::LightRed));
-        assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
-        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::LightCyan));
     }
 
     #[test]
