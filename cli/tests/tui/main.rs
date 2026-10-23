@@ -11,6 +11,7 @@ mod tui_chat_pad;
 mod tui_checklist;
 mod tui_dialog;
 mod tui_history;
+mod tui_inbox_cyan;
 mod tui_idle;
 mod tui_logs;
 mod tui_loop_guard;
