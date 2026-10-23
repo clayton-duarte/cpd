@@ -238,7 +238,7 @@ fn a_dispatch_pr_rebases_only_when_its_jobs_are_done() {
     assert_eq!(fx.lead_sha(), tip, "nothing moved");
     assert_eq!(fx.remote_head(), moved, "nothing pushed");
 
-    fx.env.sql("UPDATE jobs SET status = 'merged' WHERE plan = 'pay' AND key = 'w';");
+    fx.env.sql("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'w'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE plan = 'pay' AND key = 'w';");
     let out = fx.rebase(&[]).ok();
 
     let new = fx.lead_sha();
