@@ -30,6 +30,7 @@ test("start-up runs §15.2's steps in order and follows from the cursor", async 
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
+  await waitFor("the tracker's review list", () => f.argvs().some((a) => a[0] === "review" && a[1] === "list")); // started after the follower, not awaited by it
 
   assert.deepEqual(f.argvs(), [
     ["session", "show", ID],
