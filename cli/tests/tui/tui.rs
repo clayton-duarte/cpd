@@ -947,6 +947,31 @@ fn tui_marks_a_restart_of_an_older_tmux_server_pending_and_does_not_kill_it() {
         &format!("[ -e '{}' ] && case \" $* \" in *\" display -p #{{version}} \"*) echo 1.0; exit 0;; esac\nexec '{}' \"$@\"", older.display(), real.display()),
     );
     let pending = env.cpd_home().join("run/tmux-restart.pending");
+    // The cockpit starts the engine, and the engine restarts a server older than the installed tmux as soon as nothing is in
+    // the way (`restart::busy`). This test is of `cpd tui` alone, and on a loaded machine it outlasts the engine's pause of a
+    // few seconds: the restart would kill the server the test asks about. A running Attempt is in the way; its driver is
+    // this process, which lives as long as the test.
+    env.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't');
+                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, 't');
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
+                   VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', {pid}, 't');",
+                fp = "a".repeat(64),
+                id = tx.id(),
+                pid = std::process::id()
+            ))?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
 
     env.cpd(&["tui"]).ok();
     assert!(!pending.exists(), "a server as new as the installed tmux needs no restart");

@@ -92,7 +92,7 @@ if ! printf '%s' "$version" | grep -q '"store": *\(null\|{\)'; then
 fi
 if printf '%s' "$version" | grep -q '"opens": *false'; then
   code=$(printf '%s' "$version" | sed -n 's/.*"refusal": *{[^}]*"code": *"\([^"]*\)".*/\1/p')
-  message=$(printf '%s' "$version" | sed -n 's/.*"refusal": *{.*"message": *"\(\(\\.\|[^"\\]\)*\)".*/\1/p')
+  message=$(printf '%s' "$version" | sed -En 's/.*"refusal": *\{.*"message": *"((\\.|[^"\\])*)".*/\1/p')
   echo "cpd install refused: this build cannot open $db: $message" >&2
   case $code in
     store_too_new) echo "merge main into this branch, then install again" >&2 ;;
