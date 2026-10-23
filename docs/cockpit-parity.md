@@ -78,7 +78,7 @@ Status values: **same**, **differs**, **missing**, **extra**.
 | Chart area | `body.inner(Margin{2,1})` (`main.rs:710`) | same (`plan/mod.rs:152`) | same | — |
 | Messages | `no Workflow yet`, `loading… (first fetch)`, the note (`main.rs:661–665`) | `message()` (`plan/mod.rs:91`) | differs (text) | `no Plan yet` / note; keep the one-row message area at the bottom of the window (`main.rs:712`) |
 | Flow layout | `flow.rs` (cards, buses, brackets, transitive reduction, column width, `aN`) | `plan/flow.rs` port | verify | The captured chart starts one row lower in the reference: verify against `tui/tests/fixtures/cpd2-jobs.json` / `cpd2-chart.txt` |
-| Pill style | black on the status colour (`palette::pill`) | same (capture: `38;5;0` on `48;5;8`) | same | — |
+| Pill style | the status colour inverted (palette::pill; captured as `ESC[7m` on `ESC[38;5;8m`) | same | — |
 | Selection keys | ←→/hl, ↑↓/kj, Enter, Esc, clicks (`main.rs:743–744`) | same (`plan/mod.rs:256–267`) | same | — |
 | `q` | not handled | quits (`plan/mod.rs:264`) | extra | remove (a dead layout pane stays dead in cpd 2) |
 | Wheel | 3 rows / 4 columns (`main.rs:773–776`) | same (`plan/mod.rs:298–301`) | same | — |

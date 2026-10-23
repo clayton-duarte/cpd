@@ -54,7 +54,7 @@ test("a running tool row has no dot, only the cyan pill", async () => {
 	const head = lines[0]!;
 	assert.ok(plain(head).startsWith(`${HEAD}${LEFT}`), `head ${JSON.stringify(plain(head))}`);
 	assert.ok(!/\u2981/u.test(lines.join("")), "no dot glyph U+2981");
-	assert.ok(head.includes("\x1b[46m"), `pill on bg 6: ${JSON.stringify(head)}`);
+	assert.ok(head.includes("\x1b[36m\uE0B6\x1b[7m"), `pill on bg 6: ${JSON.stringify(head)}`);
 	assert.ok(head.includes("\x1b[36m"), `cap in fg 6: ${JSON.stringify(head)}`);
 });
 
