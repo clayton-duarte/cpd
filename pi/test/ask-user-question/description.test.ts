@@ -1,6 +1,7 @@
 /** The texts built from LIMIT (docs/contract.md, docs/implementing.md: the ask-user-question copy). Every sentence is built here from LIMIT. */
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { LIMIT } from "../../lib/askguard.ts";
@@ -19,7 +20,9 @@ async function registeredTool(): Promise<Tool> {
 	const pi = new Proxy({} as Record<string, unknown>, {
 		get: (_t, method: string) => (...args: unknown[]) => { if (method === "registerTool") tools.push(args[0] as Tool); },
 	});
-	const saved = { s: process.env.CPD_SESSION, a: process.env.CPD_ATTEMPT };
+	const saved = { s: process.env.CPD_SESSION, a: process.env.CPD_ATTEMPT, d: process.env.PI_CODING_AGENT_DIR };
+	const agentDir = mkdtempSync(join(tmpdir(), "ask-desc-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	process.env.CPD_SESSION = "lead-session";
 	delete process.env.CPD_ATTEMPT;
 	try {
@@ -28,6 +31,8 @@ async function registeredTool(): Promise<Tool> {
 	} finally {
 		if (saved.s === undefined) delete process.env.CPD_SESSION; else process.env.CPD_SESSION = saved.s;
 		if (saved.a === undefined) delete process.env.CPD_ATTEMPT; else process.env.CPD_ATTEMPT = saved.a;
+		if (saved.d === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.d;
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 	const tool = tools.find((candidate) => candidate.name === "ask_user_question");
 	assert.ok(tool, "ask_user_question is registered");
