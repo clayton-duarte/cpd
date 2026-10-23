@@ -40,6 +40,7 @@ use self::flow::{Dir, Selection};
 use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
+use crate::trace::Trace;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -97,10 +98,20 @@ impl Centre {
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
     /// frame is not the one drawn. Whether it did.
+    #[cfg(test)]
     fn turn(&mut self, frame: usize) -> bool {
+        self.turn_traced(frame, &mut Trace::new(None))
+    }
+
+    /// [`Centre::turn`], adding the layout's time to `trace`.
+    fn turn_traced(&mut self, frame: usize, trace: &mut Trace) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
+            let began = trace.is_on().then(Instant::now);
             self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(CHART_MARGIN);
+            if let Some(b) = began {
+                trace.add_layout(b.elapsed());
+            }
             self.frame = frame;
         }
         turned
@@ -113,23 +124,32 @@ struct Snapshot {
     cursor: i64,
     centre: Option<Centre>,
     pulse: Option<Pulse>,
+    /// The time `boxes::layout` took, when the snapshot was asked to time it (the frame trace), else zero.
+    layout: Duration,
 }
 
 /// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
 fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
+    snapshot_timed(store, width, now_ms, false)
+}
+
+/// [`snapshot`], timing its layout when `timed`.
+fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     if let Some(manager) = read::manager_slot(store)? {
         // Read for the widest the ids allow; the drawing keeps the last buckets that fit.
         let buckets = pulse::buckets(usize::from(width).saturating_sub(2 * usize::from(MARGIN.horizontal)), 0);
         let pulse = read::pulse(store, &manager.context, now_ms, buckets)?;
-        return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse) });
+        return Ok(Snapshot { cursor, centre: None, pulse: Some(pulse), layout: Duration::ZERO });
     }
-    let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
+    let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None, layout: Duration::ZERO }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
+    let began = timed.then(Instant::now);
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
-    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None })
+    let layout = began.map_or(Duration::ZERO, |b| b.elapsed());
+    Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
@@ -371,6 +391,8 @@ fn show(
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
     let log = ViewLog::of(home, "plan");
+    let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
+    let epoch = Instant::now();
     // a log that cannot be written is the view's error line: a lasting state
     let write = |ui: &mut Ui, line: &str| {
         if let Err(why) = log.append(line) {
@@ -395,7 +417,7 @@ fn show(
         }
         let frame = palette::frame(SystemTime::now());
         if let Some(c) = snap.centre.as_mut() {
-            redraw |= c.turn(frame);
+            redraw |= c.turn_traced(frame, &mut trace);
         }
         // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
         if let Some(c) = snap.centre.as_ref() {
@@ -406,10 +428,18 @@ fn show(
             }
         }
         if redraw {
-            terminal.draw(|f| match snap.pulse.as_ref() {
-                Some(pulse) => ui.draw_pulse(f, pulse),
-                None => ui.draw(f, snap.centre.as_ref()),
-            })?;
+            let (drawn, written) = trace.draw(epoch, &log, frame, || {
+                terminal
+                    .draw(|f| match snap.pulse.as_ref() {
+                        Some(pulse) => ui.draw_pulse(f, pulse),
+                        None => ui.draw(f, snap.centre.as_ref()),
+                    })
+                    .map(drop)
+            });
+            drawn?;
+            if let Err(why) = written {
+                ui.error = Some(why);
+            }
             redraw = false;
         }
         if !event::poll(poll.min(FRAME))? {
@@ -419,7 +449,7 @@ fn show(
             }
             fetched = Instant::now();
             let shown = ui.error.clone();
-            if let Some(changes) = kept(follow.poll_changes(store), &mut follow_error) {
+            if let Some(changes) = kept(trace.read(|| follow.poll_changes(store)), &mut follow_error) {
                 stale |= changes.pulls
                     || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
             }
@@ -429,7 +459,12 @@ fn show(
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let width = terminal.size().map_or(0, |s| s.width);
-                let next = kept(snapshot(store, width, now_ms()), &mut snapshot_error);
+                let timed = trace.is_on();
+                let taken_now = trace.read(|| snapshot_timed(store, width, now_ms(), timed));
+                let next = kept(taken_now.map(|s| {
+                    trace.add_layout(s.layout);
+                    s
+                }), &mut snapshot_error);
                 stale = snapshot_error.is_some();
                 ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
                 if let Some(next) = next {

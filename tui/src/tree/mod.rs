@@ -72,6 +72,7 @@ use folds::FoldsFile;
 use kinds::KINDS;
 use view::{Effect, View};
 use super::viewlog::ViewLog;
+use crate::trace::Trace;
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
@@ -117,6 +118,8 @@ fn event_loop(
     runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
     let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
+    let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
+    let epoch = Instant::now();
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
     let mut last_poll = Instant::now();
@@ -151,18 +154,18 @@ fn event_loop(
         }
         if last_poll.elapsed() >= poll {
             last_poll = Instant::now();
-            dirty |= kept(follow.poll_changes(store), &mut follow_error).is_some_and(|changes| changes.any());
+            dirty |= kept(trace.read(|| follow.poll_changes(store)), &mut follow_error).is_some_and(|changes| changes.any());
             // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17)
             dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
-            dirty |= kept(model::engine_running(home), &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
+            dirty |= kept(trace.read(|| model::engine_running(home)), &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
             // a merge starts and ends with no Event: its marker (hs-d495) is read on each poll
-            if let Some(open) = kept(read::open_pulls(store), &mut open_error) {
-                redraw |= view.set_merging(crate::merge::marker::live(home, &open));
+            if let Some(open) = kept(trace.read(|| read::open_pulls(store)), &mut open_error) {
+                redraw |= view.set_merging(trace.read(|| crate::merge::marker::live(home, &open)));
             }
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone()).or_else(|| open_error.clone());
         }
         if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {
-            let next = read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)));
+            let next = trace.read(|| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?))));
             if let Some((end, tree)) = kept(next, &mut snapshot_error) {
                 snooze_end = end;
                 let t = &view.tree;
@@ -190,7 +193,11 @@ fn event_loop(
         // the Inbox items' ages are redrawn every second, from `opened_at`
         redraw |= !view.tree.inbox.is_empty() && second != drawn_second;
         if redraw {
-            terminal.draw(|f| view.draw(f, frame))?;
+            let (drawn, written) = trace.draw(epoch, &log.file, frame, || terminal.draw(|f| view.draw(f, frame)).map(drop));
+            drawn?;
+            if let Err(why) = written {
+                show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
+            }
             (redraw, drawn_frame, drawn_second) = (false, frame, second);
         }
         if !event::poll(TICK)? {
@@ -218,7 +225,11 @@ fn event_loop(
             Effect::Ask(question) => {
                 // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
                 // shows the item picked, not the menu, behind the popup.
-                terminal.draw(|f| view.draw(f, frame))?;
+                let (drawn, written) = trace.draw(epoch, &log.file, frame, || terminal.draw(|f| view.draw(f, frame)).map(drop));
+                drawn?;
+                if let Err(why) = written {
+                    show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
+                }
                 let title = question.title();
                 match runner.ask(question) {
                     Ok(None) => {}
