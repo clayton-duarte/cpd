@@ -546,7 +546,7 @@ fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result
 /// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`. The PR's `open` and `update` Jobs count
 /// for nothing (contract §7.6): an `open` Job that is `failed` is why the Lead is here, and one that is `merged` on a PR still
 /// `dispatch` is a merge that died before it opened the pull request.
-fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
+pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
     let all: Vec<jobs::Job> = env
         .store
         .read(|conn| jobs::load(conn, &plan.plan.id))?
