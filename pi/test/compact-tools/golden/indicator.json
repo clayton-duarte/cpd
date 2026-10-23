@@ -820,20 +820,17 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mread\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/app.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file",
-			"   \\e[31mor directory\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mread\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/app.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file",
-			"   \\e[31mor directory\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mread\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/app.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file",
-			"   \\e[31mor directory\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
@@ -1087,8 +1084,7 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mread\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/app.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file",
-			"   \\e[31mor directory\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mENOENT: no such file\\e[0m…\\e[0m\\e[39m"
 		]
 	],
 	"compact/write/done/closed/100": [
@@ -1968,20 +1964,17 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mwrite\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/new.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission",
-			"   \\e[31mdenied\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission d\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mwrite\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/new.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission",
-			"   \\e[31mdenied\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission d\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mwrite\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/new.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission",
-			"   \\e[31mdenied\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission d\\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
@@ -2307,8 +2300,7 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mwrite\\e[39m\\e[49m\\e[31m\\e[39m \\e[37msrc/new.ts\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission",
-			"   \\e[31mdenied\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mEACCES: permission d\\e[0m…\\e[0m\\e[39m"
 		]
 	],
 	"compact/edit/done/closed/100": [
@@ -4187,20 +4179,17 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mbash\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mRun tests\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mbash\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mRun tests\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mbash\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mRun tests\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
@@ -4513,8 +4502,7 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mbash\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mRun tests\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		]
 	],
 	"compact/powershell/done/closed/100": [
@@ -5285,20 +5273,17 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mpowershell\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mList files + 1 more step\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mpowershell\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mList files + 1 more step\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mpowershell\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mList files + 1 more step\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		],
 		[
 			"",
@@ -5579,8 +5564,7 @@
 		[
 			"",
 			" \\e[31m⦁\\e[39m \\e[31m\\e[39m\\e[41m\\e[30mpowershell\\e[39m\\e[49m\\e[31m\\e[39m \\e[37mList files + 1 more step\\e[39m",
-			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with",
-			"   \\e[31mcode 1\\e[39m"
+			"\\e[90m └ \\e[39m\\e[90mFailed in 1.234s\\e[39m\\e[90m · \\e[39m\\e[31mCommand exited with \\e[0m…\\e[0m\\e[39m"
 		]
 	],
 	"compact/grep/done/closed/100": [
