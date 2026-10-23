@@ -9,12 +9,12 @@ pub const CAPS_COLUMNS: u16 = 2;
 
 /// The style of a cap: the block's foreground and nothing else.
 pub fn cap_style(block: Style) -> Style {
-    let _ = (block, spec());
-    unimplemented!()
+    Style::new().fg(block.fg.expect("a pill block has a foreground"))
 }
 
 /// The three spans of a pill: left cap, text in `block`, right cap.
 pub fn pill<'a>(text: impl Into<Cow<'a, str>>, block: Style) -> Vec<Span<'a>> {
-    let _ = (text.into(), block);
-    unimplemented!()
+    let caps = &spec().caps;
+    let cap = cap_style(block);
+    vec![Span::styled(caps.left.as_str(), cap), Span::styled(text, block), Span::styled(caps.right.as_str(), cap)]
 }
