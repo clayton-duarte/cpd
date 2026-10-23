@@ -60,4 +60,5 @@ else
 fi
 
 printf '%s\n' "$header" > "$file"
+"$root/scripts/sync-version.sh" >&2
 echo "$file"

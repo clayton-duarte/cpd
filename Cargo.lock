@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.0.5"
+version = "0.13.45"
 dependencies = [
  "clap",
  "cpd-core",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-core"
-version = "0.0.5"
+version = "0.13.45"
 dependencies = [
  "clap",
  "minijinja",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-engine"
-version = "0.0.5"
+version = "0.13.45"
 dependencies = [
  "clap",
  "cpd-core",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-tui"
-version = "0.0.5"
+version = "0.13.45"
 dependencies = [
  "clap",
  "cpd-core",
