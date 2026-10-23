@@ -21,7 +21,7 @@ const theme = themeMod.loadThemeFromPath(THEME.pathname, "256color");
 const E = "\x1b[";
 const SEP = `${E}90m─${E}39m`;
 const pill = (n: number, label: string): string =>
-	`${E}3${n}m\uE0B6${E}7m${label}${E}27m\uE0B4${E}39m`;
+	`${E}3${n}m\uE0B6${E}7m${label}${E}27m${E}3${n}m\uE0B4${E}39m`;
 
 type TabBarLike = Component & {
 	setProps(p: {

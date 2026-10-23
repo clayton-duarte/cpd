@@ -162,8 +162,8 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
   const lead = `${MARGIN}${GREY8(TOP)}`;
-  // contract §6.1.1: the pill is magenta 5 with text 0, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
-  const pill = `\x1b[35m${CAP_LEFT}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_RIGHT}\x1b[39m`;
+  // contract §6.1.1: the pill is magenta 5 inverted, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
+  const pill = `\x1b[35m${CAP_LEFT}\x1b[7mcpd\x1b[27m\x1b[35m${CAP_RIGHT}\x1b[39m`;
   const sentence = firstSentence(summary);
   const rail = `${MARGIN}${GREY8(RAIL)}`;
   const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");

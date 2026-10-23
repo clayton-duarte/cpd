@@ -91,10 +91,10 @@ test("the label pill uses only indexed SGR 0-7", () => {
 		for (const match of message.matchAll(/\x1b\[([0-9;]*)m/gu)) {
 			const params = match[1]!.split(";").map(Number);
 			const [first] = params;
-			const allowed = (first! >= 30 && first! <= 37) || (first! >= 40 && first! <= 47) || first === 39 || first === 49 || first === 0 || first === 22 || first === 23 || first === 24 || first === 27;
+			const allowed = (first! >= 30 && first! <= 37) || (first! >= 40 && first! <= 47) || first === 39 || first === 49 || first === 0 || first === 22 || first === 23 || first === 24 || first === 27 || first === 7;
 			const indexed = (first === 38 || first === 48) && params[1] === 5 && params[2]! < 8;
 			assert.ok(allowed || indexed, `SGR ${match[1]} is outside the indexed 0-7 set`);
-			assert.ok(![2, 3, 7].includes(first!), `SGR ${first} is forbidden`);
+			assert.ok(![2, 3].includes(first!), `SGR ${first} is forbidden`);
 		}
 	}
 });

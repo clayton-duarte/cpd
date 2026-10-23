@@ -29,7 +29,7 @@ function pillAround(colour: number, line: string): void {
 	const body = line.slice(left + 1, right);
 	assert.ok(body.includes(INVERT) && body.includes(REVERT), `title inverted: ${JSON.stringify(body)}`);
 	assert.ok(!body.includes(bg(colour)) && !body.includes(`${ESC}30m`), `no bg, no text 0: ${JSON.stringify(body)}`);
-	assert.ok(body.startsWith(INVERT) && body.endsWith(REVERT), `whole pill shape: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(INVERT) && body.endsWith(`${REVERT}${fg(colour)}`), `whole pill shape: ${JSON.stringify(body)}`);
 	assert.ok(line.slice(right).startsWith(RIGHT));
 }
 
@@ -89,7 +89,7 @@ test("the caps of a tool pill take its colour on the terminal background", async
 		assert.ok(lastBg.length === 0 || lastBg.at(-1) === 49 || lastBg.at(-1) === 0, `${phase}: left cap on the terminal background`);
 		assert.ok(beforeLeft.endsWith(fg(colour)), `${phase}: left cap fg ${colour}: ${JSON.stringify(head)}`);
 		const beforeRight = head.slice(0, right);
-		assert.ok(/\x1b\[(0|49)m(\x1b\[[0-9;]*m)*$/u.test(beforeRight) && beforeRight.endsWith(fg(colour)),
+		assert.ok(/\x1b\[(0|27|49)m(\x1b\[[0-9;]*m)*$/u.test(beforeRight) && beforeRight.endsWith(fg(colour)),
 			`${phase}: right cap fg ${colour} on the terminal background: ${JSON.stringify(head)}`);
 	}
 });

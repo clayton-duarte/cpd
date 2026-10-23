@@ -31,7 +31,7 @@ test("the question's header badge is drawn as a grey pill with caps and no paddi
 	try {
 		const out = header(t);
 		assert.equal(out, PILL);
-		assert.doesNotMatch(out, /\x1b\[(2|7|48;|38;)/);
+		assert.doesNotMatch(out, /\x1b\[(2m|48;|38;)/);
 	} finally {
 		off();
 	}

@@ -24,6 +24,6 @@ test("a cpd message title pill is magenta 5, inverted", () => {
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   const row = (rendering.render(m, { expanded: false, outputPad: 1 }, theme) as Component).render(200)[0]!;
   const title = "cpd";
-  assert.ok(row.includes(`\x1b[35m${CAP_L}\x1b[7m${title}\x1b[27m${CAP_R}\x1b[39m`), JSON.stringify(row));
+  assert.ok(row.includes(`\x1b[35m${CAP_L}\x1b[7m${title}\x1b[27m\x1b[35m${CAP_R}\x1b[39m`), JSON.stringify(row));
   assert.ok(!row.includes("<muted>" + CAP_L) && !row.includes(`<muted>${title}`), "the pill is no theme-muted block");
 });

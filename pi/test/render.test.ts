@@ -53,7 +53,7 @@ const first = (summary: string): string => {
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<inv>cpd</inv>${CAP_R}</> <t7>${first(summary)}</>`;
+const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
 const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
 const TERM = ` <c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;

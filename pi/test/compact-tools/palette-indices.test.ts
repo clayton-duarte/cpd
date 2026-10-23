@@ -60,7 +60,7 @@ function refused(lines: string[]): string[] {
 		for (const match of line.matchAll(/\x1b\[(7|27)m/gu)) {
 			const before = line.slice(0, match.index);
 			const after = line.slice(match.index + match[0].length);
-			const inPill = match[1] === "7" ? before.endsWith("\uE0B6") : after.startsWith("\uE0B4");
+			const inPill = match[1] === "7" ? before.endsWith("\uE0B6") : after.replace(/^(\x1b\[[0-9;]*m)*/u, "").startsWith("\uE0B4");
 			if (!inPill) found.push(`reverse video outside a pill's caps in ${readable(line)}`);
 		}
 	}
@@ -255,7 +255,7 @@ test("the running dot and working label are colour 6", async () => {
 			if (plain(message.slice(last)) !== "") colours.add(paint.fg);
 			assert.deepEqual([...colours], [6], `the label is a pill: caps 6, text inverted in ${readable(message)}`);
 			assert.deepEqual(refused([message]), [], readable(message));
-			assert.ok(message.includes(`\uE0B6${ESC}[7m`) && message.includes(`${ESC}[27m\uE0B4`), `reverse between the caps in ${readable(message)}`);
+			assert.ok(message.includes(`\uE0B6${ESC}[7m`) && message.includes(`${ESC}[27m${ESC}[36m\uE0B4`), `reverse between the caps in ${readable(message)}`);
 		}
 	});
 });

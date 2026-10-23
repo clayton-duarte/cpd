@@ -22,7 +22,7 @@ const theme = themeMod.loadThemeFromPath(THEME.pathname, "256color");
 const E = "\x1b[";
 const SEP = `${E}90m─${E}39m`;
 const pill = (n: number, label: string): string =>
-	`${E}3${n}m\uE0B6${E}7m${label}${E}27m\uE0B4${E}39m`;
+	`${E}3${n}m\uE0B6${E}7m${label}${E}27m${E}3${n}m\uE0B4${E}39m`;
 const BLUE = 4;
 const GREEN = 2;
 const GREY = 7;
@@ -105,7 +105,7 @@ test("the tab line is pills joined by ─ with no arrows, boxes or check marks",
 test("a pill has caps, the colour inverted onto its text and no padding inside", () => {
 	const line = hooked(() => D({ tabs: [tab("Scope", false, true)], submit: { active: false, allAnswered: false } })[0]!);
 	assert.ok(line.includes(`${E}34m\uE0B6${E}7mScope${E}27m${E}34m\uE0B4${E}39m`), line);
-	assert.doesNotMatch(line, /\x1b\[(2|48;|38;)/);
+	assert.doesNotMatch(line, /\x1b\[(2m|48;|38;)/);
 	assert.doesNotMatch(line, /\x1b\[(30m|4)/);
 	assert.doesNotMatch(line, / \x1b\[27m/);
 });

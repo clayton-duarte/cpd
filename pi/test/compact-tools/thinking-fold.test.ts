@@ -77,7 +77,7 @@ test("the Thinking pill is inverted in 7 with caps 7", () => {
 	assert.ok(right > left, "a right cap");
 	assert.ok(head.slice(0, left).endsWith(`${ESC}37m`), `left cap in fg 7: ${JSON.stringify(head)}`);
 	const body = head.slice(left + 1, right);
-	assert.ok(body.startsWith(`${ESC}7m`) && body.endsWith(`${ESC}27m`), `title inverted: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(`${ESC}7m`) && body.endsWith(`${ESC}27m${ESC}37m`), `title inverted: ${JSON.stringify(body)}`);
 	assert.ok(!body.includes(`${ESC}47m`) && !body.includes(`${ESC}30m`), `no bg 7, no text 0: ${JSON.stringify(body)}`);
 	assert.ok(!/\x1b\[(36|46|96|106)m/u.test(head), "no cyan");
 });
