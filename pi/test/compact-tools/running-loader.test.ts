@@ -10,7 +10,7 @@ import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdo
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const FRAMES = MOON_FRAMES;
-const OLD_GLYPH = "\u{F005A}";
+const OLD_GLYPH = "\u{F0B2A}";
 let sequence = 0;
 
 async function withRow<T>(
@@ -92,7 +92,7 @@ test("the running closing row has no text after the glyph", async () => {
 			const close = plain(closing(row));
 			assert.ok(!close.includes("Running") && !/\d+(\.\d+)?m?s/u.test(close), JSON.stringify(close));
 			assert.equal([...close].length, 3, `" ╰" and one frame only: ${JSON.stringify(close)}`);
-			assert.ok(!close.includes(OLD_GLYPH), "no U+F005A");
+			assert.ok(!close.includes(OLD_GLYPH), "no U+F0B2A");
 			advance(5000);
 		}
 	});
@@ -102,7 +102,7 @@ test("a finished row closes with its toggle as before", async () => {
 	await withRow("toggle", undefined, (row) => {
 		const close = closing(row);
 		assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
-		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F004B}\u{F0063}]/u, `toggle in 7: ${JSON.stringify(close)}`);
+		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u, `toggle in 7: ${JSON.stringify(close)}`);
 		assert.ok(!FRAMES.some((frame) => close.includes(frame)), "no loader frame once finished");
 	}, true);
 	// Merged guard (red today): the running row of the same tool is the loader row, not the toggle.

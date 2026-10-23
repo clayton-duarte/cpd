@@ -14,7 +14,7 @@ use crate::widgets::legend;
 const MOONS: [&str; 8] =
     ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
 const NEW_MOON: &str = "\u{F0F64}";
-const FIRST_QUARTER: &str = "\u{F0F61}";
+const WAITING_GLYPH: &str = "\u{F1853}";
 const FULL_MOON: &str = "\u{F0F62}";
 
 const ALL_DOTS: [Dot; 10] =
@@ -63,9 +63,9 @@ fn the_idle_and_stopped_dots_are_the_new_moon_and_the_needs_you_dot_is_the_full_
 }
 
 #[test]
-fn the_waiting_dot_is_the_first_quarter_moon_in_the_waiting_colour() {
+fn the_waiting_dot_is_circle_opacity_in_the_waiting_colour() {
     let span = dot_span(Dot::Waiting, 0, false);
-    assert_eq!(span.content, FIRST_QUARTER);
+    assert_eq!(span.content, WAITING_GLYPH);
     assert_eq!(span.style, Style::new().fg(palette::color_clickable(Meaning::Waiting)));
 }
 
@@ -98,10 +98,10 @@ fn the_queued_job_pill_keeps_the_circle_outline() {
 fn the_legend_shows_the_moon_glyphs_for_every_dot() {
     let shown = legend_dots_text();
     assert!(shown.contains(&MOONS.concat()), "the frames row: {shown:?}");
-    for glyph in [FULL_MOON, FIRST_QUARTER, NEW_MOON] {
+    for glyph in [FULL_MOON, WAITING_GLYPH, NEW_MOON] {
         assert!(shown.contains(glyph), "U+{:X}: {shown:?}", glyph.chars().next().unwrap() as u32);
     }
-    let precedence = format!("white > {NEW_MOON} > {FIRST_QUARTER} > {NEW_MOON} > {NEW_MOON}");
+    let precedence = format!("white > {NEW_MOON} > {WAITING_GLYPH} > {NEW_MOON} > {NEW_MOON}");
     assert!(shown.contains(&precedence), "the precedence line: {shown:?}");
 }
 

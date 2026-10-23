@@ -13,7 +13,7 @@ initTheme("dark", false);
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-plain-agent-"));
 test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
 
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const ITALIC = /\x1b\[3m/u;
 const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "").trim();
 

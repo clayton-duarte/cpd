@@ -1,7 +1,7 @@
 /**
  * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking…`
  * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
- * `╰󰁋 expand`, expanded the whole text on rails 8 in text 7 then `╰󰁣 collapse`. Headings stay text.
+ * `╰󰬦 expand`, expanded the whole text on rails 8 in text 7 then `╰󰬬 collapse`. Headings stay text.
  * The hidden view (hideThinkingBlock: true) stays the plain `Thinking…` with no toggle.
  * Rows may carry the cockpit's one leading space, so rows are compared without it.
  */
@@ -23,8 +23,8 @@ test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, for
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
-const EXPAND = "\u{F004B}";
-const COLLAPSE = "\u{F0063}";
+const EXPAND = "\u{F0B26}";
+const COLLAPSE = "\u{F0B2C}";
 const NERD = { expand: EXPAND, collapse: COLLAPSE };
 const ESC = "\x1b[";
 const rows = (block: string) => block.split("\n").map((line) => plain(line).trim());

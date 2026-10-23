@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
+use cpd_tui::link::CUE;
 use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
@@ -317,8 +318,9 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
         format!(" │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                │"),
         format!(" │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                             │"),
     );
+    let title = format!(" ╭ api · api-server 󱦰 main · #12 open {CUE} ╮");
     let want = [
-        " ╭ api · api-server 󱦰 main · #12 open 󰏌 ╮",
+        title.as_str(),
         merged_row.as_str(),
         " ╰──────────────────┬───────────────────╯",
         "                    │",
@@ -449,11 +451,11 @@ fn a_pull_request_box_title_ends_in_a_link_to_it() {
     env.sql(&plan_under_review(2, "pending"));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
-    assert!(screen.iter().any(|l| l == " ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮"), "{}", screen.join("\n"));
+    assert!(screen.iter().any(|l| *l == format!(" ╭ repo · repo 󱦰 main · #7 open {CUE} ╮")), "{}", screen.join("\n"));
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
-    // the link wraps its whole text, from `#` through `󰏌`, and nothing else
-    assert_eq!(linked_text(&styled, "https://github.com/acme/repo/pull/7"), "#7 open 󰏌", "{styled:?}");
+    // the link wraps its whole text, from `#` through `󱆭`, and nothing else
+    assert_eq!(linked_text(&styled, "https://github.com/acme/repo/pull/7"), format!("#7 open {CUE}"), "{styled:?}");
 }
 
 #[test]
@@ -461,7 +463,7 @@ fn a_conflict_shows_in_the_box_title_and_clears_with_no_event() {
     let env = env();
     env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
-    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} 󰏌")));
+    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} {CUE}")));
     screen_when(&env, &pane, "the open title", |s| title(s, "open"));
 
     // the poll stored a conflict: no Event is appended for the view to wake on, so only the change of the row shows it
@@ -482,7 +484,7 @@ fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succee
     let env = env();
     env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     let pane = start_view(&env);
-    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open 󰏌"));
+    let title = |s: &[String]| s.iter().any(|l| l.contains(&format!("#7 open {CUE}")));
     screen_when(&env, &pane, "the chart", title);
     let mut store = env.store();
     // not through `Store`, which refuses a changed schema
@@ -514,7 +516,7 @@ fn a_follow_that_fails_is_shown_below_the_chart() {
     env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
     env.sql(&event("plan-phase", "ctx", Some("ship"), None, "{}"));
     let pane = start_view(&env);
-    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open 󰏌"));
+    let title = |s: &[String]| s.iter().any(|l| l.contains(&format!("#7 open {CUE}")));
     screen_when(&env, &pane, "the chart", title);
     // not through `Store`, which keeps the Events append-only
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
@@ -539,7 +541,7 @@ fn a_pending_plan_review_draws_no_row_above_the_boxes() {
         let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
         let shown = screen.join("\n");
         assert_eq!(screen[0], "", "{port:?}:\n{shown}");
-        assert_eq!(screen[1], " ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮", "{port:?}:\n{shown}");
+        assert_eq!(screen[1], format!(" ╭ repo · repo 󱦰 main · #7 open {CUE} ╮"), "{port:?}:\n{shown}");
         assert!(screen.iter().all(|l| !l.contains("Plan review")), "{port:?}:\n{shown}");
         assert!(!styled_screen(&env, &pane).contains("localhost"));
     }
