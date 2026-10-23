@@ -2394,7 +2394,7 @@ In a pane `W` columns wide a rail fold's rows are, by column: column 0 blank (ma
 | cyan (6, 14) | **agent activity**: running Jobs, working dots and spinners (except the red loader, hs-d581), the Lead-working dot, what a Lead is handling (a closed PR, the conflict or failing checks of an owned PR, `updating`), escalations (Pulse's bar), pending checks, Pulse's activity and PR-opened bars, the waiting Workers count (the status line's `W`: its pill holds no colour by rule (3), so the cyan applies where the count is drawn as text outside a block; there is none today), the Worker pane's `agent` label, a log error addressed to a Lead. The Worker pane's `you` label is **7**, not cyan (hs-d362 amended) |
 | grey (7, 15) | the default when no meaning applies: 7 read-only, 15 clickable |
 
-**Job pills** (the Plan view's cards, the legend's samples, hs-d534): draft magenta, queued 15, running cyan, merging yellow, merged green, failed red (hs-d586), cancelled 8; the block is the bright pair (13, 15, 14, 11, 10, 9; cancelled stays 8, which has no pair) because a pill is clickable, text 0, caps the block's colour. The selected pill is the blue block. **The status line:** buttons 15, text 0; the workers pill and the version pill 8, text 0, caps 8, with no colours inside (hs-d561; they were 7 under hs-d534); the preview pill yellow (background 3, text 0). **The pi chat** (hs-d508): cpd's blocks are magenta, tool pills follow their status in base colours (running cyan, done green, failed red), the pill of Thinking is 7 (hs-d557 item 1, replacing hs-d534's colour 6), lines and rails are 8, toggles are 7, and every pill is read-only, so only the base colours 0-7 (hs-d557 item 5); the pi window follows the palette through a **pi theme that cpd ships**, mapping pi's colour tokens to the indices 0-15 (pi themes accept indices). **Its owner is Plan `pi-theme`**: the rows below that say "pi theme" state the contract, and the Plan `tui-visuals` implements only `tui/` and the tmux options and formats.
+**Job pills** (the Plan view's cards, the legend's samples, hs-d534): draft magenta, queued 15, running cyan, merging yellow, merged green, failed red (hs-d586), cancelled 8; the block is the bright pair (13, 15, 14, 11, 10, 9; cancelled stays 8, which has no pair) because a pill is clickable, text inverted, caps the block's colour (hs-d594). The selected pill is the blue block (4 reversed). **The status line:** buttons 15, text inverted (hs-d594); the workers pill and the version pill 8, text inverted, caps 8, with no colours inside (hs-d561 and hs-d594; they were 7 text 0 under hs-d534); the preview pill yellow (3 inverted). **The pi chat** (hs-d508): cpd's blocks are magenta, tool pills follow their status in base colours (running cyan, done green, failed red), the pill of Thinking is 7 (hs-d557 item 1, replacing hs-d534's colour 6), lines and rails are 8, toggles are 7, and every pill is read-only with inverted text (hs-d594), so only the base colours 0-7 (hs-d557 item 5); the pi window follows the palette through a **pi theme that cpd ships**, mapping pi's colour tokens to the indices 0-15 (pi themes accept indices). **Its owner is Plan `pi-theme`**: the rows below that say "pi theme" state the contract, and the Plan `tui-visuals` implements only `tui/` and the tmux options and formats.
 
 **Where the colours live.** The views take every colour from `tui/src/palette.rs` only (the test `no_colour_outside_the_palette` forbids `Color::` elsewhere under `tui/`): `palette::fg(Meaning)` for a meaning's colour (base, or the bright pair of it for a mark inside a clickable area), the colourless text of rule (2) (15, 7, 8), `palette::pill_static()` (colour 7, text inverted), `palette::pill_interactive()` (colour 15, text inverted), `palette::pill(…)` (a coloured pill, text inverted, hs-d594), and `palette::pill_focus()` and `palette::selected()` (the blue block, colour 4, text inverted). tmux draws its own pills and lines from the format strings and the server options below, which hold the same numbers. pi draws from the theme of Plan `pi-theme` (§6.1.1 "The pi theme").
 
@@ -2410,7 +2410,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 
 **The terminal theme** (hs-d594). The Dango theme of the dotfiles' Ghostty config is v3 since hs-d594, with background #1c1a20, foreground #d8d2cc, index 0 bamboo #5a504a for lines and sticks, and the cpd and pi palettes mapped to indices 1-15. The old Dango v1 theme (background #2d2522, foreground #c8bfb9) stays selectable as `Dango v1` in Ghostty. cpd names indices only, never colours by value, and uses the theme's own foreground. Index 0 is the theme's own: the cockpit and pi never draw it as text.
 
-**The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click, key, or a terminal modifier-click on an OSC 8 link). For a block, *Colour* gives the background, the text and the caps; for text it gives the foreground; a mark inside a blue block is text 0.
+**The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click, key, or a terminal modifier-click on an OSC 8 link). For a block, *Colour* gives the foreground (the block's colour), the text inverted, and the caps; for text it gives the foreground; a mark inside a blue block inherits the inversion.
 
 | Element | Interactive | Colour | Where |
 |---|---|---|---|
@@ -2424,7 +2424,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Archived Plan or fork row (dot, name, counters) | yes (opens its history) | fg 8 on every mark: archived wins over the clickable 15, and no mark is coloured | palette: muted |
 | Asleep Session row (dot, name) | yes (resumes it) | fg 7 | palette: read-only text |
 | Asleep Session row (counters) | yes (resumes it) | fg 8 | palette: muted |
-| Keyboard cursor row (only while the pane has focus) | yes | block: bg 4, fg 0, the whole row; its marks have no colour of their own | `palette::selected()` |
+| Keyboard cursor row (only while the pane has focus) | yes | block: 4 inverted, the whole row; its marks inherit the inversion | `palette::selected()` |
 | Dot: needs-you, red / yellow / magenta / blue / white | part of the row | fg 9 / 11 / 13 / 12 / 15 | palette: bright meaning (hs-d570: blue is always 4) |
 | Dot: waiting (half circle) | part of the row | fg 14 | palette: bright meaning |
 | Dot: working (spinner) | part of the row | fg 14 | palette: bright meaning |
@@ -2445,27 +2445,27 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Scroll cues `▲ n more`, `▼ n more` (every view, popup and column) | no | fg 8 | `dialog/scroll.rs` through the palette: muted |
 | Footer: the snapshot's error (every view's error line) | no | fg 1 | palette: red |
 | **The Inbox** | | | |
-| Title pill `Inbox` and its count pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Title pill `Inbox` and its count pill | no | block 7 inverted, caps 7 | `palette::pill_static()` |
 | Title lead `╭─` and the `─` line to the count | no | fg 8 | palette: muted |
 | Row branch `│` | no | fg 8 | palette: muted |
 | Tier glyph: red / yellow / magenta / blue / white | yes (part of the item's row) | fg 9 / 11 / 13 / 12 / 15 | palette: bright meaning (hs-d570: blue is always 4) |
 | Merge spinner in the glyph cell (an item's PR merge runs) | part of the row | fg 11 | palette: bright meaning |
 | Item label (also when it is an OSC 8 link) | yes | fg 15 | palette: clickable text |
 | Age (`42s`, `5m`) | no | fg 8 | palette: muted |
-| Keyboard cursor on an item row | yes | block: bg 4, fg 0 | `palette::selected()` |
+| Keyboard cursor on an item row | yes | block: 4 inverted | `palette::selected()` |
 | Closing toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes | fg 7 | palette: read-only text |
 | Terminator `╰󰬪` (nothing to fold) and empty Inbox closing row `╰󰬪 up to date, drink some water` | no | fg 8 | palette: muted |
 | **The Plan view** | | | |
-| Job pill: draft | yes | bg 13, fg 0, caps 13 | `palette::pill(…)`, bright |
-| Job pill: queued | yes | bg 15, fg 0, caps 15 | `palette::pill_interactive()` |
-| Job pill: running | yes | bg 14, fg 0, caps 14 | `palette::pill(…)`, bright |
-| Job pill: merging | yes | bg 11, fg 0, caps 11 | `palette::pill(…)`, bright |
-| Job pill: merged | yes | bg 10, fg 0, caps 10 | `palette::pill(…)`, bright |
-| Job pill: failed (its Lead handles it) | yes | bg 14, fg 0, caps 14 | `palette::pill(…)`, bright |
-| Job pill: failed and stuck | yes | bg 9, fg 0, caps 9 | `palette::pill(…)`, bright |
-| Job pill: cancelled | yes | bg 8, fg 0, caps 8 | `palette::pill(…)` |
-| Job pill text (icon, key, tier, `aN`) | part of the pill | fg 0 | pill |
-| Selected Job pill | yes | block: bg 4, fg 0, caps 4 | `palette::pill_focus()` |
+| Job pill: draft | yes | block 13 inverted, caps 13 | `palette::pill(…)`, bright |
+| Job pill: queued | yes | block 15 inverted, caps 15 | `palette::pill_interactive()` |
+| Job pill: running | yes | block 14 inverted, caps 14 | `palette::pill(…)`, bright |
+| Job pill: merging | yes | block 11 inverted, caps 11 | `palette::pill(…)`, bright |
+| Job pill: merged | yes | block 10 inverted, caps 10 | `palette::pill(…)`, bright |
+| Job pill: failed (its Lead handles it) | yes | block 14 inverted, caps 14 | `palette::pill(…)`, bright |
+| Job pill: failed and stuck | yes | block 9 inverted, caps 9 | `palette::pill(…)`, bright |
+| Job pill: cancelled | yes | block 8 inverted, caps 8 | `palette::pill(…)` |
+| Job pill text (icon, key, tier, `aN`) | part of the pill | inherits inversion | pill |
+| Selected Job pill | yes | block: 4 inverted, caps 4 | `palette::pill_focus()` |
 | Chart lines (`─`, `│`, junctions, arrows) | no | fg 8 | palette: muted |
 | PR box border and its `┬` exit and `󱦳` arrow | no | fg 8 | palette: muted |
 | PR box title: the key (bold), ` · repo 󱦰 base · ` | no | fg 7 | palette: read-only text |
@@ -2487,7 +2487,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Pulse bar: PR opened, escalation, any other activity | part of the row | fg 14 | palette: bright meaning |
 | Pulse bar: Job or PR merged | part of the row | fg 10 | palette: bright meaning |
 | Pulse: empty bucket `▁`, age (`12m`), `quiet 41m` | no | fg 8 | palette: muted |
-| Legend popup: title pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Legend popup: title pill | no | block 7 inverted, caps 7 | `palette::pill_static()` |
 | Legend popup: section titles (`Inbox`, `Pulse`, …) | no | fg 7, bold, underlined | palette: read-only text |
 | Legend popup: column header, scroll position `1-20/60` | no | fg 8 | palette: muted |
 | Legend popup: swatches, Job sample pills, counters, Dots, PR states, checks, tiers, Pulse samples | no | the colour of the element they sample, as the view draws it (the same palette call, so the legend shows what the cockpit shows) | palette |
@@ -2495,7 +2495,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | **The Deploy column** | | | |
 | Machine row: hostname (bold), CPU, GPU, memory line | no | fg 7 | palette: read-only text |
 | Section title ` ──PRs───…──3 `: lead, line | no | fg 8 | palette: muted |
-| Section title pill `PRs` and its count pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Section title pill `PRs` and its count pill | no | block 7 inverted, caps 7 | `palette::pill_static()` |
 | PR first line ` owner/repo#12`, owned / not owned | owned yes; not owned no (right click only) | fg 15 / fg 7 | palette: clickable text, read-only text |
 | PR first line: `󱆭` | yes (modifier-click) | fg 15 | palette: clickable text |
 | PR second line: `open`, owned / not owned | as above | fg 15 / 7; fg 11 / 3 when the PR is ready to merge | palette: text, meaning |
@@ -2511,58 +2511,58 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | PR second line: title | part of the row | fg 8 | palette: muted |
 | PR second line: merge icon `󰘭` | yes (opens the merge popup) | fg 15 | palette: clickable text |
 | Merge spinner (replaces the merge icon, the menu's Merge entry, the Inbox glyph) | part of a clickable area | fg 11 | palette: bright meaning |
-| Active PR row (its Plan is in the chat slot), both lines | yes | block: bg 4, fg 0 across both lines | `palette::selected()` |
+| Active PR row (its Plan is in the chat slot), both lines | yes | block: 4 inverted across both lines | `palette::selected()` |
 | ` no open PRs` | no | fg 8 | palette: muted |
 | The snapshot's error (last row) | no | fg 1 | palette: red |
 | PR menu (right click) border | no | fg 8 | palette: muted |
 | PR menu entries `Merge`, `Copy Link`, `Go to Lead` | yes | fg 15 | palette: clickable text |
-| PR menu selected entry | yes | block: bg 4, fg 0 | `palette::selected()` |
+| PR menu selected entry | yes | block: 4 inverted | `palette::selected()` |
 | PR menu busy `Merge ⠿` | part of an entry | fg 11 | palette: bright meaning |
 | **The status line** (tmux, `status-format[0]`; hs-d561) | | | |
 | `─` line: leading, joins, fill, closing | no | fg 8 | `#[fg=colour8]` |
-| Button pills `󰨝 󰨁 󰧭` | yes (click ranges) | bg 15, fg 0, caps 15 | `status-format[0]`, `BTN` below |
-| Preview pill `preview: <path> <sha>` | no | bg 3, fg 0, caps 3 | `status-format[0]` |
-| Workers pill (long and short form), no colours inside | no | bg 8, fg 0, caps 8 (hs-d561; was bg 7, caps 7) | `status-format[0]` |
-| Version pill | no | bg 8, fg 0, caps 8 (hs-d561; was bg 7, caps 7) | `status-format[0]` |
+| Button pills `󰨝 󰨁 󰧭` | yes (click ranges) | block 15 inverted, caps 15 | `status-format[0]`, `BTN` below |
+| Preview pill `preview: <path> <sha>` | no | block 3 inverted, caps 3 | `status-format[0]` |
+| Workers pill (long and short form), no colours inside | no | block 8 inverted, caps 8 (hs-d594, hs-d561; was bg 7, caps 7) | `status-format[0]` |
+| Version pill | no | block 8 inverted, caps 8 (hs-d594, hs-d561; was bg 7, caps 7) | `status-format[0]` |
 | The chat slot's last row (hs-d567): empty by its occupant, not by tmux | no | nothing drawn | the occupant (pi adapter, history view); no tmux option |
 | **Pane borders and titles** (tmux) | | | |
 | Border lines, unfocused pane | yes (drag) | fg 7 | `pane-border-style` |
 | Border lines, focused pane | yes (drag) | fg 4 | `pane-active-border-style` |
-| Pane title pill, unfocused (the `━` before it, caps, block) | no | bg 7, fg 0, caps 7, the `━` 7 | `pane-border-format` |
-| Pane title pill, focused | no | bg 4, fg 0, caps 4, the `━` 4 | `pane-border-format` |
+| Pane title pill, unfocused (the `━` before it, caps, block) | no | block 7 inverted, caps 7, the `━` 7 | `pane-border-format` |
+| Pane title pill, focused | no | block 4 inverted, caps 4, the `━` 4 | `pane-border-format` |
 | **Dialogs, popups and menus** | | | |
 | Popup frame of the legend, `logs` and `merge` popups (the single-line frame and its ` title `) | yes (drag) | fg 7 | `popup-border-style` |
 | Dialog frame (`╭ ─ ╮ │ ╰ ╯`, the top row's `─` included; hs-d578) | no | fg 8 | drawn by the view |
-| Dialog title pill, Logs title pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
-| Dialog button: the accepting one (hs-d578) | yes | bg 12, fg 0, caps 12 | `palette::selected()` colours, as a pill |
-| Dialog button: the other one (hs-d578) | yes | bg 15, fg 0, caps 15 | `palette::pill_interactive()` |
-| Input box label pill (hs-d578) | no | follows the border: bg 15 (unfocused) or 12 (focused), fg 0, caps the same | the view |
+| Dialog title pill, Logs title pill | no | block 7 inverted, caps 7 | `palette::pill_static()` |
+| Dialog button: the accepting one (hs-d578) | yes | block 12 inverted, caps 12 | `palette::selected()` colours, as a pill |
+| Dialog button: the other one (hs-d578) | yes | block 15 inverted, caps 15 | `palette::pill_interactive()` |
+| Input box label pill (hs-d578) | no | follows the border: block 15 inverted (unfocused) or 12 inverted (focused), caps the same | the view |
 | Dialog body text | no | fg 7 | palette: read-only text |
 | Input field text | yes | fg 15 | palette: clickable text |
-| Input field cursor | yes | block: bg 4, fg 0 | `palette::selected()` |
+| Input field cursor | yes | block: 4 inverted | `palette::selected()` |
 | Validation refusal text | no | fg 3 | palette: yellow |
-| Button: the first (the default action) | yes | block: bg 4, fg 0 | `palette::selected()` |
-| Button: the others, as text / drawn as a pill | yes | fg 15 / bg 15, fg 0, caps 15 | palette: clickable text, `palette::pill_interactive()` |
+| Button: the first (the default action) | yes | block: 4 inverted | `palette::selected()` |
+| Button: the others, as text / drawn as a pill | yes | fg 15 / block 15 inverted, caps 15 | palette: clickable text, `palette::pill_interactive()` |
 | Dialog position `1-5/12`, scroll cues | no | fg 8 | palette: muted |
 | Merge popup: `<owner>/<repo>#12`, title line, ` method: … ` | no | fg 7 | palette: read-only text |
 | Logs dialog: event time `12:03:41` | no | fg 8 | palette: muted |
 | Logs dialog: event text | no | fg 7 | palette: read-only text |
 | Logs dialog: `error` Event addressed to a Lead | no | fg 6 | palette: meaning |
 | Logs dialog: `error` Event for the User | no | fg 1 | palette: meaning |
-| Logs dialog: the Event the dialog opened at | no | block: bg 4, fg 0 across its line | `palette::selected()` |
+| Logs dialog: the Event the dialog opened at | no | block: 4 inverted across its line | `palette::selected()` |
 | Logs dialog: foot error | no | fg 1 | palette: red |
 | cpd's own menus (tree, PR): border | no | fg 8 | palette: muted |
-| cpd's own menus: entries / selected entry | yes | fg 15 / block bg 4, fg 0 | palette: clickable text, `palette::selected()` |
-| tmux's own pane menu | yes | text 15 (`menu-style`), border 8 (`menu-border-style`), selected entry bg 4, fg 0 (`menu-selected-style`) | server options, §6.1 |
+| cpd's own menus: entries / selected entry | yes | fg 15 / block 4 inverted | palette: clickable text, `palette::selected()` |
+| tmux's own pane menu | yes | text 15 (`menu-style`), border 8 (`menu-border-style`), selected entry 4 inverted (`menu-selected-style`, hs-d594) | server options, §6.1 |
 | **cpd's messages in the pi chat** (`pi/lib/render.ts`) | | | |
 | Title row lead `╭─` | no | fg 8 | pi theme (Plan `pi-theme`) |
-| Title pill (`cpd Message from pi-pin`) | no | bg 5, fg 0, caps 5 (cpd's blocks are magenta, rule (3)) | pi theme (Plan `pi-theme`) |
+| Title pill (`cpd Message from pi-pin`) | no | block 5 inverted, caps 5 (cpd's blocks are magenta, rule (3), hs-d594) | pi theme (Plan `pi-theme`) |
 | Rail `│ ` before each content line | no | fg 8 | pi theme (Plan `pi-theme`) |
 | Content lines | no | fg 7 | pi theme (Plan `pi-theme`) |
 | Toggle row `╰󰬦 expand` / `╰󰬬 collapse` | yes (click, Ctrl+O) | fg 7 | pi theme (Plan `pi-theme`) |
 | The message's background (every line) | no | the terminal default: no fill (the theme's `customMessageBg` is `""`, hs-d537 A4) | pi theme (Plan `pi-theme`) |
-| pi tool pills: running / done / failed (`ask_user_question` while its question is open: bg 5) | no | bg 6 / 2 / 1, fg 0 (base colours); bg 5 for the open question | pi theme (Plan `pi-theme`) |
-| pi Thinking pill `Thinking…` | no | bg 7, fg 0, caps 7 (hs-d557 item 1; replaces the colour-6 pill) | pi theme (Plan `pi-theme`) |
+| pi tool pills: running / done / failed (`ask_user_question` while its question is open: block 5) | no | 6 / 2 / 1 inverted (base colours); 5 inverted for the open question (hs-d594) | pi theme (Plan `pi-theme`) |
+| pi Thinking pill `Thinking…` | no | block 7 inverted, caps 7 (hs-d594, hs-d557 item 1; replaces the colour-6 pill) | pi theme (Plan `pi-theme`) |
 | The User's input | no | text 7 on no fill (`userMessageBg` "", `userMessageText` 7), inside a chat balloon whose borders are 8 (§6.9 "Chat balloons") | pi theme (Plan `pi-theme`) |
 | The jump hint ` ↓ Jump to latest message · Ctrl+End` (A7) | no | fg 8 text only, no background, like the scroll cues | the adapter (below) |
 | pi lines and rails, toggles | no / yes | fg 8 / fg 7 | pi theme (Plan `pi-theme`) |
@@ -2576,7 +2576,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | History pane: title line (bold) | no | fg 7 | palette: read-only text |
 | Chat pane placeholder (no Lead in the slot) | no | fg 8 | palette: muted |
 | tmux message line (`display-message`, a failed status-button click) | no | tmux's own default: a yellow block with text 0, which is the palette's yellow (a refusal) by look; cpd sets no `message-style` | tmux default |
-| tmux copy and view mode highlight | yes | block: bg 4, fg 0 | `mode-style`, §6.1 |
+| tmux copy and view mode highlight | yes | block: 4 inverted | `mode-style`, §6.1 |
 | OSC 8 links (the `󱆭` cells, link labels) | yes (modifier-click) | the colour of the cell they sit on; cpd adds none | `tui/src/link.rs` |
 
 **The exact formats** (`core/src/host/tmux.rs`; tests pin them). `\u{e0b6}` and `\u{e0b4}` are the caps U+E0B6 and U+E0B4. Inside a `#{?…}` branch a comma would split the branch, so each `#[…]` there holds one attribute.
@@ -2621,11 +2621,11 @@ The theme file is `pi/themes/dango.json` (`name` "dango"), declared in `pi/packa
 | `dim` | 8 | muted text (there is no dim: 8) |
 | `text` | 7 | read-only text |
 | `thinkingText` | 7 | read-only text |
-| `selectedBg` | 4 | the selection block (blue, text 0) |
+| `selectedBg` | 4 | the selection block (blue 4 inverted, hs-d594) |
 | `scrollbarTrack` | "" | no fill |
 | `scrollbarThumb` | 8 | muted mark |
-| `searchMatchBg` | 3 | a match is a yellow block |
-| `searchMatchText` | 0 | text on a block |
+| `searchMatchBg` | "" | the terminal default (A1: pi search matches cannot invert; hs-d594) |
+| `searchMatchText` | 3 | yellow text with no block (A1: pi search matches cannot invert; hs-d594) |
 | `userMessageBg` | "" | no fill: the User's input is not inverted any more (the chat balloons replace hs-d557 item 6's experiment, §6.9) |
 | `userMessageText` | 7 | read-only text, as every body text |
 | `customMessageBg` | "" | no fill (A4) |
@@ -2676,7 +2676,7 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Pill, colour n in 1-7 | no | caps `ESC[3nm` U+E0B6 / U+E0B4 `ESC[39m` (the terminal background behind them); body `ESC[4nm` `ESC[30m` text `ESC[49m` `ESC[39m`. Magenta: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
 | Lead `╭─`, rails `│ `, metadata, secondary text | no | `ESC[90m`…`ESC[39m` (8) |
 | Content lines, toggle | no / yes | `ESC[37m`…`ESC[39m` (7) |
-| Working label pill in the input's border | no | pill bg 6, text 0 (the loader frame included), caps 6, no padding inside (§6.9 "The input widget") |
+| Working label pill in the input's border | no | pill 6 inverted (the loader frame included), caps 6, no padding inside (§6.9 "The input widget", hs-d594) |
 | Input box border (corners, lines, walls) | no | one colour by state: working `ESC[36m`, focused `ESC[94m`, unfocused `ESC[97m`, then `ESC[39m` (§6.9 "The input widget") |
 
 **The pi chat rows** (hs-d508, hs-d509, hs-d510, hs-d537; the owner is Plan `pi-theme`, which replaces the `pi-pin` rows). Every row below is drawn by the extension, with no background fill (only the pills are blocks):
@@ -2684,18 +2684,18 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Element | Hit target | Colour |
 |---|---|---|
 | cpd's block: lead `╭─` | no | fg 8, `ESC[90m` |
-| cpd's pill (`cpd` alone, commands.md §15.9) | no | bg 5, text 0, caps 5: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
+| cpd's pill (`cpd` alone, commands.md §15.9) | no | 5 inverted, caps 5: `ESC[35m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[35m` `ESC[39m` (hs-d594) |
 | cpd's block: the first sentence after the pill (outside it) | no | fg 7, `ESC[37m` |
 | Terminator row ` ╰󰬪` (a fold-template element that cannot fold, §6.9) | no | the whole row fg 8, `ESC[90m`: the space, `╰` and the glyph |
 | Chat balloon borders and tails `╭ ─ ╮ │ ╰ ╯` (§6.9) | no | fg 8, `ESC[90m`; the text inside keeps the terminal's look (7), neither recoloured nor inverted |
 | cpd's block: rail `│ ` | no | fg 8, `ESC[90m` |
 | cpd's block: content | no | fg 7, `ESC[37m` |
 | cpd's block: toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes (click, Ctrl+O) | fg 7, `ESC[37m` |
-| Tool pill, running **or not yet started** (`ask_user_question` too, until its execution starts) | no | bg 6, text 0, caps 6: `ESC[46m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[36m`; the text is the tool's title as today |
-| Tool pill, `ask_user_question` while its question is open | no | bg 5, text 0, caps 5: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m`; exactly while the tool is executing and has no result (the window of form 5 of §6.9); a decision before the work runs is magenta (the palette's meaning, above) |
-| Tool pill, done (`ask_user_question` too, after its result) | no | bg 2, text 0, caps 2: `ESC[42m` `ESC[30m`…, caps `ESC[32m` |
-| Tool pill, failed | no | bg 1, text 0, caps 1: `ESC[41m` `ESC[30m`…, caps `ESC[31m` |
-| Thinking pill (the one title `Thinking…`) | no | bg 7, text 0, caps 7: `ESC[47m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[37m` (hs-d557 item 1). No SGR 3 (italic) anywhere in the Thinking block, for any markdown |
+| Tool pill, running **or not yet started** (`ask_user_question` too, until its execution starts) | no | 6 inverted, caps 6: `ESC[36m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[36m` `ESC[39m` (hs-d594); the text is the tool's title as today |
+| Tool pill, `ask_user_question` while its question is open | no | 5 inverted, caps 5: `ESC[35m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[35m` `ESC[39m` (hs-d594); exactly while the tool is executing and has no result (the window of form 5 of §6.9); a decision before the work runs is magenta (the palette's meaning, above) |
+| Tool pill, done (`ask_user_question` too, after its result) | no | 2 inverted, caps 2: `ESC[32m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[32m` `ESC[39m` (hs-d594) |
+| Tool pill, failed | no | 1 inverted, caps 1: `ESC[31m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[31m` `ESC[39m` (hs-d594) |
+| Thinking pill (the one title `Thinking…`) | no | 7 inverted, caps 7: `ESC[37m` U+E0B6 `ESC[39m` `ESC[7m`…`ESC[27m` U+E0B4 `ESC[37m` `ESC[39m` (hs-d594, hs-d557 item 1). No SGR 3 (italic) anywhere in the Thinking block, for any markdown |
 | Thinking and tool rows: lead, rails, metadata, secondary text | no | fg 8, `ESC[90m` |
 | Tool row and group head, closing row of a row with **no result yet** (fold `toggle`; form 3 of §6.9 "The five closing rows") | no | ` ╰` fg 8 (`ESC[90m`) then ONE loader frame fg 6 (`ESC[36m`), no text and no timer; not a toggle. Done: `╰` 8, toggle 7, metadata 8 |
 | `ask_user_question` row while its question is open (form 5) | no | ` ╰󰬦 choose`: every cell (`╰`, glyph, space, word) fg 8 (`ESC[90m`); nothing clickable |
