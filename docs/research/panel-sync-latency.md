@@ -8,68 +8,56 @@ and of the tmux probe T (18:49 to 19:10 EDT, section 2.3). Every number says its
 
 ## Summary
 
-- A change in the store is drawn by the plan view in 209 to 519 ms (median 332 ms, n=120 over 3 runs) and by the tree
-  in 219 to 534 ms (median 350 ms, n=60): about 0.1 s of poll wait, 2 x 100 ms of frame waits, 2 to 4 ms of read. The
-  handoff's "within about 0.7 s" holds for them (max 534 ms).
-- The widgets view (the Dispatch column) does **not** draw a Lead's state change at all: 0 of 70 in 6 s. Its `KINDS`
-  list has no `session-state` (read in source, and reproduced by hand, 1 run); it draws the change only when a listed
-  Event or a `pull_requests` change makes it re-read. For a `pull_requests` change it is the fastest view (32 to 513 ms,
-  n=70).
-- The Inbox row and the engine-set tmux option follow the engine, not the store: the engine's Inbox step lands 11 to
-  23 ms after its tick starts (n=148) and the option 11 to 31 ms (n=80); ticks start every 5.000 s (n=1 046 intervals,
-  12 runs, max 5 018 ms; E5 off). Cause to tree row: median 2.6 s, max 5.3 s (n=148). The view adds a median 338 ms
-  (n=80) after the engine's write.
-- On the live cockpit the engine's `cpd pr poll` child takes 4.8 to 7.8 s of wall time (n=26) and E8 comes after it:
-  polls start 9.9 to 12.8 s apart (n=24), so E8 runs in two bursts per cycle and the gap to the next one is up to
-  12.8 s (derived, n=26). That reproduces `panel-sync-cost.md`'s median 6.1 s and p95 12.6 s for the Inbox lag.
-- tmux shows an option within 1 to 22 ms of its being set (n=26, 40, 40): not a source of seconds.
-- Spread between views for one commit: tree against plan up to 213 ms; plan against widgets up to 412 ms; the Inbox row
-  against the plan view median 2.4 to 3.4 s, max 4.9 s.
-- A fresh run of A (n=40) agrees with the raw data within 28 ms of median; the fresh B within 472 ms (a uniform wait).
+- Tree and plan draw a store change in 209 to 534 ms (plan median 332, n=120; tree 350, n=60; 3 runs): about 0.1 s of
+  poll wait, 2 x 100 ms of frame waits, 2 to 4 ms of read. The handoff's "within about 0.7 s" holds (max 534 ms).
+- The widgets view (the Dispatch column) does **not** draw a Lead's state change: 0 of 70 in 6 s. Its `KINDS` has no
+  `session-state` (source; hand check, 1 run); it re-reads only on a listed Event or a `pull_requests` change, and for
+  a `pull_requests` change it is the fastest view (32 to 513 ms, n=70).
+- The Inbox row and the engine-set tmux option follow the engine's tick: its Inbox step lands 11 to 23 ms after the
+  tick starts (n=148), the option 11 to 31 ms (n=80); ticks start every 5.000 s (n=1 046, 12 runs; E5 off). Cause to tree
+  row: median 2.6 s, max 5.3 s (n=148); the view adds a median 338 ms (n=80) after the engine's write.
+- Live cockpit: the engine's `cpd pr poll` child takes 4.8 to 7.8 s (n=26) and E8 comes after it; polls start 9.9 to
+  12.8 s apart (n=24), so the gap between E8 runs is up to 12.8 s (derived): this reproduces cost.md's Inbox lag
+  (median 6.1 s, p95 12.6 s). tmux shows an option within 1 to 22 ms of its being set (n=26, 40, 40): not a source of seconds.
+- Spread for one commit: tree against plan up to 213 ms; plan against widgets up to 412 ms; the Inbox row against the
+  plan view median 2.4 to 3.4 s, max 4.9 s. A fresh run of A agrees with the raw data within 28 ms of median.
 
 ## 1. Method and tools
 
-Probe (design in the Appendix; harness lost with `/tmp` after this Job, so the Appendix holds it):
+The harness is in the Appendix (it lived in `/tmp` and is removed with this Job).
 
-- A **throwaway** `CPD_HOME` (`/tmp/lag-a1-home.<x>`, config `version = 1`, `machine = "probe"`, `[tmux] socket` the
-  private one, `watch.pr_poll_seconds = 4294967295` so E5 never runs, a `gh` stub on `PATH` that exits 0) and a
-  **private tmux server** `sync-probe-lag-<pid>` (`-f /dev/null`). In it three real views (`cpd tui view tree`, `plan`,
-  `widgets`, window `v`, widths 34, 216 and 33 columns, height 50) and the real engine (`cpd watch`, window `e`), each
-  under `timeout`. Never `/home/clayton/.cpd`, never the socket `cpd` (verified: the harness asserts both prefixes).
-- The store is **seeded**, not a copy of the live one: Context `ctx`; Plan `pay` (deploy) with one open PR, its
-  `pull_requests` row and Lead `lead1` in the chat slot; Plan `ghost` with 30 draft Jobs (for trigger Q).
-  It is small (tens of rows): read cost on live-size data is `panel-sync-cost.md`'s (section 2 there), not measured here.
-- **T0** = the `at` of the `txns` row of the commit (written by the writer inside the transaction, ms resolution), read
-  back from the store. **T1** = the middle of the `tmux capture-pane -p` call (each pane polled in its own thread every
-  20 ms) that first shows the expected text. The predicate is a regex per surface.
-- **Resolution**: one observer sample is 1.8 ms median per capture (n about 17 000 per observer, p95 3.0 ms, max up to
-  93 ms under load). The previous sample's start is exactly 20 ms before the hit's start (n=40, min = max = 20 ms), so T1
-  is good to about +/- 12 ms. T0 is the stamp inside the transaction: the commit lands up to a few ms later; the CLI
-  commands (triggers A, B, Q-down) take 23 to 32 ms in all (n=40).
-- **Build**: `target/debug/cpd`, the `dev` profile (unoptimized), `0.13.45-dev`, built 17:16 from the `lag-a1`
-  worktree. Its commits on top of `bf1214f7` change only the findings file (verified, `git log --stat`), so the code is
-  the Lead Branch's. The live cockpit runs a release build: debug code is slower to read and draw. The latencies
-  below are timer-dominated (hundreds of ms), so the effect is small (guess); the 2 to 4 ms read would be less in release.
-- **Poll period and its cost** (from the straces `s_<view>.txt`, `fcntl` read-mark locks on the follower thread):
-  tree and plan check the store every 252 and 257 ms on average (intervals alternate 200 and 300 ms: the 200 ms sleep
-  is rounded up to the next 100 ms frame; n=3 950 and 3 834 intervals); widgets every 505 ms (n=1 992) on its **loop
-  thread**. An idle check holds the read mark 0.17 to 0.18 ms (median; n=4 709 and 8 332; under strace, so an upper
-  bound). The CPU of the views is `panel-sync-cost.md` section 1 (tree 0.37 %, plan 0.36 %, widgets 0.14 %).
-- **Machine load and nice 19** (hs-d528): the probe's processes (views, engine, observers) all ran at nice 19; the
-  live cockpit does not. `/proc/loadavg` per run:
-  Runs (local time; loadavg start to end; range of the 1-min value read before each commit): A-bug 17:23, 0.73 to 0.85
-  (0.73 to 1.40); A-main 17:30, 0.89 to 1.41 (0.82 to 1.69); B-bug 17:36, 1.30 to 10.90 (0.80 to 24.66); B-bug2 17:55,
-  17.10 to 2.03 (0.81 to 16.85); B-main 18:14, 1.49 to 8.88 (1.38 to 11.73); C-main 18:19, 10.33 to 1.15 (1.07 to 11.46);
-  Q-main 18:24, 1.05 to 0.67 (0.52 to 1.19); A-strace 18:30, 0.69 to 1.12 (0.59 to 1.25); C-strace 18:33, 1.03 to 1.26
-  (0.71 to 1.47); Q-outer 18:39, 0.48 to 1.19 (0.55 to 1.19); T 18:44 (no summary; 1.00 to 2.72 per commit); fresh A 18:49,
-  1.19 to 1.34 (0.92 to 2.68); fresh B 18:55, 0.78 to 1.45 (0.74 to 1.54); fresh T 19:01 (0.43 to 1.02 per commit).
-- **Effect of nice 19**: B-main and C-main ran at 1-min loads up to 11.7 on 16 cores; their capture cost rose (p95 9.0 ms
-  against 3.0 ms) but the view hop did not: tree draw minus engine event is 337 and 339 ms median in B-main (n=20 each)
-  against 337 ms in the fresh B (n=40) at load 1.5; ticks stayed 5 000 to 5 018 ms in 12 runs (n=1 046). No run shows a
-  wakeup waiting for a nice-0 process (it would show as a frame or more; none did; guess: the 16 cores had idle ones).
+- A **throwaway** `CPD_HOME` (`/tmp/lag-a1-home.<x>`; `[tmux] socket` the private one; `watch.pr_poll_seconds =
+  4294967295` so E5 never runs; a `gh` stub that exits 0) and a **private tmux server** `sync-probe-lag-<pid>`. In it
+  the real views (`cpd tui view tree|plan|widgets`, 34, 216 and 33 columns, 50 rows) and the real engine (`cpd watch`),
+  each under `timeout`. Never `/home/clayton/.cpd`, never the socket `cpd` (the harness asserts both prefixes).
+- The store is **seeded** (Context `ctx`; Plan `pay` in `deploy` with one open PR, its `pull_requests` row and Lead
+  `lead1` in the chat slot; Plan `ghost` with 30 draft Jobs), tens of rows, not a copy of the live store. Read cost on
+  live-size data is `panel-sync-cost.md` section 2, not measured here.
+- **T0** = the `at` of the commit's `txns` row (ms, stamped in the transaction), read back. **T1** = the middle of the
+  `tmux capture-pane -p` call (one thread per pane, every 20 ms) that first shows the expected text (a regex per surface).
+- **Resolution**: a capture takes 1.8 ms median (n about 17 000 per observer, p95 3.0 ms, max 93 ms under load); the
+  hit's start is exactly 20 ms after the previous miss's (n=40, min = max), so T1 is good to about +/- 12 ms. T0 is a
+  few ms before the commit lands; the CLI commands (A, B, Q-down) take 23 to 32 ms (n=40).
+- **Build**: `target/debug/cpd`, `dev` profile (unoptimized), `0.13.45-dev`, built 17:16 in the `lag-a1` worktree; its
+  commits on top of `bf1214f7` change only the findings file (`git log --stat`), so the code is the Lead Branch's. The
+  live cockpit runs release builds; the latencies are timer-dominated (hundreds of ms), so the effect is small (guess).
+- **Poll period and its cost** (straces `s_<view>.txt`, read-mark `fcntl` locks of the follower thread): tree and plan
+  check the store every 252 and 257 ms on average (200 or 300 ms: the 200 ms sleep rounds up to a 100 ms frame; n=3 950
+  and 3 834), widgets every 505 ms (n=1 992) on its **loop thread**. An idle check holds the read mark 0.18 and 0.17 ms
+  median (0.11 for widgets; n=4 709, 8 332, 4 192; under strace, an upper bound). CPU of the views: cost.md section 1.
+- **Load and nice 19** (hs-d528): all probe processes (views, engine, observers) ran at nice 19; the live cockpit does not.
+  `/proc/loadavg` per run (local time; start to end; range of the 1-min value before each commit): A-bug 17:23, 0.73 to
+  0.85 (0.73 to 1.40); A-main 17:30, 0.89 to 1.41 (0.82 to 1.69); B-bug 17:36, 1.30 to 10.90 (0.80 to 24.66); B-bug2
+  17:55, 17.10 to 2.03 (0.81 to 16.85); B-main 18:14, 1.49 to 8.88 (1.38 to 11.73); C-main 18:19, 10.33 to 1.15 (1.07 to
+  11.46); Q-main 18:24, 1.05 to 0.67 (0.52 to 1.19); A-strace 18:30, 0.69 to 1.12 (0.59 to 1.25); C-strace 18:33, 1.03 to
+  1.26 (0.71 to 1.47); Q-outer 18:39, 0.48 to 1.19 (0.55 to 1.19); T 18:44 (1.00 to 2.72 per commit); fresh A 18:49, 1.19
+  to 1.34 (0.92 to 2.68); fresh B 18:55, 0.78 to 1.45 (0.74 to 1.54); fresh T 19:01 (0.43 to 1.02 per commit).
+- **Effect of nice 19**: B-main and C-main ran at loads up to 11.7 on 16 cores; the observers' capture cost rose (p95
+  9.0 ms against 3.0 ms) but the view hop did not: tree draw minus engine Event is 337 and 339 ms median in B-main (n=20
+  each) against 337 ms in the fresh B (n=40, load 1.5); ticks stayed 5 000 to 5 018 ms (n=1 046). No run shows a wakeup
+  waiting for a nice-0 process (it would be a frame or more; guess: the 16 cores had idle ones).
 
-Percentiles are linear interpolation over the n samples (`derive.py`). "seen/n" is the share of commits whose text
-appeared before the 22 s deadline (6 s fixed window for widgets in A).
+Percentiles: linear interpolation over the n samples (`derive.py`). "seen/n": commits whose text appeared within 22 s.
 
 ## 2. Results per trigger
 
@@ -185,9 +173,8 @@ For the same commit, the largest minus the smallest T1 over the surfaces that dr
 | Q up (Q-outer) | tree, `@cpd_workers`, outer tmux | 20 | 18 | 2 345 | 4 177 | 4 190 |
 | Q down (Q-outer) | option, outer tmux (2 surfaces) | 20 | 2 | 7 | 18 | 18 |
 
-Two views fed by the store directly (tree and plan, plan and widgets) differ by up to 0.2 s and 0.4 s: their polls
-and frames are not phase-locked. A view fed by the engine (Inbox row, `@cpd_workers`) differs by the engine's wait:
-the median is the median tick wait.
+Two views fed by the store (tree and plan, plan and widgets) differ by up to 0.2 s and 0.4 s: their polls and frames
+are not phase-locked. A view fed by the engine (Inbox row, `@cpd_workers`) differs by the engine's wait.
 
 ## 4. Hops
 
@@ -207,20 +194,17 @@ Plan view, trigger A and C (median, min to max; n = 10 to 15 per cell, `A idle`,
 | draw to the capture that shows it | 9 (1 to 18) | 11 (2 to 19) | 9 (1 to 18) | 11 (1 to 18) |
 | total from T0 | 322 (241 to 518) | 311 (209 to 456) | 323 (215 to 512) | 333 (216 to 488) |
 
-The tree row of C (`C conflict`, `C clean`, n=14 and 15) is the same: 116 and 115 to the poll, 99 and 100 to the snapshot, 2
-read, 99 and 99 to the draw, 6 and 9 to the capture; total 320 and 318 from the engine's Event (its Inbox row waits
-for the engine's write).
-
+The tree's Inbox row (C, n=14 and 15 from the engine's Event) is the same: 116 and 115 to the poll, 99 and 100 to the
+snapshot, 2 read, 99 and 99 to the draw, 6 and 9 to the capture; total 320 and 318.
 Widgets view (C, n=15 per cell): write to the snapshot's first read 289 (27 to 496) and 204 (32 to 440) (its poll is on
-the loop thread, every 505 ms, so uniform 0 to 505); read 2 (1 to 3); read to draw 0 (0 to 1) (the same thread
-draws after the read); draw to capture 14 and 11; total 309 and 220 from T0.
+the loop thread, every 505 ms); read 2 (1 to 3); read to draw 0 (the same thread draws); draw to capture 14 and 11;
+total 309 and 220 from T0.
 
-Reading the table: the poll wait is 0 to 300 ms (the poll period) and then **two frame boundaries of about 100 ms**:
-the loop takes the poll's answer at the next frame boundary and starts the snapshot, and takes the snapshot's result
-at the next frame boundary and draws it (99 to 101 ms and 95 to 99 ms, n=79 each: A idle 20 plan, C 30 plan and 29 tree). The read itself is 2 to
-4 ms under strace in a debug build. "Coalescing" in the sense of the 500 ms `COALESCE` / `SNAPSHOT_EVERY` was **not
-exercised**: every commit came at least 1 s after the previous one (gap 1 to 9 s), so the 500 ms rule never held a
-snapshot back; a burst test was not run (not measured).
+Reading the table: after the poll wait (0 to 300 ms) come **two frame boundaries of about 100 ms**: the loop takes
+the poll's answer at the next frame boundary and starts the snapshot, then takes its result at the next boundary and
+draws (99 to 101 ms and 95 to 99 ms, n=79 each: 20 plan A, 30 plan C, 29 tree C). The read is 2 to 4 ms under strace
+in a debug build. The 500 ms `COALESCE` / `SNAPSHOT_EVERY` hold was **not exercised**: every commit came 1 s or more
+after the previous one (gaps 1 to 9 s); a burst test was not run (not measured).
 
 Engine hop (tick phase), B, C and Q (the engine's step and the tick it belongs to, from `watch.lock`'s mtime, which the
 engine touches at each tick's start (`engine.rs`: `lock.touch()` before `tick()`)):
@@ -240,10 +224,10 @@ cause to Inbox row = wait to the next tick (0 to 5 s) + 12 ms (engine) + 338 ms 
 
 ## 5. tmux
 
-How tmux shows an option the engine sets: **measured** in the probe, with a second private tmux server `outer`
-(`sync-probe-lag-<pid>-outer`, `tmux -L <outer> new-session -d -s o "tmux -L <inner> attach -t x"`) showing the inner
-server's screen; the inner's pane border format reads `T=#{@cpd_title}` (`T`) and the inner's status line read
-`@cpd_workers` (`Q-outer`). The set command is `tmux -L <inner> set -p -t <pane> @cpd_title tN`.
+How tmux shows an option the engine sets, **measured** with a second private tmux server `outer` showing the inner
+server's screen (`tmux -L <outer> new-session -d -s o "tmux -L <inner> attach -t x"`); the inner's pane border format
+reads `T=#{@cpd_title}` (`T`) and its status line `@cpd_workers` (`Q-outer`); the set command is `tmux -L <inner> set -p
+-t <pane> @cpd_title tN`.
 
 | Probe | What | n | min | median | p95 | max |
 |---|---|---|---|---|---|---|
