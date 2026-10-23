@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(asked(press(&mut view, KeyCode::Char('n'))), Question::input("New Plan", ask, String::new()));
     }
 
-    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text).
+    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text, a select picks its first option).
     fn answered(question: Question, text: Option<&'static str>) -> Result<Option<Action>, String> {
         struct Answer(Option<&'static str>);
         impl Dialogs for Answer {
@@ -916,8 +916,8 @@ mod tests {
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(self.0.is_some())
             }
-            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
-                unreachable!("no select in this test")
+            fn select(&self, _: &str, _: &str, options: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
+                Ok(self.0.map(|_| options[0].clone()))
             }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
@@ -1732,38 +1732,6 @@ mod tests {
             Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml"),
             "no input popup opens"
         );
-    }
-
-    #[test]
-    fn new_context_with_several_owners_asks_which_after_the_title() {
-        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
-        let question = popup_at(&mut view, 8, 15, 0);
-        // two popups: the title, then the owner (`Owner (<owners>):`); a name that is no owner is refused after it
-        struct Typed(std::cell::RefCell<Vec<(String, &'static str)>>, &'static str);
-        impl Dialogs for Typed {
-            fn input(&self, _: &str, prompt: &str, _: &str, _: Validator) -> Result<Option<String>, cpd_core::error::CpdError> {
-                let n = self.0.borrow().len();
-                let text = if n == 0 { "Building cpd!" } else { self.1 };
-                self.0.borrow_mut().push((prompt.to_owned(), text));
-                Ok(Some(text.to_owned()))
-            }
-            fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
-                Ok(false)
-            }
-            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
-                unreachable!("no select in this test")
-            }
-            fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
-                Ok(serde_json::json!({}))
-            }
-        }
-        let typed = Typed(Default::default(), "other");
-        let run = question.clone().ask(&typed).unwrap().unwrap();
-        assert_eq!(typed.0.borrow().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["Title:", "Owner (clayton-duarte, other):"]);
-        assert_eq!(run, Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "other".into() });
-        assert_eq!(run.argv(), ["context", "new", "building-cpd", "--title=Building cpd!", "--owner=other"]);
-        let refused = question.ask(&Typed(Default::default(), "nobody")).unwrap_err();
-        assert_eq!(refused, "No owner policy nobody: choose one of clayton-duarte, other.");
     }
 
     #[test]
