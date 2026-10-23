@@ -154,10 +154,18 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`layout`] ran on this thread (the tests of R2 count them).
+    pub(crate) static LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says which failed Jobs and closed pull requests are red, the rest waiting.
 pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
+    #[cfg(test)]
+    LAYOUTS.with(|n| n.set(n.get() + 1));
     let charts: Vec<Chart> = prs
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.stuck_jobs), frame))

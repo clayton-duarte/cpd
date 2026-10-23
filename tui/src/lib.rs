@@ -36,6 +36,9 @@ mod trace_tests;
 #[cfg(test)]
 mod icons_tests;
 pub mod merge;
+pub mod pace;
+#[cfg(test)]
+mod pace_tests;
 pub mod palette;
 #[cfg(test)]
 mod updating_label;

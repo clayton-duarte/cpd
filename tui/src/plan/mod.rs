@@ -79,27 +79,27 @@ const FRAME: Duration = Duration::from_millis(100);
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 /// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
-const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
+pub(crate) const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
 
 /// What the pane shows when a Lead is in the chat slot.
-struct Centre {
-    slot: ChatSlot,
-    plan: PlanBoxes,
-    boxes: Boxes,
+pub(crate) struct Centre {
+    pub(crate) slot: ChatSlot,
+    pub(crate) plan: PlanBoxes,
+    pub(crate) boxes: Boxes,
     /// The spinner frame `boxes` is drawn at.
-    frame: usize,
+    pub(crate) frame: usize,
 }
 
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
-    fn spins(&self) -> bool {
+    pub(crate) fn spins(&self) -> bool {
         self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running)
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
     /// frame is not the one drawn. Whether it did.
     #[cfg(test)]
-    fn turn(&mut self, frame: usize) -> bool {
+    pub(crate) fn turn(&mut self, frame: usize) -> bool {
         self.turn_traced(frame, &mut Trace::new(None))
     }
 
