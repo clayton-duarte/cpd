@@ -2740,7 +2740,7 @@ Lifecycle of a tool row and its closing row: **created** (arguments begin to str
 **The box.** `W` is the width in cells of the area the box is drawn in (every row of the box is exactly `W` cells wide); `tw = W - 6` is the text width (the width available for text, measured in characters, wrapping by characters at `tw`).
 
 **Geometry.**
-- Top row: a margin cell, the corner `╭`, one `─`, the label as a pill (cap U+E0B6, the label text, cap U+E0B4; drawn in the border's colour, hs-d578: text 0 on background 15 with caps colour 15 when unfocused, text 0 on background 12 with caps colour 12 when focused), then `─` up to the closing corner `╮`, and a margin cell. The left cap sits three columns from the edge, as in the Inbox's ` ╭─Inbox───…`. The fill is `W - label chars - 7` cells. A label wider than the room is cut to `W - 7` cells; with fewer than 1 cell of room there is no pill. No label (empty): ` ╭` + `─` × (W - 4) + `╮ `.
+- Top row: a margin cell, the corner `╭`, one `─`, the label as a pill (cap U+E0B6, the label text, cap U+E0B4; drawn in the border's colour, hs-d578 and hs-d594: 15 inverted with caps colour 15 when unfocused, 12 inverted with caps colour 12 when focused), then `─` up to the closing corner `╮`, and a margin cell. The left cap sits three columns from the edge, as in the Inbox's ` ╭─Inbox───…`. The fill is `W - label chars - 7` cells. A label wider than the room is cut to `W - 7` cells; with fewer than 1 cell of room there is no pill. No label (empty): ` ╭` + `─` × (W - 4) + `╮ `.
 - Text rows: ` │ ` (margin, wall, one padding cell), `tw` text cells, ` │ ` (padding, wall, margin). No padding row above or below the text (padding is 1 column and 1 row; zero above and below).
 - Bottom row: ` ╰` + `─` × (W - 4) + `╯ `.
 
