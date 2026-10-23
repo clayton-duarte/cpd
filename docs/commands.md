@@ -249,13 +249,13 @@ No flags, no preconditions, no effects (one read transaction).
 
 ```json
 {"ok": true, "contexts": [
-  {"id": "building-cpd", "title": "Building cpd", "jira": null, "archived_at": null,
+  {"id": "building-cpd", "title": "Building cpd", "jira": null, "owner": "clayton-duarte", "archived_at": null,
    "records": 57, "open_questions": 2,
    "plans": [{"id": "cpd2", "title": "cpd in Rust", "phase": "dispatch", "lead_session": "596d007f-…", "archived_at": null}]}],
  "events_cursor": 48213}
 ```
 
-`archived_at` (here and on each Plan) is null, or the time the object was archived (contract §2.2 "Archived"). Archived Contexts and Plans are listed too. `events_cursor` is the highest Event id visible in the same read transaction (§17). Idempotent: read-only.
+`owner` is the GitHub login of the Context's owner (contract §2.2), or null for a Context created before the migration. `archived_at` (here and on each Plan) is null, or the time the object was archived (contract §2.2 "Archived"). Archived Contexts and Plans are listed too. `events_cursor` is the highest Event id visible in the same read transaction (§17). Idempotent: read-only.
 
 ### 3.3 `context show`
 
@@ -543,7 +543,7 @@ Idempotent: yes. With no uncurated record it returns `"already": true` and runs 
 cpd context owner <login> [--context <c>]
 ```
 
-Sets the GitHub owner of a Context that has none (contract §8.3, hs-d288): a Context created before `context new --owner` existed, which the migration could not fill because its PRs had no pull request or pull requests of two owners (contract §4.5). The owner is set once; there is no change of owner. The Context is `--context`, else the selected Plan's (§1.3).
+Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context created before `context new --owner` existed may have no owner, which the migration could not fill because its PRs had no pull request or pull requests of two owners (contract §4.5); a Context with an owner may change it, but only while no Plan of the Context has a PR row (PR rows are rows of `prs` of Plans not deleted, in any status). The Context is `--context`, else the selected Plan's (§1.3).
 
 | Flag | Meaning |
 |---|---|
@@ -553,16 +553,17 @@ Sets the GitHub owner of a Context that has none (contract §8.3, hs-d288): a Co
 |---|---|---|
 | a Context was selected (§1.3) | `context_required` | 2 |
 | the Context exists | `context_not_found` | 4 |
-| the Context has no owner, unless it is this one (then `already`); `details.context`, `details.owner` (the one it has) | `owner_set` | 3 |
+| the same owner again (no write, no Event) | `already` | 0 |
+| the Context has an owner other than this one and a PR row exists; details: `context`, `owner` (the current owner), `prs` (the PR rows as `<plan>/<key>`, sorted) | `owner_in_use` | 3 |
 | the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
 | that file is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
-An archived Context is not refused: setting its owner changes no work.
+An archived Context is not refused: changing its owner changes no work.
 
-Effects: **rows**, one transaction, with a compare-and-swap on `owner IS NULL`: `contexts.owner`. **Event** `context-owner` `{owner}`. Nothing else: the Context's existing PRs keep their `name`, and from now on resolve `Repo(<owner>, <name>)` (or `Owner(<owner>)` while their `name` is null, contract §8.3).
+Effects: **rows and Events**, one transaction with the checks and the UPDATE on `contexts.owner`. One `context-owner` Event `{owner}` appended for each change; none for `already`. Nothing else: the Context's existing PRs keep their `name`, and from now on resolve `Repo(<owner>, <name>)` (or `Owner(<owner>)` while their `name` is null, contract §8.3). Sessions already started keep the policy text they were given for the old owner until they restart (contract §8.3 'Delivery to agents').
 
 ```json
-{"ok": true, "context": {"id": "building-cpd", "owner": "clayton-duarte"}}
+{"ok": true, "context": {"id": "building-cpd", "owner": "clayton-duarte"}, "already": false}
 ```
 
 Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
