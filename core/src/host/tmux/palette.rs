@@ -1,4 +1,4 @@
-//! The palette on tmux's side (contract §6.1.1, hs-d534): pane title pills, the status line's pills, tmux's menus and copy mode.
+//! The Dango palette on tmux's side (contract §6.1.1, hs-d534): pane title pills, the status line's pills, tmux's menus and copy mode.
 //!
 //! The formats are drawn by tmux itself: each test sets the options a format reads on a private server (its socket in a
 //! temp dir, killed when the test ends), has tmux expand the format (`display-message -p`), and reads back, cell by cell,

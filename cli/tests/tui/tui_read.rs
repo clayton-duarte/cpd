@@ -411,7 +411,7 @@ const T0: &str = "2026-01-04T00:00:00.000Z";
 fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     let (_env, mut store) = fixture();
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
-    assert_eq!(needs(&mut store, "ship"), read::NeedsUser::default(), "no item: an agent handles everything");
+    assert_eq!(needs(&mut store, "ship"), read::NeedsUser { lead_working: true, ..Default::default() }, "no item: an agent handles everything");
 
     let stuck = |plan: &str, job: &str| Condition {
         job: Some(key(job)),
@@ -429,15 +429,15 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true },
         "a fork's dialog is not the Lead's"
     );
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true });
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false });
     assert_eq!(needs(&mut store, "rel"), read::NeedsUser::default(), "another Plan's items are not its own");
 
     // a hidden item needs nobody: the item is snoozed
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false });
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false });
 }
 
 #[test]

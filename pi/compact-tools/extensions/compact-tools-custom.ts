@@ -1,13 +1,13 @@
 import { ToolExecutionComponent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { hookMethod } from "./compact-tools-hook.ts";
+import { hookMethod, type MethodBehavior } from "./compact-tools-hook.ts";
 import { refreshRowShell } from "./compact-tools-rendering.ts";
 
 // Symbol.for keys are shared by every evaluation of this module. The prototype is
 // Pi's and outlives a /reload, so the patch is installed once and always asks the
-// most recently loaded extension instance, through the shared slot, what to render.
+// most recently loaded extension instance what to render: the newest load wins.
 const RESOLVER_KEY = Symbol.for("pi-compact-tools.custom.resolver.v2");
 const LEGACY_RESOLVER_KEY = Symbol.for("pi-compact-tools.custom.resolver");
-const PATCHED_KEY = Symbol.for("pi-compact-tools.custom.patched.v2");
+const STATE_KEY = Symbol.for("pi-compact-tools.custom.state.v2");
 const ROUTED_METHODS = ["getCallRenderer", "getResultRenderer", "getRenderShell", "hasRendererDefinition"] as const;
 
 type AnyToolDefinition = ToolDefinition<any, any, any>;
@@ -26,6 +26,10 @@ export interface RowRenderers {
 export type RowResolver = (row: ToolRow) => RowRenderers | undefined;
 
 type RoutedPrototype = Record<(typeof ROUTED_METHODS)[number], (...args: unknown[]) => unknown>;
+type RowState = {
+	decisions: WeakMap<object, { resolver: RowResolver | undefined; renderers: RowRenderers | null }>;
+	owners: WeakMap<object, { call?: unknown; result?: unknown }>;
+};
 type ResolverSlot = typeof globalThis & { [RESOLVER_KEY]?: RowResolver };
 
 export function setRowResolver(resolver: RowResolver | undefined): void {
@@ -48,7 +52,6 @@ export function patchToolRows(prototype: object | undefined): boolean {
 	if (!prototype) return false;
 	const routed = prototype as RoutedPrototype;
 	if (!ROUTED_METHODS.every((method) => typeof routed[method] === "function")) return false;
-	if (Object.hasOwn(prototype, PATCHED_KEY)) return true;
 	hookMethod(prototype, "updateDisplay", "custom.refreshShell", (self, args, original) => {
 		refreshRowShell(self);
 		return original.apply(self, args);
@@ -56,8 +59,9 @@ export function patchToolRows(prototype: object | undefined): boolean {
 	// Cache within a configuration generation. session_start can apply trusted
 	// project settings after rows were constructed; a new resolver invalidates
 	// those provisional decisions, and updateDisplay reconciles the shell.
-	const decisions = new WeakMap<object, { resolver: RowResolver | undefined; renderers: RowRenderers | null }>();
-	const owners = new WeakMap<object, { call?: unknown; result?: unknown }>();
+	// That state outlives a load, so it lives in a process-global slot shared by all loads.
+	const slot = globalThis as unknown as Record<symbol, RowState | undefined>;
+	const { decisions, owners } = (slot[STATE_KEY] ??= { decisions: new WeakMap(), owners: new WeakMap() });
 	const changed = (row: object, kind: "call" | "result", renderer: unknown) => {
 		let owner = owners.get(row);
 		if (!owner) owners.set(row, owner = {});
@@ -78,20 +82,24 @@ export function patchToolRows(prototype: object | undefined): boolean {
 		}
 		return decision.renderers ?? undefined;
 	};
-	const original = Object.fromEntries(ROUTED_METHODS.map((method) => [method, routed[method]])) as RoutedPrototype;
-	routed.getCallRenderer = function (this: ToolRow, ...args) {
-		return changed(this, "call", resolve(this)?.renderCall ?? original.getCallRenderer.apply(this, args));
-	};
-	routed.getResultRenderer = function (this: ToolRow, ...args) {
-		return changed(this, "result", resolve(this)?.renderResult ?? original.getResultRenderer.apply(this, args));
-	};
-	routed.getRenderShell = function (this: ToolRow, ...args) {
-		return resolve(this) ? "self" : original.getRenderShell.apply(this, args);
-	};
-	routed.hasRendererDefinition = function (this: ToolRow, ...args) {
-		return resolve(this) ? true : original.hasRendererDefinition.apply(this, args);
-	};
-	Object.defineProperty(prototype, PATCHED_KEY, { value: true });
+	// Every call re-hooks, so each record holds this load's behaviour. A plain wrapper from
+	// an older release (no hook record, no handle to its original) is not unwrapped: the
+	// hook goes on top and the older layer stays as an inert extra call.
+	type Original = (...args: unknown[]) => unknown;
+	const onRow = (body: (this: ToolRow, original: Original, args: unknown[]) => unknown): MethodBehavior =>
+		(self, args, original) => body.call(self, original, args);
+	hookMethod(prototype, "getCallRenderer", "custom.getCallRenderer", onRow(function (original, args) {
+		return changed(this, "call", resolve(this)?.renderCall ?? original.apply(this, args));
+	}));
+	hookMethod(prototype, "getResultRenderer", "custom.getResultRenderer", onRow(function (original, args) {
+		return changed(this, "result", resolve(this)?.renderResult ?? original.apply(this, args));
+	}));
+	hookMethod(prototype, "getRenderShell", "custom.getRenderShell", onRow(function (original, args) {
+		return resolve(this) ? "self" : original.apply(this, args);
+	}));
+	hookMethod(prototype, "hasRendererDefinition", "custom.hasRendererDefinition", onRow(function (original, args) {
+		return resolve(this) ? true : original.apply(this, args);
+	}));
 	return true;
 }
 

@@ -144,8 +144,8 @@ test("no row is wider than the pane and a very narrow pane draws no balloon", as
 	}
 });
 
-test("the cpd theme no longer inverts the user's input", () => {
-	const theme = JSON.parse(readFileSync(new URL("../themes/cpd.json", import.meta.url), "utf8")) as { colors: Record<string, unknown> };
+test("the dango theme no longer inverts the user's input", () => {
+	const theme = JSON.parse(readFileSync(new URL("../themes/dango.json", import.meta.url), "utf8")) as { colors: Record<string, unknown> };
 	assert.equal(theme.colors.userMessageBg, "");
 	assert.equal(theme.colors.userMessageText, 7);
 });

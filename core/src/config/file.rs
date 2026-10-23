@@ -48,6 +48,8 @@ pub struct Config {
     pub context_distill_tier: Tier,
     /// The days of curated records the digest takes as relevant (§4.6, §8.2, hs-d549, hs-d551).
     pub context_recent_days: u32,
+    /// The records a Context holds before it is curated (hs-d592).
+    pub context_curation_min_records: u32,
     /// The loop-guard breaker trips when more than this many self-started turns run in 600 ms (§3.6, §8.2, hs-d552, hs-d571).
     pub loop_guard_turns: u32,
     /// The Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
@@ -283,6 +285,7 @@ impl Config {
             Ok(tier)
         })?;
         let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
+        let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
@@ -383,6 +386,7 @@ impl Config {
             manager_tier,
             context_distill_tier,
             context_recent_days,
+            context_curation_min_records,
             loop_guard_turns,
             open_tier,
             lead_pi_packages,

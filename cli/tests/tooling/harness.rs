@@ -1,4 +1,5 @@
-//! The harness itself: isolation of `$CPD_HOME`, git, tmux and the fakes.
+//! The harness itself: isolation of `$CPD_HOME`, git, tmux and the fakes. (The shared `write_config` sets no curation
+//! floor: the default is 25, so a test that curates a small Context says `context_curation_min_records = 1`, hs-d592.)
 
 use crate::common;
 
