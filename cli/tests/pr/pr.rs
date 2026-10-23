@@ -3864,7 +3864,7 @@ impl Fx {
 #[test]
 fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
     let fx = fx_stacked("dispatch");
-    let web = stacked_pr(&fx);
+    stacked_pr(&fx);
     // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
     // worktree is `target_worktree_path`.
     let marker = fx.env.root().join("gate-saw");
