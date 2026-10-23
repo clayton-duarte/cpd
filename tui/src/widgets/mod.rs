@@ -133,7 +133,7 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
-/// PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
+/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
 /// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
 fn show(

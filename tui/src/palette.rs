@@ -184,7 +184,7 @@ pub fn asleep_text() -> Style {
     read_only_text()
 }
 
-/// The fold toggles `╰󰁋 expand` / `╰󰁣 collapse`, colour 7.
+/// The fold toggles `╰󰬦 expand` / `╰󰬬 collapse`, colour 7.
 pub fn toggle_text() -> Style {
     read_only_text()
 }
@@ -299,24 +299,24 @@ pub(crate) mod check {
 // Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
 /// A queued Job: `nf-md-circle_outline` (U+F0766).
 pub const QUEUED: &str = "\u{F0766}";
-/// A merging Job: `nf-md-eye_circle_outline` (U+F0B95).
-pub const MERGING: &str = "\u{F0B95}";
+/// A merging Job: `nf-md-download_circle` (U+F1464).
+pub const MERGING: &str = "\u{F1464}";
 /// A merged Job: `nf-md-check_circle` (U+F05E0).
 pub const MERGED: &str = "\u{F05E0}";
 /// A failed Job: `nf-md-close_circle` (U+F0159).
 pub const FAILED: &str = "\u{F0159}";
-/// A draft Job: `nf-md-progress_pencil` (U+F1787).
-pub const DRAFT: &str = "\u{F1787}";
-/// A cancelled Job: `nf-md-cancel` (U+F073A).
-pub const CANCELLED: &str = "\u{F073A}";
+/// A draft Job: `nf-fa-circle_question` (U+F059).
+pub const DRAFT: &str = "\u{F059}";
+/// A cancelled Job: `nf-md-close_circle` (U+F0159).
+pub const CANCELLED: &str = "\u{F0159}";
 
 // PR check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
 /// Checks passed: `nf-md-check_circle` (U+F05E0).
 pub const CHECKS_PASSED: &str = MERGED;
 /// Checks failed: `nf-md-close_circle` (U+F0159).
 pub const CHECKS_FAILED: &str = FAILED;
-/// Checks pending: `nf-md-progress_clock` (U+F0996).
-pub const CHECKS_PENDING: &str = "\u{F0996}";
+/// Checks pending: `nf-md-eye_circle` (U+F0B94).
+pub const CHECKS_PENDING: &str = "\u{F0B94}";
 /// No checks: `nf-md-minus` (U+F0374).
 pub const CHECKS_NONE: &str = "\u{F0374}";
 
@@ -381,8 +381,8 @@ pub const SPINNER: [&str; 8] = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68
 pub const IDLE: &str = SPINNER[0];
 /// A stopped Session: the new moon, drawn dim.
 pub const STOPPED: &str = IDLE;
-/// A Session that waits for another agent (hs-d303): `nf-md-moon_first_quarter`, the half-lit moon, in `Meaning::Waiting`.
-pub const WAITING: &str = "\u{F0F61}";
+/// A Session that waits for another agent (hs-d303): `nf-md-circle_opacity` (U+F1853), in `Meaning::Waiting`.
+pub const WAITING: &str = "\u{F1853}";
 /// A Session that needs the User (coloured by case): `nf-md-moon_full`.
 pub const NEEDS_YOU: &str = "\u{F0F62}";
 
@@ -651,14 +651,14 @@ mod tests {
     fn every_pill_and_check_glyph_is_one_cell_wide_and_the_one_hs_d235_picked() {
         let glyphs = [
             (QUEUED, 0xF0766),
-            (MERGING, 0xF0B95),
+            (MERGING, 0xF1464),
             (MERGED, 0xF05E0),
             (FAILED, 0xF0159),
-            (DRAFT, 0xF1787),
-            (CANCELLED, 0xF073A),
+            (DRAFT, 0xF059),
+            (CANCELLED, 0xF0159),
             (CHECKS_PASSED, 0xF05E0),
             (CHECKS_FAILED, 0xF0159),
-            (CHECKS_PENDING, 0xF0996),
+            (CHECKS_PENDING, 0xF0B94),
             (CHECKS_NONE, 0xF0374),
         ];
         for (glyph, code) in glyphs {
