@@ -55,7 +55,7 @@ pub(crate) fn box_top(label: &str, focused: bool, width: usize) -> Line<'static>
 /// The row the forms share: `lead` (two cells) and `muted`, the style of the lead, the lines and `close`, a closing cell that
 /// takes the place of the count, and `pill_style` are what differ.
 fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Option<&str>, pill_style: Style, width: usize) -> Line<'static> {
-    let cap = Style::new().fg(pill_style.bg.expect("a pill has a colour"));
+    let cap = Style::new().fg(pill_style.fg.expect("a pill has a colour"));
     let pad = usize::from(width >= 2);
     let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
@@ -98,7 +98,7 @@ pub(crate) mod check {
     /// The pill whose left cap is at (`x`, `y`) of `buf` reads `text` between its two caps, with no padding spaces, and is grey:
     /// the caps are the pill's background colour; the text is the static pill's (hs-d534).
     pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
-        let grey = palette::pill_static().bg.unwrap();
+        let grey = palette::pill_static().fg.unwrap();
         let reset = Cell::EMPTY.bg; // the terminal's own background, which no colour names (no colour outside the palette)
         let width = u16::try_from(text.chars().count()).unwrap();
         let drawn: String = (x..x + width + 2).map(|x| buf[(x, y)].symbol()).collect();
@@ -183,7 +183,7 @@ mod tests {
             assert_eq!(pill.style, palette::pill_static(), "the title text is the static pill's");
             for cap in [CAP_LEFT, CAP_RIGHT] {
                 let cap = find(cap);
-                assert_eq!(cap.style.fg, palette::pill_static().bg, "a cap is the pill's colour: {cap:?}");
+                assert_eq!(cap.style.fg, palette::pill_static().fg, "a cap is the pill's colour: {cap:?}");
             }
             let lines: Vec<_> = l.spans.iter().filter(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '╭' || c == '─')).collect();
             assert!(lines.iter().any(|s| s.content.contains('─')), "the lines: {:?}", l.spans);

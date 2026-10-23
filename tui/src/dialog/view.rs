@@ -177,7 +177,7 @@ fn frame_top(title: &str, width: usize) -> Line<'static> {
     let pill = !text.is_empty() && left >= text.chars().count() + 3;
     let fill = left - if pill { text.chars().count() + 2 } else { 0 };
     let style = palette::pill_static();
-    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+    let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
     let mut spans = vec![Span::styled(lead, muted)];
     if pill {
         spans.extend([Span::styled(CAP_LEFT, cap), Span::styled(text, style), Span::styled(CAP_RIGHT, cap)]);
@@ -203,7 +203,7 @@ fn frame_wall(width: usize) -> Line<'static> {
 
 /// A button as a pill: the caps around the label.
 fn pill(label: &str, style: Style, rect: Rect, f: &mut Frame) {
-    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+    let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
     let line = Line::from(vec![Span::styled(CAP_LEFT, cap), Span::styled(label.to_owned(), style), Span::styled(CAP_RIGHT, cap)]);
     f.render_widget(Paragraph::new(line), rect);
 }
