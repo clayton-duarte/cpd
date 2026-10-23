@@ -968,13 +968,13 @@ fn an_archived_context_is_skipped_by_distill() {
     let before = events_count(&fx);
 
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(out, json!({"context": CONTEXT, "skipped": "archived"}), "{out}");
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "archived"}), "{out}");
     assert_nothing_done(&fx, before);
 
     // Archived is checked first: under the floor it still reports `archived`.
     set_floor(&fx, 50);
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(out, json!({"context": CONTEXT, "skipped": "archived"}), "{out}");
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "archived"}), "{out}");
     assert_nothing_done(&fx, before);
 }
 
@@ -986,7 +986,7 @@ fn a_context_under_the_floor_is_skipped_by_distill() {
     let before = events_count(&fx);
 
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(out, json!({"context": CONTEXT, "skipped": "young", "records": 4, "floor": 5}), "{out}");
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 4, "floor": 5}), "{out}");
     assert_nothing_done(&fx, before);
 }
 
@@ -997,7 +997,7 @@ fn a_context_at_the_floor_is_curated_by_distill() {
     // One above the count: skipped; at the count: curated (a changed floor applies at the next run).
     set_floor(&fx, 6);
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(out, json!({"context": CONTEXT, "skipped": "young", "records": 5, "floor": 6}), "{out}");
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 5, "floor": 6}), "{out}");
     assert_eq!(fx.pi_calls(), 0);
     set_floor(&fx, 5);
 
