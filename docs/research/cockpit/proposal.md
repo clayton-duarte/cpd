@@ -247,7 +247,7 @@ Rank is the expected gain in the User's efficiency per unit of effort, with **F*
 - **Efficiency gain:** he reads *what he must do* (a failure, a review, a question) before reading the label, and he can tell red from yellow even where his theme makes them close.
 - **Look:** a second glyph after the urgency dot: `✗` failed, `✎` changes requested, `✓` ready to merge, `↗` review to give, `☰` Plan review, `?` question, `✉` reply, `⚠` engine.
 - **Pattern:** each state has its own shape as well as its colour, shared by every surface; apps use roles over the terminal's 16 colours and check legibility.
-- **Sources:** agent-deck's `●` `◐` `○` `✕` ([Status Detection](https://github.com/asheshgoplani/agent-deck#status-detection)); ilmari's one table of icon and colour per state ([configuration](https://github.com/bnomei/ilmari#configuration)); Catppuccin's "Legibility always comes first" ([style guide](https://github.com/catppuccin/catppuccin/blob/HEAD/docs/style-guide.md)); opencode's `system` theme on ANSI 0–15 ([themes.mdx](https://github.com/sst/opencode/blob/HEAD/packages/web/src/content/docs/themes.mdx)). Details: attention.md A-09; looks.md L-03, whose §2.2 computed from the User's two Ghostty themes that red and yellow are ΔE 18 apart in Vesper and that colour 8 is 2.6 : 1 on the CPD theme (calculations, not seen on a screen).
+- **Sources:** agent-deck's `●` `◐` `○` `✕` ([Status Detection](https://github.com/asheshgoplani/agent-deck#status-detection)); ilmari's one table of icon and colour per state ([configuration](https://github.com/bnomei/ilmari#configuration)); Catppuccin's "Legibility always comes first" ([style guide](https://github.com/catppuccin/catppuccin/blob/HEAD/docs/style-guide.md)); opencode's `system` theme on ANSI 0–15 ([themes.mdx](https://github.com/sst/opencode/blob/HEAD/packages/web/src/content/docs/themes.mdx)). Details: attention.md A-09; looks.md L-03, whose §2.2 computed from the User's two Ghostty themes that red and yellow are ΔE 18 apart in Vesper and that colour 8 is 2.6 : 1 on the Dango theme (named `CPD` when measured) (calculations, not seen on a screen).
 - **cpd mapping (palette, every surface that shows a need):** `palette::kind_glyph(Kind)` used by the Inbox rows, the strip, the popup and the Plan view marks; one legend table generated from the palette; `failed` and `conflict` bold. A throwaway audit script that prints contrast and ΔE for a Ghostty theme file; fix what it finds in the palette, not in a theme engine.
 - **Effort:** S. A palette function, the legend lines, the row builders; the audit is about fifty lines and not runtime code.
 - **Depends on:** hs-d266's Nerd Font icon choices (the glyphs above are stand-ins); D5.
@@ -540,11 +540,11 @@ Each decision is his; the recommendation is one line with its reason. The ones P
 
 | Option | What it means |
 |---|---|
-| **a. Follow the terminal's ANSI theme (today) and fix the palette for both his themes** | his Ghostty `theme =` line restyles the cockpit; #7's glyphs and the audit make red and yellow distinguishable in Vesper and grey legible in the CPD theme |
+| **a. Follow the terminal's ANSI theme (today) and fix the palette for both his themes** | his Ghostty `theme =` line restyles the cockpit; #7's glyphs and the audit make red and yellow distinguishable in Vesper and grey legible in the Dango theme |
 | b. cpd ships its own palette and a theme chooser | a second theme system next to the terminal's (survey.md I-32) |
 | c. A truecolour palette | smooth fades and gradients; leaves his theme; needs RGB through tmux |
 
-**Recommendation: a.** The terminal owns the theme; cpd only owes legibility on the themes he uses. Which Ghostty theme he runs is his taste; the audit says Vesper needs shapes for red/yellow and the CPD theme needs a lighter grey (looks.md §2.2, calculations).
+**Recommendation: a.** The terminal owns the theme; cpd only owes legibility on the themes he uses. Which Ghostty theme he runs is his taste; the audit says Vesper needs shapes for red/yellow and the Dango theme needs a lighter grey (looks.md §2.2, calculations).
 
 ### D6 · A Merge button on a ready PR
 
