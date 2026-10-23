@@ -116,10 +116,10 @@ Not recommended: option 4 (mutating cuts text the agent promised to state, again
 
 ## Choices for the User
 
-1. **Prompt section** - Recommended: add an `ask_limit` section built from `LIMIT` for Leads and Managers in `before_agent_start`; about 10 lines, no package coupling, advisory (G2 stays), in the system prompt not the tool description.
-2. **Tool description** - append the limit to the package's description with a small cpd tool's `prepareLoadout`; where pi and the community put limits and it merges, but adds a model-visible tool and uses a hook documented for another purpose.
-3. **Upstream first** - open a PR to rpiv-mono for a merge-style guidance key, use the section (1) meanwhile; right long-term home, but slow and not in our control.
-4. **Guidance config file** - cpd writes the rpiv `guidance` file from the package's own defaults; official knob, but replace-only, global to the User's pi, and stale after each package update until regenerated.
+1. **Prompt section**: Recommended: add an `ask_limit` section built from `LIMIT` for Leads and Managers in `before_agent_start`; about 10 lines, no package coupling, advisory (G2 stays), in the system prompt not the tool description.
+2. **Tool description**: append the limit to the package's description with a small cpd tool's `prepareLoadout`; where pi and the community put limits and it merges, but adds a model-visible tool and uses a hook documented for another purpose.
+3. **Upstream first**: open a PR to rpiv-mono for a merge-style guidance key, use the section (1) meanwhile; right long-term home, but slow and not in our control.
+4. **Guidance config file**: cpd writes the rpiv `guidance` file from the package's own defaults; official knob, but replace-only, global to the User's pi, and stale after each package update until regenerated.
 
 ## Not verified
 
