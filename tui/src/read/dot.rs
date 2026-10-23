@@ -19,6 +19,8 @@ pub enum Dot {
     Waiting,
     /// `palette::SPINNER`: the Lead is working.
     Working,
+    /// The red loader: the Plan's Lead is working while its Plan has a failed Job (hs-d581).
+    Fixing,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
     White,
     /// `palette::NEEDS_YOU` blue: an Inbox item of urgency `blue` (hs-d570).

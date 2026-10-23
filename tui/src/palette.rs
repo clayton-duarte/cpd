@@ -445,7 +445,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Working | Dot::Fixing => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
         Dot::Stopped => (STOPPED, muted_text()),
