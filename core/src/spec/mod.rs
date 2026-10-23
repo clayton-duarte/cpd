@@ -13,7 +13,7 @@ use minijinja::value::Value;
 use minijinja::{Environment, UndefinedBehavior};
 
 use crate::config::Tier;
-use crate::error::CpdError;
+use crate::error::{CpdError, ErrorCode};
 use crate::git::Pipeline;
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, EscalationId, PlanId};
