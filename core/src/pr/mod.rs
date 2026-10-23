@@ -122,6 +122,12 @@ pub struct AddArgs {
     /// The template of stub drafts the PR starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
     #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
     shape: String,
+    /// Adopt the existing pull request <number> of the repo: its head branch is pushed to, its base is the pull request's (§9.4)
+    #[arg(long, value_name = "number", conflicts_with = "base", value_parser = clap::value_parser!(i64).range(1..))]
+    adopt: Option<i64>,
+    /// With --adopt: the login of the pull request's author when the User is not the author (confirmed by the User first)
+    #[arg(long = "confirm-author", value_name = "login", requires = "adopt")]
+    confirm_author: Option<String>,
     #[command(flatten)]
     plan: PlanArg,
 }
