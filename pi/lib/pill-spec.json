@@ -1,0 +1,21 @@
+{
+  "caps": {
+    "left": "\ue0b6",
+    "right": "\ue0b4"
+  },
+  "clickable": {
+    "add": 8,
+    "from": 1,
+    "to": 7
+  },
+  "meanings": {
+    "plain": 7,
+    "in_progress": 6,
+    "review": 3,
+    "done": 2,
+    "failed": 1,
+    "planning": 5,
+    "nothing": 8,
+    "focus": 4
+  }
+}

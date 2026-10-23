@@ -1,5 +1,8 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import { pill as sharedPill } from "../../lib/pill.ts";
 import { indicatorGlyph, type RowStatus } from "./compact-tools-core.ts";
+
+export { foreground } from "../../lib/pill.ts";
 
 /**
  * The only colors compact-tools draws: indices 0-15 of the terminal's palette (docs/contract.md
@@ -19,23 +22,23 @@ export const RUNNING = INDEX.cyan;
 export const TEXT = INDEX.grey;
 
 /** The foreground SGR parameter for an index: 30-37 below 8, 90-97 from 8. */
-function foreground(index: number): number {
+function sgrParam(index: number): number {
 	return index < 8 ? 30 + index : 90 + index - 8;
 }
 
 /** The escape that starts painting in palette index `index`. */
 export function fgOpen(index: number): string {
-	return `\x1b[${foreground(index)}m`;
+	return `\x1b[${sgrParam(index)}m`;
 }
 
 /** Paint `text` in palette index `index`, then return to the default foreground. */
 export function paint(index: number, text: string): string {
-	return `\x1b[${foreground(index)}m${text}\x1b[39m`;
+	return `\x1b[${sgrParam(index)}m${text}\x1b[39m`;
 }
 
 /** A painter for one index, for text painted many times. */
 export function painter(index: number): (text: string) => string {
-	const open = `\x1b[${foreground(index)}m`;
+	const open = `\x1b[${sgrParam(index)}m`;
 	return (text) => `${open}${text}\x1b[39m`;
 }
 
@@ -74,8 +77,7 @@ const statusIndex = (status: RowStatus): number =>
 
 /** A pill: caps in the colour on the terminal background, the text reversed (in the terminal's background). */
 export function pill(index: number, text: string): string {
-	const open = `\x1b[${foreground(index)}m`;
-	return `${open}\uE0B6\x1b[7m${text}\x1b[27m${open}\uE0B4\x1b[39m`;
+	return sharedPill(index, text);
 }
 
 /** A tool row's title pill: running (and not yet started) cyan, done green, failed red. */

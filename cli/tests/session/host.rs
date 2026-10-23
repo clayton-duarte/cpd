@@ -159,9 +159,9 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
 /// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
 /// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[reverse]\
+#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
 #[noreverse]\u{e0b4}}}}";
@@ -500,7 +500,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
     // left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
+    assert_eq!(border(), "#[fg=colour4]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
 /// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
@@ -528,7 +528,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
          #[noreverse]\u{e0b4}#[default]\
          #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]";
-    let format = cpd_core::host::tmux::STATUS_FORMAT;
+    let format = cpd_core::host::tmux::STATUS_FORMAT.as_str();
     assert!(format.starts_with(&prefix), "{format}");
     assert!(format.ends_with(suffix), "{format}");
 }
