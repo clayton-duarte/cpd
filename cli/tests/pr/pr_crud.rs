@@ -189,7 +189,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "jobs": ["api-config"]})
+               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jobs": ["api-config"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
@@ -215,7 +215,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(added[1]["plan"], "pay-1");
     assert_eq!(
         added[1]["data"],
-        json!({"pr": "web", "repo": fx.web.display().to_string(), "base": "main", "title": "Change web", "needs": ["api"], "appended": false})
+        json!({"pr": "web", "repo": fx.web.display().to_string(), "base": "main", "title": "Change web", "head_ref": null, "author": null, "needs": ["api"], "appended": false})
     );
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Change web");
     let shown = fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();

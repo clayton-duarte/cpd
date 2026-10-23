@@ -65,6 +65,13 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let wants_others = args.repo.is_some() || args.base.is_some() || needs.is_some();
     let wants_title = args.title.is_some();
     let stored = env.store.read(|conn| editable_pr(conn, &plan, &key, wants_title, wants_others))?.0;
+    if stored.head_ref.is_some()
+        && let Some(flag) = [(args.repo.is_some(), "--repo"), (args.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
+    {
+        return Err(CpdError::new(ErrorCode::PrAdopted, format!("PR {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
+            .with("pr", key.as_str())
+            .with("flag", flag));
+    }
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
     let name = repo.as_deref().map(|r| key_repo(&mut env, &plan, r)).transpose()?;
     let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
@@ -151,13 +158,6 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
 
 fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
     let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some(), edits.others())?;
-    if let Some(flag) = [(edits.repo.is_some(), "--repo"), (edits.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
-        && before.head_ref.is_some()
-    {
-        return Err(CpdError::new(ErrorCode::PrAdopted, format!("PR {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
-            .with("pr", key.as_str())
-            .with("flag", flag));
-    }
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();

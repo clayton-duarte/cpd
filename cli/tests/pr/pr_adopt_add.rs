@@ -28,6 +28,7 @@ fn fx() -> Fx {
     env.git(&pay, &["add", "-A"]);
     env.git(&pay, &["commit", "-q", "-m", "tests table"]);
     env.git(&pay, &["update-ref", "refs/remotes/origin/main", "main"]);
+    env.git(&pay, &["update-ref", "refs/remotes/origin/release", "main"]);
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let root = env.root().display().to_string();
@@ -247,7 +248,7 @@ fn the_head_branch_of_a_pr_cannot_change_and_is_unique_among_live_prs() {
     write(&insert("pay-1", "a", "waiting")).expect("insert a PR with a head_ref");
     let err = write("UPDATE prs SET head_ref = 'feat/z' WHERE key = 'a'").expect_err("head_ref is fixed");
     assert!(format!("{err:?}").contains("pr_locked"), "{err:?}");
-    let err = write(&insert("pay-2", "b", "open")).expect_err("a second live PR with the head");
+    let err = write(&insert("pay-2", "b", "waiting")).expect_err("a second live PR with the head");
     assert!(format!("{err:?}").to_lowercase().contains("unique"), "{err:?}");
     // A cancelled row does not count.
     write(&insert("pay-2", "c", "cancelled")).expect("a cancelled row does not hold the head");

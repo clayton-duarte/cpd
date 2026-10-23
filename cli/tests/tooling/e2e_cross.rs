@@ -363,7 +363,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(
         out["pr"],
         json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/chain/a1", "appended": false, "shape": "config", "jobs": ["a1-config"]})
+               "lead_branch": "cpd/chain/a1", "appended": false, "shape": "config", "head_ref": null, "jobs": ["a1-config"]})
     );
     let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--shape", "config", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));

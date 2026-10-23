@@ -947,8 +947,8 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let dir = tempfile::tempdir().unwrap();
     let (store, before) = migrated_5(&dir);
     drop(store);
-    // `prs_shape_fixed` is `job-kinds`': it is not one of migration 5's.
-    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_hist_del").collect();
+    // `prs_shape_fixed` is `job-kinds`' and `prs_head_ref_fixed` is `pr-adopt`'s: neither is one of migration 5's.
+    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_head_ref_fixed" && name != "prs_hist_del").collect();
     let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
@@ -2762,11 +2762,12 @@ fn stacked_prs_keeps_every_pr_and_need() {
         vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
-    // `job-kinds` added `prs.shape`, last, `free` in every row.
+    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row.
     let without_shape: Vec<String> = after["prs"]
         .iter()
         .map(|row| {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+            assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::json!("free")));
             serde_json::Value::from(cells).to_string()
         })
@@ -2994,7 +2995,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             .collect()
     };
     assert_eq!(strip(&after["jobs"], 4, "work"), before["jobs"]);
-    assert_eq!(strip(&after["prs"], 1, "free"), before["prs"]);
+    assert_eq!(strip(&after["prs"], 2, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
