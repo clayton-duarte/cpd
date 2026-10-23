@@ -124,12 +124,14 @@ pub fn is_fetch_race(stderr: &str) -> bool {
 /// Whether a failed `git worktree add` or `git worktree list` read another
 /// cpd operation's half-written (being added) or half-removed `.git/worktrees/<id>/`: `fatal: failed to read
 /// .git/worktrees/<id>/commondir: Success` (the file created, not yet written)
-/// or `...: No such file or directory`.
+/// `...: Undefined error: 0` (macOS's text for strerror(0)) or `...: No such file or directory`.
 pub fn is_admin_dir_race(stderr: &str) -> bool {
     stderr.lines().any(|line| {
         line.starts_with("fatal: failed to read ")
             && line.contains("worktrees/")
-            && (line.ends_with("/commondir: Success") || line.ends_with("/commondir: No such file or directory"))
+            && (line.ends_with("/commondir: Success")
+                || line.ends_with("/commondir: Undefined error: 0")
+                || line.ends_with("/commondir: No such file or directory"))
     })
 }
 
@@ -161,6 +163,14 @@ pub fn worktree_add(dir: &Path, args: &[&str], path: &Path) -> Result<String, Cp
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn is_admin_dir_race_matches_the_linux_and_macos_text_of_strerror_zero() {
+        for tail in ["Success", "Undefined error: 0"] {
+            let line = format!("fatal: failed to read .git/worktrees/x/commondir: {tail}");
+            assert!(super::is_admin_dir_race(&line), "{line}");
+        }
+    }
+
     use super::{is_fetch_race, is_admin_dir_race};
 
     #[test]
