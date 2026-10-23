@@ -1278,7 +1278,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         ("red:", palette::NEEDS_YOU, Dot::Red),
         ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
         ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
-        ("blue:", palette::NEEDS_YOU, Dot::Blue),
+        ("cyan:", palette::NEEDS_YOU, Dot::Cyan),
         ("white:", palette::NEEDS_YOU, Dot::White),
     ] {
         let cell = &buf[glyph_at(text)];
