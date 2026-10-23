@@ -40,3 +40,4 @@ mod policy;
 mod review_job;
 mod review;
 mod spec;
+mod repo_config;
