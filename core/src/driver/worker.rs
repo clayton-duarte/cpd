@@ -11,7 +11,6 @@ use serde_json::Value;
 use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::git;
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
@@ -139,7 +138,7 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
     let answers = answers(conn, target)?;
     let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
     let quick_check = spec::quick_check(&policy.hooks.pre_commit);
-    let protected = git::protected_list(&target.worktree, &target.lead_branch)?;
+    let protected = policy.protected.paths.clone();
     let job_spec = job.require_spec()?;
     let (touches, acceptance, out_of_scope) = (
         strings(&job_spec.touches, "touches")?,

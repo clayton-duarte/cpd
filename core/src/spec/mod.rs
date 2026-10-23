@@ -3,7 +3,7 @@
 //! binary, so nothing in a repo or worktree can change what Workers are told.
 //!
 //! The driver gathers the facts (the Job, the earlier Attempts, the answered
-//! Escalations, the protected list of [`crate::git::protected_list`]) and calls
+//! Escalations, the PR policy's `protected.paths`) and calls
 //! [`render`] or [`write`]; [`quick_check`] lists the commands of the PR's policy `hooks.pre-commit`.
 
 use std::path::{Path, PathBuf};
@@ -20,8 +20,8 @@ use crate::ids::{AttemptId, EscalationId, PlanId};
 
 const TEMPLATE: &str = include_str!("worker.md");
 
-/// What no Attempt may touch, whatever the repo's own list says (§7.5).
-const ALWAYS_PROTECTED: [&str; 3] = [".config/wt.toml", ".config/cpd.toml", ".cpd/"];
+/// What no Attempt may touch, whatever the PR's `protected.paths` say (§7.5).
+const ALWAYS_PROTECTED: [&str; 1] = [".cpd/"];
 
 /// How an earlier Attempt ended (§3.4): its cause, which fixes its outcome.
 /// Only `merge_conflict` carries what explains it.
@@ -174,7 +174,7 @@ pub struct Input<'a> {
     /// The commands of the PR's `hooks.pre-commit`, as [`quick_check`] lists them;
     /// empty when the repo defines none.
     pub quick_check: &'a [String],
-    /// The repo's own protected list (§7.5); the always-protected paths are added here.
+    /// The PR policy's `protected.paths` (§7.5); the always-protected paths are added here.
     pub protected: &'a [String],
     /// Earlier ended Attempts of this Job, oldest first.
     pub previous: &'a [Previous],

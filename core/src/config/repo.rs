@@ -1,12 +1,12 @@
-//! The `[tests]` table of a repo's `.config/cpd.toml` (contract §7.7): the commands that build, find and run the
-//! named tests of a `test` or `impl` Job. Read from the Lead Branch's tree by [`crate::git::tamper`], next to the
-//! `protected` list: one file, one parse, so a table that is not as documented is `config_invalid` wherever it is read.
+//! The `[test-commands]` table of a repo's policy file (contract §7.7, §8.3): the commands that build, find and run the
+//! named tests of a `test` or `impl` Job. The policy loader parses it and validates it with [`RepoTests::validate`]: a
+//! table that is not as documented is `policy_invalid`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::git::hooks::template_uses;
 
-/// `[tests]`: `build` and `run` are required, `list` is optional (hs-d497); any other key is refused.
+/// `[test-commands]`: `build` and `run` are required, `list` is optional (hs-d497); any other key is refused.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RepoTests {
