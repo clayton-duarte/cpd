@@ -135,6 +135,7 @@ test("a session show that fails once then succeeds starts the adapter normally (
   await waitFor("a retry", () => f.argvs().filter((a) => a[1] === "show").length >= 3);
   f.respond("session-show", shown());
   await waitFor("the follower", () => f.follows().length > 0);
+  await waitFor("the tracker's review list", () => f.argvs().some((a) => a[0] === "review" && a[1] === "list"));
   assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
   assert.deepEqual(f.argvs().slice(-3), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"], ["review", "list", "--session", ID]]);
   assert.equal(f.pi.sessionName, "the lead");
