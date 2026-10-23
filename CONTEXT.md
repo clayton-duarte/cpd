@@ -113,7 +113,7 @@ A self-contained unit of work defined by a Spec, executable by a fresh agent ses
 _Avoid_: card, task, step
 
 **Job kind** (new, hs-d340, hs-d341):
-What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs a `[tests]` table in its `.config/cpd.toml` before its PRs can be `tdd`; the Lead adds it.
+What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs `[test-commands]` in its repo policy file before its PRs can be `tdd`.
 _Avoid_: type, category, role
 
 **Open Job** (new, hs-d340):
@@ -221,7 +221,7 @@ _Avoid_: blocker, ask
 ## Outcomes
 
 **Gate** (changed):
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in a gate worktree, at the submit of the PR's open or update Job (before cpd pushes), and in `pr open`, `pr push` and `pr rebase`, the repair, before they push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job (a Job's submit runs the quick check, and a test or impl Job's own tests) or per merge (R19).
+The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in its repo policy file (`[hooks]`, contract §7.3) and run by cpd only at the PR level: on a PR's Lead Branch, in a gate worktree, at the submit of the PR's open or update Job (before cpd pushes), and in `pr open`, `pr push` and `pr rebase`, the repair, before they push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job (a Job's submit runs the quick check, and a test or impl Job's own tests) or per merge (R19).
 _Avoid_: CI, checks
 
 **Quick check** (new):
@@ -243,16 +243,19 @@ _Avoid_: level, profile
 ## Policies
 
 **Policy** (new, hs-d288):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's owner and repo files under `$CPD_HOME/policy/` (contract §8.3). Never per machine (hs-d263), and not in a repo's committed files yet. `cpd policy show` prints one.
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's owner and repo files under `$CPD_HOME/policy/` (contract §8.3). Never per machine (hs-d263). cpd reads nothing from a repo's tree. `cpd policy show` prints one.
 _Avoid_: rules, settings, profile, config
 
 **Domain** (new, hs-d288):
-One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`, `monitor` or `instructions`. Its value has typed keys that cpd's commands branch on (such as `pr.gate`, `local` or `ci`) and a free `text` for the agents its fixed audience names. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
+One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`, `monitor`, `instructions` or, for a repo only, `hooks`, `test-commands` or `protected`. Its value has typed keys that cpd's commands branch on (such as `pr.gate`, `local` or `ci`) and a free `text` for the agents its fixed audience names. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
 _Avoid_: section, category, setting
 
 **Scope** (new, hs-d288):
 Where a Domain's value is set: cpd's default, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > default, hs-d279); no Domain adds up across Scopes.
 _Avoid_: layer, level, override file
+
+**Repo policy file** (new):
+The repo scope of a Policy, `$CPD_HOME/policy/repos/<owner>/<name>.toml`: required for every repo cpd works on (`repo_unconfigured` when missing; an empty file means nothing to configure), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
 
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.

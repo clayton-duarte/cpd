@@ -362,7 +362,7 @@ function factProblems(files: { name: string; text: string }[]): string[] {
   const codes = errorCodes();
   const vocab = vocabulary();
   const flags = knownFlags();
-  const hooks = new Set(["pre-start", "pre-commit", "pre-merge"].filter((h) => section(contractDoc, "### 7.3 Hooks from `.config/wt.toml`").includes(`| \`${h}\` |`)));
+  const hooks = new Set(["pre-start", "pre-commit", "pre-merge"].filter((h) => section(contractDoc, "### 7.3 Hooks from the repo policy file").includes(`| \`${h}\` |`)));
   const defaults = configDefaults();
   const edges = new Map<string, string>(); // the first transition out of each phase
   for (const m of section(contractDoc, "### 3.1 Plan phases").matchAll(/^\s+([a-z]+) --> ([a-z]+):/gm)) if (!edges.has(m[1]!)) edges.set(m[1]!, m[2]!);
