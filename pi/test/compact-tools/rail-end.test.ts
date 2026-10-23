@@ -1,10 +1,10 @@
 /**
  * The rail end rule (docs/contract.md 6.9, the table of closing rows): every pill head ` ╭─` is, at every instant of
  * the row's life, followed by exactly ONE closing row, and it is one of five forms:
- *   1/2  ` ╰󰁋 expand` / ` ╰󰁣 collapse`    the fold's toggle, glyph in 7
+ *   1/2  ` ╰󰬦 expand` / ` ╰󰬬 collapse`    the fold's toggle, glyph in 7
  *   3    ` ╰` in 8 + one loader frame in 6    from the row's creation (argument streaming included) until a result
- *   4    ` ╰󰁚` in 8                            a block that cannot fold
- *   5    ` ╰󰁋 choose`, the whole row in 8      `ask_user_question` only, from the start of its execution until its result
+ *   4    ` ╰󰬪` in 8                            a block that cannot fold
+ *   5    ` ╰󰬦 choose`, the whole row in 8      `ask_user_question` only, from the start of its execution until its result
  * Rows are driven through Pi's own ToolExecutionComponent in Pi's order (indicator-harness.ts).
  */
 import assert from "node:assert/strict";
@@ -17,9 +17,9 @@ import {
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const FRAMES = MOON_FRAMES;
 const LOADER = new RegExp(`^ \u2570[${FRAMES.join("")}]$`, "u");
-const TOGGLE = /^ \u2570[\u{F004B}\u{F0063}] (expand|collapse)( · .*)?$/u;
-const TERMINATOR = /^ \u2570\u{F005A}$/u;
-const CHOOSE = /^ \u2570\u{F004B} choose$/u;
+const TOGGLE = /^ \u2570[\u{F0B26}\u{F0B2C}] (expand|collapse)( · .*)?$/u;
+const TERMINATOR = /^ \u2570\u{F0B2A}$/u;
+const CHOOSE = /^ \u2570\u{F0B26} choose$/u;
 const WIDTHS = [40, 100];
 
 type Row = ReturnType<typeof makeRow>;
@@ -61,7 +61,7 @@ function formOf(raw: string): Form | undefined {
 		const line = raw.includes("\x1b[90m \u2570") || raw.includes("\x1b[90m\u2570");
 		return line && /\x1b\[36m$/u.test(before) && !raw.includes("\x1b[37m") ? "loader" : undefined;
 	}
-	if (TOGGLE.test(text)) return /\x1b\[37m[^\x1b]*[\u{F004B}\u{F0063}]/u.test(raw) ? "toggle" : undefined;
+	if (TOGGLE.test(text)) return /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u.test(raw) ? "toggle" : undefined;
 	return undefined;
 }
 
@@ -263,7 +263,7 @@ test("a custom tool with its own result renderer closes with one of the five", a
 	});
 });
 
-test("ask_user_question closes with ╰󰁋 choose in colour 8 from the start of its execution until its result", async () => {
+test("ask_user_question closes with ╰󰬦 choose in colour 8 from the start of its execution until its result", async () => {
 	await withHarness((harness) => {
 		for (const stage of ["started", "empty partial", "partial"] as const) {
 			for (const width of WIDTHS) {
@@ -271,7 +271,7 @@ test("ask_user_question closes with ╰󰁋 choose in colour 8 from the start of
 				const lines = drawn(rowAt(harness, ask, stage, false), width);
 				assert.equal(closingOf(lines, where), "choose", where);
 				const last = lines.at(-1)!;
-				assert.equal(plain(last), " \u2570\u{F004B} choose", where);
+				assert.equal(plain(last), " \u2570\u{F0B26} choose", where);
 				assert.ok(!/\x1b\[(37|36|97)m/u.test(last), `${where}: the whole row is colour 8, not clickable: ${JSON.stringify(last)}`);
 			}
 		}

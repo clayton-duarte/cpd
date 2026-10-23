@@ -19,7 +19,7 @@ const RIGHT = "\uE0B4";
 const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "").trim();
 const rows = (lines: string[]) => lines.map(plain).filter((line) => line !== "");
 const ITALIC = /\x1b\[3m/u;
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const TEXT = "The user wants the pill to expand, so I will look at how the title is built.\n\nThen decide what the fold should hold.";
 
 function live(hideThinkingBlock = false) {
@@ -48,10 +48,10 @@ const EXPANDED = [
 	"│ built.",
 	"│",
 	"│ Then decide what the fold should hold.",
-	"╰\u{F0063} collapse",
+	"╰\u{F0B2C} collapse",
 	"done",
 ];
-const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F004B} expand", "done"];
+const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand", "done"];
 
 /**
  * String and template literals of a source holding `...`; a spread and a comment are not literals.

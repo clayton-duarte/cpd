@@ -71,7 +71,7 @@ test("a finished row closes with the toggle in 7 and the line in 8", async () =>
 		const lines = row.render(100).filter((line) => plain(line).trim() !== "");
 		const close = lines[lines.length - 1]!;
 		assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
-		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F004B}\u{F0063}]/u, `toggle in 7: ${JSON.stringify(close)}`);
+		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u, `toggle in 7: ${JSON.stringify(close)}`);
 		assert.ok(!new RegExp(GLYPH, "u").test(close), "no loader frame once finished");
 		// The running row of the same tool is not a toggle: its closing row has no 7.
 		const live = await running("toggle");

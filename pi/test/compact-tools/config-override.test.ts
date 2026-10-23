@@ -23,8 +23,8 @@ async function loadHarness() {
 	return loaded;
 }
 
-const EXPAND = "\u{F004B}";
-const COLLAPSE = "\u{F0063}";
+const EXPAND = "\u{F0B26}";
+const COLLAPSE = "\u{F0B2C}";
 const SEVEN = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 
 const agentFile = () => join(process.env.PI_CODING_AGENT_DIR!, "compact-tools.json");
