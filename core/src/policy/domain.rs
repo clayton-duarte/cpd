@@ -260,7 +260,12 @@ impl Set for HooksSet {
     }
 
     fn complete(&self) -> Option<Hooks> {
-        Some(Hooks { pre_start: self.pre_start.clone()?, pre_commit: self.pre_commit.clone()?, pre_merge: self.pre_merge.clone()? })
+        // A hook left out is no hook: cpd's default table is empty.
+        Some(Hooks {
+            pre_start: self.pre_start.clone().unwrap_or_default(),
+            pre_commit: self.pre_commit.clone().unwrap_or_default(),
+            pre_merge: self.pre_merge.clone().unwrap_or_default(),
+        })
     }
 }
 
