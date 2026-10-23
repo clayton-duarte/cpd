@@ -1,6 +1,6 @@
 /**
  * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking…`
- * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
+ * (inverted 7, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
  * `╰󰬦 expand`, expanded the whole text on rails 8 in text 7 then `╰󰬬 collapse`. Headings stay text.
  * With hideThinkingBlock: true the view still starts folded (pill and expand row); pi's hidden label is only a step of Ctrl+T.
  * Rows may carry the cockpit's one leading space, so rows are compared without it.
@@ -69,7 +69,7 @@ test("a thinking block folds to one Thinking pill and an expand toggle", () => {
 	}
 });
 
-test("the Thinking pill is bg 7 with text 0 and caps 7", () => {
+test("the Thinking pill is inverted in 7 with caps 7", () => {
 	const head = folded(SOURCE).split("\n").find((line) => line.includes(LEFT))!;
 	assert.ok(head, "a head row with a pill");
 	const left = head.indexOf(LEFT);
@@ -77,8 +77,8 @@ test("the Thinking pill is bg 7 with text 0 and caps 7", () => {
 	assert.ok(right > left, "a right cap");
 	assert.ok(head.slice(0, left).endsWith(`${ESC}37m`), `left cap in fg 7: ${JSON.stringify(head)}`);
 	const body = head.slice(left + 1, right);
-	assert.ok(body.includes(`${ESC}47m`), `title on bg 7: ${JSON.stringify(body)}`);
-	assert.ok(body.includes(`${ESC}30m`), `title text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(`${ESC}7m`) && body.endsWith(`${ESC}27m`), `title inverted: ${JSON.stringify(body)}`);
+	assert.ok(!body.includes(`${ESC}47m`) && !body.includes(`${ESC}30m`), `no bg 7, no text 0: ${JSON.stringify(body)}`);
 	assert.ok(!/\x1b\[(36|46|96|106)m/u.test(head), "no cyan");
 });
 

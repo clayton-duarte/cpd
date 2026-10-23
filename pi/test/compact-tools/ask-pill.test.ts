@@ -9,7 +9,7 @@ import { advance, announce, CASES, loadExtension, makeRow, shutdown, text } from
 
 const ESC = "\x1b[";
 const pillOf = (n: number, name: string) =>
-	`${ESC}${30 + n}m\uE0B6${ESC}39m${ESC}${40 + n}m${ESC}30m${name}${ESC}39m${ESC}49m${ESC}${30 + n}m\uE0B4${ESC}39m`;
+	`${ESC}${30 + n}m\uE0B6${ESC}7m${name}${ESC}27m\uE0B4${ESC}39m`;
 const ARGS = { questions: [{ question: "Which one?", header: "Pick", options: ["a", "b"] }] };
 let sequence = 0;
 

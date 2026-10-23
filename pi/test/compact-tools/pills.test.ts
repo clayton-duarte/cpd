@@ -1,6 +1,6 @@
 /**
  * Tool pills and the Thinking pill (docs/contract.md sections 6.1.1 and 6.9): a block is its colour as
- * background with text 0 (\x1b[30m), caps U+E0B6 / U+E0B4 in the colour as foreground. Running (and not
+ * reverse video (\x1b[7m ... \x1b[27m, text in the terminal background), caps U+E0B6 / U+E0B4 in the colour as foreground. Running (and not
  * yet started) cyan 6, done green 2, failed red 1, Thinking grey 7 (hs-d557). Indexed SGR only.
  */
 import assert from "node:assert/strict";
@@ -16,7 +16,8 @@ const ESC = "\x1b[";
 const COLOUR = { cyan: 6, green: 2, red: 1, grey: 7 } as const;
 const fg = (n: number) => `${ESC}${30 + n}m`;
 const bg = (n: number) => `${ESC}${40 + n}m`;
-const TEXT0 = `${ESC}30m`;
+const INVERT = `${ESC}7m`;
+const REVERT = `${ESC}27m`;
 
 /** The pill the colour draws around a title: left cap, title on the colour with text 0, right cap. */
 function pillAround(colour: number, line: string): void {
@@ -26,8 +27,9 @@ function pillAround(colour: number, line: string): void {
 	const right = line.indexOf(RIGHT, left);
 	assert.ok(right > left, `a right cap in ${JSON.stringify(line)}`);
 	const body = line.slice(left + 1, right);
-	assert.ok(body.includes(bg(colour)), `title on bg ${colour}: ${JSON.stringify(body)}`);
-	assert.ok(body.includes(TEXT0), `title text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.includes(INVERT) && body.includes(REVERT), `title inverted: ${JSON.stringify(body)}`);
+	assert.ok(!body.includes(bg(colour)) && !body.includes(`${ESC}30m`), `no bg, no text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(INVERT) && body.endsWith(REVERT), `whole pill shape: ${JSON.stringify(body)}`);
 	assert.ok(line.slice(right).startsWith(RIGHT));
 }
 
