@@ -17,7 +17,6 @@ use nix::unistd::Pid;
 use super::archive::archive_on_quit;
 use super::fork_wait::wait_for_source;
 use super::moves::first_message;
-use super::port;
 use super::reload::{adapter_missing, may_exec, reload, reload_due, stop_pi};
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, not_a_lead, state};
@@ -157,19 +156,17 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     }
 }
 
-/// Steps 1–3 and the start of pi (§10.8): the Plan's port, how pi starts, pi
-/// itself. Also the identity of pi's install, recorded right before pi starts:
-/// a change after it is a pi the Lead has not run yet. `None` when the range
-/// of ports is full and the User ended the input.
+/// Steps 1–3 and the start of pi (§10.8): how pi starts, pi itself. Also the
+/// identity of pi's install, recorded right before pi starts: a change after
+/// it is a pi the Lead has not run yet. `None` when a fork's source can never
+/// become idle and the User ended the input.
 fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, Option<Watched>)>, CpdError> {
-    // A Lead with a Plan gets the Plan's port; a Context's Manager gets its Context's (§6.5, hs-d496).
-    let Some(port) = assign_port(env, row)? else { return Ok(None) };
     // `None`: a fork whose source can never become idle reached the end of input (main #60, hs-d196).
     let Some(start) = start(env, dirs, row)? else { return Ok(None) };
     let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
-    // The port is the Plan's, whatever the environment holds; the host is the review host (§6.5).
-    let plannotator = Plannotator { port: Some(port.to_string()), url_host: review_host(&mut std::io::stderr()) };
+    // The port is the configured range, whatever the environment holds; the host is the review host (§6.5).
+    let plannotator = Plannotator::from_config(&env.config, review_host(&mut std::io::stderr()));
     git_guard::install(&env.home)?;
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
@@ -281,30 +278,6 @@ pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, Cpd
                 wait = (wait * 2).min(RETRY_MAX);
             }
             other => return other,
-        }
-    }
-}
-
-/// The Plan's plannotator port. When the range is full the pane says so, names the
-/// Plans that hold it and waits for Enter to try again; `None` at the end of input.
-fn assign_port(env: &mut Env, row: &Row) -> Result<Option<u16>, CpdError> {
-    loop {
-        let assigned = patiently("assigning the plannotator port", || match &row.plan {
-            Some(plan) => port::assign(&env.home, &mut env.store, &env.config, plan),
-            None => port::assign_manager(&env.home, &mut env.store, &env.config, &row.context),
-        });
-        match assigned {
-            Ok(port) => return Ok(Some(port)),
-            Err(e) if e.code() == ErrorCode::NoPort => {
-                print!("\n  {}: {}\n  Press Enter to retry.\n", e.code(), e.message());
-                let _ = std::io::stdout().flush();
-                let mut line = String::new();
-                match std::io::stdin().lock().read_line(&mut line) {
-                    Ok(0) | Err(_) => return Ok(None),
-                    Ok(_) => {}
-                }
-            }
-            Err(e) => return Err(e),
         }
     }
 }
