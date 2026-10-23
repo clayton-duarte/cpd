@@ -80,6 +80,12 @@ const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 /// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
 const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
 
+/// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one while the Lead works,
+/// `needs_user.lead_working`).
+pub(crate) fn spins(jobs: &[read::JobNode], needs_user: &read::NeedsUser) -> bool {
+    jobs.iter().any(|j| matches!(flow::Live::of(j, needs_user.lead_working), flow::Live::Running | flow::Live::FailedWorked))
+}
+
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
     slot: ChatSlot,
@@ -92,7 +98,7 @@ struct Centre {
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
     fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running)
+        spins(&self.plan.jobs, &self.plan.needs_user)
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
