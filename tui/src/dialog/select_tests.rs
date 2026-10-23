@@ -180,8 +180,8 @@ fn mock_tmux(dir: &tempfile::TempDir) -> (Tmux, PathBuf) {
     let script = format!(
         "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
          case \" $* \" in *\" list-clients \"*) echo '1 100 30';; esac\n\
-         if [ \"$1\" = display-popup ]; then\n  for last; do :; done\n  out=${{last#*--out=\\'}}; out=${{out%%\\'*}}\n  \
-         [ -f '{result}' ] && cp '{result}' \"$out\"\nfi\nexit 0\n",
+         case \" $* \" in *\" display-popup \"*)\n  for last; do :; done\n  out=${{last#*--out=\\'}}; out=${{out%%\\'*}}\n  \
+         [ -f '{result}' ] && cp '{result}' \"$out\";;\nesac\nexit 0\n",
         calls = calls.display(),
         result = dir.path().join("result").display()
     );
