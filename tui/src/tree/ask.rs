@@ -119,6 +119,8 @@ pub trait Dialogs {
     fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError>;
     /// Whether a `confirm` popup was confirmed.
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError>;
+    /// The option chosen in a `select` popup; `None` when cancelled.
+    fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError>;
     /// What the delete of `what` would remove: the reply of the command without `--yes`, or why it is refused.
     fn preview(&self, what: &Deletable) -> Result<Value, String>;
 }
@@ -238,6 +240,10 @@ mod tests {
         fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
             self.opened.borrow_mut().push(format!("confirm {title} | {text} | {yes_label}"));
             Ok(self.yes)
+        }
+
+        fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, CpdError> {
+            unreachable!("no select in this test")
         }
 
         fn preview(&self, _: &Deletable) -> Result<Value, String> {
@@ -383,6 +389,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, CpdError> {
                 Err(CpdError::new(cpd_core::error::ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit."))
+            }
+            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, CpdError> {
+                unreachable!("no select in this test")
             }
             fn preview(&self, _: &Deletable) -> Result<Value, String> {
                 Err("refused".to_owned())

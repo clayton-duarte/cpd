@@ -916,6 +916,9 @@ mod tests {
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(self.0.is_some())
             }
+            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
+                unreachable!("no select in this test")
+            }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
             }
@@ -1746,6 +1749,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(false)
+            }
+            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
+                unreachable!("no select in this test")
             }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
