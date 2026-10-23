@@ -159,11 +159,16 @@ fn note(log: &mut dyn Write, line: &str) {
     let _ = writeln!(log, "cpd: {line}");
 }
 
+/// The npm package cpd's adapter replaced with its own copy (`pi/ask-user-question/`).
+const RETIRED_NPM_PACKAGE: &str = "@juicesharp/rpiv-ask-user-question";
+
 /// The `[-e …]` rule (contract §6.5): of `candidates`, the ones pi's global
 /// settings (`<agent dir>/settings.json`) and project settings
 /// (`<cwd>/.pi/settings.json`) do not already declare, compared by package
 /// identity. Candidates resolve from `cwd`, as pi resolves `-e`. Each skipped
 /// candidate is logged to `log` with the settings file that declares it.
+/// A candidate that is the retired package (`RETIRED_NPM_PACKAGE`, whatever
+/// the version) is dropped first, with one log line, before the settings rule.
 pub fn extensions_to_pass(candidates: &[String], cwd: &Path, dirs: &PiDirs, log: &mut dyn Write) -> Vec<String> {
     let mut declared_packages = declared(&dirs.global_settings(), &dirs.home, log);
     declared_packages.extend(declared(&project_settings(cwd), &dirs.home, log));
@@ -171,6 +176,10 @@ pub fn extensions_to_pass(candidates: &[String], cwd: &Path, dirs: &PiDirs, log:
         .iter()
         .filter(|candidate| {
             let id = package_identity(candidate, cwd, &dirs.home);
+            if id == PackageId::Npm(RETIRED_NPM_PACKAGE.to_owned()) {
+                note(log, &format!("not passing -e {candidate}: cpd's adapter carries its own copy of it"));
+                return false;
+            }
             match declared_packages.iter().find(|d| d.id == id) {
                 Some(d) => {
                     note(
@@ -275,12 +284,12 @@ mod tests {
         let f = Fixture::new();
         let settings = f.global(
             r#"{"packages": ["npm:@plannotator/pi-extension@0.30.0",
-                {"source": "npm:@juicesharp/rpiv-ask-user-question", "skills": []}]}"#,
+                {"source": "npm:@example/other-tool", "skills": []}]}"#,
         );
         let candidates = strs(&[
             "/opt/pi",
             "npm:@plannotator/pi-extension@0.28.17",
-            "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+            "npm:@example/other-tool@2.0.0",
             "npm:@other/pkg@1.0.0",
         ]);
         let (kept, log) = f.pass(&candidates);
@@ -289,7 +298,7 @@ mod tests {
         assert_eq!(lines.len(), 2, "{log}");
         assert!(lines[0].contains("-e npm:@plannotator/pi-extension@0.28.17"), "{log}");
         assert!(lines[0].contains(&settings.display().to_string()), "{log}");
-        assert!(lines[1].contains("-e npm:@juicesharp/rpiv-ask-user-question@2.13.8"), "{log}");
+        assert!(lines[1].contains("-e npm:@example/other-tool@2.0.0"), "{log}");
     }
 
     #[test]

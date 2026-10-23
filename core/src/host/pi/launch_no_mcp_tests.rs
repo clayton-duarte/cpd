@@ -1,4 +1,4 @@
-//! `--no-mcp` in every Session's pi argv (contract §6.6 argv table, §6.10; pro-d3, pro-d7): pi then loads no built-in MCP extension, so no `mcp.json` reaches a Session.
+//! `--no-mcp` in every Session's pi argv (contract §6.6 argv table, §6.11; pro-d3, pro-d7): pi then loads no built-in MCP extension, so no `mcp.json` reaches a Session.
 //! The one-shot runs (`--no-extensions`) have no MCP already and are unchanged.
 
 use std::num::NonZeroU32;

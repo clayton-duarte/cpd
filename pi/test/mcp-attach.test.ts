@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { ev, Fixture, ID, OTHER, planShow, shown, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
-// pro-d8, commands.md §15.3 `mcp-attached`, contract §5.3 and §6.10: the Event for the adapter's own Session registers the server with pi (`pi.registerMcpServer(name, server)`),
+// pro-d8, commands.md §15.3 `mcp-attached`, contract §5.3 and §6.11: the Event for the adapter's own Session registers the server with pi (`pi.registerMcpServer(name, server)`),
 // with no message and no turn; one for another Session registers nothing. Each test is red now because the adapter does not know the kind.
 
 const SERVER = { url: "https://mcp.slack.com/mcp", exposure: "hidden", toolExposure: { slack_read_channel: "direct" } };
