@@ -221,9 +221,9 @@ impl Pulled {
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `list` the PR's Jobs, for the body.
 pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, list: &[jobs::Job]) -> Result<Pulled, CpdError> {
-    match gh::head_pr(lead, &pr.lead_branch)? {
+    match gh::head_pr(lead, pr.remote_branch())? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head)?, merged: true }),
-        Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, &pr.lead_branch, &head)),
+        Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
         Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, list)?, merged: false }),
         None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, list)?, merged: false }),
     }
