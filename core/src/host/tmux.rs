@@ -660,6 +660,18 @@ impl Tmux {
         Ok((!value.is_empty()).then(|| value.to_owned()))
     }
 
+    /// The path of the executable process `pid` runs, `None` when it cannot be read (the process is gone).
+    /// Linux: `/proc/<pid>/exe`, which stays readable (and the same inode) when an upgrade replaced the file.
+    /// macOS: `libproc`'s path of the pid, the file now at that path: a process started from a binary that was
+    /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
+    /// unlinked executable: unverified).
+    pub fn pid_exe(pid: u32) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        return libproc::proc_pid::pidpath(i32::try_from(pid).ok()?).ok().map(PathBuf::from);
+        #[cfg(not(target_os = "macos"))]
+        return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+    }
+
     /// `display -p '#{version}'`: the version of the tmux the server runs
     /// (`3.4`, `next-3.7`), which is the one it was started with.
     pub fn server_version(&self) -> Result<String, CpdError> {
