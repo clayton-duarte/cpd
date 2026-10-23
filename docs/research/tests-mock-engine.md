@@ -14,7 +14,7 @@ engine: the real count is 191 (121 + 32 + 38 in the small files). `store.rs:1239
 
 - `TestEnv::empty/new` (`common/mod.rs:714-770`) makes a temp dir, starts a **reaper** `sh teardown.sh watch <test pid>` in its own
   process group (`:249-260`; its loop is `sleep 1` while the dir exists, `TEARDOWN_SH`) and writes a denied-tool shim for each
-  of `DENIED_TOOLS`. `Drop` kills the reaper and runs `teardown.sh` (`:774-788`): `kill`, `sleep 0.05` loops (up to 1 s), `rm -rf`.
+  of `DENIED_TOOLS` (gh, pi, curl, wget, ssh; `:305`). `Drop` kills the reaper and runs `teardown.sh` (`:774-788`): `kill`, `sleep 0.05` loops (up to 1 s), `rm -rf`.
   Every test that makes a `TestEnv` therefore starts 2 shell processes of our own and reaps them. Own shim: allowed, but not free.
 - `TestEnv::new` needs the **system `sqlite3` CLI** (`common/mod.rs:664-672`, used by the teardown to read `attempts.driver_pid`)
   and, on macOS, `perl`, `ps`, `flock` shim (`:641`). That is an external that is not the bundled rusqlite. Not a test of it, but a hard
@@ -28,7 +28,7 @@ engine: the real count is 191 (121 + 32 + 38 in the small files). `store.rs:1239
   overrides exist as env vars (`host/limit.rs`: `CPD_TEST_*`, debug builds): `PR_POLL`, `DEADLINE_<TOOL>`, `DOCTOR_DEADLINE`,
   `DRIVER_POLL`, `LEAD_POLL`, `KILL_PAUSE`, `FILE_POLL`, `SOURCE_POLL`; the engine tick is `watch.tick_seconds` (minimum 0.1 s).
 - Waits: `wait_until`/`poll` (`common/mod.rs:396-421`) poll every 10 ms up to `WAIT` = 30 s (`:388`); `wait_whole_ticks`
-  (`:1147`) waits for `n+1` fake-`gh` search calls, one per tick (0.1 s, `TICK_SECONDS` `:75`) when the engine runs with
+  (`:1147`) waits for `n+1` fake-`gh` search calls, one per tick (0.1 s, `TICK_SECONDS` `:79`) when the engine runs with
   `PR_POLL_EVERY_TICK`, else one per `pr_poll_seconds` (whole seconds).
 - **Every engine test runs real tmux without creating a server**: each tick the engine calls `tmux list-panes -a` (E2
   `engine/src/watch/liveness.rs:372`, E13 `sleep.rs:87`, E10 `titles.rs:150`) and `server_running` (workers, `workers.rs:95`)
@@ -57,7 +57,7 @@ has one class (the most demanding); counts in the last column are exact only whe
 | engine/watch_titles_width.rs | 2 | `TestEnv::tmux` (7 calls: new-session, set -p, display) | none | engine | `wait_whole_ticks` 1 | fake pi/gh | 2 T (+R: width is read from a pane) |
 | engine/watch_worker_archive.rs | 3 | engine-side | `git_repo` `:50` (fx) | engine | `thread::sleep(1500 ms)` `:141` (3 tests use `some_ticks`: 1 call site) | fake pi/gh | 1 C, 2 K (+G for the fixture) |
 | engine/main.rs | 0 | | | | | | module list only |
-| store/events.rs | 35 | none | none | `cpd events follow` child (`Follower` `:696-731`, killed on `Drop`) in 10 tests; `cpd` runs 18 | `thread::sleep(hold)` `:589`; polls 20 s (`:718 :788 :926`); follower polls on its own | none | 23 K, 12 C (see 2.8) |
+| store/events.rs | 35 | none | none | `cpd events follow` child (`Follower` `:693-731`, killed on `Drop`) in 10 tests; `cpd` runs 18 | `thread::sleep(hold)` `:589`; polls 20 s (`:718 :788 :926`); follower polls on its own | none | 23 K, 12 C (see 2.8) |
 | store/store.rs | 68 | none | none | `Writer` child = this test binary re-run (`:1239-1370`) in 6; `sleep 60` child `:1306`; `cpd` runs 8 | `thread::sleep` 1100/1500/300/100 ms (`:1445 :1746 :1767 :1769 :1796 :1798 :1871`); `Instant` asserts | system `sqlite3` CLI (harness) | 52 K, 13 C, 1 X, 1 helper-not-a-test, 1 K-with-sh (`:1156`) |
 | store/store_window.rs | 4 | none | none | `cpd` runs 2 | none | none | K |
 | store/store_asleep.rs | 1 | none | none | none | none | none | K |
@@ -83,7 +83,7 @@ the "seam" column only names what exists or is missing.
 `ensure_says_the_exit_status_is_unknown_...`, 3379 `ensure_starts_the_engine_for_a_caller_without_a_utf8_locale` (4 locales, 2 ensures each).
 - External: tmux `new-session`, `new-window`, `respawn-pane`, `kill-window`, `kill-server`, `list-panes -a -F`, `list-windows`, `set-hook
   pane-died|window-unlinked`, `set -g`, hook firing, `#{pane_dead_status}`, UTF-8 client mode; plus real `cpd` re-exec into the pane.
-- Real time waited: `BACK` = 10 s ceiling (`:557`, "within seconds"); `thread::sleep` 2 s (`:639`) and 5 s (`:685`, asserts 3..=14 starts, i.e.
+- Real time waited: `BACK` = 10 s ceiling (`:519`, "within seconds"); `thread::sleep` 2 s (`:639`) and 5 s (`:685`, asserts 3..=14 starts, i.e.
   a rate bound on the product's 2 s back-off in `engine/src/watch/ensure.rs`, unverified constant); fake `cpd` `sleep 1` (`:455`).
 - Fix: what is *our* code is the decision list in `ensure.rs` (`list_panes`, `server_running`, `create_session`, `new_window`,
   `respawn_pane`, `kill_window`, `apply_server_options`, lines 122-272): drive it through a fake tmux behind the `Tmux` struct
@@ -192,11 +192,11 @@ fake `Command` runner in `host/deadline.rs`. Size: 0.3 Job. Seam: `host/deadline
   `store_asleep.rs` pay none. Keep; a `TempHome` without reaper would cut 2 processes per test (not required by the rule).
 - C (13), real time of the product's store-lock/ busy wait (`core/src/store/lock.rs:133-188`, `mod.rs:125-132` 50 ms naps, `lock.rs:89` 100 ms): `store.rs:1370 1393 1440 1498 1561 1677 1740 1760 1784 1811 1823 1841`, `events.rs:598`.
   Waits: 1.1 s (`1440`, a real `sleep` *is* the slow work), 1.5 s (`1740`, `events.rs:601`), 0.6 s (`1760 1784`), 0.3 s (`1677 1811 1823`), 0.1 s (`1871`); `1393`/`1498`/`1370`/`1561` spawn a **child test binary**
-  (`Writer`, `current_exe` + `store::child_writer --exact`, `:1239-1370`) holding a lock until a release file. Own process, `KillOnDrop` (`:1286`), no external: allowed, but they depend on
+  (`Writer`, `current_exe` + `store::child_writer --exact`, `:1239-1370`) holding a lock until a release file. Own process, `KillOnDrop` (`:1275`), no external: allowed, but they depend on
   `--test-threads=1` argv shape and on `cargo nextest` accepting an unfiltered `child_writer`.
 - Fix: a clock/sleeper seam in `store/lock.rs` and `store/mod.rs` (`Instant::now` + `thread::sleep`) so "waits longer than busy_ms" runs in 0 s; the child-process ones can stay (two connections in one process suffice for `1393`, `1498`; unverified that
   the holder record `store-writer-<pid>.json` identifies a thread). Fixed delays 300/1500 ms in the *test thread* (`1746-1798`) are the same seam.
-- `events.rs` follow (10 tests, `Follower` `:696`): a real `cpd events follow` child polling the store; `next()` is a blocking `read_line` with no timeout (`:709`): a follower that never prints hangs the test until nextest's
+- `events.rs` follow (10 tests, `Follower` `:693`): a real `cpd events follow` child polling the store; `next()` is a blocking `read_line` with no timeout (`:709`): a follower that never prints hangs the test until nextest's
   own timeout; `exit()` has a 20 s poll. Fix: run `follow` in-process with a `poll` of 0 and an in-memory `Write`; the re-exec test (`:904`) needs a real exe replace (`exe.replaced()`, `core/src/events/mod.rs:171-175`) and stays an own-binary test.
 
 ## 3. Tests that test an external (X)
@@ -220,13 +220,13 @@ fake `Command` runner in `host/deadline.rs`. Size: 0.3 Job. Seam: `host/deadline
    (an Apple binary hides its environment: `mine()` falls back to the dir string, `TEARDOWN_SH`), so an Apple-signed `sleep` pane can survive (unverified).
 2. **Detached E3 drivers** (2.4): `setsid` children recorded in the store; if the store write is lost (engine killed first) the driver has no recorded pid and the teardown cannot find it. The test waits up to 60 s (`:1330 :1444`) for the driver to end.
 3. **Hooks restarting the engine while the server dies** (`kill_tmux_server` `:1036`, comment `hygiene.md 3a`): the supervising `pane-died` hook starts a new engine and a new server in the env being removed; the harness unsets hooks first. Tests 578-664, 3379.
-4. **Load-dependent timing**: `BACK` 10 s (`watch.rs:557`) and `WAIT` 30 s under load 40-120; gap asserts `300..4000 ms` (`:2349`) and `>= 200`, `>= 300` ms (`:2321-2323`) from a shell `date` that can be delayed; `5 s` back-off count `3..=14` (`:685`); store waits `>= 1400 ms`
+4. **Load-dependent timing**: `BACK` 10 s (`watch.rs:519`) and `WAIT` 30 s under load 40-120; gap asserts `300..4000 ms` (`:2349`) and `>= 200`, `>= 300` ms (`:2321-2323`) from a shell `date` that can be delayed; `5 s` back-off count `3..=14` (`:685`); store waits `>= 1400 ms`
    (`store.rs:1754`) and `< 5 s` (`:1700`); doctor `elapsed < 20 s` (`doctor.rs:786`) and the 1 s/0.3 s deadlines (`:752 :767`: the comment at `:723` says a spawn took over 1 s at Gate start).
 5. **Absence tests by sleep**: `watch.rs:807 846 874 1412`, `watch_worker_archive.rs:141`, `watch_distill_inbox.rs:103` (a fixed duration standing for "no event came"): flake only on slow ticks, never on fast ones; `wait_whole_ticks` (positive signal)
    is the existing cure and is used by 40 tests.
 6. **Blocking reads without timeout**: `store/events.rs:709` `Follower::next` and `store.rs:1670`-style `rx.recv_timeout(10 s)` (that one has a bound). `events.rs:709` hangs until nextest kills the test if the follower never prints.
 7. **Per-test fork count**: `TestEnv` = 2 shells (+ `sqlite3` read in the teardown, `recorded()` only when `cpd.db` exists); `Fx` = ~6 git forks + 1 `cpd pr poll` per 0.1 s tick + 1 tmux `list-panes` per tick (when `list-panes` is reached). At
    load average 40-120 these forks are the slowest part; none leaks, but they widen every time window above.
-8. **Shared `CARGO_TARGET_TMPDIR` templates** (`store_template`, `git_repo_template`, `common/mod.rs:~1190-1222`): made once, renamed in atomically; a concurrent maker's whole copy wins; no leak. A stale template after a crash between `copy` and `rename` leaves `*.partial` files (`cpd-store-<pid>.partial`), never removed (unverified: no cleanup in `store_template`).
+8. **Shared `CARGO_TARGET_TMPDIR` templates** (`store_template`, `git_repo_template`, `common/mod.rs:1178 1203`): made once, renamed in atomically; a concurrent maker's whole copy wins; no leak. A stale template after a crash between `copy` and `rename` leaves `*.partial` files (`cpd-store-<pid>.partial`), never removed (unverified: no cleanup in `store_template`).
 9. **Engine drop**: `Engine::drop` SIGKILLs and waits (`watch.rs:90-97`); `watch_*_inbox.rs` wrappers poll 10 s for the child's exit (`:38`, `:30`, `:27`) then leave it to the group teardown; a child that ignores SIGTERM stays until `Drop` of the `TestEnv` (group kill + 1 s grace).
-10. **`two_concurrent_ensures` and the install tests** start background `sh -c 'flock .. sleep 120'` (`watch.rs:3141`) outside the group, killed by the test with `kill <pid>` after the script (`:3153-3158`): a panic between start and kill leaves a `sleep 120` until the env's `mine()` check; their own comment limits it to 120 s ("the longest any fake sleeps", `common/mod.rs:63-66`).
+10. **`two_concurrent_ensures` and the install tests** start background `sh -c 'flock .. sleep 120'` (`watch.rs:3141`) outside the group, killed by the test with `kill <pid>` after the script (`:3156-3159`): a panic between start and kill leaves a `sleep 120` until the env's `mine()` check; their own comment limits it to 120 s ("the longest any fake sleeps", `common/mod.rs:63-66`).
