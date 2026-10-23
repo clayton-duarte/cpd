@@ -156,9 +156,17 @@ export function groupHint(rows: readonly ToolRowLike[], canRun: CanRun = ALWAYS_
 }
 
 /** Claude Code keeps a failure in view beneath the folded group. */
-export function groupFailures(rows: readonly ToolRowLike[]): string[] {
-	return rows.filter((row) => memberStatus(row) === "error")
+export function groupFailures(rows: readonly ToolRowLike[], width?: number): string[] {
+	const lines = rows.filter((row) => memberStatus(row) === "error")
 		.map((row) => claudeFailure(row.toolName, getTextResult(row.result!)).headline);
+	if (width === undefined) return lines;
+	// The text after "Error: " is cut to fewer than half the width (docs/contract.md section 6.9).
+	const cap = Math.ceil(width / 2) - 1;
+	return lines.map((line) => {
+		const prefix = line.startsWith("Error: ") ? "Error: " : "";
+		const reason = line.slice(prefix.length);
+		return cap < 1 ? prefix.trimEnd() : prefix + truncateToWidth(reason, cap, "…");
+	});
 }
 
 /**
@@ -436,7 +444,7 @@ export class ToolGroupController {
 		const lines = ["", fit(title)];
 		const hintText = groupHint(rows, this.canRun);
 		if (hintText) lines.push(fit(chrome(`${CLAUDE_RESULT_PREFIX}${hintText}`)));
-		if (!expanded) for (const failure of groupFailures(rows)) lines.push(fit(chrome(CLAUDE_RESULT_PREFIX) + ink("error", failure)));
+		if (!expanded) for (const failure of groupFailures(rows, width)) lines.push(fit(chrome(CLAUDE_RESULT_PREFIX) + ink("error", failure)));
 		return lines;
 	}
 

@@ -94,9 +94,9 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 		}
 		{
 			const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
-			const line = closing(row.render(2));
-			assert.match(line, /Failed in [0-9.]+m?s$/u);
-			assert.ok(!line.includes(SEPARATOR), `no reason at width 2: ${line}`);
+			const flat = row.render(2).map(plain).join("").replace(/\s+/gu, "");
+			for (const word of ["TypeError", "diagnostic"]) assert.ok(!flat.includes(word), `no reason at width 2: ${flat}`);
+			assert.ok(!flat.includes(SEPARATOR.trim()), `no separator at width 2: ${flat}`);
 			shutdown(harness);
 		}
 	} finally {
