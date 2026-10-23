@@ -28,7 +28,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -112,27 +112,59 @@ pub const PLAN_POLLS: [(&str, &str); 6] = [
 ///
 /// `sh teardown.sh <pgid>` tears the env down and removes its directory; `sh teardown.sh watch
 /// <pid>` (the reaper, the group's leader) waits until `<pid>` is gone or the directory is, and
-/// then tears down, from a session of its own, if the directory is still there. `dir`, `socket`
-/// and `sqlite3` are prepended by [`TestEnv::new`]. Linux only (`/proc`). Idempotent.
+/// then tears down, from a session of its own, if the directory is still there. `dir`, `socket`,
+/// `tmuxdir` and `sqlite3` are prepended by [`TestEnv::new`]. Idempotent.
+///
+/// On Linux liveness and the environment come from `/proc` and the second stage starts with
+/// `setsid`. On macOS (`uname` is Darwin; no /proc, no `setsid`) `alive` is `kill -0` plus
+/// `ps -o stat=` (a Z is dead), `mine` reads `ps -E -o command=` (an Apple platform binary hides its
+/// environment there: with none shown `mine` is true only if its command line holds the env's directory), and the second
+/// stage starts a session with perl's `POSIX::setsid`.
 const TEARDOWN_SH: &str = r#"
 home=$dir/cpd-home
 
 # alive PID: running (a zombie is dead).
 alive() {
+  if [ "$(uname)" = Darwin ]; then
+    kill -0 "$1" 2>/dev/null || return 1
+    _l=$(ps -o stat= -p "$1" 2>/dev/null) || return 1
+    case $_l in ""|*Z*|*X*) return 1 ;; esac
+    return 0
+  fi
   _l=
   { read -r _l < "/proc/$1/stat"; } 2>/dev/null || return 1
   case ${_l##*) } in Z*|X*) return 1 ;; esac
 }
 
 # mine PID: PID runs with this env's CPD_HOME.
-mine() { grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null; }
+mine() {
+  if [ "$(uname)" = Darwin ]; then
+    _l=$(ps -E -p "$1" -o command= 2>/dev/null) || return 1
+    case $_l in *" CPD_HOME=$home"|*" CPD_HOME=$home "*) return 0 ;; esac
+    # An environment shown without this CPD_HOME is another's. None shown (no PATH or HOME) is a platform
+    # binary hiding it: then only its command line can say, and it is the env's only if it holds the env's directory.
+    # (A recorded pid of a driver that has ended is often another process by now: pids are recycled within minutes.)
+    case $_l in *" PATH="*|*" HOME="*) return 1 ;; esac
+    _c=$(ps -o command= -p "$1" 2>/dev/null) || return 1
+    case $_c in *"$dir"*) return 0 ;; esac
+    return 1
+  fi
+  grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null
+}
 
 # The pids cpd records for its detached children: the drivers of the Attempts not ended, the
 # engine's distill runs and its tmux restart. Not checked with `mine` yet.
 recorded() {
   if [ -f "$home/cpd.db" ]; then
-    "$sqlite3" -readonly -cmd '.timeout 5000' "$home/cpd.db" \
-      "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    # macOS: a WAL store with no -wal/-shm file cannot be opened -readonly (CANTOPEN); it is opened
+    # for writing with query_only, which creates the two files in the env's directory.
+    if [ "$(uname)" = Darwin ]; then
+      "$sqlite3" -cmd 'PRAGMA query_only=1' -cmd '.timeout 5000' "$home/cpd.db" \
+        "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    else
+      "$sqlite3" -readonly -cmd '.timeout 5000' "$home/cpd.db" \
+        "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
+    fi
   fi
   for _f in "$home"/run/context-digests/*/distill.pid "$home/run/tmux-restart.pid"; do
     [ -f "$_f" ] && read -r _p < "$_f" && printf '%s\n' "$_p"
@@ -161,16 +193,18 @@ stop() {
 # supervising hooks go first: a hook that runs while the server dies starts a new server, where
 # no teardown looks (hygiene.md 3a).
 stop_tmux() {
-  for _s in "$dir"/tmux/*/"$socket"; do
-    [ -S "$_s" ] || return 0
+  # The env's socket and the ones a test derives from its name (`<socket>-outer-<name>`).
+  for _s in "$tmuxdir"/tmux-*/"$socket" "$tmuxdir"/tmux-*/"$socket"-*; do
+    [ -S "$_s" ] || continue
+    _n=${_s##*/}
     for _h in pane-died window-unlinked; do
-      TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" set-hook -gu "$_h" >/dev/null 2>&1
+      TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" set-hook -gu "$_h" >/dev/null 2>&1
     done
     _g=
-    for _p in $(TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
+    for _p in $(TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
       _g="$_g -$_p"
     done
-    TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" kill-server >/dev/null 2>&1
+    TMUX_TMPDIR="$tmuxdir" tmux -L "$_n" kill-server >/dev/null 2>&1
     stop $_g
   done
 }
@@ -188,6 +222,8 @@ teardown() {
   done
   stop $_r
   stop_tmux
+  # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
+  [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
   rm -rf "$dir"
 }
 
@@ -195,6 +231,11 @@ if [ "${1-}" = watch ]; then
   while [ -d "$dir" ] && alive "$2"; do sleep 1; done
   [ -d "$dir" ] || exit 0
   # The teardown stops this group, so it runs outside it.
+  if [ "$(uname)" = Darwin ]; then
+    # No setsid command: perl forks (this process leads its group, so it cannot setsid), the
+    # child starts a session and runs the teardown, the parent returns at once, like setsid.
+    exec perl -MPOSIX -e 'fork and exit 0; POSIX::setsid() != -1 or exit 1; exec @ARGV' sh "$0" "$$" </dev/null >/dev/null 2>&1
+  fi
   exec setsid sh "$0" "$$" </dev/null >/dev/null 2>&1
 fi
 teardown "$1"
@@ -227,7 +268,8 @@ fn sh_quote(s: &str) -> String {
 /// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
 /// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
 fn envs_dir() -> PathBuf {
-    std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), PathBuf::from)
+    // Normalised: a TMPDIR that ends in a slash, joined with `/name` by a script, makes a `//` the components drop.
+    std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), |d| PathBuf::from(d).components().collect())
 }
 
 /// The Gate's run id (`scripts/gate-run.sh`), which every socket name carries so that the run finds its own.
@@ -555,6 +597,56 @@ impl GitWrapper {
     }
 }
 
+/// Room the env's `TMUX_TMPDIR` policy leaves for the sockets a test derives from [`TestEnv::tmux_socket`] (`bare.rs`:
+/// `<socket>-outer-<name>`, at most 7 + 10 characters; `tui_merge.rs`: `<socket>-outer`): they live in the same
+/// directory, so they must fit in `sun_path` too. The teardown removes them (`<socket>-*`).
+const DERIVED_SOCKET_ROOM: usize = 20;
+
+/// The `TMUX_TMPDIR` of the env rooted at `root` whose socket is `socket`: [`tmux_tmpdir_for`] with [`DERIVED_SOCKET_ROOM`].
+fn env_tmux_tmpdir(root: &Path, socket: &str) -> PathBuf {
+    let uid = fs::metadata(root).expect("stat the env").uid();
+    tmux_tmpdir_for(root, uid, &format!("{socket}{}", "-".repeat(DERIVED_SOCKET_ROOM)))
+}
+
+/// The `TMUX_TMPDIR` for an env rooted at `root`: `<root>/tmux`, or `/tmp` when the socket path would pass 100
+/// characters (measured on the canonical path, which tmux resolves; macOS's `sun_path` holds 103).
+pub fn tmux_tmpdir_for(root: &Path, uid: u32, socket: &str) -> PathBuf {
+    let tmux = root.join("tmux");
+    let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if canonical.join(format!("tmux/tmux-{uid}/{socket}")).as_os_str().len() > 100 { PathBuf::from("/tmp") } else { tmux }
+}
+
+/// A `flock(1)` for where there is none (macOS), in perl, which ships with macOS: `flock [-n] [-x] [--no-fork] <file>
+/// <command> [args...]` holds an exclusive lock on `<file>` across the `exec` of the command.
+const FLOCK_SHIM: &str = r#"#!/usr/bin/perl
+use strict;
+use warnings;
+use Fcntl qw(:flock);
+my $nb = 0;
+while (@ARGV && $ARGV[0] =~ /^-/) {
+    my $o = shift @ARGV;
+    if ($o eq '-n' || $o eq '--nonblock') { $nb = 1 }
+    elsif ($o eq '--no-fork' || $o eq '-x' || $o eq '--exclusive') { }
+    else { print STDERR "flock shim: unsupported option $o\n"; exit 64 }
+}
+@ARGV >= 2 or do { print STDERR "usage: flock [-n] [--no-fork] [-x] <file> <command> [args...]\n"; exit 64 };
+my $file = shift @ARGV;
+$^F = 255;
+open(my $fh, '>>', $file) or do { print STDERR "flock shim: $file: $!\n"; exit 1 };
+flock($fh, LOCK_EX | ($nb ? LOCK_NB : 0)) or exit 1;
+exec @ARGV or do { print STDERR "flock shim: $ARGV[0]: $!\n"; exit 127 };
+"#;
+
+/// Writes the perl `flock` shim to `<dir>/flock`.
+pub fn write_flock_shim(dir: &Path) {
+    write_executable(&dir.join("flock"), FLOCK_SHIM);
+}
+
+/// Whether the inherited `PATH` holds a `flock`.
+fn has_flock() -> bool {
+    std::env::split_paths(inherited_path()).any(|d| d.join("flock").is_file())
+}
+
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
@@ -626,6 +718,7 @@ impl TestEnv {
     }
 
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
+    /// Where there is no `flock` (macOS) the harness needs perl, for the shim it writes to `bin/`.
     pub fn empty() -> TestEnv {
         let sqlite3 = sqlite3();
         let envs_dir = envs_dir();
@@ -636,12 +729,14 @@ impl TestEnv {
             None => format!("cpdt-{}-{n}", std::process::id()),
         };
         let script = dir.path().join("teardown.sh");
+        let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
         fs::write(
             &script,
             format!(
-                "dir={}\nsocket={}\nsqlite3={}\n{TEARDOWN_SH}",
+                "dir={}\nsocket={}\ntmuxdir={}\nsqlite3={}\n{TEARDOWN_SH}",
                 sh_quote(&dir.path().to_string_lossy()),
                 sh_quote(&tmux_socket),
+                sh_quote(&tmuxdir.to_string_lossy()),
                 sh_quote(&sqlite3.to_string_lossy())
             ),
         )
@@ -660,9 +755,12 @@ impl TestEnv {
         fs::write(env.cpd_home().join("policy/owners/acme.toml"), "").expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
-            "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n",
+            "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
         )
         .expect("write .gitconfig");
+        if !has_flock() {
+            write_flock_shim(&env.bin());
+        }
         env
     }
 
@@ -713,6 +811,17 @@ impl TestEnv {
         self.root().join("bin")
     }
 
+    /// The `TMUX_TMPDIR` of this env's private tmux server: in the env, or `/tmp` when its socket path would be too long.
+    pub fn tmux_tmpdir(&self) -> PathBuf {
+        env_tmux_tmpdir(self.root(), self.tmux_socket())
+    }
+
+    /// The `flock` the env's commands run: the shim in `bin/` where the system has none, else the real one.
+    pub fn flock(&self) -> PathBuf {
+        let shim = self.bin().join("flock");
+        if shim.is_file() { shim } else { PathBuf::from("flock") }
+    }
+
     /// The private tmux server's socket name (`tmux -L <name>`), to put in
     /// `config.toml` as `tmux.socket`. Its socket file is under this env's own
     /// `TMUX_TMPDIR`.
@@ -723,7 +832,7 @@ impl TestEnv {
     /// A `Command` for `program` with this env's isolated environment:
     /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `PLANNOTATOR_*`, `GH_*`, `GITHUB_*`, `SSH_*`,
     /// the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case),
-    /// `TMUX` and `TMUX_PANE` removed, then
+    /// `TMUX`, `TMUX_PANE` and `ZDOTDIR` removed, then
     /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR` and git's config set. It runs in the env's
     /// process group, which the teardown stops: a process that leaves it (`setsid`) is
     /// stopped only when cpd records it ([`TEARDOWN_SH`]).
@@ -736,7 +845,8 @@ impl TestEnv {
                 .any(|p| k.starts_with(p))
                 || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
                 || k == "TMUX"
-                || k == "TMUX_PANE";
+                || k == "TMUX_PANE"
+                || k == "ZDOTDIR";
             if drop {
                 cmd.env_remove(&key);
             }
@@ -746,7 +856,7 @@ impl TestEnv {
         cmd.env("PATH", std::env::join_paths(paths).expect("PATH"))
             .env("CPD_HOME", self.cpd_home())
             .env("HOME", self.home())
-            .env("TMUX_TMPDIR", self.root().join("tmux"))
+            .env("TMUX_TMPDIR", self.tmux_tmpdir())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
             .env("GIT_TERMINAL_PROMPT", "0")

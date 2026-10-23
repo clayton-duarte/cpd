@@ -2734,8 +2734,12 @@ impl Drop for Child {
 
 /// Whether process `pid` has `path` open.
 fn has_open(pid: u32, path: &Path) -> bool {
-    let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else { return false };
-    fds.filter_map(|fd| fs::read_link(fd.ok()?.path()).ok()).any(|target| target == path)
+    if let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) {
+        return fds.filter_map(|fd| fs::read_link(fd.ok()?.path()).ok()).any(|target| target == path);
+    }
+    // no /proc (macOS): `lsof` names each open file on an `n` line
+    let Ok(out) = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-Fn"]).output() else { return false };
+    String::from_utf8_lossy(&out.stdout).lines().any(|l| l.strip_prefix('n').is_some_and(|n| Path::new(n) == path))
 }
 
 #[test]

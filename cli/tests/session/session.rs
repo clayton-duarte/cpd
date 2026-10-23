@@ -531,7 +531,8 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
 
     let pane = panes(&env).into_iter().find(|p| p.pane == out["session"]["pane"]).unwrap();
     assert_eq!((pane.window.as_str(), pane.window_name.as_str(), pane.session.as_str()), (out["session"]["window"].as_str().unwrap(), "park-pay", new.as_str()));
-    assert!(env.calls("cpd").contains(&vec!["session".to_owned(), "run".to_owned(), new.clone()]));
+    // The parked pane starts `cpd` after `fork` returned.
+    wait_until("the pane's cpd session run", || env.calls("cpd").contains(&vec!["session".to_owned(), "run".to_owned(), new.clone()]));
 
     let registered = events(&env, "session-registered");
     let registered = registered.last().unwrap();

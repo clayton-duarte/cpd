@@ -113,7 +113,17 @@ impl Watch {
     }
 }
 
+/// `pid`'s parent and state ('Z' for a zombie) from `libproc`'s BSD info.
+#[cfg(target_os = "macos")]
+fn stat(pid: u32) -> Option<(u32, char)> {
+    // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
+    const SZOMB: u32 = 5;
+    let info = libproc::proc_pid::pidinfo::<libproc::bsd_info::BSDInfo>(i32::try_from(pid).ok()?, 0).ok()?;
+    Some((info.pbi_ppid, if info.pbi_status == SZOMB { 'Z' } else { 'R' }))
+}
+
 /// `pid`'s parent and state from `/proc/<pid>/stat`.
+#[cfg(not(target_os = "macos"))]
 fn stat(pid: u32) -> Option<(u32, char)> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // `pid (comm) state ppid …`; comm may hold spaces and parentheses.
@@ -124,11 +134,22 @@ fn stat(pid: u32) -> Option<(u32, char)> {
     Some((ppid, state))
 }
 
+/// Every pid: `libproc`'s process list on macOS, the numbers in `/proc` elsewhere.
+#[cfg(target_os = "macos")]
+fn all_pids() -> Vec<u32> {
+    libproc::processes::pids_by_type(libproc::processes::ProcFilter::All).unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn all_pids() -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
+    entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()).collect()
+}
+
 /// Every live descendant of `root`, not `root` itself, in pid order.
 fn descendants(root: u32) -> Vec<u32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    for pid in entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()) {
+    for pid in all_pids() {
         if let Some((ppid, state)) = stat(pid)
             && state != 'Z'
         {
@@ -147,7 +168,16 @@ fn descendants(root: u32) -> Vec<u32> {
     found
 }
 
-/// `pid`'s command line, its arguments joined by spaces.
+/// `pid`'s command line, its arguments joined by spaces. macOS: `libproc` has
+/// no argv reader (only the name and path), so `ps -o command=` gives it.
+#[cfg(target_os = "macos")]
+fn cmdline(pid: u32) -> String {
+    let out = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+}
+
+/// `pid`'s command line from `/proc/<pid>/cmdline`, its arguments joined by spaces.
+#[cfg(not(target_os = "macos"))]
 fn cmdline(pid: u32) -> String {
     let raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
     let words: Vec<String> =

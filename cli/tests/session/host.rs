@@ -23,7 +23,7 @@ struct Server {
 /// The wrapper gets its own `TMUX_TMPDIR` (`Tmux::with_tmpdir`): the process environment is never touched.
 fn server() -> Server {
     let env = TestEnv::new();
-    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux"));
+    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.tmux_tmpdir());
     Server { env, tmux }
 }
 
@@ -45,7 +45,7 @@ struct DefaultDirServer(String);
 
 impl DefaultDirServer {
     fn socket_file(&self) -> std::path::PathBuf {
-        Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata("/proc/self").unwrap().uid() })).join(&self.0)
+        Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata(std::env::current_exe().unwrap()).unwrap().uid() })).join(&self.0)
     }
 }
 
@@ -679,7 +679,7 @@ fn list_panes_parses_for_a_caller_without_a_utf8_locale() {
     for locale in LOCALES {
         let env = TestEnv::new();
         let program = tmux_as_caller_with(&env, "tmux-caller", locale);
-        let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux")).with_program(program);
+        let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.tmux_tmpdir()).with_program(program);
         if let Err(e) = tmux.ensure_session("cpd", "main", &sleeper(env.root())) {
             failures.push(format!("{locale:?}: ensure_session: {e:?}"));
             continue;
@@ -698,7 +698,7 @@ fn list_panes_parses_for_a_caller_without_a_utf8_locale() {
 fn every_tmux_method_runs_tmux_with_u_first() {
     let env = TestEnv::new();
     let fake = env.fake("tmux-recorder", "exit 0");
-    let tmux = Tmux::with_tmpdir("cpdt-argv", env.root().join("tmux")).with_program(&fake);
+    let tmux = Tmux::with_tmpdir("cpdt-argv", env.tmux_tmpdir()).with_program(&fake);
 
     let argv = tmux.argv(&["list-panes".into()]);
     assert_eq!(&argv[..2], ["tmux", "-u"], "{argv:?}");
@@ -743,7 +743,7 @@ fn every_tmux_method_runs_tmux_with_u_first() {
 fn apply_status_line_sets_the_global_cpd_version_option() {
     let env = TestEnv::new();
     let fake = env.fake("tmux-recorder", "exit 0");
-    let tmux = Tmux::with_tmpdir("cpdt-version", env.root().join("tmux")).with_program(&fake);
+    let tmux = Tmux::with_tmpdir("cpdt-version", env.tmux_tmpdir()).with_program(&fake);
     tmux.apply_status_line("cpd", "0.0.5-5ba3a1d3").unwrap();
     let calls: Vec<String> = env.calls("tmux-recorder").iter().map(|c| c.join(" ")).collect();
     assert!(calls.iter().any(|c| c.ends_with("set -g @cpd_version 0.0.5-5ba3a1d3")), "{calls:#?}");

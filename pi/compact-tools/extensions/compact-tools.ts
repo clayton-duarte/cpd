@@ -210,9 +210,9 @@ export function loaderRow(): Component {
 /** The one tool whose row closes with `choose` while its question is open (pi's own name; @juicesharp/rpiv-ask-user-question). */
 const ASK_USER_QUESTION = "ask_user_question";
 /** Closing row 5: the whole row in 8, because it is not clickable. */
-const CHOOSE_ROW = " ╰\u{F004B} choose";
+const CHOOSE_ROW = " ╰\u{F0B26} choose";
 /** Closing row 4: a block that cannot fold. */
-const TERMINATOR_ROW = " ╰\u{F005A}";
+const TERMINATOR_ROW = " ╰\u{F0B2A}";
 
 /** What closes a row that has no result to fold: `choose` while ask_user_question's widget is open, else the loader. */
 function pendingKey(name: string, ctx: RenderContext): string {

@@ -1,15 +1,16 @@
 /**
- * The closing row of a running tool row (docs/contract.md 6.1.1, 6.9): " ╰" in 8 and ONE frame of the cockpit loader
- * in 6 (U+F0766, then U+F0A9E..U+F0AA5, one frame every 100 ms), no text after it. A finished row closes with its
+ * The closing row of a running tool row (docs/contract.md 6.1.1, 6.9): " ╰" in 8 and ONE frame of pi's moon-phase loader
+ * in 6 (loader-frames.ts, one frame every 100 ms), no text after it. A finished row closes with its
  * toggle in 7; fold "status" keeps " └ Running".
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown } from "./indicator-harness.ts";
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const FRAMES = ["\u{F0766}", ...Array.from({ length: 8 }, (_, i) => String.fromCodePoint(0xf0a9e + i))];
-const OLD_GLYPH = "\u{F005A}";
+const FRAMES = MOON_FRAMES;
+const OLD_GLYPH = "\u{F0B2A}";
 let sequence = 0;
 
 async function withRow<T>(
@@ -46,7 +47,7 @@ const closing = (row: ReturnType<typeof makeRow>) => drawn(row).at(-1)!;
 
 function assertLoaderRow(close: string): void {
 	const text = plain(close);
-	assert.match(text, /^ \u2570[\u{F0766}\u{F0A9E}-\u{F0AA5}]$/u, JSON.stringify(close));
+	assert.match(text, new RegExp(`^ \u2570[${MOON_FRAMES.join("")}]$`, "u"), JSON.stringify(close));
 	assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
 	const frame = [...text].at(-1)!;
 	const at = close.indexOf(frame);
@@ -67,7 +68,7 @@ test("a running group head has the same closing row and never an open rail", asy
 	});
 });
 
-test("the loader steps through the cockpit's nine frames, one every 100 ms", async () => {
+test("the loader steps through the eight moon phases, one every 100 ms", async () => {
 	await withRow("toggle", undefined, (row) => {
 		const seen: string[] = [];
 		for (let step = 0; step < 18; step++) {
@@ -76,8 +77,8 @@ test("the loader steps through the cockpit's nine frames, one every 100 ms", asy
 		}
 		assert.ok(seen.every((frame) => FRAMES.includes(frame)), JSON.stringify(seen));
 		const start = FRAMES.indexOf(seen[0]!);
-		const expected = seen.map((_, i) => FRAMES[(start + i) % 9]);
-		assert.deepEqual(seen, expected, "each 100 ms is the next frame, in order, wrapping after nine");
+		const expected = seen.map((_, i) => FRAMES[(start + i) % 8]);
+		assert.deepEqual(seen, expected, "each 100 ms is the next frame, in order, wrapping after eight");
 		advance(50);
 		const before = [...plain(closing(row))].at(-1);
 		advance(40);
@@ -91,7 +92,7 @@ test("the running closing row has no text after the glyph", async () => {
 			const close = plain(closing(row));
 			assert.ok(!close.includes("Running") && !/\d+(\.\d+)?m?s/u.test(close), JSON.stringify(close));
 			assert.equal([...close].length, 3, `" ╰" and one frame only: ${JSON.stringify(close)}`);
-			assert.ok(!close.includes(OLD_GLYPH), "no U+F005A");
+			assert.ok(!close.includes(OLD_GLYPH), "no U+F0B2A");
 			advance(5000);
 		}
 	});
@@ -101,7 +102,7 @@ test("a finished row closes with its toggle as before", async () => {
 	await withRow("toggle", undefined, (row) => {
 		const close = closing(row);
 		assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
-		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F004B}\u{F0063}]/u, `toggle in 7: ${JSON.stringify(close)}`);
+		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u, `toggle in 7: ${JSON.stringify(close)}`);
 		assert.ok(!FRAMES.some((frame) => close.includes(frame)), "no loader frame once finished");
 	}, true);
 	// Merged guard (red today): the running row of the same tool is the loader row, not the toggle.

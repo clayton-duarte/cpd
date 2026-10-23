@@ -152,19 +152,21 @@ fn e11_runs_the_helper_with_its_arguments_and_writes_the_cache_by_rename() {
 
     let calls = fx.env.calls("node");
     let script = fx.env.root().join("adapter/lib/slack-channel.ts");
+    // The product reports canonical paths: /var is a symlink into /private on a Mac.
+    let root = fx.env.root().canonicalize().unwrap();
     assert_eq!(
         calls[0],
         [
             script.to_str().unwrap(),
             "--coding-agent",
-            fx.env.root().join("install/releases/1.0.0/node_modules/@earendil-works/pi-coding-agent/dist/index.js").to_str().unwrap(),
+            root.join("install/releases/1.0.0/node_modules/@earendil-works/pi-coding-agent/dist/index.js").to_str().unwrap(),
             "--channel",
             CHANNEL,
             "--me",
             ME
         ]
     );
-    assert_eq!(fs::read_to_string(fx.env.root().join("helper-agent-dir")).unwrap().trim(), fx.env.root().to_str().unwrap());
+    assert_eq!(fs::read_to_string(fx.env.root().join("helper-agent-dir")).unwrap().trim(), root.to_str().unwrap());
 
     // A period of an hour: the next run is not due, whatever the ticks.
     fx.env.wait_whole_ticks(3);

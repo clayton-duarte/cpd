@@ -6,9 +6,9 @@
 //!   draws them. The tree's Contexts and the Inbox each draw their own margins (two blocks share one empty row).
 //! - **Expanded:** the title row `╭` and the title's content (bold), for example `╭󰪥 building-cpd`; each content row
 //!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
-//!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰁣 collapse`.
-//! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰁋 expand`.
-//! - **Nothing to fold:** a block of rows ends with the terminator ` ╰󰁚` (U+F005A, colour 8, no word, no toggle; hs-d574, replacing hs-d477's and hs-d459's plain `╰─` line). A tree Context block with no closing row keeps its last row's branch as `╰─` ([`LAST_BRANCH`]); a block with no row at all closes with the terminator ([`done`]).
+//!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰬬 collapse`.
+//! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰬦 expand`.
+//! - **Nothing to fold:** a block of rows ends with the terminator ` ╰󰬪` (U+F0B2A, colour 8, no word, no toggle; hs-d574, replacing hs-d477's and hs-d459's plain `╰─` line). A tree Context block with no closing row keeps its last row's branch as `╰─` ([`LAST_BRANCH`]); a block with no row at all closes with the terminator ([`done`]).
 //! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `│`, `╰`). The toggle's arrow and word
 //!   (`expand`, `collapse`) are `palette::toggle_text()` (colour 7, hs-d534). The content is not muted, and a row the widget
 //!   wraps keeps its own glyphs and colours: the fold only adds muted lines.
@@ -34,13 +34,13 @@ pub const LAST_BRANCH: &str = "╰─";
 const OPEN: &str = "╭";
 /// The start of the closing row.
 const CLOSE: &str = "╰";
-/// U+F004B md-arrow_down_drop_circle_outline: the folded block's arrow.
+/// U+F0B26 nf-md-chevron_down_circle: the folded block's arrow.
 /// The terminator glyph (hs-d574), also the empty Inbox's closing row glyph (hs-d487).
-const TERMINATOR: &str = "\u{F005A}";
+pub(crate) const TERMINATOR: &str = "\u{F0B2A}";
 
-const DOWN: &str = "\u{F004B}";
-/// U+F0063 md-arrow_up_drop_circle_outline: the expanded block's arrow.
-const UP: &str = "\u{F0063}";
+pub(crate) const DOWN: &str = "\u{F0B26}";
+/// U+F0B2C nf-md-chevron_up_circle: the expanded block's arrow.
+pub(crate) const UP: &str = "\u{F0B2C}";
 
 fn muted() -> Style {
     palette::muted_text()
@@ -54,20 +54,20 @@ pub fn title(content: Line<'static>) -> Line<'static> {
     Line { spans, ..content }
 }
 
-/// The closing row: `╰󰁋 expand` when folded, `╰󰁣 collapse` when expanded: the muted `╰`, then the arrow and the word in colour 7.
+/// The closing row: `╰󰬦 expand` when folded, `╰󰬬 collapse` when expanded: the muted `╰`, then the arrow and the word in colour 7.
 pub fn toggle(expanded: bool) -> Line<'static> {
     let (arrow, word) = if expanded { (UP, "collapse") } else { (DOWN, "expand") };
     Line::from(vec![Span::styled(CLOSE, muted()), Span::styled(format!("{arrow} {word}"), palette::toggle_text())])
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
-/// items or fewer): the muted terminator `╰󰁚` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
+/// items or fewer): the muted terminator `╰󰬪` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
 pub fn plain() -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{TERMINATOR}"), muted()))
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
-/// items or fewer): a muted `╰`, the terminator glyph U+F005A and the word (the empty Inbox; hs-d487, hs-d574).
+/// items or fewer): a muted `╰`, the terminator glyph U+F0B2A and the word (the empty Inbox; hs-d487, hs-d574).
 pub fn done(text: &str) -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{TERMINATOR} {text}"), muted()))
 }
@@ -92,7 +92,7 @@ pub struct Fold {
 pub struct Drawn {
     /// The empty row above, the title, the content (only when expanded), the toggle row and the empty row below.
     pub lines: Vec<Line<'static>>,
-    /// The row, in `lines`, of the `╰󰁋 expand` / `╰󰁣 collapse` closing row: the only one that toggles (the empty row below follows).
+    /// The row, in `lines`, of the `╰󰬦 expand` / `╰󰬬 collapse` closing row: the only one that toggles (the empty row below follows).
     pub toggle: usize,
 }
 
@@ -155,14 +155,14 @@ mod tests {
     #[test]
     fn expanded_is_the_title_the_content_straight_against_its_branch_and_one_collapse() {
         let drawn = bare(block(true));
-        assert_eq!(words(&drawn), ["╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", "╰\u{F0063} collapse"]);
+        assert_eq!(words(&drawn), ["╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", format!("╰{UP} collapse").as_str()]);
         assert_eq!(drawn.toggle, 3, "the toggle is the last row, and the only one");
     }
 
     #[test]
     fn folded_is_the_title_and_expand_and_the_content_is_not_drawn() {
         let drawn = bare(Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn());
-        assert_eq!(words(&drawn), ["╭󰝦 dotfiles", "╰\u{F004B} expand"]);
+        assert_eq!(words(&drawn), ["╭󰝦 dotfiles", format!("╰{DOWN} expand").as_str()]);
         assert_eq!(drawn.toggle, 1);
     }
 
@@ -187,28 +187,23 @@ mod tests {
     #[test]
     fn a_block_with_no_glyph_leads_its_content_with_the_plain_line() {
         let drawn = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn());
-        assert_eq!(words(&drawn), ["╭t", "│ one", "╰\u{F0063} collapse"]);
+        assert_eq!(words(&drawn), ["╭t", "│ one", format!("╰{UP} collapse").as_str()]);
         assert!(is_muted(&drawn.lines[1].spans[0]));
     }
 
     #[test]
     fn a_block_with_no_content_is_its_title_and_its_toggle() {
-        assert_eq!(words(&bare(Fold::new(Line::from("x"), vec![], true).drawn())), ["╭x", "╰\u{F0063} collapse"]);
+        assert_eq!(words(&bare(Fold::new(Line::from("x"), vec![], true).drawn())), ["╭x", format!("╰{UP} collapse").as_str()]);
     }
 
     #[test]
     fn the_toggle_row_alone_is_what_the_inbox_draws() {
-        assert_eq!(flat(&toggle(false)), "╰\u{F004B} expand");
-        assert_eq!(flat(&toggle(true)), "╰\u{F0063} collapse");
+        assert_eq!(flat(&toggle(false)), format!("╰{DOWN} expand"));
+        assert_eq!(flat(&toggle(true)), format!("╰{UP} collapse"));
         assert_eq!(toggle(true).spans[1].style, palette::toggle_text());
     }
 
     // ---- section look v3 (commands.md §17, "Collapsible blocks"; hs-d349, hs-d345): red until `fold` draws the arrows ----
-
-    /// U+F004B md-arrow_down_drop_circle_outline.
-    const DOWN: &str = "\u{F004B}";
-    /// U+F0063 md-arrow_up_drop_circle_outline.
-    const UP: &str = "\u{F0063}";
 
     #[test]
     fn the_closing_row_is_the_corner_and_the_arrow_and_the_word_folded_or_expanded() {
@@ -230,7 +225,7 @@ mod tests {
     #[test]
     fn a_block_with_nothing_to_fold_closes_with_the_muted_terminator_and_no_word() {
         let row = plain();
-        assert_eq!(flat(&row), "╰\u{F005A}");
+        assert_eq!(flat(&row), format!("╰{TERMINATOR}"));
         assert!(row.spans.iter().all(is_muted), "{:?}", row.spans);
     }
 

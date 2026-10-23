@@ -209,11 +209,12 @@ fn print(out: &mut impl Write, lines: &str) -> Result<(), Result<(), CpdError>> 
 }
 
 /// Whether the reader of `stdout` is gone, checked without writing (G1): a follower with no Event to
-/// write would otherwise never meet EPIPE. A pipe whose read end closed reports `POLLERR` on Linux; the
-/// hangup flag `POLLHUP` is handled too, as macOS reports it (unverified: not run on macOS).
+/// write would otherwise never meet EPIPE. `POLLOUT` is requested because macOS reports
+/// `POLLHUP` for a pipe whose reader closed only then (verified on macOS with `select.poll`: no events requested gives
+/// nothing). On Linux such a pipe reports `POLLERR` (unverified on Linux). A file or tty reports `POLLOUT` only: not gone.
 fn reader_gone(stdout: &impl std::os::fd::AsFd) -> bool {
     use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-    let mut fds = [PollFd::new(stdout.as_fd(), PollFlags::empty())];
+    let mut fds = [PollFd::new(stdout.as_fd(), PollFlags::POLLOUT)];
     match poll(&mut fds, PollTimeout::ZERO) {
         Ok(n) if n > 0 => fds[0]
             .revents()

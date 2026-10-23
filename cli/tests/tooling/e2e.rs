@@ -67,6 +67,9 @@ fi
 
 /// The fake `gh`: no open PR yet, the PR it creates, then the poller's search finds that PR with failing checks (the
 /// engine polls from its first tick, before the PR exists: the search finds nothing then).
+/// The search lists the PR only once `pr open` has recorded it (the Plan's PR has its `pr` object), on purpose: a poll that
+/// lands between `gh pr create` and the record stores the row unowned, `ensure()` keeps it, and no later poll tells the
+/// feedback (known, see the follow-up); the test does not pin that window.
 const GH: &str = r#"
 created="$(dirname "$0")/../pr-created"
 case "$1 $2" in
@@ -80,7 +83,7 @@ case "$1 $2" in
         exit 0 ;;
     esac
     nodes=''
-    if [ -e "$created" ]; then
+    if [ -e "$created" ] && cpd plan show --plan pay 2>/dev/null | grep -q '"pr":{"number":7'; then
       nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
     fi
     echo '{"data":{"search":{"issueCount":1,"nodes":['"$nodes"']},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}' ;;

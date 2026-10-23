@@ -4,12 +4,12 @@ import type { Component } from "@earendil-works/pi-tui";
 import { Rendering } from "../lib/render.ts";
 import type { RenderedMessage, Theme } from "../lib/pi.ts";
 
-/** contract §6.9 / §6.1.1 (hs-d534, hs-d545), commands.md §15.9: the cpd pill holds only `cpd`; the first sentence follows it outside, text 7; a block that cannot fold ends with ` ╰󰁚`. */
+/** contract §6.9 / §6.1.1 (hs-d534, hs-d545), commands.md §15.9: the cpd pill holds only `cpd`; the first sentence follows it outside, text 7; a block that cannot fold ends with ` ╰󰬪`. */
 
 const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
-const TERM = "\u{F005A}";
+const TERM = "\u{F0B2A}";
 const PILL = `\x1b[35m${CAP_L}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_R}\x1b[39m`;
 const GREY = (s: string): string => `\x1b[90m${s}\x1b[39m`;
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -62,7 +62,7 @@ test("a long sentence wraps like a tool row's title and never inside the pill", 
   assert.equal(text.slice(0, 1 + cont.length).join("").replace(/[\s│╭─]|cpd/gu, "").replace(/[\u{E0B6}\u{E0B4}]/gu, ""), sentence.replace(/\s/g, ""), "the sentence is whole, never cut");
 });
 
-test("an always-open block ends with the closing row of ╰󰁚, all 8", () => {
+test("an always-open block ends with the closing row of ╰󰬪, all 8", () => {
   for (const expanded of [false, true])
     for (const outputPad of [1, 0]) {
       const rows = draw(summaryMessage(), { expanded, outputPad });
@@ -78,7 +78,7 @@ test("an always-open block's last row is never a bare rail", () => {
   }
 });
 
-test("a block with no body ends with ╰󰁚 and no toggle", () => {
+test("a block with no body ends with ╰󰬪 and no toggle", () => {
   for (const expanded of [false, true]) {
     const rows = draw(cpdMessage("Nothing more", ""), { expanded });
     assert.equal(rows.at(-1), ` ${GREY(`╰${TERM}`)}`);
@@ -89,7 +89,7 @@ test("a block with no body ends with ╰󰁚 and no toggle", () => {
 
 test("a foldable block keeps its toggle with ╰ in 8 and the glyph and word in 7", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(draw(m, { expanded: false }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F004B} expand\x1b[39m`);
-  assert.equal(draw(m, { expanded: true }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0063} collapse\x1b[39m`);
+  assert.equal(draw(m, { expanded: false }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B26} expand\x1b[39m`);
+  assert.equal(draw(m, { expanded: true }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B2C} collapse\x1b[39m`);
   assert.equal(draw(m, { expanded: true })[0], ` ${GREY("╭─")}${PILL} \x1b[37mWorker of Job x\x1b[39m`);
 });

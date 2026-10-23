@@ -18,8 +18,8 @@ const theme: Theme = {
 
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
-const FOLDED = "\u{F004B}";
-const OPEN = "\u{F0063}";
+const FOLDED = "\u{F0B26}";
+const OPEN = "\u{F0B2C}";
 
 const render = (text: string, expanded = false): string[] => {
   const m = eventMessage(ev(7, "job-merged", { text }) as unknown as CpdEvent, ID);

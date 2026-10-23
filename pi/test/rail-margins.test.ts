@@ -71,7 +71,7 @@ test("a tool row fold keeps three blank columns after its text", async () => {
 	}
 });
 
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const SOURCE = `Weighing the options.\n\n${long}\n\nKeep the cache.`;
 
 /** The expanded block as the host draws it: Pi's Markdown component (paddingX = outputPad 1) calling the transformer, at pane width W. */

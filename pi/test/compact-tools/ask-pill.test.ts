@@ -1,6 +1,6 @@
 /**
  * The ask pill (docs/contract.md 6.1.1, 6.9): `[ask_user_question]` is magenta (bg 5, text 0, caps 5) exactly while the
- * tool executes and has no result (the window of the closing row ` ╰󰁋 choose`); cyan 6 before; 2 / 1 after; no other tool's
+ * tool executes and has no result (the window of the closing row ` ╰󰬦 choose`); cyan 6 before; 2 / 1 after; no other tool's
  * pill is ever magenta. The real ToolExecutionComponent is driven through indicator-harness.ts; the head row's raw SGR is read.
  */
 import assert from "node:assert/strict";

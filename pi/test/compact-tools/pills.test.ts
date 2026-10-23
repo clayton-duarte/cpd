@@ -136,7 +136,7 @@ test("a folded thinking block shows the expand toggle and none of its text", asy
 	const block = await thinking();
 	try {
 		const lines = block.draw().map(plain).map((line) => line.trim());
-		assert.deepEqual(lines, [`╭─${LEFT}Thinking…${RIGHT}`, "\u2570\u{F004B} expand"]);
+		assert.deepEqual(lines, [`╭─${LEFT}Thinking…${RIGHT}`, "\u2570\u{F0B26} expand"]);
 	} finally { block.end(); }
 });
 
@@ -149,7 +149,7 @@ test("toggling a thinking block shows its whole text", async () => {
 		assert.equal(lines[0], `╭─${LEFT}Thinking…${RIGHT}`);
 		assert.ok(lines.includes("\u2502 Inspect the renderer."), JSON.stringify(lines));
 		assert.ok(lines.includes("\u2502 Keep the cache."), JSON.stringify(lines));
-		assert.equal(lines.at(-1), "\u2570\u{F0063} collapse", JSON.stringify(lines));
+		assert.equal(lines.at(-1), "\u2570\u{F0B2C} collapse", JSON.stringify(lines));
 	} finally { block.end(); }
 });
 

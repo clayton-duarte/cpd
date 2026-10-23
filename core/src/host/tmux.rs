@@ -488,8 +488,9 @@ impl Tmux {
     /// This server, with every call run by the server's own tmux program ([`Tmux::server_exe`]): a
     /// client of another version cannot be trusted to talk to it, least of all while it dies (hs-n285).
     ///
-    /// The program is the file `/proc/<pid>/exe` points to, which outlives the server; a file an upgrade
+    /// Linux: the program is the file `/proc/<pid>/exe` points to, which outlives the server; a file an upgrade
     /// has replaced is only reachable as `/proc/<pid>/exe`, which lasts as long as the server does.
+    /// macOS: the `read_link` of a regular file fails, so the program is the path `server_exe` read.
     pub fn on_server_binary(&self) -> Result<Tmux, CpdError> {
         let exe = self.server_exe()?;
         let program = std::fs::read_link(&exe).ok().filter(|file| file.is_file()).unwrap_or(exe);
@@ -659,17 +660,42 @@ impl Tmux {
         Ok((!value.is_empty()).then(|| value.to_owned()))
     }
 
+    /// The path of the executable process `pid` runs, `None` when it cannot be read (the process is gone).
+    /// Linux: `/proc/<pid>/exe`, which stays readable (and the same inode) when an upgrade replaced the file.
+    /// macOS: `libproc`'s path of the pid, the file now at that path: a process started from a binary that was
+    /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
+    /// unlinked executable: unverified).
+    pub fn pid_exe(pid: u32) -> Option<PathBuf> {
+        #[cfg(target_os = "macos")]
+        return libproc::proc_pid::pidpath(i32::try_from(pid).ok()?).ok().map(PathBuf::from);
+        #[cfg(not(target_os = "macos"))]
+        return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+    }
+
     /// `display -p '#{version}'`: the version of the tmux the server runs
     /// (`3.4`, `next-3.7`), which is the one it was started with.
     pub fn server_version(&self) -> Result<String, CpdError> {
         Ok(self.run(&strings(&["display", "-p", "#{version}"]))?.trim().to_owned())
     }
 
-    /// The server's own tmux program: `/proc/<server pid>/exe` (Linux), which
+    /// The server's own tmux program. Linux: `/proc/<server pid>/exe`, which
     /// execs the binary the server runs even when an upgrade has replaced its
-    /// file. A client of another version cannot attach to the server (hs-n224).
+    /// file. macOS: the path of the server pid's executable (`libproc`); it has no
+    /// equivalent of `/proc/<pid>/exe`, so after an upgrade the path names the new
+    /// file (accepted). A client of another version cannot attach to the server (hs-n224).
     pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
         let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
+        #[cfg(target_os = "macos")]
+        let exe = {
+            let pid: i32 = out.trim().parse().map_err(|e| {
+                CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
+            })?;
+            PathBuf::from(libproc::proc_pid::pidpath(pid).map_err(|e| {
+                CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid}): {e}."))
+                    .with("pid", pid.to_string())
+            })?)
+        };
+        #[cfg(not(target_os = "macos"))]
         let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
         std::fs::metadata(&exe).map_err(|e| {
             CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
@@ -799,9 +825,14 @@ impl Tmux {
         }
     }
 
-    /// The program is the server's own `/proc/<pid>/exe` and it is gone: the server went, and took it.
+    /// The program is the server's own and it is gone: the server went, and took it (Linux: its
+    /// `/proc/<pid>/exe`). On macOS the program from [`Tmux::server_exe`] is a plain file, gone when the file is.
     fn program_gone(&self) -> bool {
-        self.program.as_deref().is_some_and(|p| p.starts_with("/proc/") && !p.exists())
+        #[cfg(target_os = "macos")]
+        let own = |p: &Path| p.is_absolute();
+        #[cfg(not(target_os = "macos"))]
+        let own = |p: &Path| p.starts_with("/proc/");
+        self.program.as_deref().is_some_and(|p| own(p) && !p.exists())
     }
 
     /// `list-sessions`, read as the answer of a server that may be on its way out.

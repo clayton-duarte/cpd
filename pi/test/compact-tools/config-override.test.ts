@@ -23,8 +23,8 @@ async function loadHarness() {
 	return loaded;
 }
 
-const EXPAND = "\u{F004B}";
-const COLLAPSE = "\u{F0063}";
+const EXPAND = "\u{F0B26}";
+const COLLAPSE = "\u{F0B2C}";
 const SEVEN = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 
 const agentFile = () => join(process.env.PI_CODING_AGENT_DIR!, "compact-tools.json");
@@ -92,7 +92,7 @@ test("a file overrides field by field: tools, one glyph, previewLines", () => {
 });
 
 test("glyphs written as JSON escapes (surrogate pairs) are the same code points", () => {
-	files('{"toggle": {"expand": "\\uDB80\\uDC4B", "collapse": "\\uDB80\\uDC63"}}', undefined, (cwd) => {
+	files('{"toggle": {"expand": "\\uDB82\\uDF26", "collapse": "\\uDB82\\uDF2C"}}', undefined, (cwd) => {
 		assert.deepEqual(loadConfig(cwd, false).toggle, { expand: EXPAND, collapse: COLLAPSE });
 	});
 });
