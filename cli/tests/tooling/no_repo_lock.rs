@@ -401,8 +401,12 @@ fn paused_gate(root: &Path) -> String {
 fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_push() {
     let fx = fx();
     let pay = fx.plan("pay", true);
-    // The Gate's hooks are the repo file's; the Lead Branch is pushed: the PR's head and the lease.
+    // The Gate's hooks are the repo file's. The Lead Branch has a commit of its own, pushed: the PR's head and the
+    // lease, which the rebase rewrites.
     fx.env.repo_policy("acme", "pay", &format!("[hooks]\n{}", paused_gate(fx.env.root())));
+    fs::write(pay.path.join("lead.txt"), "lead\n").unwrap();
+    fx.git(&pay.path, &["add", "-A"]);
+    fx.git(&pay.path, &["commit", "-q", "-m", "lead"]);
     fx.git(&pay.path, &["push", "-q", "origin", &pay.branch]);
     let api = fx.submitted(&pay, "api");
     // The base moved: the rebase rewrites the Lead Branch.
