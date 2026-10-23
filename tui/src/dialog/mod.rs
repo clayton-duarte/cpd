@@ -14,6 +14,8 @@ pub(crate) mod validate;
 mod view;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod select_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +51,8 @@ enum Kind {
     Text(Text),
     /// Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}`
     Checklist(Checklist),
+    /// A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}`
+    Select(Select),
 }
 
 /// What every kind takes.
@@ -107,6 +111,24 @@ struct Checklist {
     items: PathBuf,
 }
 
+#[derive(clap::Args, Debug)]
+struct Select {
+    #[command(flatten)]
+    common: Common,
+    /// The question above the options
+    #[arg(long)]
+    prompt: String,
+    /// An option, repeated, in the order shown
+    #[arg(long = "option", required = true)]
+    options: Vec<String>,
+}
+
+/// The options of a `select` on the command line: at least one, each non-empty, one line, no control character, at most
+/// 70 characters, all distinct; otherwise `args_invalid`.
+fn check_options(_options: &[String]) -> Result<(), CpdError> {
+    todo!("select: check the options")
+}
+
 /// How a dialog closed: the result file's content. `value` is the typed text of an accepted `input`, and only then.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -153,6 +175,7 @@ impl Kind {
                 let dialog = Dialog::new(a.common.title.clone(), a.prompt, mode);
                 (a.common, dialog)
             }
+            Kind::Select(_) => todo!("select: the kind"),
             Kind::Text(a) => {
                 let dialog = Dialog::new(a.common.title.clone(), a.body, Mode::Text);
                 (a.common, dialog)
@@ -373,6 +396,12 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
         (true, Some(value)) => Ok(Some(value)),
         (true, None) => Err(CpdError::new(ErrorCode::Internal, "The input dialog confirmed with no value.")),
     }
+}
+
+/// A radio list of `options` in a popup, under the question `prompt`. The option chosen, `None` when the User cancelled.
+#[allow(dead_code)] // the tree's New Context… (Job tui-nc)
+pub(crate) fn select(_tmux: &Tmux, _title: &str, _prompt: &str, _options: &[String]) -> Result<Option<String>, CpdError> {
+    todo!("select: the opener")
 }
 
 /// What a `checklist` closed with: whether it was approved, and the ids ticked and not.

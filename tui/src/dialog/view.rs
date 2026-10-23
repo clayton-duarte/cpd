@@ -42,6 +42,8 @@ pub(crate) enum Mode {
     /// Entries `[ ] <id> — <detail>` with the record's full text under each, the User ticks, with the `Approve` and `Later` buttons
     /// (hs-d549, hs-d551, hs-d569 CD2, CD3). `cursor` is an entry.
     Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
+    /// A radio list: the prompt, then one row per option, with the `OK` and `Cancel` buttons. `cursor` is an option.
+    Select { options: Vec<String>, cursor: usize },
 }
 
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
@@ -263,6 +265,7 @@ impl Dialog {
             Mode::Input { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
             Mode::Text => vec![CLOSE.to_owned()],
             Mode::Checklist { .. } => vec![APPROVE.to_owned(), LATER.to_owned()],
+            Mode::Select { .. } => todo!("select: the buttons"),
         }
     }
 
