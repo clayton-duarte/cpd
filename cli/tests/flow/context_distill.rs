@@ -196,9 +196,15 @@ fn pi_that_cannot_start_is_distill_failed_spawn() {
 fn a_context_with_nothing_in_force_has_nothing_to_do() {
     let fx = fx();
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!((out["already"].clone(), out["digest"].clone()), (json!(true), Value::Null));
+    assert_eq!(out, json!({"ok": true, "context": CONTEXT, "skipped": "young", "records": 0, "floor": 1}), "{out}");
     assert_eq!(fx.pi_calls(), 0);
     assert!(fx.digest_files().is_empty());
+
+    floor_notes(&fx, 1);
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!((out["already"].clone(), out["digest"].clone()), (json!(true), Value::Null));
+    assert_eq!(fx.pi_calls(), 1);
 }
 
 #[test]
@@ -911,8 +917,12 @@ fn a_failed_pi_run_fails_the_run_with_no_second_step() {
 /// Sets `context_curation_min_records` in the fixture's config.toml.
 fn set_floor(fx: &Fx, floor: u32) {
     let path = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&path).unwrap().replace("context_curation_min_records = 1\n", &format!("context_curation_min_records = {floor}\n"));
-    assert!(text.contains(&format!("context_curation_min_records = {floor}")), "{text}");
+    let text: String = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|l| if l.starts_with("context_curation_min_records = ") { format!("context_curation_min_records = {floor}\n") } else { format!("{l}\n") })
+        .collect();
+    assert!(text.contains(&format!("context_curation_min_records = {floor}\n")), "{text}");
     fs::write(path, text).unwrap();
 }
 
