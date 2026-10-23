@@ -118,7 +118,7 @@ pub const PLAN_POLLS: [(&str, &str); 6] = [
 /// On Linux liveness and the environment come from `/proc` and the second stage starts with
 /// `setsid`. On macOS (`uname` is Darwin; no /proc, no `setsid`) `alive` is `kill -0` plus
 /// `ps -o stat=` (a Z is dead), `mine` reads `ps -E -o command=` (an Apple platform binary hides its
-/// environment there: with none shown `mine` is true, as only recorded pids and tmux's are asked), and the second
+/// environment there: with none shown `mine` is true only if its command line holds the env's directory), and the second
 /// stage starts a session with perl's `POSIX::setsid`.
 const TEARDOWN_SH: &str = r#"
 home=$dir/cpd-home
@@ -141,10 +141,13 @@ mine() {
   if [ "$(uname)" = Darwin ]; then
     _l=$(ps -E -p "$1" -o command= 2>/dev/null) || return 1
     case $_l in *" CPD_HOME=$home"|*" CPD_HOME=$home "*) return 0 ;; esac
-    # An environment shown without this CPD_HOME is another's; none shown (no PATH or HOME) is a
-    # platform binary hiding it: a pid cpd recorded, which is taken as the env's.
+    # An environment shown without this CPD_HOME is another's. None shown (no PATH or HOME) is a platform
+    # binary hiding it: then only its command line can say, and it is the env's only if it holds the env's directory.
+    # (A recorded pid of a driver that has ended is often another process by now: pids are recycled within minutes.)
     case $_l in *" PATH="*|*" HOME="*) return 1 ;; esac
-    return 0
+    _c=$(ps -o command= -p "$1" 2>/dev/null) || return 1
+    case $_c in *"$dir"*) return 0 ;; esac
+    return 1
   fi
   grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null
 }

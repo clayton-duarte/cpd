@@ -379,7 +379,9 @@ fn put_up(env: &TestEnv) -> Up {
     common::wait_until("the driver to trap SIGTERM", || trapped.exists());
     record_driver(env, driver);
     // A distill run the engine started, recorded as the engine records it.
-    let distill = detached(env, &["sleep", "100"]);
+    // Its command line holds the env's dir (the teardown stops a recorded pid only if it is the env's, and a platform
+    // binary like `sleep` shows nothing of it on macOS); the `:` after the sleep keeps the shell from exec'ing it.
+    let distill = detached(env, &["sh", "-c", &format!("sleep 100; : '{}'", env.root().display())]);
     let home = cpd_core::home::CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let pid_file = home.distill_pid(&cpd_core::ids::ContextId::parse("ctx").unwrap());
     std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
@@ -724,6 +726,24 @@ fn a_process_that_leaves_the_group_and_is_not_recorded_outlives_the_teardown() {
     let outlived = alive(escaped);
     let _ = std::process::Command::new("kill").arg(escaped.to_string()).status();
     assert!(outlived, "an unrecorded process in a session of its own was stopped");
+}
+
+#[test]
+fn a_recorded_pid_that_is_not_the_envs_is_spared() {
+    // A pid cpd recorded for a driver that has ended is another process by the time of the teardown (pids are recycled
+    // within minutes on macOS). Such a process hides its environment (an Apple platform binary does), and has nothing
+    // of the env in its command line: the teardown must not signal it.
+    use std::os::unix::process::CommandExt;
+    let env = TestEnv::new();
+    let mut other = std::process::Command::new("/bin/sleep");
+    other.arg("600").env_clear().process_group(0).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let mut other = other.spawn().unwrap();
+    record_driver(&env, other.id());
+    env.teardown();
+    let outlived = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(outlived, "the teardown stopped a recorded pid that is not the env's");
 }
 
 #[test]
