@@ -37,6 +37,7 @@ import {
 	type QuestionParams,
 	QuestionParamsSchema,
 } from "./tool/types.ts";
+import { limitSentence } from "./limit-text.ts";
 import { validateQuestionnaire } from "./tool/validate-questionnaire.ts";
 import type { WrappingSelectItem } from "./view/components/wrapping-select.ts";
 
@@ -349,6 +350,7 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	`Each question MUST have ${MIN_OPTIONS}-${MAX_OPTIONS} options. Every option requires a concise label (1-5 words) and a description explaining what the choice means or its trade-offs. The user can additionally type a custom answer via the automatically appended "Type something." row on every question, or press Esc to abandon the questionnaire. Do NOT author "Other" or "Type something." labels yourself — reserved labels are rejected at runtime.`,
 	`Set multiSelect: true when multiple answers are valid. Provide an options[].preview markdown string when an option benefits from richer side-by-side context (mockups, code snippets, diagrams, configs) — single-select only. The "Type something." row is appended to every question; in preview mode it expands to the full pane width while typing so the custom answer is not cramped into the narrow options column. If you recommend a specific option, make that the first option and append "(Recommended)" to its label.`,
 	"Do not stack multiple ask_user_question calls back-to-back — group all clarifying questions into one invocation.",
+	limitSentence,
 ];
 
 export const DEFAULT_TOOL_DESCRIPTION = `Ask the user one or more structured questions during execution. Use when you need to:
@@ -369,7 +371,7 @@ Use the optional \`preview\` field on options when presenting concrete artifacts
 - Diagram variations
 - Configuration examples
 
-Preview content is rendered as markdown in a monospace box. Multi-line text with newlines is supported. When any option has a preview, the UI switches to a side-by-side layout with a vertical option list on the left and preview on the right. Do not use previews for simple preference questions where labels and descriptions suffice. Note: previews are only supported for single-select questions (not multiSelect).`;
+Preview content is rendered as markdown in a monospace box. Multi-line text with newlines is supported. When any option has a preview, the UI switches to a side-by-side layout with a vertical option list on the left and preview on the right. Do not use previews for simple preference questions where labels and descriptions suffice. Note: previews are only supported for single-select questions (not multiSelect).\n\n${limitSentence}`;
 
 export function registerAskUserQuestionTool(pi: ExtensionAPI): void {
 	pi.registerTool({

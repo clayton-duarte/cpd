@@ -8,6 +8,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAskUserQuestionTool } from "./ask-user-question.ts";
+import { findOtherCopy, standDown } from "./double-load.ts";
 import { registerAskUserQuestionReconciler } from "./reconcile.ts";
 
 export {
@@ -20,6 +21,10 @@ export {
 } from "./events.ts";
 
 export default function (pi: ExtensionAPI) {
+	// Only a Lead (CPD_SESSION and CPD_PLAN) or a Manager (CPD_SESSION alone) has this tool; a Worker has CPD_ATTEMPT too.
+	if (!process.env.CPD_SESSION || process.env.CPD_ATTEMPT) return;
+	const found = findOtherCopy(process.cwd());
+	if (found) return standDown(pi, found);
 	registerAskUserQuestionTool(pi);
 	registerAskUserQuestionReconciler(pi);
 }

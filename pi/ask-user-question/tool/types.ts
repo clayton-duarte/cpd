@@ -1,4 +1,5 @@
 import { type Static, Type } from "typebox";
+import { fieldNote } from "../limit-text.ts";
 import { LABELS_BY_KIND, ROW_INTENT_META } from "../state/row-intent.ts";
 
 export const MAX_QUESTIONS = 4;
@@ -49,7 +50,7 @@ export const OptionSchema = Type.Object({
 	preview: Type.Optional(
 		Type.String({
 			description:
-				"Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format.",
+				`Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format. ${fieldNote}`,
 		}),
 	),
 });
@@ -57,7 +58,8 @@ export const OptionSchema = Type.Object({
 export const QuestionSchema = Type.Object({
 	question: Type.String({
 		description:
-			'The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?"',
+			'The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?" ' +
+			fieldNote,
 	}),
 	header: Type.String({
 		maxLength: MAX_HEADER_LENGTH,
