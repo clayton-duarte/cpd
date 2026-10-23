@@ -139,9 +139,20 @@ fn view_pids(env: &TestEnv) -> Vec<(String, u32)> {
     views
 }
 
+/// The path of the executable process `pid` runs: `/proc/<pid>/exe` where it exists, `lsof` (whose first
+/// `n` line of the `txt` descriptors is the executable) on macOS.
+fn exe_of(pid: u32) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"]).output().ok()?;
+        let text = String::from_utf8(out.stdout).ok()?;
+        return text.lines().find_map(|l| l.strip_prefix('n')).map(PathBuf::from);
+    }
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// Whether the process `pid` runs the file `exe` (device and inode).
 fn runs(pid: u32, exe: &str) -> bool {
-    let (Ok(proc), Ok(file)) = (fs::metadata(format!("/proc/{pid}/exe")), fs::metadata(exe)) else { return false };
+    let (Some(proc), Ok(file)) = (exe_of(pid).and_then(|p| fs::metadata(p).ok()), fs::metadata(exe)) else { return false };
     (proc.dev(), proc.ino()) == (file.dev(), file.ino())
 }
 

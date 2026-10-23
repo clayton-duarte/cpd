@@ -146,6 +146,7 @@ fn context_archive_frees_the_slot_held_by_its_manager() {
         "the next live Session after the Context, then the archive; log: {}",
         log(&env)
     );
+    common::wait_until("the Context to be archived", || env.root().join("archived").exists());
     assert!(env.root().join("archived").exists(), "the Context ends archived (not refused in_chat_slot); log: {}", log(&env));
 }
 
@@ -162,5 +163,6 @@ fn context_archive_parks_when_no_other_session_is_live() {
         "no other live Session: the slot is parked, then the archive; log: {}",
         log(&env)
     );
+    common::wait_until("the Context to be archived", || env.root().join("archived").exists());
     assert!(env.root().join("archived").exists(), "the Context ends archived (not refused in_chat_slot); log: {}", log(&env));
 }
