@@ -901,7 +901,8 @@ impl TestEnv {
         sql(&mut self.store(), text);
     }
 
-    /// Writes `$CPD_HOME/config.toml`.
+    /// Writes `$CPD_HOME/config.toml` as given: the default curation floor is 25, so a test that curates a small Context
+    /// says `context_curation_min_records = 1` in `text`.
     pub fn write_config(&self, text: &str) {
         fs::create_dir_all(self.cpd_home()).expect("create CPD_HOME");
         fs::write(self.cpd_home().join("config.toml"), text).expect("write config.toml");
