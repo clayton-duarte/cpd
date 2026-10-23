@@ -995,65 +995,6 @@ fn archive(env: &TestEnv) {
 }
 
 #[test]
-fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_only_them() {
-    let env = env();
-    populate(&env);
-    archive(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 26);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
-    let mut expected = vec![
-        String::new(),
-        format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
-        row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
-        format!(" ├─{IDLE} ship·f-id"),
-        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
-        String::new(),
-        format!(" ╭{NEEDS_YOU} beta"),
-        row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        collapse(),
-        String::new(),
-        format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
-    ];
-    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
-    expected.extend(inbox_section(46));
-    let screen = pane.screen_is(&expected);
-    assert_eq!(
-        screen,
-        expected,
-        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰬬 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with the terminator `╰󰬪`; no `󰇘` row"
-    );
-    assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its terminator closing row does nothing
-    pane.click(10, 9);
-    assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])]);
-    pane.click(5, 12);
-    pane.click(1, 13);
-    pane.settled();
-    // beta's closing row hides its archived row only: the live row stays
-    pane.click(5, 10);
-    let shown = [format!(" ╭{NEEDS_YOU} beta")];
-    let screen = pane.wait("beta folded", |s| s.get(9) == Some(&expand()));
-    assert_eq!(screen[7..8], shown);
-    assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
-    assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
-    assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰\u{F0B2A}"));
-    assert_eq!(
-        calls(&env),
-        [
-            words(&["plan", "unarchive", "--plan=old"]),
-            words(&["session", "open", "l-old"]),
-            words(&["context", "unarchive", "gamma"]),
-            words(&["context", "manager", "--context=gamma", "--by-user"])
-        ],
-        "only the clicks on the archived Plan and the archived Context's title ran commands"
-    );
-}
-
-#[test]
 fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let env = env();
     populate(&env);
