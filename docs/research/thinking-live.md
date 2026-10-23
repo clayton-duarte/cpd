@@ -55,7 +55,7 @@ One run of one cell group (`<ROOT>` is the worktree for 'after', `/tmp/tl/before
 ```sh
 A=$(mktemp -d /tmp/tl/agent.XXXX)
 cat > $A/settings.json <<S
-{"hideThinkingBlock": <HIDE>, "quietStartup": true, "tuiMode": "fullscreen", "theme": "cpd", "themes": ["<worktree>/pi/themes"]}
+{"hideThinkingBlock": <HIDE>, "quietStartup": true, "tuiMode": "fullscreen", "theme": "dango", "themes": ["<worktree>/pi/themes"]}
 S
 mkdir -p $A/sessions/--tmp-tl-cwd--; cp /tmp/tl/sess.jsonl $A/sessions/--tmp-tl-cwd--/s.jsonl
 tmux -u -L thinking-live -f /dev/null new-session -d -x 100 -y 32 -s t -c /tmp/tl/cwd \
