@@ -156,11 +156,11 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
 
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
-/// `needs_user` says which failed Jobs and closed pull requests are red, the rest waiting.
+/// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
 pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
     let charts: Vec<Chart> = prs
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.stuck_jobs), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), needs_user.lead_working), frame))
         .collect();
     let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
@@ -497,7 +497,7 @@ mod tests {
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
         let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
-        let single = flow::layout(&flow::flow_jobs(&jobs, &[]), 0);
+        let single = flow::layout(&flow::flow_jobs(&jobs, false), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {

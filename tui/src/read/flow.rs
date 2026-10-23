@@ -59,7 +59,7 @@ pub struct PlanBoxes {
 /// pull request, in the waiting colour while an agent handles it, and in red only for these.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NeedsUser {
-    /// The Jobs with an open `job-stuck` item.
+    /// The Jobs with an open `job-stuck` item (no longer drawn by the plan view, hs-d586; the guarded tests still build it).
     pub stuck_jobs: Vec<JobKey>,
     /// The Plan's Lead has an open `dialog` item: it asks the User (about a closed pull request, say).
     pub lead_dialog: bool,

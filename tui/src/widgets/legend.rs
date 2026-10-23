@@ -134,15 +134,13 @@ pub(crate) fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    // a failed Job is waiting (its Lead handles it) until `job-stuck` opens (audit Q3): the stuck one is red, after `failed`
-    let (stuck_icon, stuck) = palette::JOB_STUCK;
+    // the failed pill turns through the eight moons, red, while the Plan's Lead works (hs-d586)
     let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
     jobs.insert(
         failed + 1,
         vec![
-            plain("failed, stuck"),
-            capped(format!("{stuck_icon} key│S1"), palette::job_pill(JobStatus::Failed, false, true)),
-            Line::from(Span::styled("3", palette::fg_clickable(stuck))),
+            plain("red loader: a failed Job, its Lead working"),
+            Line::from(palette::SPINNER.iter().map(|m| Span::styled(*m, palette::fg_clickable(palette::Meaning::Failed))).collect::<Vec<_>>()),
         ],
     );
     // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
