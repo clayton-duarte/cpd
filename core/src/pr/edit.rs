@@ -151,6 +151,13 @@ fn editable_pr(conn: &Connection, plan: &PlanId, key: &PrKey, title: bool, other
 
 fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Result<Decision, CpdError> {
     let (before, stored_title) = editable_pr(conn, plan, key, edits.title.is_some(), edits.others())?;
+    if let Some(flag) = [(edits.repo.is_some(), "--repo"), (edits.base.is_some(), "--base")].iter().find_map(|(given, flag)| given.then_some(*flag))
+        && before.head_ref.is_some()
+    {
+        return Err(CpdError::new(ErrorCode::PrAdopted, format!("PR {key} is an adopted pull request: its repo and base come from the pull request, so {flag} cannot change."))
+            .with("pr", key.as_str())
+            .with("flag", flag));
+    }
     let mut after = before.clone();
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();

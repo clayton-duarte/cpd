@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{AddArgs, Env, plan_phase};
+use super::{AddArgs, Env, gh, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
@@ -71,6 +71,14 @@ struct Wanted {
     shape: String,
     /// `--needs` as given, as sorted PR references (`needs_refs`); `Some(vec![])` is `--no-needs`; `None`: the default.
     needs: Option<Vec<String>>,
+    /// `--adopt`: the pull request to adopt, with `--confirm-author`.
+    adopt: Option<Adopt>,
+}
+
+/// The pull request `--adopt` names, read from GitHub, and the author the Lead confirmed.
+struct Adopt {
+    pull: gh::Adoptable,
+    confirm: Option<String>,
 }
 
 enum Decision {
@@ -374,9 +382,14 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let name = key_repo(&mut env, &plan, &repo)?;
-    let base = env.store.read(|conn| classify_base(conn, args.base.as_deref()))?;
+    let adopt = args.adopt.map(|number| gh::adoptable(&repo, number)).transpose()?;
+    let base = match &adopt {
+        Some(a) => BaseArg::Branch(Some(a.base.clone())),
+        None => env.store.read(|conn| classify_base(conn, args.base.as_deref()))?,
+    };
     let wanted = Wanted {
         base: wanted_base(&repo, base)?,
+        adopt: adopt.map(|pull| Adopt { pull, confirm: args.confirm_author }),
         repo: repo.display().to_string(),
         name,
         title: args.title.to_string(),
@@ -385,6 +398,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         needs,
     };
 
+    let head_ref = wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str());
     let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, true))? {
         Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
         Decision::Insert { .. } => {
@@ -415,7 +429,17 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo
                     );
-                    let event = NewEvent::pr_added(text, key, &wanted.repo, &base, &wanted.title, &needs, appended);
+                    let event = NewEvent::pr_added(
+                        text,
+                        key,
+                        &wanted.repo,
+                        &base,
+                        &wanted.title,
+                        head_ref,
+                        wanted.adopt.as_ref().map(|a| a.pull.author.as_str()),
+                        &needs,
+                        appended,
+                    );
                     append(tx, event.plan(plan.clone()))?;
                     for stub in &stubs {
                         let text = format!("Job {} added to Plan {plan} as draft (the {} template of PR {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
@@ -430,7 +454,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
     let mut out = json!({"pr": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "needs": needs,
-        "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape,
+        "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape, "head_ref": head_ref,
         "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
     if already {
@@ -504,6 +528,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
             .with("title", title)
             .with("needs", existing.needs.clone())
             .with("shape", existing.shape.as_str())
+            .with("head_ref", existing.head_ref.clone())
             .with("status", existing.status.as_str()));
     }
     let needs = match &wanted.needs {
@@ -516,7 +541,65 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
         require_tests_table(conn, plan, wanted, &resolved.base)?;
     }
     check_template_keys_free(conn, plan, wanted)?;
+    if let Some(adopt) = &wanted.adopt {
+        check_adoptable(conn, wanted, adopt)?;
+    }
     Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
+}
+
+/// The refusals of `--adopt` (contract §3.8), in order, exit 3: the pull request is open, not from a fork, not a cpd one, its head free of
+/// every live PR, and its author the User or confirmed.
+fn check_adoptable(conn: &Connection, wanted: &Wanted, adopt: &Adopt) -> Result<(), CpdError> {
+    let pull = &adopt.pull;
+    let number = pull.number;
+    if pull.state != "OPEN" {
+        return Err(CpdError::new(ErrorCode::AdoptNotOpen, format!("Pull request #{number} is {}: only an open pull request is adopted.", pull.state))
+            .with("number", number)
+            .with("url", pull.url.as_str())
+            .with("state", pull.state.as_str()));
+    }
+    if pull.fork {
+        return Err(CpdError::new(ErrorCode::AdoptFork, format!("Pull request #{number} comes from a fork: cpd cannot push to a fork."))
+            .with("number", number)
+            .with("url", pull.url.as_str()));
+    }
+    if pull.head_ref.starts_with("cpd/") {
+        return Err(CpdError::new(ErrorCode::AdoptCpdBranch, format!("Pull request #{number} has the head branch {}: it is a cpd pull request.", pull.head_ref))
+            .with("number", number)
+            .with("head_ref", pull.head_ref.as_str()));
+    }
+    let holder: Option<(String, String)> = conn
+        .query_row(
+            "SELECT plan, key FROM prs WHERE repo = ?1 AND head_ref = ?2 AND status IN ('waiting', 'dispatch', 'open')",
+            [wanted.repo.as_str(), pull.head_ref.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((plan, pr)) = holder {
+        return Err(CpdError::new(
+            ErrorCode::AdoptTaken,
+            format!("The head branch {} is already adopted by PR {pr} of Plan {plan}.", pull.head_ref),
+        )
+        .with("head_ref", pull.head_ref.as_str())
+        .with("plan", plan)
+        .with("pr", pr));
+    }
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    if !same(&pull.author, &pull.user) && !adopt.confirm.as_deref().is_some_and(|c| same(c, &pull.author)) {
+        return Err(CpdError::new(
+            ErrorCode::AdoptForeign,
+            format!(
+                "Pull request #{number} is {}'s, not the User's ({}). Ask the User first; once they agree, run again with --confirm-author {}.",
+                pull.author, pull.user, pull.author
+            ),
+        )
+        .with("number", number)
+        .with("url", pull.url.as_str())
+        .with("author", pull.author.as_str())
+        .with("user", pull.user.as_str())
+        .with("confirm", format!("--confirm-author {}", pull.author)));
+    }
+    Ok(())
 }
 
 /// A `tdd` PR needs the repo's `[tests]` (contract §7.7), read from `origin/<base>` (`<base>` with no `origin`): `tests_unconfigured`;
@@ -609,14 +692,25 @@ fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], b
     };
     (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
         && title == Some(wanted.title.as_str())
+        && existing.head_ref.as_deref() == wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
         && needs_match
 }
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, base, lead_branch, wanted.name.as_str(), wanted.title, wanted.shape],
+        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, head_ref, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, ?9, id, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![
+            plan.as_str(),
+            wanted.key.as_str(),
+            wanted.repo,
+            base,
+            lead_branch,
+            wanted.name.as_str(),
+            wanted.title,
+            wanted.shape,
+            wanted.adopt.as_ref().map(|a| a.pull.head_ref.as_str())
+        ],
     )?;
     insert_needs(tx, plan, &wanted.key, needs)
 }
