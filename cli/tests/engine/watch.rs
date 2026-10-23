@@ -2303,8 +2303,9 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     let log = fx.env.root().join("poll.log");
     // A poll that lasts 0.2 s, so that "after the end" differs from "after the start", and that notes both.
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.2; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
+        r#"echo "start $({now})" >> '{log}'; sleep 0.2; echo "end $({now})" >> '{log}'; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
+        now = NOW_NS,
         log = log.display()
     ));
 
@@ -2340,8 +2341,9 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     tick_every(&fx, "5");
     let log = fx.env.root().join("poll.log");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
+        r#"echo "start $({now})" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
+        now = NOW_NS,
         log = log.display()
     ));
 
@@ -2653,6 +2655,9 @@ fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() 
     }
 }
 
+/// The shell command that prints the epoch in nanoseconds: BSD `date` has no `%N`.
+const NOW_NS: &str = r#"perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%d%06d000\n",$s,$u'"#;
+
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = fx("");
@@ -2662,12 +2667,13 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     // E5 must not run before that (it polls every tick otherwise), 4987.
     let reset_file = fx.env.root().join("reset-at");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'
+        r#"echo "start $({now})" >> '{log}'
 if [ ! -e '{first}' ]; then
-  touch '{first}'; ms=$(( $(date +%s%N) / 1000000 + 500 ))
-  reset=$(date -u -d "@$((ms / 1000)).$(printf %03d $((ms % 1000)))" +%Y-%m-%dT%H:%M:%S.%3NZ); printf %s "$reset" > '{reset_file}'
+  touch '{first}'; ms=$(( $({now}) / 1000000 + 500 ))
+  reset=$(perl -MPOSIX -e '$ms=shift; print strftime("%Y-%m-%dT%H:%M:%S",gmtime(int($ms/1000))).sprintf(".%03dZ",$ms%1000)' "$ms"); printf %s "$reset" > '{reset_file}'
   echo '{low}' | sed "s/RESET_AT/$reset/"
 else echo '{ok}'; fi; exit 0"#,
+        now = NOW_NS,
         log = log.display(),
         first = first.display(),
         reset_file = reset_file.display(),

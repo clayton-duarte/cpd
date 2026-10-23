@@ -634,6 +634,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0, 1, 2, 3]));
     assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
 
+    // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let calls = env.calls("node");
     assert_eq!(calls.len(), 1);
     let argv = &calls[0];
@@ -644,8 +645,8 @@ fn tiers_runs_the_catalog_module_from_argv() {
         argv[3..],
         [
             "--".to_owned(),
-            coding_agent.to_str().unwrap().to_owned(),
-            pi_ai.to_str().unwrap().to_owned(),
+            coding_agent.canonicalize().unwrap().to_str().unwrap().to_owned(),
+            pi_ai.canonicalize().unwrap().to_str().unwrap().to_owned(),
             "O=p/m-opus".to_owned(),
             "S=p/m-sonnet".to_owned(),
             "H=p/m-low".to_owned(),

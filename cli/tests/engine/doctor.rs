@@ -417,7 +417,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
     let run = doctor(&env);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
-    assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.display().to_string()}));
+    assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.canonicalize().unwrap().display().to_string()}));
 }
 
 #[test]
