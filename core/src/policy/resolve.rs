@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use super::domain::{merge, Policy, Scope, Source, Sources};
+use super::domain::{merge, Domain, Policy, Scope, Source, Sources};
 use super::load::{load_scope_file, parse_scope, policy_invalid};
-use super::{owner_unknown, PolicyKey, Resolved};
+use super::{owner_unknown, repo_unconfigured, PolicyKey, Resolved};
 use crate::home::CpdHome;
 use crate::ids::OwnerLogin;
 
@@ -35,16 +35,45 @@ fn owner_file(home: &CpdHome, owner: &OwnerLogin) -> PathBuf {
     owners_dir(home).join(format!("{owner}.toml"))
 }
 
+/// What a missing repo file is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepoFile {
+    /// `repo_unconfigured`.
+    Required,
+    /// No repo scope.
+    Optional,
+}
+
+/// The repo-only domains (contract §8.3): `Some(domain)` of the first one an owner file has a table of.
+fn repo_only(scope: &Scope) -> Option<Domain> {
+    [
+        (Domain::Hooks, scope.hooks.is_some()),
+        (Domain::TestCommands, scope.test_commands.is_some()),
+        (Domain::Protected, scope.protected.is_some()),
+    ]
+    .into_iter()
+    .find_map(|(domain, set)| set.then_some(domain))
+}
+
 /// The scope layers of `key`, most specific first, or `None` when the owner has no file.
-fn layers(home: &CpdHome, key: &PolicyKey) -> Result<Option<Vec<(Source, Scope)>>, crate::error::CpdError> {
+fn layers(
+    home: &CpdHome,
+    key: &PolicyKey,
+    repo_file: RepoFile,
+) -> Result<Option<Vec<(Source, Scope)>>, crate::error::CpdError> {
     let Some((owner_real, owner_scope)) = load_scope_file(&owner_file(home, key.owner()))? else {
         return Ok(None);
     };
+    if let Some(domain) = repo_only(&owner_scope) {
+        return Err(policy_invalid(&owner_real, Some(domain.name()), format!("`{}` is set in a repo file only", domain.name())));
+    }
     let mut layers = Vec::new();
     if let PolicyKey::Repo(owner, name) = key {
         let path = repos_dir(home).join(owner.as_str()).join(format!("{name}.toml"));
-        if let Some((real, scope)) = load_scope_file(&path)? {
-            layers.push((Source::Repo(real), scope));
+        match load_scope_file(&path)? {
+            Some((real, scope)) => layers.push((Source::Repo(real), scope)),
+            None if repo_file == RepoFile::Required => return Err(repo_unconfigured(owner, name, &path)),
+            None => {}
         }
     }
     layers.push((Source::Owner(owner_real), owner_scope));
@@ -58,9 +87,19 @@ fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
 
 /// The policy of `key`: cpd's default, then the owner file, then the repo file,
 /// per domain, the whole domain replaced. A key whose owner has no file is
-/// `owner_unknown`, even when its repo file exists.
+/// `owner_unknown`, even when its repo file exists. A Repo key whose repo file is missing is
+/// `repo_unconfigured` (an empty file is valid), after the owner check.
 pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, key)? {
+    match layers(home, key, RepoFile::Required)? {
+        Some(layers) => Ok(merge_layers(&layers)),
+        None => Err(owner_unknown(key.owner())),
+    }
+}
+
+/// [`resolve`] with the repo file optional: a missing one is no repo scope (owner and default only).
+/// For the `pr poll`, which needs only `pr.feedback` and keeps polling an open PR of an unconfigured repo.
+pub fn resolve_lenient(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
+    match layers(home, key, RepoFile::Optional)? {
         Some(layers) => Ok(merge_layers(&layers)),
         None => Err(owner_unknown(key.owner())),
     }
@@ -70,7 +109,7 @@ pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error
 /// an owner without a file is cpd's default, source `default (no owner file)`,
 /// not `owner_unknown`.
 pub fn resolve_unowned_row(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, key)? {
+    match layers(home, key, RepoFile::Optional)? {
         Some(layers) => Ok(merge_layers(&layers)),
         None => Ok(Resolved {
             policy: default_policy().clone(),

@@ -5,22 +5,26 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use toml::de::{DeTable, DeValue};
+use toml::Spanned;
 
 use super::HookError;
 use crate::home::Hook;
 
 /// One command of a hook, as written (not yet rendered).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookCommand {
     /// The key it has in a table or block; `None` for `hook = "cmd"`.
     pub name: Option<String>,
+    #[serde(rename = "command")]
     pub template: String,
 }
 
 /// A hook's commands: blocks run in order, the commands of a block together.
 /// `hook = "cmd"` and `[hook]` are one block; `[[hook]]` is one block each.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Pipeline {
     pub blocks: Vec<Vec<HookCommand>>,
 }
@@ -55,7 +59,13 @@ pub fn parse(text: &str, hook: Hook) -> Result<Pipeline, String> {
     let Some((_, value)) = doc.get_ref().iter().find(|(k, _)| k.get_ref().as_ref() == name) else {
         return Ok(Pipeline::default());
     };
-    let bad = |what: &str| format!("`{name}` in .config/wt.toml must be a string, a table of strings or an array of tables of strings, {what}.");
+    parse_value(value, &format!("`{name}` in .config/wt.toml"))
+}
+
+/// The pipeline a hook's value is, in any of the three forms (`what` names the key in the error sentence).
+/// Shared by `.config/wt.toml` and the `[hooks]` table of a policy file.
+pub fn parse_value(value: &Spanned<DeValue<'_>>, what: &str) -> Result<Pipeline, String> {
+    let bad = |why: &str| format!("{what} must be a string, a table of strings or an array of tables of strings, {why}.");
     let blocks = match value.get_ref() {
         DeValue::String(s) => vec![vec![HookCommand { name: None, template: s.to_string() }]],
         DeValue::Table(t) => vec![block(t).map_err(|w| bad(&w))?],

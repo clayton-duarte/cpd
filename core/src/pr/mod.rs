@@ -195,13 +195,19 @@ impl Env {
 /// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
 /// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
 fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
-    pr_policy_resolved(env, plan, key)?
+    pr_policy_resolved(env, plan, key, resolve)?
 }
 
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unknown`, `policy_invalid`),
-/// which a consumer of many rows (the poll) reports for its row and goes on.
-fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Result<Policy, CpdError>, CpdError> {
+/// which a consumer of many rows (the poll) reports for its row and goes on. `resolve` is the strict [`resolve`], or
+/// the poll's `resolve_lenient` (a missing repo file is no repo scope).
+fn pr_policy_resolved(
+    env: &mut Env,
+    plan: &PlanId,
+    key: &PrKey,
+    resolve: fn(&crate::home::CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>,
+) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = env.store.read(|conn| {
         Ok(conn.query_row(
             "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context

@@ -36,7 +36,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
-pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_unowned_row};
+pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_lenient, resolve_unowned_row};
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -90,6 +90,19 @@ pub fn owner_unknown(owner: &OwnerLogin) -> CpdError {
         format!("The owner {owner} has no policy file: create policy/owners/{owner}.toml (empty means cpd's default)."),
     )
     .with("owner", owner.as_str())
+}
+
+/// `repo_unconfigured` (exit 3): the repo has no `repos/<owner>/<name>.toml` (`file`); an empty one is valid.
+pub fn repo_unconfigured(owner: &OwnerLogin, name: &RepoName, file: &std::path::Path) -> CpdError {
+    CpdError::new(
+        ErrorCode::RepoUnconfigured,
+        format!(
+            "The repo {owner}/{name} has no policy file: create {} (an empty file means nothing to configure).",
+            file.display()
+        ),
+    )
+    .with("repo", format!("{owner}/{name}"))
+    .with("file", file.display().to_string())
 }
 
 /// `repo_unkeyed` (exit 1): the repo cannot be keyed from `origin`; `url` is `None` with no `origin`.

@@ -22,7 +22,7 @@ use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
 
-pub use def::{HookCommand, Pipeline, load};
+pub use def::{HookCommand, Pipeline, load, parse_value};
 pub use exec::is_withheld;
 pub use template::{shell_escape, uses as template_uses};
 

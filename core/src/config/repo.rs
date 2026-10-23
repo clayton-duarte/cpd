@@ -2,12 +2,12 @@
 //! named tests of a `test` or `impl` Job. Read from the Lead Branch's tree by [`crate::git::tamper`], next to the
 //! `protected` list: one file, one parse, so a table that is not as documented is `config_invalid` wherever it is read.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::git::hooks::template_uses;
 
 /// `[tests]`: `build` and `run` are required, `list` is optional (hs-d497); any other key is refused.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RepoTests {
     /// Compiles what the named tests need: non-zero is a build error.

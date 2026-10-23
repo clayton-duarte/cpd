@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::RepoTests;
+use crate::git::hooks::Pipeline;
 use crate::session::Role;
 
 /// `pr.gate`: whether `pr open`, `pr push` and `pr rebase` run the Gate (hs-d292).
@@ -73,6 +75,108 @@ pub struct TextSet {
     pub text: Option<String>,
 }
 
+/// What `Policy::text` reads: a domain with no `text` (the repo-only ones) has `""`.
+pub trait HasText {
+    fn text(&self) -> &str;
+}
+
+impl HasText for Pr {
+    fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl HasText for Text {
+    fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// The `hooks` domain (repo scope only, no `text`): each hook's pipeline of §7.3, empty when not set.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hooks {
+    #[serde(rename = "pre-start")]
+    pub pre_start: Pipeline,
+    #[serde(rename = "pre-commit")]
+    pub pre_commit: Pipeline,
+    #[serde(rename = "pre-merge")]
+    pub pre_merge: Pipeline,
+}
+
+impl HasText for Hooks {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// The `test-commands` domain (repo scope only, no `text`): `[tests]` of §7.7, `None` when not set.
+impl HasText for Option<RepoTests> {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// The `protected` domain (repo scope only, no `text`): the PR's protected paths of §7.5.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Protected {
+    pub paths: Vec<String>,
+}
+
+impl HasText for Protected {
+    fn text(&self) -> &str {
+        ""
+    }
+}
+
+/// What a scope file's `[hooks]` table sets. It is not read from a value (`toml::Table` sorts keys, and a
+/// block's commands keep file order): the loader reads it from the file text (`load::parse_scope`).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct HooksSet {
+    pub pre_start: Option<Pipeline>,
+    pub pre_commit: Option<Pipeline>,
+    pub pre_merge: Option<Pipeline>,
+}
+
+impl<'de> Deserialize<'de> for HooksSet {
+    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
+        Err(serde::de::Error::custom("[hooks] is read from the file text, not from a value"))
+    }
+}
+
+/// What a scope file's `[test-commands]` table sets. An empty table sets nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestCommandsSet {
+    pub build: Option<String>,
+    pub run: Option<String>,
+    pub list: Option<String>,
+}
+
+impl TestCommandsSet {
+    /// The commands the table sets: `None` for an empty table, else `build` and `run` are required and
+    /// [`RepoTests::validate`] holds. The error is a sentence.
+    pub fn commands(&self) -> Result<Option<RepoTests>, String> {
+        let (build, run) = match (&self.build, &self.run) {
+            (None, None) if self.list.is_none() => return Ok(None),
+            (Some(build), Some(run)) => (build, run),
+            (None, _) => return Err("[test-commands] has no `build`".to_owned()),
+            (_, None) => return Err("[test-commands] has no `run`".to_owned()),
+        };
+        let tests = RepoTests { build: build.clone(), run: run.clone(), list: self.list.clone() };
+        tests.validate().map_err(|e| e.replace("[tests]", "[test-commands]"))?;
+        Ok(Some(tests))
+    }
+}
+
+/// What a scope file's `[protected]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectedSet {
+    pub paths: Option<Vec<String>>,
+}
+
 /// A table a scope sets, read over cpd's default.
 pub trait Set {
     type Value: Clone;
@@ -125,6 +229,69 @@ impl Set for TextSet {
     }
 }
 
+/// The typed keys of the repo-only domains, by name.
+pub const PRE_START: &str = "pre-start";
+pub const PRE_COMMIT: &str = "pre-commit";
+pub const PRE_MERGE: &str = "pre-merge";
+pub const BUILD: &str = "build";
+pub const RUN: &str = "run";
+pub const LIST: &str = "list";
+pub const PATHS: &str = "paths";
+
+fn left_out<const N: usize>(keys: [(&'static str, bool); N]) -> Vec<&'static str> {
+    keys.into_iter().filter_map(|(name, out)| out.then_some(name)).collect()
+}
+
+impl Set for HooksSet {
+    type Value = Hooks;
+
+    fn fill(&self, base: &Hooks) -> (Hooks, Vec<&'static str>) {
+        let out = left_out([
+            (PRE_START, self.pre_start.is_none()),
+            (PRE_COMMIT, self.pre_commit.is_none()),
+            (PRE_MERGE, self.pre_merge.is_none()),
+        ]);
+        let value = Hooks {
+            pre_start: self.pre_start.clone().unwrap_or_else(|| base.pre_start.clone()),
+            pre_commit: self.pre_commit.clone().unwrap_or_else(|| base.pre_commit.clone()),
+            pre_merge: self.pre_merge.clone().unwrap_or_else(|| base.pre_merge.clone()),
+        };
+        (value, out)
+    }
+
+    fn complete(&self) -> Option<Hooks> {
+        Some(Hooks { pre_start: self.pre_start.clone()?, pre_commit: self.pre_commit.clone()?, pre_merge: self.pre_merge.clone()? })
+    }
+}
+
+impl Set for TestCommandsSet {
+    type Value = Option<RepoTests>;
+
+    fn fill(&self, base: &Option<RepoTests>) -> (Option<RepoTests>, Vec<&'static str>) {
+        // The loader validated the table: it sets nothing, or `build` and `run`.
+        match self.commands() {
+            Ok(Some(tests)) => (Some(tests), left_out([(LIST, self.list.is_none())])),
+            _ => (base.clone(), vec![BUILD, RUN, LIST]),
+        }
+    }
+
+    fn complete(&self) -> Option<Option<RepoTests>> {
+        self.commands().ok()
+    }
+}
+
+impl Set for ProtectedSet {
+    type Value = Protected;
+
+    fn fill(&self, base: &Protected) -> (Protected, Vec<&'static str>) {
+        (Protected { paths: self.paths.clone().unwrap_or_else(|| base.paths.clone()) }, left_out([(PATHS, self.paths.is_none())]))
+    }
+
+    fn complete(&self) -> Option<Protected> {
+        Some(Protected { paths: self.paths.clone()? })
+    }
+}
+
 /// Where a domain's value came from (contract §8.3 "Model").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -174,7 +341,9 @@ impl std::fmt::Display for DomainSource {
 }
 
 macro_rules! domains {
-    ($($field:ident, $variant:ident, [$($role:ident),+], $value:ty, $set:ty;)+) => {
+    (@name $field:ident) => { stringify!($field) };
+    (@name $field:ident $name:literal) => { $name };
+    ($($field:ident $(= $name:literal)?, $variant:ident, [$($role:ident),*], $value:ty, $set:ty;)+) => {
         /// A domain of the policy.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Domain {
@@ -188,7 +357,7 @@ macro_rules! domains {
             /// The TOML table name.
             pub fn name(self) -> &'static str {
                 match self {
-                    $(Domain::$variant => stringify!($field),)+
+                    $(Domain::$variant => domains!(@name $field $($name)?),)+
                 }
             }
 
@@ -200,7 +369,7 @@ macro_rules! domains {
         /// Who a domain's `text` reaches, fixed in code (contract §8.3).
         pub fn audience(domain: Domain) -> &'static [Role] {
             match domain {
-                $(Domain::$variant => &[$(Role::$role),+],)+
+                $(Domain::$variant => &[$(Role::$role),*],)+
             }
         }
 
@@ -208,14 +377,14 @@ macro_rules! domains {
         #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
         #[serde(deny_unknown_fields)]
         pub struct Policy {
-            $(pub $field: $value,)+
+            $($(#[serde(rename = $name)])? pub $field: $value,)+
         }
 
         impl Policy {
             /// The `text` of `domain`.
             pub fn text(&self, domain: Domain) -> &str {
                 match domain {
-                    $(Domain::$variant => &self.$field.text,)+
+                    $(Domain::$variant => HasText::text(&self.$field),)+
                 }
             }
         }
@@ -224,7 +393,7 @@ macro_rules! domains {
         #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
         #[serde(deny_unknown_fields)]
         pub struct Scope {
-            $(pub $field: Option<$set>,)+
+            $($(#[serde(rename = $name)])? pub $field: Option<$set>,)+
         }
 
         impl Scope {
@@ -270,6 +439,9 @@ domains! {
     tests, Tests, [Lead, Worker], Text, TextSet;
     monitor, Monitor, [Lead, Worker], Text, TextSet;
     instructions, Instructions, [Manager, Lead, Worker], Text, TextSet;
+    hooks, Hooks, [], Hooks, HooksSet;
+    test_commands = "test-commands", TestCommands, [], Option<RepoTests>, TestCommandsSet;
+    protected, Protected, [], Protected, ProtectedSet;
 }
 
 impl Sources {
