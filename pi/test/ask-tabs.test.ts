@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { Container, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { installHint } from "../lib/hint.ts";
 
-const THEME = new URL("../themes/cpd.json", import.meta.url);
+const THEME = new URL("../themes/dango.json", import.meta.url);
 type ThemeLike = { fg(c: string, t: string): string; bg(c: string, t: string): string };
 const pi = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 const themeMod = (await import(pathToFileURL(join(dirname(pi), "modes/interactive/theme/theme.js")).href)) as {

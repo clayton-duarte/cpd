@@ -86,12 +86,11 @@
 	],
 	"compact/read/failed/closed/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file or directory, access 'src/app.ts'{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file or directory, access 'src/a{0}…{0}{/}"
 	],
 	"compact/read/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file",
-		"   \\e[31mor directory, access 'src/app.ts'{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file{0}…{0}{/}"
 	],
 	"compact/read/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
@@ -148,8 +147,7 @@
 	],
 	"compact/read@offset/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mOffset 40 is beyond",
-		"   \\e[31mend of file (12 lines total){/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mOffset 40 is beyond {0}…{0}{/}"
 	],
 	"compact/read@offset/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
@@ -260,8 +258,7 @@
 	],
 	"compact/write/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mEACCES: permission",
-		"   \\e[31mdenied, open 'notes.md'{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mEACCES: permission d{0}…{0}{/}"
 	],
 	"compact/write/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
@@ -650,8 +647,7 @@
 	],
 	"compact/bash/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun tests{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
-		"   \\e[31mcode 1{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with {0}…{0}{/}"
 	],
 	"compact/bash/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mnpm test{/}",
@@ -710,8 +706,7 @@
 	],
 	"compact/bash@quiet/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun true{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand timed out",
-		"   \\e[31mafter 5 seconds{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand timed out af{0}…{0}{/}"
 	],
 	"compact/bash@quiet/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mtrue{/}",
@@ -779,15 +774,12 @@
 	],
 	"compact/bash@wide/failed/closed/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at <stdin>:1): Cannot index string with \"scripts\" (Command exited",
-		"   \\e[31mwith code 5){/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at <stdin>:1): Cannot index string wi{0}…{0}{/}"
 	],
 	"compact/bash@wide/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 mor",
 		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37me steps{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at",
-		"   \\e[31m<stdin>:1): Cannot index string with",
-		"   \\e[31m\"scripts\" (Command exited with code 5){/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at <stdin{0}…{0}{/}"
 	],
 	"compact/bash@wide/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
@@ -852,8 +844,7 @@
 	],
 	"compact/bash@four/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun seq{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
-		"   \\e[31mcode 1{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with {0}…{0}{/}"
 	],
 	"compact/bash@four/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mseq 1 4{/}",
@@ -918,8 +909,7 @@
 	"compact/powershell/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mList files \"src\" + 1 more ",
 		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mstep{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
-		"   \\e[31mcode 1{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with {0}…{0}{/}"
 	],
 	"compact/powershell/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
@@ -976,8 +966,7 @@
 	],
 	"compact/grep/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mrg: src: No such file",
-		"   \\e[31mor directory{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mrg: src: No such fil{0}…{0}{/}"
 	],
 	"compact/grep/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
@@ -1167,8 +1156,7 @@
 	],
 	"compact/custom:web_search/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider",
-		"   \\e[31munavailable{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider unav{0}…{0}{/}"
 	],
 	"compact/custom:web_search/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
@@ -2646,8 +2634,7 @@
 	],
 	"preview/custom:web_search/failed/closed/44": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
-		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider",
-		"   \\e[31munavailable{/}"
+		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider unav{0}…{0}{/}"
 	],
 	"preview/custom:web_search/failed/open/100": [
 		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",

@@ -26,8 +26,8 @@ fn open(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-/// The machine's `config.toml`, with a short Events poll.
-const CONFIG: &str = "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n";
+/// The machine's `config.toml`, with a short Events poll and the curation floor at 1 (the default is 25, hs-d592).
+const CONFIG: &str = "version = 1\nmachine = \"m1\"\ncontext_curation_min_records = 1\n[events]\npoll_ms = 20\n";
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;

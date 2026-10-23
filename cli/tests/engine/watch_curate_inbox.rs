@@ -43,7 +43,7 @@ fn fx() -> Fx {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\ncontext_curation_min_records = 1\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
             common::TICK_SECONDS,
             env.tmux_socket()
         ),
@@ -167,4 +167,71 @@ fn e8_opens_the_curate_items_blue() {
     for kind in ["curate-retire", "curate-docs"] {
         assert!(fx.items(kind).iter().all(|i| i["urgency"] == "blue"), "{:?}", fx.items(kind));
     }
+}
+
+impl Fx {
+    /// Rewrites `context_curation_min_records` in config.toml, every other line kept.
+    fn set_floor(&self, floor: u32) {
+        let path = self.env.cpd_home().join("config.toml");
+        let text = fs::read_to_string(&path).unwrap();
+        let lines: Vec<String> = text.lines().map(|l| if l.starts_with("context_curation_min_records") { format!("context_curation_min_records = {floor}") } else { l.to_owned() }).collect();
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+    }
+
+    fn pending(&self, context: &str) -> (i64, i64) {
+        (
+            self.env.query(&format!("SELECT count(*) FROM record_retirements WHERE context = '{context}' AND status = 'pending'")),
+            self.env.query(&format!("SELECT count(*) FROM record_curations WHERE context = '{context}' AND doc_candidate = 'pending'")),
+        )
+    }
+}
+
+/// hs-d592 R6: an archived Context has no curate item (derived from its state: unarchiving reopens them), its rows untouched.
+#[test]
+fn e8_opens_no_curate_item_for_an_archived_context_and_reopens_it_unarchived() {
+    let fx = fx();
+    fx.records("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n4"]);
+    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n4"], &["hs-n1", "hs-n2"], &["hs-n3"]);
+    let _engine = fx.start();
+    fx.assert_item("curate-retire", "building", "building: 2 to retire");
+    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
+    let before = fx.pending("building");
+
+    fx.env.sql("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'building'");
+    wait_until("both items closed", || fx.items("curate-retire").is_empty() && fx.items("curate-docs").is_empty());
+    assert_eq!(fx.pending("building"), before, "the rows stay pending");
+    assert_eq!(before, (2, 1));
+
+    fx.env.sql("UPDATE contexts SET archived_at = NULL WHERE id = 'building'");
+    fx.assert_item("curate-retire", "building", "building: 2 to retire");
+    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
+    assert_eq!(fx.pending("building"), before);
+}
+
+/// hs-d592 R2, R5, R6: a Context under `context_curation_min_records` has no curate item, the floor read at every tick.
+#[test]
+fn e8_opens_no_curate_item_for_a_context_under_the_floor() {
+    let fx = fx();
+    fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
+    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1", "hs-n2"], &["hs-n3"]);
+    fx.records("control", &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"]);
+    fx.propose("control", &["hs-n4", "hs-n5", "hs-n6", "hs-n7", "hs-n8", "hs-n9"], &["hs-n4"], &["hs-n9"]);
+    let _engine = fx.start();
+    fx.assert_item("curate-retire", "building", "building: 2 to retire");
+    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
+    fx.assert_item("curate-retire", "control", "control: 1 to retire");
+    fx.assert_item("curate-docs", "control", "control: 1 doc candidates");
+    let before = (fx.pending("building"), fx.pending("control"));
+
+    fx.set_floor(5);
+    wait_until("building's items closed", || fx.items("curate-retire").iter().chain(fx.items("curate-docs").iter()).all(|i| i["context"] != "building"));
+    assert_eq!((fx.pending("building"), fx.pending("control")), before, "the rows stay pending");
+    assert_eq!(fx.items("curate-retire").len(), 1, "control keeps its items");
+    assert_eq!(fx.items("curate-docs").len(), 1, "control keeps its items");
+
+    fx.set_floor(3);
+    fx.assert_item("curate-retire", "building", "building: 2 to retire");
+    fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
+    fx.assert_item("curate-retire", "control", "control: 1 to retire");
+    assert_eq!((fx.pending("building"), fx.pending("control")), before);
 }

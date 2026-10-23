@@ -416,7 +416,7 @@ fn a_note_superseding_an_unknown_record_is_record_not_found() {
 fn distilling(env: &TestEnv) {
     fs::write(
         env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
     )
     .unwrap();
     env.fake_pi(&crate::common::pi_says(crate::common::CURATES_ALL));

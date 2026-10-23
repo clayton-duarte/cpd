@@ -47,7 +47,7 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
         held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
     };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
-    conditions_with(store, home, OffsetDateTime::now_utc(), config.loop_guard_turns, team)
+    conditions_with(store, home, OffsetDateTime::now_utc(), config.loop_guard_turns, config.context_curation_min_records, team)
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.
@@ -56,6 +56,7 @@ pub fn conditions_with(
     home: &CpdHome,
     now: OffsetDateTime,
     loop_guard_turns: u32,
+    floor: u32,
     team: Option<Team<'_>>,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
@@ -66,7 +67,7 @@ pub fn conditions_with(
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(|conn| pr_ready(conn))?);
-    all.extend(store.read(curate)?);
+    all.extend(store.read(|conn| curate(conn, floor))?);
     all.extend(review_requested(store, home, now, team)?);
     Ok(all)
 }
@@ -248,24 +249,24 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 /// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one blue item per Context and kind while the Context has
 /// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
-fn curate(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
     let mut out = Vec::new();
     for (kind, name, noun, sql) in [
         (
             Kind::CurateRetire,
             "curate-retire",
             "to retire",
-            "SELECT context, count(*) FROM record_retirements WHERE status = 'pending' GROUP BY context ORDER BY context",
+            "SELECT context, count(*) FROM record_retirements WHERE status = 'pending' AND context IN (SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL AND (SELECT count(*) FROM context_records WHERE context = contexts.id) >= ?1) GROUP BY context ORDER BY context",
         ),
         (
             Kind::CurateDocs,
             "curate-docs",
             "doc candidates",
-            "SELECT context, count(*) FROM record_curations WHERE doc_candidate = 'pending' GROUP BY context ORDER BY context",
+            "SELECT context, count(*) FROM record_curations WHERE doc_candidate = 'pending' AND context IN (SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL AND (SELECT count(*) FROM context_records WHERE context = contexts.id) >= ?1) GROUP BY context ORDER BY context",
         ),
     ] {
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt.query_map([floor], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         for (raw, n) in rows {
             let context = id("context id", &raw, ContextId::parse)?;
             out.push(Condition {
@@ -523,7 +524,7 @@ mod tests {
 
     /// [`super::conditions_with`] with the team review rule off: these tests need no config file.
     fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-        conditions_with(store, home, NOW, 20, None)
+        conditions_with(store, home, NOW, 20, 1, None)
     }
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
@@ -1440,7 +1441,7 @@ mod tests {
     fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
         write_cache(f, posts);
         let lookup = lookup(prs);
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
         all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect()
     }
 
@@ -1497,7 +1498,7 @@ mod tests {
         assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other PRs");
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let none = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
+        let none = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
     }
 
@@ -1520,6 +1521,7 @@ mod tests {
             &f.home,
             NOW,
             20,
+            1,
             Some(team(&mut |refs| {
                 asked = refs.to_vec();
                 Ok(answer.clone())
@@ -1535,7 +1537,7 @@ mod tests {
         let mut f = fixture("dispatch");
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
-        let off = conditions_with(&mut f.store, &f.home, NOW, 20, None).unwrap();
+        let off = conditions_with(&mut f.store, &f.home, NOW, 20, 1, None).unwrap();
         assert!(off.is_empty());
         reconcile(&mut f.store, &off, T).unwrap();
         assert!(f.store.read(open_items).unwrap().is_empty());
@@ -1556,7 +1558,7 @@ mod tests {
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let unknown = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
+        let unknown = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
         assert_eq!(unknown.len(), 2, "no file is unknown, not empty: {unknown:?}");
         reconcile(&mut f.store, &unknown, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
@@ -1572,12 +1574,12 @@ mod tests {
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
         std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("unreadable")))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1);
         let error = all.iter().find(|c| c.kind == Kind::EngineError).expect("an engine-error condition");
         assert_eq!((error.urgency, error.subject.as_str(), error.label.as_str()), (Urgency::Red, "error:E8/team-review/store_failed", "team review: store_failed"));
         std::fs::write(f.home.run_dir().join("team-review.json"), r#"{"version": 2, "posts": []}"#).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| panic!("unreadable")))).unwrap();
         assert!(all.iter().any(|c| c.kind == Kind::EngineError), "another version is unreadable too");
     }
 
@@ -1586,7 +1588,7 @@ mod tests {
         let mut f = fixture("dispatch");
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "kept");
         assert_eq!(all.iter().find(|c| c.kind == Kind::EngineError).map(|c| c.subject.as_str()), Some("error:E8/team-review/gh_failed"));
     }
@@ -1597,13 +1599,13 @@ mod tests {
         write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.prs.insert(("acme/gone".to_owned(), 2), None);
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
         assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
 
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
         let blind = Lookup { me: ME_LOGIN.to_owned(), prs: [(("acme/pay".to_owned(), 1), None)].into() };
-        let all = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every PR unreadable: the queue stays");
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }
@@ -1629,7 +1631,7 @@ mod tests {
         assert_eq!(tail, [Kind::PrReady]);
         write_cache(&f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
-        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, 20, Some(team(&mut |_| Ok(lookup.clone()))))
+        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, 20, 1, Some(team(&mut |_| Ok(lookup.clone()))))
             .unwrap()
             .into_iter()
             .map(|c| c.kind)
