@@ -704,13 +704,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
+    fn a_failed_job_is_waiting_until_it_is_stuck() {
         assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
         assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::LightCyan));
-        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::LightRed));
-        assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
-        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::LightCyan));
     }
 
     #[test]

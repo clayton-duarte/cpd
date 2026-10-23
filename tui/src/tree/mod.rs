@@ -38,6 +38,8 @@ mod kinds;
 mod look;
 #[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+mod counter_tests;
 mod menu;
 mod rows;
 mod slug;

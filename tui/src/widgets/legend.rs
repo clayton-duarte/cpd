@@ -338,6 +338,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palette::numbered::C9;
     use crate::read::Kind;
 
     fn text(line: &Line) -> String {
@@ -478,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_is_waiting_and_a_stuck_one_is_red_in_the_pill_and_the_counter() {
+    fn a_failed_job_is_waiting_in_its_pill_and_red_in_its_counter_stuck_or_not() {
         let jobs = &sections()[1];
         let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
@@ -490,7 +491,7 @@ mod tests {
             "a sample pill is the Job pill the Plan view draws (hs-d534)"
         );
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
-        assert_eq!((fg(failed), fg(stuck)), (palette::fg_clickable(Meaning::Waiting).fg, palette::fg_clickable(Meaning::Failed).fg));
+        assert_eq!((fg(failed), fg(stuck)), (Some(C9), Some(C9)), "a failed count is red, stuck or not (hs-d580)");
     }
 
     #[test]

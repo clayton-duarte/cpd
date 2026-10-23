@@ -932,16 +932,6 @@ mod tests {
         assert!(!crate::palette::check::is_muted(&buf[(2, 1)]));
     }
 
-    #[test]
-    fn an_asleep_row_is_colour_7_on_every_mark_and_an_archived_one_colour_8() {
-        let mut t = tree(vec![context("cc", vec![with_dot("pp", Dot::Stopped)])]);
-        t.contexts[0].plans[0].sessions[0].asleep_at = Some(WHEN.to_owned());
-        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        // the dot, the name and the counters are 7; the branch is a line, 8
-        let marks: Vec<Color> = (0..20).filter(|&x| !" ╭├╰│─".contains(buf[(x, 1)].symbol())).map(|x| fg(&buf, x, 1)).collect();
-        assert!(!marks.is_empty() && marks.iter().all(|c| Some(*c) == palette::asleep_text().fg), "{marks:?}");
-        assert_eq!(fg(&buf, 0, 1), palette::muted_text().fg.unwrap(), "the branch");
-    }
 
     #[test]
     fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
@@ -996,42 +986,7 @@ mod tests {
         assert_eq!((cell(&buf, 2, 1), cell(&buf, 2, 2), cell(&buf, 2, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::Red), drawn_dot(Dot::White)), "while each Session row keeps its own");
     }
 
-    #[test]
-    fn every_status_has_its_counter_colour_and_zeros_and_separators_are_grey() {
-        let t = tree(vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [9, 1, 2, 3, 4, 5]), lone("bb", "y", Phase::Dispatch, [0; 6])])]);
-        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 3, false);
-        // counters "1⋅2⋅3⋅4⋅5" end `RIGHT_PAD` columns before the edge
-        let at = |i: u16| 9 + 2 * i;
-        let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
-        assert_eq!(
-            colours,
-            [Meaning::NotStarted, Meaning::InProgress, Meaning::Review, Meaning::Waiting, Meaning::Done].map(palette::color_clickable),
-            "the tree's rows are clickable: the bright pairs"
-        );
-        assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
-        assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
-    }
 
-    #[test]
-    fn the_failed_counter_is_waiting_and_red_only_while_the_plan_has_a_stuck_job() {
-        use super::super::inbox::item;
-        use cpd_core::ids::PlanId;
-        use cpd_core::inbox::model::Urgency;
-        let counters = || vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", "y", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
-        // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 9 + 2 * 3
-        let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 15, row);
-        let handled = tree(counters());
-        assert_eq!((failed(&handled, 1), failed(&handled, 2)), (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Waiting)), "its Lead handles it");
-        let stuck_for = |plan: &str, kind: Kind| {
-            let mut t = tree(counters());
-            t.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse(plan).unwrap()), ..item(1, kind, Urgency::Red, "x", WHEN) }];
-            t
-        };
-        let stuck = stuck_for("aa", Kind::JobStuck);
-        assert_eq!((failed(&stuck, 1), failed(&stuck, 2)), (palette::color_clickable(Meaning::Failed), palette::color_clickable(Meaning::Waiting)), "red for the Plan with the open job-stuck only");
-        let other = stuck_for("aa", Kind::Dialog);
-        assert_eq!(failed(&other, 1), palette::color_clickable(Meaning::Waiting), "another item is not job-stuck");
-    }
 
     #[test]
     fn the_guides_are_dark_grey() {
