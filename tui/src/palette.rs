@@ -371,20 +371,20 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// Nerd Font `nf-md-circle_outline` (U+F0766), then `nf-md-circle_slice_1` … `8` (U+F0A9E..U+F0AA5): the 9 frames of one
-/// animation. The working dot and a running Job's pill show one per [`frame`]; the other dots are its first and last.
-/// https://www.nerdfonts.com/cheat-sheet
-pub const SPINNER: [&str; 9] =
-    ["\u{F0766}", "\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
+/// The eight moon phases, `nf-md-moon_new` (U+F0F64), `moon_waxing_crescent` (F0F67), `moon_first_quarter` (F0F61),
+/// `moon_waxing_gibbous` (F0F68), `moon_full` (F0F62), `moon_waning_gibbous` (F0F66), `moon_last_quarter` (F0F63),
+/// `moon_waning_crescent` (F0F65): the one loader of pi and the cockpit (hs-d579). The working dot and a running Job's pill
+/// show one per [`frame`]; the idle dot is the first, the needs-you dot the full moon. https://www.nerdfonts.com/cheat-sheet
+pub const SPINNER: [&str; 8] = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
 
-/// An idle Session: the first frame.
+/// An idle Session: `nf-md-moon_new`, the first frame.
 pub const IDLE: &str = SPINNER[0];
-/// A stopped Session: the first frame, drawn dim.
+/// A stopped Session: the new moon, drawn dim.
 pub const STOPPED: &str = IDLE;
-/// A Session that waits for another agent (hs-d303): `nf-md-circle_slice_4`, the half circle, in `Meaning::Waiting`.
-pub const WAITING: &str = SPINNER[4];
-/// A Session that needs the User (coloured by case): the last frame.
-pub const NEEDS_YOU: &str = SPINNER[8];
+/// A Session that waits for another agent (hs-d303): `nf-md-moon_first_quarter`, the half-lit moon, in `Meaning::Waiting`.
+pub const WAITING: &str = "\u{F0F61}";
+/// A Session that needs the User (coloured by case): `nf-md-moon_full`.
+pub const NEEDS_YOU: &str = "\u{F0F62}";
 
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
@@ -428,7 +428,7 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
 /// How long one frame of the spinner lasts, in milliseconds.
 const FRAME_MS: u128 = 100;
 
-/// The spinner frame at `now`: `(unix ms / 100) % 9`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / 100) % 8`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
@@ -631,12 +631,12 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
-        let glyphs: Vec<_> = (0..10).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
-        assert_eq!(SPINNER.len(), 9);
-        assert_eq!((SPINNER[0], SPINNER[8]), ("\u{F0766}", "\u{F0AA5}"));
-        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[8]));
+        assert_eq!(SPINNER.len(), 8);
+        assert_eq!((SPINNER[0], SPINNER[4]), ("\u{F0F64}", "\u{F0F62}"));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[4]));
     }
 
     #[test]
@@ -688,9 +688,9 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_nine() {
+    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_eight() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 8, 8, 0, 1]);
+        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 0, 0, 1, 2]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 
@@ -758,7 +758,7 @@ mod tests {
         assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
     }
 
-    /// No other file of the cockpit's views names a colour.
+    /// No other file of the cockpit's views names a colour. `moon_tests.rs` is exempt: it pins the dots' colours (hs-d579) and draws nothing.
     #[test]
     fn no_colour_outside_the_palette() {
         fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
@@ -770,7 +770,7 @@ mod tests {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     walk(&path, offenders);
-                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs") {
+                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs" && n != "moon_tests.rs") {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for (n, line) in text.lines().enumerate() {
                         if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {

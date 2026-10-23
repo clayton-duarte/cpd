@@ -946,14 +946,14 @@ mod tests {
     #[test]
     fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
         let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Working)]), Dot::Working)]);
-        let glyphs: Vec<(String, String)> = (0..9)
+        let glyphs: Vec<(String, String)> = (0..=SPINNER.len())
             .map(|frame| {
                 let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
                 (buf[(1, 0)].symbol().to_owned(), buf[(2, 1)].symbol().to_owned())
             })
             .collect();
         let want: Vec<(String, String)> =
-            (0..9).map(|f| (SPINNER[f % SPINNER.len()].to_owned(), SPINNER[f % SPINNER.len()].to_owned())).collect();
+            (0..=SPINNER.len()).map(|f| (SPINNER[f % SPINNER.len()].to_owned(), SPINNER[f % SPINNER.len()].to_owned())).collect();
         assert_eq!(glyphs, want);
     }
 
