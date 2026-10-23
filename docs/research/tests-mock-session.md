@@ -135,7 +135,7 @@ are the design Job's; "seam" names what the cluster would bind to.
 - Fix: no test change. Put `tmux` in `DENIED_TOOLS` (`mod.rs:304`) so these tests fail loudly if they reach it, and give the tests that need
   it a fake. One small Job (harness change, shared with the other areas: not counted here).
 
-Sum of Jobs for this scope: A 2 + B 2 + D 1 + E 1 = **6** (C folded into B2; F is a harness change, not counted). The 13 K-only files need none.
+Sum of Jobs for this scope: A 2 + B 2 + D 1 + E 1 = **6** (C folded into B2; F is a harness change, not counted). The K-only files (board, pill_lines, list_archived, report, resume, send, titles_glance) need none.
 
 ## 3. Tests that test an external (X, 10 in `host.rs`)
 
