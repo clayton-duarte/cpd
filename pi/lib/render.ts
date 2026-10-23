@@ -8,7 +8,7 @@ import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
  * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
- * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
+ * content line led by a muted `│ ` and a muted `╰󰬬 collapse` line; folded, a muted `╰󰬦 expand` line (U+F0B2C and U+F0B26, the
  * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
  * renderer one mouse region per message, so the click cannot be limited to the toggle line. Display only: the message's `content` and
@@ -148,10 +148,10 @@ function firstSentence(summary: string): string {
 const TOP = "╭─";
 const RAIL = "│ ";
 const CLOSE = "╰";
-/** U+F005A, the 'nothing to fold' glyph; the same code point as compact-tools' own constant in `compact-tools/extensions/compact-tools-layout.ts` (not imported across the two trees). */
-const NOTHING_TO_FOLD = "\u{F005A}";
-const DOWN = "\u{F004B}";
-const UP = "\u{F0063}";
+/** U+F0B2A, the 'nothing to fold' glyph; the same code point as compact-tools' own constant in `compact-tools/extensions/compact-tools-layout.ts` (not imported across the two trees). */
+const NOTHING_TO_FOLD = "\u{F0B2A}";
+const DOWN = "\u{F0B26}";
+const UP = "\u{F0B2C}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
