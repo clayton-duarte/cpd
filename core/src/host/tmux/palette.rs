@@ -33,17 +33,18 @@ fn colour(name: &str) -> Option<u8> {
     panic!("a colour outside the palette: {name}")
 }
 
-/// The colours a style option such as `bg=blue,fg=colour0` sets: (fg, bg).
-fn style(value: &str) -> (Option<u8>, Option<u8>) {
-    let (mut fg, mut bg) = (None, None);
+/// What a style option such as `fg=blue,reverse` sets: (fg, bg, reverse).
+fn style(value: &str) -> (Option<u8>, Option<u8>, bool) {
+    let (mut fg, mut bg, mut reverse) = (None, None, false);
     for token in value.split([',', ' ']).filter(|t| !t.is_empty()) {
         match token.split_once('=') {
             Some(("fg", c)) => fg = colour(c),
             Some(("bg", c)) => bg = colour(c),
+            _ if token == "reverse" => reverse = true,
             _ => {}
         }
     }
-    (fg, bg)
+    (fg, bg, reverse)
 }
 
 /// The cells of `text`, which tmux expanded but left the `#[…]` styles of.
@@ -82,7 +83,7 @@ pub(super) fn show(cells: &[Cell]) -> String {
 }
 
 /// Where the pill `<left cap>text<right cap>` starts in `cells` (at its left cap); checks the §6.1.1 rule (3): the caps are
-/// `colour` on the terminal's background, the text is 0 on `colour`, and nothing is reversed.
+/// `colour` on the terminal's background, not reversed; the text is reversed, in `colour` as foreground with no background.
 #[track_caller]
 fn pill(cells: &[Cell], text: &str, colour: u8) -> usize {
     let want: Vec<char> = std::iter::once('\u{e0b6}').chain(text.chars()).chain(std::iter::once('\u{e0b4}')).collect();
@@ -95,7 +96,7 @@ fn pill(cells: &[Cell], text: &str, colour: u8) -> usize {
         assert!(cap.fg == Some(colour) && cap.bg.is_none() && !cap.reverse, "the caps of {text:?} are colour {colour} on the terminal's own background: {}", show(pill));
     }
     for cell in body {
-        assert!(cell.fg == Some(0) && cell.bg == Some(colour) && !cell.reverse, "{text:?} is text 0 on a block of colour {colour}: {}", show(pill));
+        assert!(cell.fg == Some(colour) && cell.bg.is_none() && cell.reverse, "{text:?} is reversed, in colour {colour} with no background: {}", show(pill));
     }
     at
 }
@@ -152,8 +153,8 @@ impl Server {
     }
 }
 
-/// §6.1.1: every pane title is a read-only title pill, text 0 on a block of 7, and blue (4) on the focused pane; the `━`
-/// before the left cap and the caps take the block's colour; no `reverse`, no colour 8.
+/// §6.1.1: every pane title is a read-only title pill, an inverted block of 7, and blue (4) on the focused pane; the `━`
+/// before the left cap and the caps take the block's colour; no colour 8.
 #[test]
 fn title_pills_are_grey_blocks_unfocused_and_blue_blocks_focused() {
     let server = Server::new(3);
@@ -180,9 +181,9 @@ fn title_pills_are_grey_blocks_unfocused_and_blue_blocks_focused() {
     }
 }
 
-/// §6.1.1: the workers pill (long and short form) and the version pill are blocks of 7 with text 0, with no colour inside; the preview pill is yellow (3) with text 0.
+/// §6.1.1: the workers pill (long and short form) and the version pill are inverted blocks of 8, with no colour inside; the preview pill is an inverted block of yellow (3).
 #[test]
-fn the_workers_and_version_pills_are_grey_blocks_with_black_text() {
+fn the_workers_and_version_pills_are_grey_blocks_inverted() {
     let server = Server::new(1);
     let (long, short) = ("workers 1/2 · 0 waiting · 3 queued", "1/2·0·3");
     for (option, value) in [
@@ -207,7 +208,7 @@ fn the_workers_and_version_pills_are_grey_blocks_with_black_text() {
     pill(&server.status(300), "preview: x y", 3);
 }
 
-/// §6.1: `mode-style` and `menu-selected-style` are the blue block (background 4, text 0) in place of reverse video or
+/// §6.1: `mode-style` and `menu-selected-style` are the blue block (foreground 4, reverse video, no background) in place of
 /// tmux 3.8's yellow theme; `menu-style` is clickable text, 15 (no background: the terminal's own stays); `menu-border-style`
 /// is a muted line, 8.
 #[test]
@@ -216,8 +217,8 @@ fn selections_menus_and_copy_mode_are_blue_blocks() {
         SERVER_OPTIONS.iter().rev().find(|o| o.get(2) == Some(&name)).unwrap_or_else(|| panic!("SERVER_OPTIONS sets no {name}"))[3].to_owned()
     };
     for name in ["mode-style", "menu-selected-style"] {
-        assert_eq!(style(&value(name)), (Some(0), Some(4)), "{name} is text 0 on a block of 4: {}", value(name));
+        assert_eq!(style(&value(name)), (Some(4), None, true), "{name} is the blue block, reversed: {}", value(name));
     }
-    assert_eq!(style(&value("menu-style")), (Some(15), None), "menu-style: {}", value("menu-style"));
-    assert_eq!(style(&value("menu-border-style")), (Some(8), None), "menu-border-style: {}", value("menu-border-style"));
+    assert_eq!(style(&value("menu-style")), (Some(15), None, false), "menu-style: {}", value("menu-style"));
+    assert_eq!(style(&value("menu-border-style")), (Some(8), None, false), "menu-border-style: {}", value("menu-border-style"));
 }

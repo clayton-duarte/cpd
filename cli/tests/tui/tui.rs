@@ -192,7 +192,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
     // (the colours, grey or blue, are the pane's focus: `pane_active`)
-    assert!(expanded.contains("#[fg=colour0]#[bg=colour7]Context#[fg=colour7]#[bg=default]"), "{expanded}");
+    assert!(expanded.contains("#[reverse]Context#[noreverse]"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -1132,6 +1132,42 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
     }
 }
 
+/// The SGR state (foreground 0-15, background 0-15, reverse) in force over the first cell of `text` in `styled`, which
+/// holds `ESC[…m` sequences; the byte order tmux emits them in is not pinned.
+fn sgr_state_at(styled: &str, text: &str) -> (Option<u8>, Option<u8>, bool) {
+    let at = styled.find(text).unwrap_or_else(|| panic!("no {text:?} in {styled:?}"));
+    let (mut fg, mut bg, mut reverse) = (None, None, false);
+    let mut rest = &styled[..at];
+    while let Some(start) = rest.find("\x1b[") {
+        let body = &rest[start + 2..];
+        let end = body.find('m').expect("an unclosed SGR");
+        let params: Vec<u32> = body[..end].split(';').map(|p| p.parse().unwrap_or(0)).collect();
+        let mut i = 0;
+        while i < params.len() {
+            match params[i] {
+                0 => (fg, bg, reverse) = (None, None, false),
+                7 => reverse = true,
+                27 => reverse = false,
+                n @ 30..=37 => fg = Some((n - 30) as u8),
+                n @ 90..=97 => fg = Some((n - 90 + 8) as u8),
+                39 => fg = None,
+                n @ 40..=47 => bg = Some((n - 40) as u8),
+                n @ 100..=107 => bg = Some((n - 100 + 8) as u8),
+                49 => bg = None,
+                n @ (38 | 48) => {
+                    let colour = Some(params[i + 2] as u8);
+                    if n == 38 { fg = colour } else { bg = colour }
+                    i += 2;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        rest = &body[end + 1..];
+    }
+    (fg, bg, reverse)
+}
+
 const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
 
 // The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
@@ -1146,7 +1182,8 @@ fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_o
         assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");
         assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
-        assert!(styled.contains(&format!("\x1b[30m\x1b[43mpreview: {PREVIEW}")), "colour 0 on 3, unpadded: {styled:?}");
+        let (fg, bg, reverse) = sgr_state_at(&styled, &format!("preview: {PREVIEW}"));
+        assert!(reverse && fg == Some(3) && bg.is_none(), "reverse, foreground 3, no background, unpadded: {styled:?}");
     }
 }
 
