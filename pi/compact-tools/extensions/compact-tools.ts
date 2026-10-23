@@ -24,7 +24,7 @@ import type {
 	ToolDefinition,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { classifyCallStatus, formatDurationMs, normalizeLineEndings, type RowStatus } from "./compact-tools-core.ts";
 import { LOADER_INTERVAL_MS, loaderFrame } from "./compact-tools-loader.ts";
 import { loadConfig } from "./compact-tools-config.ts";
@@ -540,6 +540,7 @@ function renderRowResult(
 			state.resultLineSummaryComputed = true;
 		}
 		const container = options.isPartial ? new LoaderContainer() : new CachedContainer();
+		const pending = pendingRow(name, ctx);
 		if (state.expanded || state.preview) {
 			const body = renderRowBody(name, ctx.args, result, output, state.expanded === true, theme, ctx.isError, author);
 			if (body) container.addChild(atContentWidth(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme)));
@@ -547,8 +548,16 @@ function renderRowResult(
 		// A failed row whose output is hidden gets its reason on the status line. When
 		// the output shows, it already says why, and repeating it only doubles the error.
 		const failureReason = ctx.isError && !state.expanded && !state.preview ? summarizeFailure(name, output) : undefined;
-		container.addChild(renderControls(theme, state, options.isPartial, ctx.isError, failureReason,
-			name === "edit" ? countEditChanges(result) : undefined, nestedSummary, " └ ", "   ", pendingRow(name, ctx)));
+		const closingRow = (reason?: string) => renderControls(theme, state, options.isPartial, ctx.isError, reason,
+			name === "edit" ? countEditChanges(result) : undefined, nestedSummary, " └ ", "   ", pending);
+		// The reason is cut to fewer than half the row's cells (docs/contract.md section 6.9), so it is cut as the row draws.
+		container.addChild(failureReason ? {
+			render: (width) => {
+				const cap = Math.ceil(width / 2) - 1;
+				return closingRow(cap < 1 ? undefined : truncateToWidth(failureReason, cap, "…")).render(width);
+			},
+			invalidate() {},
+		} : closingRow());
 		component = new WithinWidth(container);
 	}
 	rememberResult(state, result, options, ctx.isError, theme);

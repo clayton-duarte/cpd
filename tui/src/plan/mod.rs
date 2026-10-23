@@ -78,6 +78,12 @@ const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 /// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
 pub(crate) const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
 
+/// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one while the Lead works,
+/// `needs_user.lead_working`).
+pub(crate) fn spins(jobs: &[read::JobNode], needs_user: &read::NeedsUser) -> bool {
+    jobs.iter().any(|j| matches!(flow::Live::of(j, needs_user.lead_working), flow::Live::Running | flow::Live::FailedWorked))
+}
+
 /// What the pane shows when a Lead is in the chat slot.
 pub(crate) struct Centre {
     pub(crate) slot: ChatSlot,
@@ -92,7 +98,7 @@ impl Centre {
     pub(crate) fn spins(&self) -> bool {
         let pulls = || self.plan.prs.iter().filter_map(|p| p.pull.as_ref());
         false
-            || self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running) // a Running Job's pill icon
+            || spins(&self.plan.jobs, &self.plan.needs_user) // a running Job's pill icon, or a failed one's while the Lead works
             || pulls().any(|p| p.lead_working) // a PR box title's Lead dot
     }
 

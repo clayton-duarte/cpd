@@ -29,6 +29,8 @@ pub mod link;
 pub mod logs;
 pub mod menu;
 #[cfg(test)]
+mod failed_pill_tests;
+#[cfg(test)]
 mod moon_tests;
 pub mod trace;
 #[cfg(test)]

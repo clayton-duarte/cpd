@@ -121,13 +121,13 @@ test("no string literal drawn in pi's chat holds three dots", () => {
 	assert.deepEqual(files.flatMap(literalsWithThreeDots), [], "every ellipsis is the one character …");
 });
 
-test("the Thinking pill and the hidden label read Thinking…", () => {
+test("the Thinking pill reads Thinking… whatever hideThinkingBlock says", () => {
 	const folded = live();
 	const hidden = live(true);
 	try {
 		assert.equal(rows(folded.draw())[0], `╭─${LEFT}Thinking…${RIGHT}`, "the pill");
 		assert.ok(hidden.label() !== undefined, "the controller sets pi's hidden label");
-		assert.deepEqual(rows(hidden.draw()), ["Thinking…", "done"], "the hidden view");
+		assert.equal(rows(hidden.draw())[0], `╭─${LEFT}Thinking…${RIGHT}`, "the pill with hideThinkingBlock true");
 	} finally { folded.end(); hidden.end(); }
 });
 
