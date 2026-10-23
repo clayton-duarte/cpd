@@ -23,28 +23,19 @@ struct Fx {
     web: PathBuf,
 }
 
-/// The repo's `[tests]` (contract §7.7): what a `tdd` PR needs of its repo.
-const TESTS_TABLE: &str = "[tests]\nbuild = \"true\"\nrun = \"true\"\n";
+/// The repo policy file's `[test-commands]` (contract §7.7): what a `tdd` PR needs of its repo.
+const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
 
-/// A keyed repo whose `main` has `.config/cpd.toml` with `[tests]`, and `origin/main` at it.
+/// A keyed repo whose policy file has `[test-commands]`.
 fn keyed_repo_with_tests(env: &TestEnv, name: &str) -> PathBuf {
     let repo = env.keyed_repo(name).canonicalize().unwrap();
-    commit_tests_table(env, &repo);
-    env.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+    env.repo_policy("acme", name, TESTS_TABLE);
     repo
-}
-
-/// Commits `[tests]` to `.config/cpd.toml` on the repo's `main` (not on `origin/main`).
-fn commit_tests_table(env: &TestEnv, repo: &PathBuf) {
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/cpd.toml"), TESTS_TABLE).unwrap();
-    env.git(repo, &["add", "-A"]);
-    env.git(repo, &["commit", "-q", "-m", "tests table"]);
 }
 
 fn fx(phase: &str) -> Fx {
     let env = TestEnv::new();
-    // `pr add` of the default shape, `tdd`, needs the repo's `[tests]`.
+    // `pr add` of the default shape, `tdd`, needs the repo policy's `[test-commands]`.
     let pay = keyed_repo_with_tests(&env, "pay");
     let web = keyed_repo_with_tests(&env, "web");
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -338,7 +329,7 @@ fn a_shape_is_one_of_tdd_docs_and_config() {
 }
 
 #[test]
-fn add_refuses_a_tdd_pr_in_a_repo_without_a_tests_table_and_reads_it_from_origin_base() {
+fn add_refuses_a_tdd_pr_in_a_repo_without_test_commands_and_reads_them_from_its_policy_file() {
     let fx = fx("plan");
     let bare = fx.env.keyed_repo("bare").canonicalize().unwrap();
     let add = |shape: Option<&str>| {
@@ -351,13 +342,10 @@ fn add_refuses_a_tdd_pr_in_a_repo_without_a_tests_table_and_reads_it_from_origin
     for shape in [None, Some("tdd")] {
         let error = fx.refused(&add(shape), "tests_unconfigured", 3, writes);
         let message = error["message"].as_str().unwrap();
-        assert!(message.contains("--shape docs") && message.contains("--shape config") && message.contains("[tests]"), "{message}");
+        assert!(message.contains("--shape docs") && message.contains("--shape config") && message.contains("[test-commands]"), "{message}");
     }
-    // The table is read from `origin/<base>`: a commit on the local `main` that `origin/main` lacks is not enough.
-    commit_tests_table(&fx.env, &bare);
-    fx.refused(&add(None), "tests_unconfigured", 3, writes);
-    // The shapes that have no test Job do not need it.
-    fx.env.git(&bare, &["update-ref", "refs/remotes/origin/main", "main"]);
+    // The table is read from the repo's policy file, not from its tree.
+    fx.env.repo_policy("acme", "bare", TESTS_TABLE);
     assert_eq!(add(None).ok()["pr"]["shape"], "tdd");
     // A repo that never had it is fine for a `docs` or a `config` PR.
     let plain = fx.env.keyed_repo("plain").canonicalize().unwrap();
@@ -368,17 +356,13 @@ fn add_refuses_a_tdd_pr_in_a_repo_without_a_tests_table_and_reads_it_from_origin
 }
 
 #[test]
-fn add_refuses_a_tests_table_that_is_not_as_documented() {
+fn add_refuses_a_test_commands_table_that_is_not_as_documented() {
     let fx = fx("plan");
     let bad = fx.env.keyed_repo("bad").canonicalize().unwrap();
-    fs::create_dir_all(bad.join(".config")).unwrap();
-    fs::write(bad.join(".config/cpd.toml"), "[tests]\nbuild = \"true\"\n").unwrap();
-    fx.env.git(&bad, &["add", "-A"]);
-    fx.env.git(&bad, &["commit", "-q", "-m", "a table without `run`"]);
-    fx.env.git(&bad, &["update-ref", "refs/remotes/origin/main", "main"]);
+    fx.env.repo_policy("acme", "bad", "[test-commands]\nbuild = \"true\"\n");
     let writes = fx.writes();
     let args = ["add", "api", "--repo", bad.to_str().unwrap(), "--title", "Add retries"];
-    let error = fx.refused(&fx.add_with_stubs("pay-1", &args), "config_invalid", 1, writes);
+    let error = fx.refused(&fx.add_with_stubs("pay-1", &args), "policy_invalid", 1, writes);
     assert!(error["message"].as_str().unwrap().contains("run"), "{error}");
 }
 

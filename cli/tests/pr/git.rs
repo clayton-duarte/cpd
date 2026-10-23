@@ -12,7 +12,7 @@ use cpd_core::error::ErrorCode;
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook};
 use cpd_core::git::{
     GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
-    discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
+    discard_worktree, push_commit, lead_branch, lead_worktree_path, remove_merged_attempt, tamper_check,
     touched_protected,
 };
 use cpd_core::git::gate::Slots;
@@ -736,16 +736,11 @@ fn the_commands_of_a_hook_can_be_listed_in_file_order() {
 
 // --------------------------------------------------------------- tamper
 
-const LIST: &str = ".config/cpd.toml";
-
-/// A repo on `main` with the repo's protected list, `verify.sh` and `scripts/ci/run.sh`
-/// committed, and the branches `cpd/pay-4521` (the Lead Branch) and `att`, both at `main`.
-fn tamper_repo(list: Option<&str>) -> (TestEnv, PathBuf) {
+/// A repo on `main` with `verify.sh` and `scripts/ci/run.sh` committed (the protected paths of [`list`]),
+/// and the branches `cpd/pay-4521` (the Lead Branch) and `att`, both at `main`.
+fn tamper_repo() -> (TestEnv, PathBuf) {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    if let Some(list) = list {
-        commit_file(&env, &repo, LIST, list);
-    }
     commit_file(&env, &repo, "verify.sh", "#!/bin/sh\n");
     commit_file(&env, &repo, "scripts/ci/run.sh", "ci\n");
     commit_file(&env, &repo, "src/a.rs", "a\n");
@@ -754,7 +749,10 @@ fn tamper_repo(list: Option<&str>) -> (TestEnv, PathBuf) {
     (env, repo)
 }
 
-const DEFAULT_LIST: &str = "protected = [\"verify.sh\", \"scripts/ci/\"]\n";
+/// The PR's `protected.paths`, from its policy.
+fn list() -> Vec<String> {
+    vec!["verify.sh".to_owned(), "scripts/ci/".to_owned()]
+}
 
 /// Commits `edit` on branch `att` (changing the tree), then returns to `main`.
 fn on_att(env: &TestEnv, repo: &Path, edit: impl FnOnce(&Path)) {
@@ -766,14 +764,12 @@ fn on_att(env: &TestEnv, repo: &Path, edit: impl FnOnce(&Path)) {
 }
 
 fn touched(repo: &Path) -> Vec<String> {
-    touched_protected(repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap()
+    touched_protected(repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap()
 }
 
 #[test]
 fn each_protected_path_is_refused() {
     let paths = [
-        ".config/wt.toml",
-        ".config/cpd.toml",
         ".cpd/anything",
         ".cpd/deep/er/file",
         "verify.sh",
@@ -781,7 +777,7 @@ fn each_protected_path_is_refused() {
         "scripts/ci/new/nested.sh",
     ];
     // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     for path in paths {
         env.git(&repo, &["branch", "-f", "att", "cpd/pay-4521"]);
         on_att(&env, &repo, |r| {
@@ -790,7 +786,7 @@ fn each_protected_path_is_refused() {
             fs::write(full, "changed\n").unwrap();
         });
         assert_eq!(touched(&repo), vec![path.to_owned()], "{path}");
-        let err = tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
+        let err = tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap_err();
         assert_eq!(err.code(), ErrorCode::GateTampered, "{path}");
         assert_eq!(err.details()["paths"], serde_json::json!([path]));
     }
@@ -798,14 +794,14 @@ fn each_protected_path_is_refused() {
 
 #[test]
 fn deleting_a_protected_path_is_refused() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
     assert_eq!(touched(&repo), vec!["verify.sh"]);
 }
 
 #[test]
 fn renaming_a_protected_path_away_is_refused() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     env.git(&repo, &["switch", "-q", "att"]);
     env.git(&repo, &["mv", "verify.sh", "src/not-protected.sh"]);
     env.git(&repo, &["mv", "scripts/ci/run.sh", "scripts/run.sh"]);
@@ -817,7 +813,7 @@ fn renaming_a_protected_path_away_is_refused() {
 
 #[test]
 fn unprotected_paths_pass() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     on_att(&env, &repo, |r| {
         for p in ["src/a.rs", "scripts/cix.sh", "verify.sh.bak", ".cpdx/y", ".config/other.toml"] {
             let full = r.join(p);
@@ -826,77 +822,33 @@ fn unprotected_paths_pass() {
         }
     });
     assert_eq!(touched(&repo), Vec::<String>::new());
-    tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap();
+    tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap();
 }
 
 #[test]
-fn the_list_comes_from_the_lead_branch_never_from_the_attempt() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
-    // The Attempt empties the list and edits verify.sh, and also "protects" its own file.
+fn the_list_is_the_policys_never_the_attempts() {
+    let (env, repo) = tamper_repo();
+    // The Attempt edits verify.sh and also "protects" its own file by writing a list in its tree.
     on_att(&env, &repo, |r| {
-        fs::write(r.join(LIST), "protected = [\"mine.txt\"]\n").unwrap();
+        fs::write(r.join(".config/cpd.toml"), "protected = [\"mine.txt\"]\n").ok();
         fs::write(r.join("verify.sh"), "weakened\n").unwrap();
         fs::write(r.join("mine.txt"), "mine\n").unwrap();
     });
-    let paths = touched(&repo);
-    assert!(paths.contains(&"verify.sh".to_owned()), "{paths:?}");
-    assert!(paths.contains(&LIST.to_owned()), "{paths:?}");
-    assert!(!paths.contains(&"mine.txt".to_owned()), "{paths:?}");
+    assert_eq!(touched(&repo), vec!["verify.sh"]);
 }
 
 #[test]
-fn the_list_is_read_at_the_lead_branchs_tip_not_the_bases() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
-    on_att(&env, &repo, |r| fs::write(r.join("secret.txt"), "x\n").unwrap());
-    assert_eq!(touched(&repo), Vec::<String>::new());
-    // The Lead Branch later protects secret.txt; the diff is still base...att.
-    env.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
-    commit_file(&env, &repo, LIST, "protected = [\"secret.txt\"]\n");
-    env.git(&repo, &["switch", "-q", "main"]);
-    let base = env.git(&repo, &["merge-base", "cpd/pay-4521", "att"]);
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", &base, "att").unwrap(), vec!["secret.txt"]);
-}
-
-#[test]
-fn no_list_file_means_only_the_fixed_protected_paths() {
-    let (env, repo) = tamper_repo(None);
-    assert_eq!(protected_list(&repo, "cpd/pay-4521").unwrap(), Vec::<String>::new());
+fn no_list_means_only_the_cpd_directory() {
+    let (env, repo) = tamper_repo();
     on_att(&env, &repo, |r| {
         fs::write(r.join("verify.sh"), "changed\n").unwrap();
         fs::create_dir_all(r.join(".config")).unwrap();
         fs::write(r.join(".config/wt.toml"), "x = 1\n").unwrap();
+        fs::write(r.join(".config/cpd.toml"), "x = 1\n").unwrap();
+        fs::create_dir_all(r.join(".cpd")).unwrap();
+        fs::write(r.join(".cpd/x"), "x\n").unwrap();
     });
-    assert_eq!(touched(&repo), vec![".config/wt.toml"]);
-}
-
-#[test]
-fn a_bad_list_file_is_config_invalid() {
-    let texts = [
-        "protected = \"verify.sh\"\n",
-        "protected = [1]\n",
-        "protect = [\"verify.sh\"]\n",
-        "protected = [\"\"]\n",
-        "protected = [\"/abs\"]\n",
-        "protected = [\n",
-    ];
-    // One repo: each case commits its list on `main` and moves the Lead tip and `att` there.
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
-    for text in texts {
-        commit_file(&env, &repo, LIST, text);
-        env.git(&repo, &["branch", "-f", "cpd/pay-4521", "main"]);
-        env.git(&repo, &["branch", "-f", "att", "main"]);
-        let err = protected_list(&repo, "cpd/pay-4521").unwrap_err();
-        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
-        let err = touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
-        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
-    }
-}
-
-#[test]
-fn an_unknown_lead_branch_is_git_failed() {
-    let (_env, repo) = tamper_repo(Some(DEFAULT_LIST));
-    let err = protected_list(&repo, "cpd/no-such").unwrap_err();
-    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", &[], "main", "cpd/pay-4521", "att").unwrap(), vec![".cpd/x"]);
 }
 
 // A base merge (§7.5): a protected path whose version on the Attempt is the Lead tip's or the
@@ -905,7 +857,7 @@ fn an_unknown_lead_branch_is_git_failed() {
 /// `tamper_repo` plus a commit on `main` writing `path` = `content` (`None`: removing it),
 /// which `att` merges; `cpd/pay-4521` stays where it was, so the base is ahead of the Lead tip.
 fn base_merge_repo(path: &str, content: Option<&str>) -> (TestEnv, PathBuf) {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     match content {
         Some(content) => {
             commit_file(&env, &repo, path, content);
@@ -923,58 +875,46 @@ fn base_merge_repo(path: &str, content: Option<&str>) -> (TestEnv, PathBuf) {
 
 #[test]
 fn a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed() {
-    for path in [".config/wt.toml", ".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
+    for path in [".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
         let (_env, repo) = base_merge_repo(path, Some("from the base\n"));
-        assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
-        tamper_check(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap();
+        assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
+        tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap();
     }
 }
 
 #[test]
-fn the_repos_own_list_file_is_handled_like_the_others() {
-    let (env, repo) = base_merge_repo(LIST, Some("protected = [\"verify.sh\", \"x/\"]\n"));
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new());
-    // Changed again to anything else, it is tampered.
-    env.git(&repo, &["switch", "-q", "att"]);
-    commit_file(&env, &repo, LIST, "protected = []\n");
-    env.git(&repo, &["switch", "-q", "main"]);
-    assert_eq!(touched(&repo), vec![LIST]);
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), vec![LIST]);
-}
-
-#[test]
 fn a_protected_path_changed_to_anything_but_the_bases_or_the_lead_tips_is_tampered() {
-    let (env, repo) = base_merge_repo(".config/wt.toml", Some("from the base\n"));
+    let (env, repo) = base_merge_repo(".cpd/x", Some("from the base\n"));
     env.git(&repo, &["switch", "-q", "att"]);
-    commit_file(&env, &repo, ".config/wt.toml", "mine\n");
+    commit_file(&env, &repo, ".cpd/x", "mine\n");
     env.git(&repo, &["switch", "-q", "main"]);
-    assert_eq!(touched(&repo), vec![".config/wt.toml"]);
+    assert_eq!(touched(&repo), vec![".cpd/x"]);
 }
 
 #[test]
 fn a_protected_path_that_matches_the_lead_tip_is_allowed() {
     // The Lead tip gained the file and the Attempt, cut earlier, has the same version.
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     env.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
-    commit_file(&env, &repo, ".config/wt.toml", "lead\n");
+    commit_file(&env, &repo, ".cpd/x", "lead\n");
     env.git(&repo, &["switch", "-q", "att"]);
     env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay-4521"]);
     env.git(&repo, &["switch", "-q", "main"]);
     let base = env.git(&repo, &["merge-base", "main", "att"]);
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", &base, "att").unwrap(), Vec::<String>::new());
+    assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", &base, "att").unwrap(), Vec::<String>::new());
 }
 
 #[test]
 fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_allowed() {
-    for path in ["verify.sh", ".config/cpd.toml"] {
+    for path in ["verify.sh", "scripts/ci/run.sh"] {
         let (_env, repo) = base_merge_repo(path, None);
-        assert_eq!(touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
+        assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
     }
 }
 
 #[test]
 fn a_protected_file_deleted_in_the_attempt_alone_is_tampered() {
-    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    let (env, repo) = tamper_repo();
     on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
     assert_eq!(touched(&repo), vec!["verify.sh"]);
 }

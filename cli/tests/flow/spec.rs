@@ -219,8 +219,6 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
       cargo check --all-targets
 
 - Never edit the protected paths. A diff that touches one is refused. They are:
-  - `.config/wt.toml`
-  - `.config/cpd.toml`
   - `.cpd/`
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
@@ -294,8 +292,6 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself. This repo defines no quick check.
 - Never edit the protected paths. A diff that touches one is refused. They are:
-  - `.config/wt.toml`
-  - `.config/cpd.toml`
   - `.cpd/`
   - `verify.sh`
   - `scripts/ci/`

@@ -11,7 +11,7 @@ use common::{Run, TestEnv};
 use cpd_core::home::CpdHome;
 use serde_json::Value;
 
-const TESTS_TABLE: &str = "[tests]\nbuild = \"true\"\nrun = \"true\"\n";
+const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
 
 struct Fx {
     env: TestEnv,
@@ -23,11 +23,7 @@ struct Fx {
 fn fx() -> Fx {
     let env = TestEnv::new();
     let repo = env.keyed_repo("pay").canonicalize().unwrap();
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/cpd.toml"), TESTS_TABLE).unwrap();
-    env.git(&repo, &["add", "-A"]);
-    env.git(&repo, &["commit", "-q", "-m", "tests table"]);
-    env.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+    env.repo_policy("acme", "pay", TESTS_TABLE);
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     env.sql(
