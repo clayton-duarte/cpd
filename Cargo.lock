@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.13.45"
+version = "0.13.46"
 dependencies = [
  "clap",
  "cpd-core",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-core"
-version = "0.13.45"
+version = "0.13.46"
 dependencies = [
  "clap",
  "libproc",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-engine"
-version = "0.13.45"
+version = "0.13.46"
 dependencies = [
  "clap",
  "cpd-core",
@@ -350,7 +350,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-tui"
-version = "0.13.45"
+version = "0.13.46"
 dependencies = [
  "clap",
  "cpd-core",
