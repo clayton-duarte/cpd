@@ -1430,17 +1430,33 @@ fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
     let env = TestEnv::new();
     let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
 
+    let trace = env.root().join("git-trace");
+    // SAFETY: nextest runs each test in its own process; no other thread reads the environment meanwhile.
+    unsafe { std::env::set_var("GIT_TRACE", &trace) };
     let (found, reads) = common::answer_reads(&admin.join("commondir"), 40, |_, _| common::Next::Hold, || listed(&repo));
+    let runs = fs::read_to_string(&trace).unwrap().lines().filter(|l| l.contains("built-in: git worktree list")).count();
 
     // The bound is the one of `worktree add` (§7): 20 rounds; the 20th failure is the error.
-    assert_eq!(reads, 20, "git ran 20 times, each read the half-written commondir");
+    assert_eq!(runs, 20, "git ran 20 times");
+    // On Linux each run reads the half-written commondir once. Apple's git sometimes opens it twice in one run, so
+    // there the reads are only at least the runs.
+    if cfg!(target_os = "linux") {
+        assert_eq!(reads, 20, "each run read the half-written commondir");
+    } else {
+        assert!(reads >= 20, "each run read the half-written commondir: {reads} reads");
+    }
     let error = found.unwrap_err();
     assert_eq!(error.code(), ErrorCode::GitFailed);
     let details = error.details();
     assert_eq!(details["exit"], 128);
     assert_eq!(details["argv"].as_array().unwrap()[3..], [serde_json::json!("worktree"), serde_json::json!("list"), serde_json::json!("--porcelain")]);
     let stderr = details["stderr"].as_str().unwrap();
-    assert!(stderr.contains("fatal: failed to read ") && stderr.contains("worktrees/pay.held/commondir: Success"), "{stderr}");
+    // strerror(0): "Success" on Linux, "Undefined error: 0" on macOS.
+    let strerror_zero = if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" };
+    assert!(
+        stderr.contains("fatal: failed to read ") && stderr.contains(&format!("worktrees/pay.held/commondir: {strerror_zero}")),
+        "{stderr}"
+    );
 }
 
 #[test]
