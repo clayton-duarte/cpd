@@ -22,6 +22,7 @@ use ratatui::{
 };
 
 use crate::palette::{self, Meaning};
+use crate::pill;
 use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
 use cpd_core::ids::JobKey;
@@ -136,10 +137,6 @@ pub enum Dir {
     Left,
     Right,
 }
-
-/// The rounded caps of a pill (powerline, U+E0B6 and U+E0B4), each one cell, drawn in the pill's status colour.
-pub const CAP_L: &str = "\u{e0b6}";
-pub const CAP_R: &str = "\u{e0b4}";
 
 /// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
 const GAP: u16 = 3;
@@ -338,9 +335,9 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // others
     let live_w: Vec<u16> = cols
         .iter()
-        .map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).filter(|&&i| jobs[i].status != Live::Cancelled).map(|&i| pill_w(i) + 2).max().unwrap_or(0))
+        .map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).filter(|&&i| jobs[i].status != Live::Cancelled).map(|&i| pill_w(i) + pill::CAPS_COLUMNS).max().unwrap_or(0))
         .collect();
-    let rect_w = |i: usize, l: usize| if jobs[i].status == Live::Cancelled { pill_w(i) + 2 } else { live_w[l] };
+    let rect_w = |i: usize, l: usize| if jobs[i].status == Live::Cancelled { pill_w(i) + pill::CAPS_COLUMNS } else { live_w[l] };
     let col_w: Vec<u16> = cols.iter().enumerate().map(|(l, cs)| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| rect_w(i, l)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
@@ -442,13 +439,9 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
                 let rect = Rect::new(xs[l], top[c] + k as u16, rect_w(i, l), 1);
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
                 // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job's is colour 8
-                let style = jobs[i].status.pill();
-                let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
-                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
-                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
-                let body = body_of(rect);
-                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
-                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
+                let (left, right) = (parts[i].0.as_str(), parts[i].1.as_str());
+                let gap = body_of(rect).width as usize - Line::from(left).width() - Line::from(right).width();
+                Line::from(pill::pill(format!("{left}{}{right}", " ".repeat(gap)), jobs[i].status.pill())).render(rect, &mut buf);
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
@@ -577,7 +570,7 @@ impl Chart {
         if let Some(pill) = selected.map(|i| self.pills[i].rect) {
             let window = Rect::new(ox, oy, area.width, area.height);
             // the body is the blue block, bold; the caps are blue too (the block's colour as foreground)
-            let blue = Style::new().fg(palette::pill_focus().fg.expect("a pill has a colour"));
+            let blue = pill::cap_style(palette::pill_focus());
             for (rect, style) in [
                 (body_of(pill), palette::pill_focus().add_modifier(Modifier::BOLD)),
                 (Rect::new(pill.x, pill.y, 1, 1), blue),
@@ -596,6 +589,9 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static CAP_L: &str = "\u{e0b6}";
+    static CAP_R: &str = "\u{e0b4}";
 
     fn job(key: &str, needs: &[&str]) -> FlowJob {
         FlowJob {
