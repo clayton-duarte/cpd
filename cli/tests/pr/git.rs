@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 
 use common::TestEnv;
 use cpd_core::error::ErrorCode;
-use cpd_core::git::hooks::{HookError, HookOutcome, load, run_hook};
+use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook};
 use cpd_core::git::{
-    GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
+    GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
     discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
@@ -40,8 +40,21 @@ fn commit_file(env: &TestEnv, repo: &Path, path: &str, content: &str) {
     env.git(repo, &["commit", "-q", "-m", &format!("edit {path}")]);
 }
 
-fn wt_toml(env: &TestEnv, repo: &Path, text: &str) {
-    commit_file(env, repo, ".config/wt.toml", text);
+/// The pipeline of `hook` in `wt`, written as a `.config/wt.toml` was (`pre-start = "cmd"`, `[pre-commit]`,
+/// `[[pre-merge]]`): read as the `[hooks]` table of a repo policy file is. `Err` is the loader's `policy_invalid`.
+fn try_pipeline(wt: &str, hook: Hook) -> Result<Pipeline, cpd_core::error::CpdError> {
+    let scope = cpd_core::policy::parse_scope(Path::new("pay.toml"), &format!("[hooks]\n{wt}").replace("\n[", "\n[hooks.").replace("[hooks.[", "[[hooks."))?;
+    let hooks = scope.hooks.unwrap_or_default();
+    Ok(match hook {
+        Hook::PreStart => hooks.pre_start,
+        Hook::PreCommit => hooks.pre_commit,
+        Hook::PreMerge => hooks.pre_merge,
+    }
+    .unwrap_or_default())
+}
+
+fn pipeline(wt: &str, hook: Hook) -> Pipeline {
+    try_pipeline(wt, hook).unwrap()
 }
 
 // ------------------------------------------------------------ worktrees
@@ -50,10 +63,10 @@ fn wt_toml(env: &TestEnv, repo: &Path, text: &str) {
 fn lead_worktree_is_a_sibling_on_cpd_plan_cut_from_the_base() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    wt_toml(&env, &repo, "[pre-start]\nmark = \"echo {{ branch }} {{ base }} > setup-ran\"\n");
+    let pre_start = pipeline("[pre-start]\nmark = \"echo {{ branch }} {{ base }} > setup-ran\"\n", Hook::PreStart);
     let main_sha = env.git(&repo, &["rev-parse", "main"]);
 
-    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    let made = create_lead_worktree_with(&repo, &plan(), "main", &setup(&env, "lead.log"), &pre_start).unwrap();
 
     assert_eq!(made.path, repo.parent().unwrap().join("pay.pay-4521"));
     assert_eq!(made.path, lead_worktree_path(&repo, &plan()).unwrap());
@@ -96,10 +109,10 @@ fn lead_worktree_is_cut_from_a_freshly_fetched_origin_base() {
 fn a_failing_pre_start_removes_the_worktree_and_branch() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    wt_toml(&env, &repo, "pre-start = \"echo no luck; exit 3\"\n");
+    let pre_start = pipeline("pre-start = \"echo no luck; exit 3\"\n", Hook::PreStart);
     let setup = setup(&env, "lead.log");
 
-    let err = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap_err();
+    let err = create_lead_worktree_with(&repo, &plan(), "main", &setup, &pre_start).unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::SetupFailed);
     assert_eq!(err.details()["tail"], "no luck");
@@ -113,8 +126,8 @@ fn a_failing_pre_start_removes_the_worktree_and_branch() {
 fn an_invalid_pre_start_is_setup_failed_too() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    wt_toml(&env, &repo, "pre-start = \"echo {{ nope }}\"\n");
-    let err = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap_err();
+    let pre_start = pipeline("pre-start = \"echo {{ nope }}\"\n", Hook::PreStart);
+    let err = create_lead_worktree_with(&repo, &plan(), "main", &setup(&env, "lead.log"), &pre_start).unwrap_err();
     assert_eq!(err.code(), ErrorCode::SetupFailed);
     assert!(!lead_worktree_path(&repo, &plan()).unwrap().exists());
     assert_eq!(env.git(&repo, &["branch", "--list", "cpd/*"]), "");
@@ -156,18 +169,14 @@ fn lead_worktree_replaces_the_leftover_of_an_interrupted_lock() {
 fn attempt_worktree_is_cut_from_the_lead_branch_head() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    wt_toml(
-        &env,
-        &repo,
-        "[pre-start]\nmark = \"echo {{ branch }} {{ base }} {{ base_worktree_path }} > setup-ran\"\n",
-    );
+    let pre_start = pipeline("[pre-start]\nmark = \"echo {{ branch }} {{ base }} {{ base_worktree_path }} > setup-ran\"\n", Hook::PreStart);
     let setup = setup(&env, "attempt.log");
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
     // The Lead Branch has moved on from main.
     commit_file(&env, &lead.path, "lead.txt", "lead\n");
     let lead_sha = env.git(&lead.path, &["rev-parse", "HEAD"]);
 
-    let made = create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup).unwrap();
+    let made = create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start).unwrap();
 
     assert_eq!(made.path, repo.parent().unwrap().join("pay.pay-4521--api-a1"));
     assert_eq!(made.path, attempt_worktree_path(&repo, &plan(), &attempt()).unwrap());
@@ -186,9 +195,9 @@ fn a_failing_attempt_pre_start_removes_the_worktree_and_branch() {
     let repo = env.git_repo("pay");
     let setup = setup(&env, "attempt.log");
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
-    wt_toml(&env, &lead.path, "pre-start = \"exit 1\"\n");
+    let pre_start = pipeline("pre-start = \"exit 1\"\n", Hook::PreStart);
 
-    let err = create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup).unwrap_err();
+    let err = create_attempt_worktree_with(&repo, &lead.path, &plan(), &attempt(), &setup, &pre_start).unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::SetupFailed);
     assert!(!attempt_worktree_path(&repo, &plan(), &attempt()).unwrap().exists());
@@ -415,15 +424,15 @@ struct Hooks {
     env: TestEnv,
     repo: PathBuf,
     log: PathBuf,
+    /// The hooks, written as a `.config/wt.toml` was and read as the `[hooks]` of a repo policy file.
+    wt: String,
 }
 
 fn hooks(wt: &str) -> Hooks {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/wt.toml"), wt).unwrap();
     let log = env.root().join("logs").join("h.log");
-    Hooks { env, repo, log }
+    Hooks { env, repo, log, wt: wt.to_owned() }
 }
 
 impl Hooks {
@@ -433,7 +442,7 @@ impl Hooks {
 
     fn run_for(&self, hook: Hook, timeout: Duration) -> cpd_core::git::HookResult {
         let op = Operation { branch: "main" };
-        run_hook(hook, &self.repo, Some(&op), timeout, &self.log).unwrap()
+        run_hook(hook, &pipeline(&self.wt, hook), &self.repo, Some(&op), timeout, &self.log).unwrap()
     }
 
     fn file(&self, name: &str) -> String {
@@ -446,16 +455,14 @@ fn no_file_and_no_table_mean_no_commands_and_the_hook_passes() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
     let log = env.root().join("h.log");
-    let run = |repo: &Path| run_hook(Hook::PreCommit, repo, None, Duration::from_secs(5), &log).unwrap();
+    let run = |wt: &str| run_hook(Hook::PreCommit, &pipeline(wt, Hook::PreCommit), &repo, None, Duration::from_secs(5), &log).unwrap();
 
-    let result = run(&repo);
+    let result = run("");
     assert_eq!(result.outcome, HookOutcome::Passed);
     assert_eq!(result.tail, None);
 
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/wt.toml"), "[pre-merge]\ngate = \"exit 1\"\n").unwrap();
     // R20: no pre-commit table means no quick check; pre-merge does not run instead.
-    let result = run(&repo);
+    let result = run("[pre-merge]\ngate = \"exit 1\"\n");
     assert_eq!(result.outcome, HookOutcome::Passed);
     assert_eq!(result.tail, None);
     assert!(!log.exists());
@@ -493,10 +500,10 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 fn the_log_has_a_hooks_line_before_the_hook_ends() {
     // The hook ends only once the test has read the log (`go`): its first line must be there before.
     let h = hooks("pre-merge = \"echo first; until [ -e go ]; do sleep 0.05; done; echo last\"\n");
-    let (repo, log) = (h.repo.clone(), h.log.clone());
+    let (repo, log, pre_merge) = (h.repo.clone(), h.log.clone(), pipeline(&h.wt, Hook::PreMerge));
     let runner = std::thread::spawn(move || {
         let op = Operation { branch: "main" };
-        run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
+        run_hook(Hook::PreMerge, &pre_merge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
     });
     common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
     let seen = fs::read_to_string(&h.log).unwrap_or_default();
@@ -565,8 +572,6 @@ fn commands_get_the_variables_as_a_template_and_as_json_on_stdin() {
     let h = hooks(
         "[pre-merge]\necho = \"echo {{ hook_type }} {{ hook_name }} {{ branch }} {{ target }} {{ target_worktree_path }} > echo.txt\"\njson = \"cat > ctx.json\"\n",
     );
-    h.env.git(&h.repo, &["add", "-A"]);
-    h.env.git(&h.repo, &["commit", "-q", "-m", "hooks"]);
     let sha = h.env.git(&h.repo, &["rev-parse", "HEAD"]);
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
 
@@ -614,36 +619,24 @@ fn an_undefined_variable_or_worktrunk_filter_fails_before_anything_runs() {
 fn target_worktree_path_is_undefined_when_no_worktree_has_the_target() {
     let h = hooks("pre-merge = \"echo {{ target_worktree_path }}\"\n");
     let op = Operation { branch: "no-such-branch" };
-    let result = run_hook(Hook::PreMerge, &h.repo, Some(&op), Duration::from_secs(5), &h.log).unwrap();
+    let result = run_hook(Hook::PreMerge, &pipeline(&h.wt, Hook::PreMerge), &h.repo, Some(&op), Duration::from_secs(5), &h.log).unwrap();
     assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))));
 }
 
 #[test]
-fn a_malformed_wt_toml_is_hook_invalid() {
+fn a_malformed_hooks_table_is_policy_invalid() {
     for text in ["pre-merge = [", "pre-merge = 3\n", "[pre-merge]\nx = 1\n"] {
-        let h = hooks(text);
-        let result = h.run(Hook::PreMerge);
-        assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))), "{text}: {result:?}");
+        let err = try_pipeline(text, Hook::PreMerge).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{text}");
     }
 }
 
 #[test]
-fn the_file_is_read_each_time_from_the_worktree_that_runs_it() {
-    let h = hooks("pre-commit = \"echo first\"\n");
-    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("first"));
-    fs::write(h.repo.join(".config/wt.toml"), "pre-commit = \"echo second\"\n").unwrap();
-    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("second"));
-}
-
-#[test]
-fn other_tables_are_ignored() {
-    let h = hooks("post-start = \"touch post.txt\"\npre-remove = \"touch rm.txt\"\n[list]\nfull = true\n[aliases]\nx = \"touch alias.txt\"\n");
-    for hook in [Hook::PreStart, Hook::PreCommit, Hook::PreMerge] {
-        assert_eq!(h.run(hook).outcome, HookOutcome::Passed);
-    }
-    for f in ["post.txt", "rm.txt", "alias.txt"] {
-        assert!(!h.repo.join(f).exists());
-    }
+fn a_wt_toml_in_the_tree_is_not_read() {
+    let h = hooks("pre-commit = \"echo from the policy\"\n");
+    fs::create_dir_all(h.repo.join(".config")).unwrap();
+    fs::write(h.repo.join(".config/wt.toml"), "pre-commit = \"echo from the tree\"\n").unwrap();
+    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("from the policy"));
 }
 
 /// Dead means no such process or state Z. The hook's sh is gone, so a background child is
@@ -730,7 +723,7 @@ fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
 fn the_commands_of_a_hook_can_be_listed_in_file_order() {
     let h = hooks("[[pre-commit]]\nz = \"first {{ branch }}\"\n\n[[pre-commit]]\nb = \"second\"\na = \"third\"\n");
     let commands: Vec<_> =
-        load(&h.repo, Hook::PreCommit).unwrap().commands().map(|c| (c.name.clone().unwrap(), c.template.clone())).collect();
+        pipeline(&h.wt, Hook::PreCommit).commands().map(|c| (c.name.clone().unwrap(), c.template.clone())).collect();
     assert_eq!(
         commands,
         vec![
@@ -1135,8 +1128,20 @@ fn key() -> PrKey {
     PrKey::parse("api").unwrap()
 }
 
-fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str) -> GateHooks<'a> {
+/// The `pre-start` and `pre-merge` pipelines of `wt` (written as a `.config/wt.toml` was).
+struct Pipes {
+    pre_start: Pipeline,
+    pre_merge: Pipeline,
+}
+
+fn pipes(wt: &str) -> Pipes {
+    Pipes { pre_start: pipeline(wt, Hook::PreStart), pre_merge: pipeline(wt, Hook::PreMerge) }
+}
+
+fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str, pipes: &'a Pipes) -> GateHooks<'a> {
     GateHooks {
+        pre_start_commands: &pipes.pre_start,
+        pre_merge_commands: &pipes.pre_merge,
         lead_branch,
         base: "main",
         pre_start: setup(env, "pr-api.pre-start.log"),
@@ -1145,14 +1150,13 @@ fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str) -> GateHooks<'a> {
     }
 }
 
-/// A Lead worktree whose tip `G` carries `wt` as `.config/wt.toml`, and a later
-/// tip whose `.config/wt.toml` would fail every hook. Returns `(repo, lead, G)`.
-fn gated(env: &TestEnv, wt: &str) -> (PathBuf, cpd_core::git::Created, String) {
+/// A Lead worktree whose tip `G` carries a `.config/wt.toml` that would fail every hook: the Gate ignores it.
+/// Returns `(repo, lead, G)`.
+fn gated(env: &TestEnv) -> (PathBuf, cpd_core::git::Created, String) {
     let repo = env.git_repo("pay");
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-    commit_file(env, &lead.path, ".config/wt.toml", wt);
-    let g = env.git(&lead.path, &["rev-parse", "HEAD"]);
     commit_file(env, &lead.path, ".config/wt.toml", "pre-start = \"exit 9\"\npre-merge = \"exit 9\"\n");
+    let g = env.git(&lead.path, &["rev-parse", "HEAD"]);
     (repo, lead, g)
 }
 
@@ -1170,9 +1174,10 @@ fn the_gate_runs_pre_start_then_pre_merge_in_a_detached_worktree_at_g_and_remove
          pre-merge = \"test -f started && echo {{{{ branch }}}} {{{{ target }}}} $(git rev-parse HEAD) $(git symbolic-ref -q HEAD || echo detached) > {0}/merge.txt\"\n",
         out.display()
     );
-    let (repo, lead, g) = gated(&env, &wt);
+    let (repo, lead, g) = gated(&env);
+    let pipes = pipes(&wt);
 
-    let gated = gate(&repo, &plan(), &key(), &g, &gate_hooks(&env, &lead.branch)).unwrap();
+    let gated = gate(&repo, &plan(), &key(), &g, &gate_hooks(&env, &lead.branch, &pipes)).unwrap();
 
     assert_eq!(gated, Ok(()));
     let w = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
@@ -1190,8 +1195,9 @@ fn a_failing_pre_start_refuses_the_gate_without_pre_merge_and_removes_the_worktr
     let env = TestEnv::new();
     let marker = env.root().join("pre-merge-ran");
     let wt = format!("pre-start = \"echo no setup; exit 4\"\npre-merge = \"touch {}\"\n", marker.display());
-    let (repo, lead, g) = gated(&env, &wt);
-    let hooks = gate_hooks(&env, &lead.branch);
+    let (repo, lead, g) = gated(&env);
+    let pipes = pipes(&wt);
+    let hooks = gate_hooks(&env, &lead.branch, &pipes);
 
     let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
 
@@ -1206,8 +1212,9 @@ fn a_failing_pre_start_refuses_the_gate_without_pre_merge_and_removes_the_worktr
 #[test]
 fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
     let env = TestEnv::new();
-    let (repo, lead, g) = gated(&env, "pre-merge = \"echo red; exit 6\"\n");
-    let hooks = gate_hooks(&env, &lead.branch);
+    let (repo, lead, g) = gated(&env);
+    let pipes = pipes("pre-merge = \"echo red; exit 6\"\n");
+    let hooks = gate_hooks(&env, &lead.branch, &pipes);
 
     let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
 
@@ -1235,7 +1242,7 @@ fn dead_pid(env: &TestEnv) -> u32 {
 #[test]
 fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
     let env = TestEnv::new();
-    let (repo, _lead, g) = gated(&env, "");
+    let (repo, _lead, g) = gated(&env);
     // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
     let adding = repo.join(".git/worktrees/adding");
     fs::create_dir_all(&adding).unwrap();
@@ -1286,14 +1293,14 @@ fn parallel_adds(env: &TestEnv, repo: &Path, sha: &str, parallel: usize, rounds:
 #[test]
 fn parallel_worktree_adds_into_one_repo_all_succeed() {
     let env = TestEnv::new();
-    let (repo, _lead, g) = gated(&env, "");
+    let (repo, _lead, g) = gated(&env);
     assert_eq!(parallel_adds(&env, &repo, &g, 16, 40, cpd_core::git::run::worktree_add), 0);
 }
 
 #[test]
 fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
     let env = TestEnv::new();
-    let (repo, _lead, g) = gated(&env, "");
+    let (repo, _lead, g) = gated(&env);
     let dead = dead_pid(&env);
     let add = |key: &PrKey, pid: u32| {
         let path = gate_worktree_path(&repo, &plan(), key, pid).unwrap();
