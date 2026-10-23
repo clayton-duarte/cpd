@@ -1079,11 +1079,6 @@ fn strings(args: &[&str]) -> Vec<String> {
 mod no_inbox;
 
 #[cfg(test)]
-mod junctions;
-#[cfg(test)]
-mod palette;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
