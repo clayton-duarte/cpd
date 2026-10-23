@@ -46,13 +46,14 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let pr = pr_of(&plan, &key);
     let lead = pr.lead(&id)?.clone();
     let branch = pr.lead_branch.clone();
+    let remote_branch = pr.remote_branch().to_owned();
     // 0. The newest pull request of the Lead Branch, in any state, before the Gate (contract §7.6, hs-n236): a merged
     // one is adopted as it is, with no Gate and no push; a closed one is refused; an open one is adopted after the push.
     let mut existing = None;
-    if let Some(head) = gh::head_pr(&lead, &branch)? {
+    if let Some(head) = gh::head_pr(&lead, &remote_branch)? {
         match head.state {
             HeadState::Merged => return adopt_merged(&mut env, &plan, &key, &lead, &head),
-            HeadState::Closed => return Err(closed(&key, &branch, &head).with("plan", id.as_str())),
+            HeadState::Closed => return Err(closed(&key, &remote_branch, &head).with("plan", id.as_str())),
             HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
         }
     }
@@ -74,13 +75,13 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let pr = pr_of(&plan, &key);
 
     // 3. Rule P with G, then the pull request.
-    let (pushed, remote) = match git::push_commit(&lead, &branch, &sha)? {
+    let (pushed, remote) = match git::push_commit(&lead, &remote_branch, &sha)? {
         git::Push::Pushed { new } => (new, sha.clone()),
         git::Push::Contained { remote } => (false, remote),
         git::Push::Rejected { stderr } => {
             return Err(CpdError::new(
                 ErrorCode::GitFailed,
-                format!("git push of {} to {branch} on origin was rejected, and the remote branch does not contain it: nothing was opened.", short(&sha)),
+                format!("git push of {} to {remote_branch} on origin was rejected, and the remote branch does not contain it: nothing was opened.", short(&sha)),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str())
@@ -171,9 +172,9 @@ fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str,
     if let Some(found) = existing {
         return Ok(found);
     }
-    match gh::create_pr(lead, &pr.base, &pr.lead_branch, title, &summary(title, list)) {
+    match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, &summary(title, list)) {
         Ok(created) => Ok(created),
-        Err(failed) => gh::head_pr(lead, &pr.lead_branch)
+        Err(failed) => gh::head_pr(lead, pr.remote_branch())
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
@@ -414,9 +415,9 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
     let mut adopting = false;
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
-        if let Some(head) = gh::head_pr(&lead, &pr.lead_branch)? {
+        if let Some(head) = gh::head_pr(&lead, pr.remote_branch())? {
             match head.state {
-                HeadState::Closed => return Err(closed(&key, &pr.lead_branch, &head).with("plan", plan.as_str())),
+                HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
                 HeadState::Merged => adopting = true,
                 HeadState::Open => {}
             }

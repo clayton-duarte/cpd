@@ -36,6 +36,9 @@ fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdErr
 fn spec(pr: &PrRow) -> JobSpec {
     let (base, lead) = (&pr.base, &pr.lead_branch);
     let remote = format!("origin/{base}");
+    if let Some(head_ref) = &pr.head_ref {
+        return adopted_spec(pr, head_ref);
+    }
     JobSpec {
         goal: format!(
             "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it, push it and open the pull request: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
@@ -63,6 +66,25 @@ fn spec(pr: &PrRow) -> JobSpec {
             "Features, refactors or fixes that the conflict does not need",
         ]),
     }
+}
+
+/// The fixed Spec of an `open` Job of an adopted PR: the pull request exists, and cpd updates it by pushing to its head branch.
+fn adopted_spec(pr: &PrRow, head_ref: &str) -> JobSpec {
+    let mut spec = update_spec(pr);
+    spec.goal = format!(
+        "Make the Lead Branch {lead} of PR {key} fit its base {base}, so that cpd can gate it and push it to {head_ref}, the head of the pull request that exists already: merge origin/{base} into it only if the two conflict, resolve the conflicts, and submit.",
+        lead = pr.lead_branch,
+        key = pr.key,
+        base = pr.base,
+    );
+    spec.context = format!(
+        "The pull request of PR {key} exists already and is adopted: it is updated, never created. Its head is {head_ref} on origin; {lead}, in the repo {repo}, is the local branch cpd pushes to it, and you work in a worktree cut from it.\n\n{rest}",
+        key = pr.key,
+        lead = pr.lead_branch,
+        repo = pr.repo,
+        rest = spec.context.split_once("\n\n").map_or("", |(_, rest)| rest),
+    );
+    spec
 }
 
 /// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists.

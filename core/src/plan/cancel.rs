@@ -60,7 +60,7 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
     let expired = expire_escalations(&mut env.store, &plan, reason)?;
 
     // 5. Pull requests.
-    let closed_prs = close_prs(&mut env, &plan)?;
+    let (closed_prs, left_open) = close_prs(&mut env, &plan)?;
 
     // 6. tmux. The Lead that runs this command, if it is one of the Plan's, is closed last: its
     // pane dies with the process, and the rows of step 7 are written by then.
@@ -78,8 +78,8 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
 
-    let already = cancelled.is_empty() && !expired && closed_prs.is_empty() && closed.is_empty() && archived.is_empty();
-    let mut out = json!({"cancelled": cancelled, "closed_prs": closed_prs, "closed": closed, "archived": archived});
+    let already = cancelled.is_empty() && !expired && closed_prs.is_empty() && left_open.is_empty() && closed.is_empty() && archived.is_empty();
+    let mut out = json!({"cancelled": cancelled, "closed_prs": closed_prs, "left_open": left_open, "closed": closed, "archived": archived});
     if already {
         out["already"] = json!(true);
     }
@@ -146,21 +146,26 @@ fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<
 }
 
 /// Step 5: `gh pr close` for each PR of `plan` in status `open` whose pull request is not `merged`
-/// or `closed` as the poller last read it. The PR rows keep their status. `{pr, number}` of each.
-fn close_prs(env: &mut Env, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
+/// or `closed` as the poller last read it. The PR rows keep their status. `{pr, number}` of each. An adopted PR's pull
+/// request is never closed: it is listed apart, as `{pr, number}`, in the second vector.
+fn close_prs(env: &mut Env, plan: &PlanId) -> Result<(Vec<Value>, Vec<Value>), CpdError> {
     let open = env.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT r.key, p.repo, p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+            "SELECT r.key, p.repo, p.number, r.head_ref IS NOT NULL FROM prs r JOIN pull_requests p ON p.id = r.pull_request
               WHERE r.plan = ?1 AND r.status = 'open' AND p.state = 'open' ORDER BY r.key",
         )?;
-        Ok(stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        Ok(stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, bool>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
     })?;
-    let mut closed = Vec::new();
-    for (key, repo, number) in open {
+    let (mut closed, mut left_open) = (Vec::new(), Vec::new());
+    for (key, repo, number, adopted) in open {
+        if adopted {
+            left_open.push(json!({"pr": key, "number": number}));
+            continue;
+        }
         pr::close_pr(env.home.root(), &repo, number)?;
         closed.push(json!({"pr": key, "number": number}));
     }
-    Ok(closed)
+    Ok((closed, left_open))
 }
 
 /// Step 7: `archived_at` on the Plan and its Sessions, one transaction, with the Events of
