@@ -188,6 +188,17 @@ fn event_loop(
             }
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone()).or_else(|| open_error.clone());
         }
+        // a due snapshot goes before a poll: when the frame is longer than `poll`, the poll would always take the turn
+        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) && !reading {
+            // what comes while the snapshot is read (an action's end) is seen by the next
+            dirty = false;
+            last_snapshot = Instant::now();
+            let shared = Arc::clone(&reader);
+            reading = true;
+            reads.request(move || {
+                Read::Snapshot(pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)))))
+            });
+        }
         if last_poll.elapsed() >= poll && !reading {
             last_poll = Instant::now();
             // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17); a merge
@@ -201,16 +212,6 @@ fn event_loop(
                     pace::Owned::read(&shared, |store, _| read::open_pulls(store)).map(|open| crate::merge::marker::live(&home, &open)),
                 );
                 Read::Poll(Polled { changes, engine: model::engine_running(&home), merging })
-            });
-        }
-        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) && !reading {
-            // what comes while the snapshot is read (an action's end) is seen by the next
-            dirty = false;
-            last_snapshot = Instant::now();
-            let shared = Arc::clone(&reader);
-            reading = true;
-            reads.request(move || {
-                Read::Snapshot(pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)))))
             });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
