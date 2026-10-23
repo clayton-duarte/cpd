@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
@@ -42,6 +42,7 @@ use super::background::Background;
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse};
+use super::pace::{self, Reads};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
@@ -70,10 +71,6 @@ const PULSE_REFRESH: Duration = Duration::from_secs(60);
 fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
-
-/// While a spinner is on screen ([`Centre::spins`]; Pulse has none since hs-d327) the view redraws this often (one frame:
-/// palette.rs); a redraw reads nothing from the store. With none, it draws only when something changed.
-const FRAME: Duration = Duration::from_millis(100);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
@@ -158,6 +155,12 @@ fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Re
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
     let layout = began.map_or(Duration::ZERO, |b| b.elapsed());
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
+}
+
+/// What the reader thread brings back: the Events since the last poll, or a snapshot.
+enum Read {
+    Poll(Result<read::Changes, CpdError>),
+    Snapshot(Result<Snapshot, CpdError>),
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
@@ -363,11 +366,11 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
-            Ok((store, home, snap, poll, follow, actions))
+            // the reads after the first run on the reader thread, with a store of its own (R4)
+            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+            Ok((home, snap, poll, reader, actions))
         },
-        |terminal, (mut store, home, mut snap, poll, follow, actions)| {
-            show(terminal, &mut store, &home, &mut snap, poll, follow, &actions)
-        },
+        |terminal, (home, mut snap, poll, reader, actions)| show(terminal, &home, &mut snap, poll, reader, &actions),
     )
 }
 
@@ -389,11 +392,10 @@ fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<Strin
 /// Draws, follows Events and takes input until the terminal fails.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
-    store: &mut Store,
     home: &CpdHome,
     snap: &mut Snapshot,
     poll: Duration,
-    mut follow: read::Follow,
+    reader: Arc<Mutex<pace::Owned<read::Follow>>>,
     actions: &Arc<Actions>,
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
@@ -414,6 +416,9 @@ fn show(
     // (runner::kept), the snapshot's error first
     let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
+    // the reads run on the reader thread (R4), one at a time: none is asked for while one is out
+    let mut reads = Reads::<Read>::new();
+    let mut reading = false;
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
     // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
@@ -422,6 +427,56 @@ fn show(
     loop {
         while worker.finished().is_some() {
             redraw = true;
+        }
+        while let Some(done) = trace.read(|| reads.take()) {
+            reading = false;
+            let shown = ui.error.clone();
+            match done {
+                Read::Poll(polled) => {
+                    if let Some(changes) = kept(polled, &mut follow_error) {
+                        stale |= changes.pulls
+                            || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
+                    }
+                    ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
+                    let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
+                    if due {
+                        let width = terminal.size().map_or(0, |s| s.width);
+                        let (timed, shared) = (trace.is_on(), Arc::clone(&reader));
+                        stale = false; // what comes while the snapshot is read (a resize) is seen by the next
+                        reading = true;
+                        reads.request(move || {
+                            Read::Snapshot(pace::Owned::read(&shared, |store, _| snapshot_timed(store, width, now_ms(), timed)))
+                        });
+                        taken = Instant::now();
+                    }
+                }
+                Read::Snapshot(taken_now) => {
+                    let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
+                    let next = kept(taken_now.map(|s| {
+                        trace.add_layout(s.layout);
+                        s
+                    }), &mut snapshot_error);
+                    stale |= snapshot_error.is_some();
+                    ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
+                    if let Some(next) = next {
+                        redraw = true;
+                        *snap = next;
+                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                        if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
+                            ui.pulse_offset = 0;
+                        }
+                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                            if let Err(e) = offsets.save(&ui.remembered, true) {
+                                ui.error = Some(e);
+                            }
+                        }
+                    }
+                    taken = Instant::now();
+                }
+            }
+            redraw |= ui.error != shown;
         }
         let frame = palette::frame(SystemTime::now());
         if let Some(c) = snap.centre.as_mut() {
@@ -450,48 +505,15 @@ fn show(
             }
             redraw = false;
         }
-        if !event::poll(poll.min(FRAME))? {
-            // idle: look for Events, every `poll`
-            if fetched.elapsed() < poll {
-                continue;
+        // wait for the next frame boundary of the clock (R3)
+        if !event::poll(pace::wait_now())? {
+            // idle: ask for Events, every `poll`
+            if fetched.elapsed() >= poll && !reading {
+                fetched = Instant::now();
+                let shared = Arc::clone(&reader);
+                reading = true;
+                reads.request(move || Read::Poll(pace::Owned::read(&shared, |store, follow| follow.poll_changes(store))));
             }
-            fetched = Instant::now();
-            let shown = ui.error.clone();
-            if let Some(changes) = kept(trace.read(|| follow.poll_changes(store)), &mut follow_error) {
-                stale |= changes.pulls
-                    || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
-            }
-            ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
-            let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
-            if due {
-                let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
-                let width = terminal.size().map_or(0, |s| s.width);
-                let timed = trace.is_on();
-                let taken_now = trace.read(|| snapshot_timed(store, width, now_ms(), timed));
-                let next = kept(taken_now.map(|s| {
-                    trace.add_layout(s.layout);
-                    s
-                }), &mut snapshot_error);
-                stale = snapshot_error.is_some();
-                ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
-                if let Some(next) = next {
-                    redraw = true;
-                    *snap = next;
-                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                    if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                        ui.pulse_offset = 0;
-                    }
-                    if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
-                        ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
-                        if let Err(e) = offsets.save(&ui.remembered, true) {
-                            ui.error = Some(e);
-                        }
-                    }
-                }
-                taken = Instant::now();
-            }
-            redraw |= ui.error != shown;
             continue;
         }
         redraw = true; // a key, a click, a resize

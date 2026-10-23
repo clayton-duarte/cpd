@@ -5,6 +5,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::store::Store;
+
 /// One frame of the spinner, in ms (the clock of [`crate::palette::frame`]).
 const FRAME_MS: u64 = 100;
 
@@ -84,5 +88,41 @@ impl<T> Drop for Reads<T> {
         q.closed = true;
         q.waiting = None;
         wake.notify_one();
+    }
+}
+
+thread_local! {
+    /// The reader thread's own store ([`Store`] is not `Send`: it is opened on the thread that reads with it).
+    static STORE: std::cell::RefCell<Option<Store>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What the reader thread reads with: its own [`Store`], opened on that thread at the first read (and again at the next
+/// after a failed open), and `S`, the state the reads keep (a `Follow`). One job runs at a time, so the lock is never
+/// contended; a view shares one `Arc<Mutex<Owned<S>>>` with every job it requests.
+pub struct Owned<S> {
+    home: CpdHome,
+    busy_ms: u64,
+    state: S,
+}
+
+impl<S> Owned<S> {
+    pub fn new(home: CpdHome, busy_ms: u64, state: S) -> Arc<Mutex<Owned<S>>> {
+        Arc::new(Mutex::new(Owned { home, busy_ms, state }))
+    }
+
+    /// Runs `read` with the store and the state; call it from the reader thread only.
+    pub fn read<T>(
+        shared: &Mutex<Owned<S>>,
+        read: impl FnOnce(&mut Store, &mut S) -> Result<T, CpdError>,
+    ) -> Result<T, CpdError> {
+        let mut guard = shared.lock().unwrap_or_else(|e| e.into_inner());
+        let owned = &mut *guard;
+        STORE.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(Store::open(&owned.home, owned.busy_ms)?);
+            }
+            read(slot.as_mut().expect("opened above"), &mut owned.state)
+        })
     }
 }
