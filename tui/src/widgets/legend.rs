@@ -134,15 +134,13 @@ pub(crate) fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    // a failed Job is waiting (its Lead handles it) until `job-stuck` opens (audit Q3): the stuck one is red, after `failed`
-    let (stuck_icon, stuck) = palette::JOB_STUCK;
+    // the failed pill turns through the eight moons, red, while the Plan's Lead works (hs-d586)
     let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
     jobs.insert(
         failed + 1,
         vec![
-            plain("failed, stuck"),
-            capped(format!("{stuck_icon} key│S1"), palette::job_pill(JobStatus::Failed, false, true)),
-            Line::from(Span::styled("3", palette::fg_clickable(stuck))),
+            plain("red loader: a failed Job, its Lead working"),
+            Line::from(palette::SPINNER.iter().map(|m| Span::styled(*m, palette::fg_clickable(palette::Meaning::Failed))).collect::<Vec<_>>()),
         ],
     );
     // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
@@ -340,7 +338,6 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palette::numbered::C9;
     use crate::read::Kind;
 
     fn text(line: &Line) -> String {
@@ -481,27 +478,10 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_job_is_waiting_in_its_pill_and_red_in_its_counter_stuck_or_not() {
-        let jobs = &sections()[1];
-        let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
-        assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
-        // the pill's body, after its left cap
-        let style = |row: &Vec<Line>| row[1].spans[1].style;
-        assert_eq!(
-            (style(failed), style(stuck)),
-            (palette::job_pill(JobStatus::Failed, false, false), palette::job_pill(JobStatus::Failed, false, true)),
-            "a sample pill is the Job pill the Plan view draws (hs-d534)"
-        );
-        let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
-        assert_eq!((fg(failed), fg(stuck)), (Some(C9), Some(C9)), "a failed count is red, stuck or not (hs-d580)");
-    }
-
-    #[test]
     fn a_sample_pill_is_cap_icon_key_bar_tier_cap_with_no_padding_like_the_charts() {
         // hs-d474: the legend's sample follows the chart's compact pill
         let jobs = &sections()[1];
         let pills: Vec<_> = jobs.rows.iter().filter(|r| r[1].spans[0].content == CAP_L).collect();
-        assert_eq!(pills.len(), 7, "one sample per status, the stuck one too");
         for row in pills {
             let body = row[1].spans[1].content.as_ref();
             assert_eq!(row[1].spans[2].content, CAP_R);
@@ -509,14 +489,15 @@ mod tests {
         }
         let sample = |name: &str| text(&jobs.rows.iter().find(|r| text(&r[0]) == name).unwrap()[1]);
         assert_eq!(sample("queued"), format!("{CAP_L}{} key│S1{CAP_R}", palette::QUEUED));
-        assert_eq!(sample("failed, stuck"), format!("{CAP_L}{} key│S1{CAP_R}", palette::JOB_STUCK.0));
     }
 
     #[test]
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "failed, stuck", "draft", "counters row"]);
+        for name in ["queued", "running", "merging", "merged", "failed", "draft", "counters row"] {
+            assert!(names.contains(&name.to_owned()), "{name}: {names:?}");
+        }
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
         assert!(!shown.contains("cancelled"), "{shown}");

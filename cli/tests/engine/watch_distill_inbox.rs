@@ -40,7 +40,7 @@ fn fx() -> Fx {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\ncontext_curation_min_records = 1\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
             common::TICK_SECONDS,
             env.tmux_socket()
         ),

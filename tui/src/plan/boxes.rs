@@ -154,13 +154,21 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`layout`] ran on this thread (the tests of R2 count them).
+    pub(crate) static LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
-/// `needs_user` says which failed Jobs and closed pull requests are red, the rest waiting.
+/// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
 pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
+    #[cfg(test)]
+    LAYOUTS.with(|n| n.set(n.get() + 1));
     let charts: Vec<Chart> = prs
         .iter()
-        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.stuck_jobs), frame))
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), needs_user.lead_working), frame))
         .collect();
     let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
@@ -497,7 +505,7 @@ mod tests {
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
         let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
-        let single = flow::layout(&flow::flow_jobs(&jobs, &[]), 0);
+        let single = flow::layout(&flow::flow_jobs(&jobs, false), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {
@@ -648,30 +656,6 @@ mod tests {
         };
         assert_eq!(cell(&NeedsUser::default()), palette::color_clickable(Meaning::Waiting));
         assert_eq!(cell(&NeedsUser { lead_dialog: true, ..NeedsUser::default() }), palette::color_clickable(Meaning::Failed));
-    }
-
-    #[test]
-    fn a_failed_job_is_waiting_and_red_only_when_it_is_stuck() {
-        let mut stuck = job("api", "stuck", &[]);
-        stuck.status = JobStatus::Failed;
-        let mut handled = job("api", "handled", &[]);
-        handled.status = JobStatus::Failed;
-        let jobs = [stuck.clone(), handled];
-        let bg = |needs: &NeedsUser, i: usize| {
-            let b = layout(&[pr("api", &[])], &jobs, needs, 0);
-            let pill = &b.chart.pills[i];
-            // the body, after the left cap
-            b.chart.buf[(pill.rect.x + 1, pill.rect.y)].bg
-        };
-        let none = NeedsUser::default();
-        let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
-        let (cyan, red) = (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Failed));
-        assert_eq!((bg(&none, 0), bg(&none, 1)), (cyan, cyan), "its Lead handles a failed Job: cyan");
-        assert_eq!((bg(&one, 0), bg(&one, 1)), (red, cyan), "red only for the stuck one (hs-d534)");
-        // a queued Job is never stuck, whatever the list says
-        let queued = job("api", "stuck", &[]);
-        let c = layout(&[pr("api", &[])], &[queued], &one, 0);
-        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::pill_interactive().bg.unwrap());
     }
 
     #[test]

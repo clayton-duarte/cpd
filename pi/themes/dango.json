@@ -1,6 +1,6 @@
 {
   "$schema": "https://pi.dev/schemas/theme.schema.json",
-  "name": "cpd",
+  "name": "dango",
   "colors": {
     "accent": 4,
     "border": 8,

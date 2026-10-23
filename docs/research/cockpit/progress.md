@@ -218,7 +218,7 @@ Two full-size mockups (215×62) follow in §5: **Mockup A** (today's columns, up
 
 ## 5. Full-size mockups (215×62)
 
-Both are 215 columns by 62 rows, drawn with the cockpit's real split: the tree and the Deploy column 43 columns each, the centre 127, two 1-column borders; the pane header on each pane's first row (inverted in the real cockpit) and the StatusBar on row 62. The data is one invented scenario (Context `api`, Plan `schema` in the chat slot) used by both. Glyphs are the ones that exist in the cockpit's palette or plain Unicode; the Nerd Font dots are shown as `●`, `○`, `⠋` for plain text. These are inventions to look at, not specifications.
+Both are 215 columns by 62 rows, drawn with the cockpit's real split: the tree and the Deploy column 43 columns each, the centre 127, two 1-column borders; the pane header on each pane's first row (inverted in the real cockpit) and the StatusBar on row 62. The data is one invented scenario (Context `api`, Plan `schema` in the chat slot) used by both. Glyphs are the ones that exist in `palette.rs` or plain Unicode; the Nerd Font dots are shown as `●`, `○`, `⠋` for plain text. These are inventions to look at, not specifications.
 
 ### Mockup A: today's columns, upgraded
 

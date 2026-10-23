@@ -22,13 +22,15 @@ const COMMAND_ARGUMENTS = ["on", "off"] as const;
 export const SILENT_SHORTCUT = "ctrl+'";
 // Symbol.for keys resolve to the same symbol in every evaluation of this module.
 // /reload re-evaluates the module, but the patched prototypes belong to Pi and
-// outlive it, so the flag they read and the patch marker must be shared.
+// outlive it, so the flag they read and the patch marker must be shared. The
+// wrap happens once per prototype; what it runs (the engaged rule) is the newest load's.
 const STATE_KEY = Symbol.for("pi-compact-tools.silent.state");
 // Versioned: an instance loaded before thinking was hidden may already have
 // wrapped these prototypes in the running process. A new key wraps once more
 // rather than silently keeping the older behavior until Pi restarts.
 const ORIGINAL_RENDER = Symbol.for("pi-compact-tools.silent.originalRender.v2");
 const OVERRIDES_KEY = Symbol.for("pi-compact-tools.silent.overrides.v2");
+const RENDER_HOOKS_KEY = Symbol.for("pi-compact-tools.silent.renderHooks.v2");
 
 interface SilentState {
 	active: boolean;
@@ -250,19 +252,34 @@ export function patchRender(
 	prototype: Renderable | undefined,
 	override: RenderOverride,
 	/** When this returns false the original render runs directly, with no override and no allocation. */
-	engaged: () => boolean = () => true,
+	engaged?: () => boolean,
 ): boolean {
 	if (!prototype || typeof prototype.render !== "function") return false;
 	// Checked as an own property: a component that inherits render() from a shared
 	// base (CustomMessageComponent uses Container's) must still get its own wrapper.
+	// The newest load wins: override and engaged are published on every call and the
+	// wrapper reads them at render time. Only the wrap itself happens once per prototype.
+	// A call that names no engaged rule (always engaged) leaves an installed record alone.
+	const hooks = renderHooks();
+	if (engaged || !hooks.has(prototype)) hooks.set(prototype, { override, engaged: engaged ?? (() => true) });
 	if (Object.hasOwn(prototype, ORIGINAL_RENDER)) return true;
 	const original = prototype.render;
 	prototype.render = function (this: unknown, width: number): string[] {
-		if (!engaged()) return original.call(this, width);
-		return override(this, width, (nextWidth) => original.call(this, nextWidth));
+		const current = renderHooks().get(prototype)!;
+		if (!current.engaged()) return original.call(this, width);
+		return current.override(this, width, (nextWidth) => original.call(this, nextWidth));
 	};
 	Object.defineProperty(prototype, ORIGINAL_RENDER, { value: original });
 	return true;
+}
+
+type RenderHooks = WeakMap<object, { override: RenderOverride; engaged: () => boolean }>;
+
+// Process-global, beside OVERRIDES_KEY: the prototypes outlive a /reload, so the
+// latest patchRender call's override and engaged rule must be what they consult.
+function renderHooks(): RenderHooks {
+	const slot = globalThis as typeof globalThis & { [RENDER_HOOKS_KEY]?: RenderHooks };
+	return slot[RENDER_HOOKS_KEY] ??= new WeakMap();
 }
 
 function sharedOverrides(): RenderOverrides | undefined {

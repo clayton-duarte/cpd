@@ -1,4 +1,7 @@
-//! The palette: the one place with colours and status icons, ported from the
+//! The code of the Dango palette (the 16 terminal colour indices of contract §6.1.1, hs-d591): the one place with
+//! colours and status icons. The module is still called `palette` because that is the module path of every
+//! `palette::...` call under `tui/` and it holds more than the colours (the status icons too); renaming it would touch
+//! every view for no behaviour. Ported from the
 //! spike's `palette.rs` (branch `cpd/cpd-ui`) on cpd 2's typed statuses. Every
 //! view takes them from here, so changing one meaning (or one icon) changes it
 //! in the tree, the Plan chart, the Dispatch column and the legend alike.
@@ -205,10 +208,9 @@ pub fn archived_text() -> Style {
 }
 
 /// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text 0. A draft is
-/// magenta. `merging` is a running Job whose Attempt is merging; `stuck` a failed Job whose `job-stuck` item is open.
-pub fn job_pill(status: JobStatus, merging: bool, stuck: bool) -> Style {
-    let meaning = if stuck && status == JobStatus::Failed { JOB_STUCK.1 } else { job_status(status, merging).1 };
-    pill_clickable(meaning)
+/// magenta. `merging` is a running Job whose Attempt is merging; A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
+pub fn job_pill(status: JobStatus, merging: bool, _stuck: bool) -> Style {
+    pill_clickable(job_status(status, merging).1)
 }
 
 /// The error line of a view that cannot load or read its data (hs-d534: red, blocking, not clickable).
@@ -328,16 +330,11 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
         (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
         (JobStatus::Running, true) => (MERGING, Meaning::Review),
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
-        // an agent handles a failed Job (its Lead retries or cancels it): waiting; it is red only once `job-stuck` is open
-        (JobStatus::Failed, _) => (FAILED, Meaning::Waiting),
+        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
         (JobStatus::Draft, _) => (DRAFT, Meaning::Planning),
         (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
-
-/// A failed Job that needs the User: its `job-stuck` item is open (audit Q3). Red, where [`job_status`] gives `failed` the
-/// waiting colour.
-pub const JOB_STUCK: (&str, Meaning) = (FAILED, Meaning::Failed);
 
 /// The Job statuses the legend lists: the name shown, the status and whether it is `merging`.
 pub const JOB_LEGEND: [(&str, JobStatus, bool); 6] = [
@@ -460,11 +457,11 @@ pub fn separator() -> Span<'static> {
 }
 
 /// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero. A
-/// failed count is red (hs-d580), where its pill is waiting until `job-stuck` opens.
+/// failed count is red (hs-d580).
 pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
     match (n, status) {
         (0, _) => muted_text(),
-        (_, JobStatus::Failed) => fg_clickable(JOB_STUCK.1),
+        (_, JobStatus::Failed) => fg_clickable(Meaning::Failed),
         _ => fg_clickable(job_status(status, merging).1),
     }
 }
@@ -573,7 +570,7 @@ mod tests {
             (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
-            (JobStatus::Failed, false, FAILED, Meaning::Waiting),
+            (JobStatus::Failed, false, FAILED, Meaning::Failed),
             (JobStatus::Draft, false, DRAFT, Meaning::Planning),
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
@@ -701,12 +698,6 @@ mod tests {
         assert_eq!(count_style(JobStatus::Cancelled, false, 3), Style::new().fg(Color::DarkGray));
         assert_eq!(count_style(JobStatus::Failed, false, 0), Style::new().fg(Color::DarkGray));
         assert_eq!(separator(), Span::styled("⋅", Style::new().fg(Color::DarkGray)));
-    }
-
-    #[test]
-    fn a_failed_job_is_waiting_until_it_is_stuck() {
-        assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
-        assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
     }
 
     #[test]

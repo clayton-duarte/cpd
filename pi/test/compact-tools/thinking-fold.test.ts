@@ -2,7 +2,7 @@
  * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking…`
  * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
  * `╰󰬦 expand`, expanded the whole text on rails 8 in text 7 then `╰󰬬 collapse`. Headings stay text.
- * The hidden view (hideThinkingBlock: true) stays the plain `Thinking…` with no toggle.
+ * With hideThinkingBlock: true the view still starts folded (pill and expand row); pi's hidden label is only a step of Ctrl+T.
  * Rows may carry the cockpit's one leading space, so rows are compared without it.
  */
 import assert from "node:assert/strict";
@@ -125,7 +125,7 @@ test("headings inside thinking stay text and make no pill", () => {
 	assert.ok(rows(expanded(SOURCE)).some((row) => row.startsWith("│ ") && row.includes("Check the code")));
 });
 
-test("the hidden view stays plain Thinking…", () => {
+test("hideThinkingBlock true in settings.json starts the view folded", () => {
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	const dir = mkdtempSync(join(tmpdir(), "thinking-fold-"));
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -139,7 +139,7 @@ test("the hidden view stays plain Thinking…", () => {
 			ui: { theme, setHiddenThinkingLabel: (value?: string) => { label = value; }, onTerminalInput: () => () => {} },
 		} as unknown as ExtensionContext);
 		const view = transform!(SOURCE, { messageType: "assistant-thinking", isStreaming: false, availableWidth: 80 });
-		assert.equal(view, "Thinking…", "no pill, no toggle, no rails");
+		assert.deepEqual(rows(view), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`], "folded: pill and the expand row");
 		assert.ok(label, "the hidden label is set");
 		assert.equal(plain(label), "Thinking…");
 		assert.ok(!label.includes(LEFT) && !label.includes(RIGHT), "no pill");

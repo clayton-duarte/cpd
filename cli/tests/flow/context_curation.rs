@@ -343,3 +343,22 @@ fn curation_refuses_a_limit_of_zero() {
     proposed_two_candidates(&env);
     refused(&env.cpd(&["context", "curation", "--context", CTX, "--limit", "0"]), "args_invalid", 2);
 }
+
+/// hs-d592 R9: a dismissed (or sent) doc candidate is never proposed again, even by a second curation line.
+#[test]
+fn a_dismissed_doc_candidate_is_never_proposed_again() {
+    let env = fx();
+    manager(&env);
+    proposed_two_candidates(&env);
+    env.cpd(&["context", "docs", "--context", CTX, "--send", "hs-d1", "--dismiss", "hs-n2"]).ok();
+
+    let again = [curation("hs-n2", "same fact", Some(&["docs/z.md"])), curation("hs-d1", "worth documenting", Some(&["docs/z.md"]))];
+    propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &again, &[]).unwrap();
+
+    assert_eq!(
+        env.query::<String>("SELECT group_concat(record || ':' || doc_candidate) FROM (SELECT * FROM record_curations WHERE doc_candidate IS NOT NULL ORDER BY record)"),
+        "hs-d1:sent,hs-n2:dismissed"
+    );
+    let listed = env.cpd(&["context", "curation", "--context", CTX]).ok();
+    assert_eq!(listed["docs_total"], 0, "{listed}");
+}
