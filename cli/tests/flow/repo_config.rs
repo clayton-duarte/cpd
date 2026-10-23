@@ -147,6 +147,9 @@ fn hooks_test_commands_and_protected_in_an_owner_file_are_policy_invalid() {
 #[test]
 fn an_invalid_hooks_or_test_commands_table_is_policy_invalid() {
     let env = env();
+    // The same tables, valid, are accepted: only their invalid forms are refused.
+    env.repo_policy("acme", "shop", "[hooks]\npre-merge = \"x\"\n\n[test-commands]\nbuild = \"b\"\nrun = \"r\"\nlist = \"l {{ test }}\"\n\n[protected]\npaths = []\n");
+    show(&env);
     let cases = [
         ("hooks", "[hooks]\npre-merge = 3\n"),
         ("test-commands", "[test-commands]\nbuild = \"b\"\n"),
