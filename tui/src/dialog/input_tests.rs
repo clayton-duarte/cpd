@@ -131,7 +131,7 @@ fn the_input_box_sits_inside_the_walls_on_row_two_with_its_label_pill_in_the_bor
     for (y, row) in rows.iter().enumerate().take(5) {
         assert_eq!(row.chars().count(), 42, "row {y}");
     }
-    // walls 8, the box's own border and label pill 12: caps 12 on the terminal's background, text 0 on 12
+    // walls 8, the box's own border and label pill 12: caps 12 on the terminal's background, text inverted in 12
     for y in 0..10 {
         assert_eq!((buf[(0, y)].fg, buf[(41, y)].fg), (numbered::C8, numbered::C8), "wall row {y}");
     }
@@ -141,7 +141,9 @@ fn the_input_box_sits_inside_the_walls_on_row_two_with_its_label_pill_in_the_bor
     let reset = ratatui::buffer::Cell::EMPTY.bg;
     assert_eq!((buf[(4, 2)].symbol(), buf[(4, 2)].fg, buf[(4, 2)].bg), (L, numbered::C12, reset));
     for x in 5..=8 {
-        assert_eq!((buf[(x, 2)].fg, buf[(x, 2)].bg), (numbered::C0, numbered::C12), "pill text {x}");
+        let cell = &buf[(x, 2)];
+        assert_eq!((cell.fg, cell.bg), (numbered::C12, reset), "pill text {x}");
+        assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED), "pill text {x} is reversed: {cell:?}");
     }
     assert_eq!((buf[(9, 2)].symbol(), buf[(9, 2)].fg, buf[(9, 2)].bg), (R, numbered::C12, reset));
 }
