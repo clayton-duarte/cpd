@@ -30,6 +30,9 @@ pub mod logs;
 pub mod menu;
 #[cfg(test)]
 mod moon_tests;
+pub mod trace;
+#[cfg(test)]
+mod trace_tests;
 #[cfg(test)]
 mod icons_tests;
 pub mod merge;
