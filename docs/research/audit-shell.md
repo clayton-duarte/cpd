@@ -165,7 +165,7 @@ Ranked by value (what the User sees first, then lines deleted, then risk removed
 - **What it does:** each test has a real tmux expand a format and reads cells back, so the tests pin what the User sees ("not how the format spells them", the file's own header).
 - **Why it exists:** the header explains the intent. It is also what the pill and junction behaviour could be pinned by without a client.
 - **Upstream:** the owner policy (`cpd policy`, `tests`): "No test uses the real tmux or any other real external dependency" (tmux is software we do not control). These tests use it
-  (`tmux -L cpd-palette-test`, killed in `Drop`). unverified: whether the policy was meant to cover tests written before it . E2 shows the alternative the policy would not
+  (`tmux -L cpd-palette-test`, killed in `Drop`). unverified: whether the policy was meant to cover tests written before it. E2 shows the alternative the policy would not
   accept either: an inner/outer tmux whose `capture-pane` gives the true rendering, with a client.
 - **Verdict:** `keep` as the only way to pin tmux's own expansion, but **flag to the User**: it contradicts the written policy; the options are (a) a documented exception for the format tests, (b) a
   mock of the expansion (a format interpreter: the arithmetic `#{e|…}`, `#{R:}`, `#{P/i/:}` would have to be re-implemented, i.e. the test would test the mock). Not a recommendation to change code.
