@@ -9,12 +9,13 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import {
 	advance, announce, CASES, CUSTOM_CASES, loadExtension, makeRow, restoreClocks, shutdown, text, type Case, type Harness,
 } from "./indicator-harness.ts";
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const FRAMES = ["\u{F0766}", ...Array.from({ length: 8 }, (_, i) => String.fromCodePoint(0xf0a9e + i))];
+const FRAMES = MOON_FRAMES;
 const LOADER = new RegExp(`^ \u2570[${FRAMES.join("")}]$`, "u");
 const TOGGLE = /^ \u2570[\u{F004B}\u{F0063}] (expand|collapse)( · .*)?$/u;
 const TERMINATOR = /^ \u2570\u{F005A}$/u;

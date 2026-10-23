@@ -1,5 +1,6 @@
 /** The input widget: pi's Editor drawn as a rounded box in the cockpit palette (contract 6.1.1, 6.9 "The input widget"). */
 import "./pinned-themes.ts";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync } from "node:fs";
@@ -14,7 +15,7 @@ import { initTheme, theme } from "../../../node_modules/@earendil-works/pi-codin
 process.env.PI_CODING_AGENT_DIR ??= mkdtempSync(join(tmpdir(), "editor-box-"));
 initTheme("dark", false);
 
-const LOADER = [0xf0766, 0xf0a9e, 0xf0a9f, 0xf0aa0, 0xf0aa1, 0xf0aa2, 0xf0aa3, 0xf0aa4, 0xf0aa5].map((code) => String.fromCodePoint(code));
+const LOADER = MOON_FRAMES;
 const FRAME = `[${LOADER.join("")}]`;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
