@@ -131,10 +131,10 @@ mod tests {
     #[test]
     fn the_glyphs_without_an_item() {
         assert_eq!(Dot::of(State::Working, None, false), Dot::Working);
-        assert_eq!(Dot::of(State::Idle, None), Dot::Idle);
-        assert_eq!(Dot::of(State::Stopped, None), Dot::Stopped);
-        assert_eq!(Dot::of(State::Blocked, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
-        assert_eq!(Dot::of(State::Waiting, None), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
+        assert_eq!(Dot::of(State::Idle, None, false), Dot::Idle);
+        assert_eq!(Dot::of(State::Stopped, None, false), Dot::Stopped);
+        assert_eq!(Dot::of(State::Blocked, None, false), Dot::Idle, "blocked is no dot of its own: its dialog item is");
+        assert_eq!(Dot::of(State::Waiting, None, false), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
         for state in [State::Working, State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             assert!(!Dot::of(state, None, false).needs_you(), "no item, never a filled dot: {state:?}");
         }
