@@ -99,11 +99,9 @@ fn tmux_server_is_private_and_killed_on_drop() {
     assert_ne!(env.tmux_socket(), "cpd");
 
     // The socket file is under this env's TMUX_TMPDIR, not the user's.
-    let found = std::fs::read_dir(&socket_dir)
-        .unwrap()
-        .flat_map(|uid_dir| std::fs::read_dir(uid_dir.unwrap().path()).unwrap())
-        .any(|entry| entry.unwrap().file_name() == env.tmux_socket());
-    assert!(found, "no socket {} under {}", env.tmux_socket(), socket_dir.display());
+    let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(env.root()).unwrap());
+    let socket = socket_dir.join(format!("tmux-{uid}")).join(env.tmux_socket());
+    assert!(socket.exists(), "no socket {} under {}", env.tmux_socket(), socket_dir.display());
 
     let pid = String::from_utf8(env.tmux(&["display-message", "-p", "#{pid}"]).stdout).unwrap();
     let pid = pid.trim().to_owned();

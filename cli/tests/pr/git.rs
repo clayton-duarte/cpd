@@ -315,6 +315,9 @@ fn a_fetch_outlasts_a_worktree_add_in_progress() {
     let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "fetch", "origin", "main"])).unwrap();
     assert!(String::from_utf8_lossy(&broken.stderr).contains("bad object worktrees/adding/HEAD"), "{broken:?}");
 
+    // The fetch below runs in this process, whose git reads the User's global config, not the env's: automatic
+    // maintenance would prune the fake entry, so turn it off in the repo's own config.
+    env.git(&repo, &["config", "maintenance.auto", "false"]);
     let fetched = std::thread::scope(|s| {
         s.spawn(|| {
             // time-claim: the fetch outlasts an entry half-created for a second; no per-poll signal from git.
