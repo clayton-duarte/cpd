@@ -78,7 +78,7 @@ Size = Worker Jobs (one Job = one Worker, about 150 turns, at most about 40 rewr
 - Listing: `rg -n 'world\(' plan_delete.rs context_delete.rs`; first `without_yes_lists_what_goes_and_deletes_nothing` (`plan_delete.rs:158`), last `refuses_when_a_plan_has_live_work` (`context_delete.rs:58`).
 - Real git, subcommands by the test: `init --bare`, `push origin main`, `worktree add -b`, `push origin <branch>`, `branch --format` (`plan_delete.rs:76-94,:49`), `update-index --refresh` (`common/mod.rs:978`), `config url.<bare>.insteadOf`. By cpd: `worktree remove --force --force`, `worktree prune`, `branch -D` (`core/src/plan/delete.rs:255-268`).
 - Git needed to have a repo/worktree: the delete product removes worktrees and branches, so the repo is the thing under test. The asserts `local_branches`/`remote_branches` (`:232,:241,:274,:280`) and `!w.lead_worktree.exists()` check git's effect.
-- tmux needed only to start a Lead session the test ignores: all 9 (`world_ending` `:69` calls `plan new` only to get a Lead row; `plan archive` `:136` closes its pane).
+- tmux needed only to start a Lead session the test ignores: all 9 (`world_ending` `:69` calls `plan new` only to get a Lead row; `plan archive` (`:135`) closes its pane).
 - Fix: replace `plan new` in `world` with a SQL fixture of the Lead (as `context_delete.rs:11-17` does for the Manager); put git behind the existing git module (`core/src/git/worktree.rs`) with a fake git for "delete calls `worktree remove`/`branch -D` in this order" and keep 1-2 contract tests on real git fixtures for "remove really removes the branch" (git contract test).
 - Size: 0.4 Job (9 tests).
 
@@ -107,7 +107,7 @@ No test in scope is wholly X. Partial or borderline:
 - `context_manager.rs:182 a_managers_pi_gets_no_plannotator_variable_from_its_callers`: the half "a new tmux pane starts from the server's global environment" (`set-environment -g`, `:188`) is tmux behaviour. Keep only the assertion on what cpd passes (move to the fake-tmux spawn check).
 - `context_manager.rs:313 session_open_brings_the_manager_into_the_chat_slot`: asserts `swap-pane`/window placement as tmux reports it (`slot`, `window_names`). Our code is the choice of slot and place; tmux layout itself is not under test, but only a model can replace it.
 - `plan_cancel.rs:380 the_cancelled_plans_port_is_free_for_another_plan`: asserts what a real terminal shows (`capture-pane` text `Press Enter to retry.`) and that `send-keys Enter` reaches the prompt. Our code is the port and the prompt; the pane/keys are tmux. R: unit test.
-- `plan_delete.rs:177,:232,:241,:274,:280` and `context_delete.rs:50`: assert `git branch` lists and that worktree directories are gone. Git removes them; our code decides which. Keep as the adapter contract test on a fixture repo (one test), the rest on a fake git.
+- `plan_delete.rs:177,:232,:241,:274,:280` and `context_delete.rs:52`: assert `git branch` lists and that worktree directories are gone. Git removes them; our code decides which. Keep as the adapter contract test on a fixture repo (one test), the rest on a fake git.
 - `context_distill.rs:408` and `:712`: git's `grep -w` matching semantics (`notes.txt` and `docs/other.md` `hs-d10` are excluded by `-w` and the `*.md` pathspec, `:412`). That is git's behaviour; keep one contract test on fixtures.
 
 ## 4. Leak and flake risks
