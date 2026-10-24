@@ -30,7 +30,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 - **State in SQLite inside the binary** (R1): one database per machine, `$CPD_HOME/cpd.db`, in WAL mode, with SQLite bundled into the binary (no system SQLite). Reads never wait for writers. Every write is recorded in the append-only `history` table (§4).
 - **Context records in the database.** A Context's records (decisions, notes, questions and answers, Plans) live only in the database tables `contexts` and `context_records`; Contexts are machine-local (hs-d23, hs-a1; Plan manager B1, §4.6). ADR-0012's git store is superseded.
 - **tmux is the only host.** Leads run in the cockpit; Workers and the engine run in a hidden session of the same tmux server (§6).
-- **The repo's setup, Gate, test commands and protected paths are its repo policy file** under `$CPD_HOME/policy/repos/` (§8.3), read by cpd itself; cpd reads nothing from a repo's tree (R4, R5, §7).
+- **The repo's setup, Gate, test commands and protected paths are its repo policy file** under `$CPD_HOME/policy/<owner>/` (§8.3), read by cpd itself; cpd reads nothing from a repo's tree (R4, R5, §7).
 - **Events are the single channel** to Leads, the TUI and agent states (D4, §5). There are no queue directories, no cache directories and no tmux user options carrying state.
 - **One engine per machine** (D5): one `cpd watch` schedules every Plan under one concurrency limit.
 - **A Plan is one deliverable over one or more PRs** (R34): each PR is the Plan's part in one repo, with its own base, Lead Branch, Lead worktree, Gate and GitHub pull request; one repo may hold several PRs of one Plan. A Plan of one PR behaves exactly as a Plan did before R34.
