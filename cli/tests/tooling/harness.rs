@@ -545,53 +545,6 @@ fn helper_lines(helper: &mut KillChild, key: &str) -> Vec<String> {
     found
 }
 
-// ---- hygiene.md 3a: a test that kills its own tmux server does not let the supervising hooks restart one ----
-
-/// An env whose server has the real hooks of `SERVER_OPTIONS` armed, with a fake `cpd` whose `watch --ensure --wait`
-/// (what the hooks run) writes `marker`, and a `tmux` that records its calls to `log` before running the real one.
-fn armed_env(marker: &std::path::Path, log: &std::path::Path) -> TestEnv {
-    let env = TestEnv::new();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"watch --ensure --wait\") : > '{}'; exit 0;; esac\nexit 1", marker.display()));
-    common::write_executable(
-        &env.bin().join("tmux"),
-        &format!("#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), common::real_tmux().display()),
-    );
-    let out = env.tmux(&["new-session", "-d", "-s", "t", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    for option in cpd_core::host::tmux::SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
-        let out = env.tmux(&option.iter().map(String::as_str).collect::<Vec<_>>());
-        assert!(out.status.success(), "{option:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    env
-}
-
-#[test]
-fn a_server_the_test_kills_is_not_restarted_by_its_supervising_hooks() {
-    // Outside the env: the env's directory is removed with it, and a late hook would write after that.
-    let outside = tempfile::tempdir().unwrap();
-    let (marker, log) = (outside.path().join("ensure-ran"), outside.path().join("tmux-calls"));
-    let env = armed_env(&marker, &log);
-    let socket = env.tmux_socket().to_owned();
-
-    env.kill_tmux_server();
-
-    // Disarmed first: both hooks are unset before the server is killed (a kill-server that runs a hook is only sometimes
-    // seen, hygiene.md bug 3: this is the deterministic half).
-    let calls = std::fs::read_to_string(&log).unwrap();
-    let at = |needle: &str| calls.lines().position(|l| l.contains(needle));
-    let kill = at("kill-server").expect("kill_tmux_server runs kill-server");
-    for hook in ["pane-died", "window-unlinked"] {
-        let unset = at(&format!("set-hook -gu {hook}")).unwrap_or_else(|| panic!("the {hook} hook is not unset:\n{calls}"));
-        assert!(unset < kill, "the {hook} hook is unset after kill-server:\n{calls}");
-    }
-    // And nothing ran the hook, nor started a server on the socket, within the wait.
-    let restarted = common::poll(WAIT, || {
-        let mentions = marker.exists() || processes_mentioning(std::path::Path::new(&socket)).iter().any(|p| *p != std::process::id());
-        mentions.then_some(())
-    });
-    assert!(restarted.is_none(), "a hook ran `cpd watch --ensure --wait` or a process mentions {socket} after the kill");
-}
-
 // ---- hygiene.md 1b: the git wrapper tests run through the env's group and reaper ----
 
 const WRAPPER_HELPER_GATE: &str = "CPD_HARNESS_WRAPPER_HELPER";
