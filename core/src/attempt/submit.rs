@@ -159,7 +159,7 @@ fn run_checks(
         let (lead, repo, pr_base) = lead_branch(conn, plan, key)?;
         Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &pr_base)?))
     })?;
-    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, &env.config.host, plan, key))?;
+    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, plan, key))?;
     git::tamper::check_over(root, &lead, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, &lead, base, sha)?;

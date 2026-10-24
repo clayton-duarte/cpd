@@ -11,7 +11,7 @@
 //! ([`super::menu`]), which then takes every key and click.
 
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
@@ -166,8 +166,8 @@ pub struct View {
     /// The last failed snapshot's error (one row), until a snapshot succeeds: a lasting state of the view, drawn as its
     /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
-    /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
-    owners_dir: Option<PathBuf>,
+    /// `$CPD_HOME/policy`: the tree whose known owners (`<owner>/owner.toml`) New Context… chooses the owner from (none when the home is unresolved).
+    policy_dir: Option<PathBuf>,
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
@@ -204,25 +204,8 @@ fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
     u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
-/// The owners of the owner policy files (`<owner>.toml`) in `dir`, sorted; anything else,
-/// a stem that is not a valid owner login included, is ignored.
-fn owners_in(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut owners: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| {
-            let path = e.path();
-            let stem = path.file_name()?.to_str()?.strip_suffix(".toml")?;
-            cpd_core::ids::OwnerLogin::parse(stem).ok().filter(|o| o.as_str() == stem).map(|_| stem.to_owned())
-        })
-        .collect();
-    owners.sort();
-    owners
-}
-
 /// The refusal of New Context… when the instance has no owner policy.
-const NO_OWNER_POLICY: &str = "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml";
+const NO_OWNER_POLICY: &str = "No owner policy: add $CPD_HOME/policy/<owner>/owner.toml";
 
 impl View {
     pub fn new(tree: Tree, focused: bool) -> View {
@@ -244,7 +227,7 @@ impl View {
             inbox_area: Rect::default(),
             inbox_cursor: None,
             error: None,
-            owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
+            policy_dir: CpdHome::from_env().ok().map(|h| cpd_core::policy::policy_dir(&h)),
             down: None,
             merging: BTreeSet::new(),
         };
@@ -545,7 +528,8 @@ impl View {
             };
         }
         if item == Item::NewContext {
-            let owners = self.owners_dir.as_deref().map(owners_in).unwrap_or_default();
+            let owners: Vec<String> =
+                self.policy_dir.as_deref().map(cpd_core::policy::known_owners).unwrap_or_default().iter().map(|o| o.as_str().to_owned()).collect();
             if owners.is_empty() {
                 return Effect::text("New Context", NO_OWNER_POLICY);
             }
@@ -1766,23 +1750,17 @@ mod tests {
         assert!(initial.ends_with("x (fork)"));
     }
 
-    /// A view whose New Context… reads the owner policies of a temp home with `owners` as files.
+    /// A view whose New Context… reads the policy tree of a temp home with `files` (paths under `policy/`).
     fn owned(tree: Tree, files: &[&str]) -> (View, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         for f in files {
-            std::fs::write(dir.path().join(f), "").unwrap();
+            let path = dir.path().join(f);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
         }
-        std::fs::create_dir(dir.path().join("sub.toml")).unwrap();
         let mut view = View::new(tree, true);
-        view.owners_dir = Some(dir.path().to_path_buf());
+        view.policy_dir = Some(dir.path().to_path_buf());
         (view, dir)
-    }
-
-    #[test]
-    fn owners_are_the_toml_file_stems_sorted() {
-        let (_view, dir) = owned(sample(), &["b.toml", "a.toml", "notes.md", ".toml", "Clayton-Duarte.toml", "clayton_duarte.toml", "-x.toml"]);
-        assert_eq!(owners_in(dir.path()), ["a", "b"]);
-        assert!(owners_in(&dir.path().join("missing")).is_empty());
     }
 
     #[test]
@@ -1790,14 +1768,14 @@ mod tests {
         let (mut view, _dir) = owned(sample(), &["notes.md"]);
         assert_eq!(
             pick_at(&mut view, 8, 15, 0),
-            Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml"),
+            Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/<owner>/owner.toml"),
             "no input popup opens"
         );
     }
 
     #[test]
     fn new_context_opens_an_input_popup_for_a_title_and_derives_the_id() {
-        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml"]);
+        let (mut view, _dir) = owned(sample(), &["clayton-duarte/owner.toml"]);
         let question = popup_at(&mut view, 8, 15, 0);
         let Question::Input { title, ref ask, ref initial } = question else { panic!("an input") };
         assert_eq!((title, initial.as_str()), ("New Context", ""));

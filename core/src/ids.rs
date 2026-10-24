@@ -162,13 +162,6 @@ simple_id!(
     |s| matches(s, lower, lower_digit, 0, 7)
 );
 
-simple_id!(
-    /// Host name, the ssh `Host` that names `policy/machines/<host>.toml`: `^[a-z][a-z0-9-]{0,31}$`,
-    /// set in `config.toml` (contract §8.2), so an invalid one is `config_invalid`.
-    HostName, ConfigInvalid, "host name", "^[a-z][a-z0-9-]{0,31}$",
-    |s| matches(s, lower, lower_digit_dash, 0, 31)
-);
-
 impl SessionId {
     /// A new session id for a pi session cpd starts: a lowercase UUID v4.
     pub fn new_v4() -> SessionId {
@@ -416,12 +409,13 @@ impl fmt::Display for OwnerLogin {
 id_traits!(OwnerLogin);
 
 /// A GitHub repository name without its owner (contract §2.1, hs-d288):
-/// `^[a-z0-9._-]{1,100}$`, ASCII-lowercased when parsed. An invalid one is `usage`.
+/// `^[a-z0-9._-]{1,100}$`, ASCII-lowercased when parsed; `owner` is refused (`<owner>/owner.toml` is the owner
+/// scope, not a repo's). An invalid one is `usage`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RepoName(String);
 
 impl RepoName {
-    const EXPECTED: &'static str = "^[a-z0-9._-]{1,100}$";
+    const EXPECTED: &'static str = "^[a-z0-9._-]{1,100}$, not `owner`";
 
     pub fn parse(s: &str) -> Result<Self, CpdError> {
         let lowered = s.to_ascii_lowercase();
@@ -429,7 +423,7 @@ impl RepoName {
             && lowered
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
-        if ok {
+        if ok && lowered != "owner" {
             Ok(RepoName(lowered))
         } else {
             Err(invalid(ErrorCode::Usage, "repo name", s, Self::EXPECTED))

@@ -16,7 +16,7 @@ use toml::{Table, Value};
 use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{HostName, MachineName};
+use crate::ids::MachineName;
 
 /// Where a leaf key's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -34,8 +34,6 @@ pub type Sources = BTreeMap<String, Source>;
 pub struct Config {
     pub version: u32,
     pub machine: MachineName,
-    /// The ssh `Host` that names `policy/machines/<host>.toml`; the value of `machine` by default (§8.2).
-    pub host: HostName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
     /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
@@ -263,8 +261,6 @@ impl Config {
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
-        let host_default = HostName::parse(machine.as_str()).expect("a machine name is a valid host name");
-        let host = r.get("host", host_default, |v| HostName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
@@ -374,7 +370,6 @@ impl Config {
         let config = Config {
             version,
             machine,
-            host,
             concurrency,
             test_concurrency,
             retry_cap,
