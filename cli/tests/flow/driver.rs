@@ -1449,6 +1449,22 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
     assert_eq!((opened[0].0, phase[0].0), (ours[0].0, ours[0].0), "one transaction");
 }
 
+/// An `open` Job's checks (base check, Gate) are one `checks` span, closed in the transaction that makes the Attempt `merging`.
+#[test]
+fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
+    let (fx, _origin) = open_fx();
+    fx.pi(SUBMIT_ONLY);
+    run_job(&fx, "open-repo");
+    let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
+    let statuses: Vec<Value> = fx.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
+    assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
+    let txns: String = fx.env.query(
+        "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
+    );
+    let txns: Vec<&str> = txns.split(',').collect();
+    assert_eq!(txns[2], txns[3], "the end and running -> merging share a transaction");
+}
+
 /// With a base that conflicts with the Lead Branch, the Worker's merge commit is required: the submit is refused `base_conflict` (before
 /// the Gate, so the Gate never runs on a head that the base would refuse), with the files and the commands, until the Worker has merged
 /// the base and resolved it. The merge commit then lands as it is (no rebase), the Gate runs on it, and the pull request opens.
