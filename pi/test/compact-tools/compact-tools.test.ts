@@ -1129,8 +1129,8 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 			setWorkingIndicator: (value?: typeof indicator) => { indicator = value; },
 		},
 	} as unknown as ExtensionContext);
-	assert.equal(indicator?.frames.length, 8);
-	assert.equal(indicator?.intervalMs, 100);
+	assert.equal(indicator?.frames.length, 28);
+	assert.equal(indicator?.intervalMs, 50);
 	handlers.get("agent_start")?.({});
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
