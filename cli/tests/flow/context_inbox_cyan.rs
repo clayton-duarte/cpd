@@ -22,7 +22,7 @@ const T1: &str = "2026-01-01T01:00:00.000Z";
 fn fx() -> TestEnv {
     let env = TestEnv::new();
     fs::create_dir_all(env.cpd_home()).unwrap();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
+    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\ncontext_curation_min_records = 1\n").unwrap();
     env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
     for text in ["Old fact.", "Same fact.", "Worth documenting."] {
         env.cpd(&["context", "note", text, "--context", CTX]).ok();
