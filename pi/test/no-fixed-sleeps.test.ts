@@ -45,10 +45,10 @@ function allowed(): Map<string, number> {
   return out;
 }
 
-function report(counts: Map<string, number>): string[] {
+function report(counts: Map<string, number>, inDomain: (path: string) => boolean): string[] {
   const allow = allowed();
   const bad: string[] = [];
-  for (const path of [...new Set([...counts.keys(), ...allow.keys()])].sort()) {
+  for (const path of [...new Set([...counts.keys(), ...[...allow.keys()].filter(inDomain)])].sort()) {
     const n = counts.get(path) ?? 0;
     const a = allow.get(path) ?? 0;
     if (n !== a) bad.push(`${path}: ${n} (allowed ${a})`);
@@ -74,7 +74,7 @@ test("no pi test waits on a timer or the wall clock outside the allowlist", () =
     const n = countLines(readFileSync(f, "utf8").split("\n").map(stripComment), patterns);
     if (n > 0) counts.set(rel(f), n);
   }
-  assert.deepEqual(report(counts), [], "timers or wall clock in pi tests (path: count (allowed n))");
+  assert.deepEqual(report(counts, (p) => p.startsWith("pi/")), [], "timers or wall clock in pi tests (path: count (allowed n))");
 });
 
 test("no Rust test sleeps or reads the wall clock outside the allowlist", () => {
@@ -98,5 +98,5 @@ test("no Rust test sleeps or reads the wall clock outside the allowlist", () => 
       }
     }
   }
-  assert.deepEqual(report(counts), [], "timers or wall clock in Rust tests (path: count (allowed n))");
+  assert.deepEqual(report(counts, (p) => !p.startsWith("pi/")), [], "timers or wall clock in Rust tests (path: count (allowed n))");
 });
