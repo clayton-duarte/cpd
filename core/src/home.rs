@@ -179,6 +179,21 @@ impl CpdHome {
         self.root.join("run")
     }
 
+    /// `run/secret/`: the grants of `cpd secret` (contract §8.4, §1.4).
+    pub fn secret_dir(&self) -> PathBuf {
+        self.run_dir().join("secret")
+    }
+
+    /// `run/secret/allow/`: one `<attempt>.json` per Attempt allowed to read secrets.
+    pub fn secret_allow_dir(&self) -> PathBuf {
+        self.secret_dir().join("allow")
+    }
+
+    /// `run/secret/approve/`: one `<uuid>.json` per approval the User gave.
+    pub fn secret_approve_dir(&self) -> PathBuf {
+        self.secret_dir().join("approve")
+    }
+
     /// `run/test-<i>.lock`: the machine-wide test slot `i`, for `i` in `0..test_concurrency` (contract §1.4, §7.6).
     pub fn test_slot(&self, i: u32) -> PathBuf {
         self.run_dir().join(format!("test-{i}.lock"))
