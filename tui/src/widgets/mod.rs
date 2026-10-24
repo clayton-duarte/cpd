@@ -85,7 +85,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
 }
 
 /// The Events that change what the column draws besides the pull request rows (whose changes have no Event): a pull
-/// request gets its PR (`pr-opened`), a Plan its Lead (`plan-created`, `session-registered`), the chat slot moves.
+/// request gets its PR (`pr-opened`), a Plan its Lead (`plan-created`, `session-registered`), the chat slot moves, a Lead's dot is a fact the column draws (`session-state`).
 /// The update Job's status moves its PR's `conflict` to `updating` and back (hs-d532): a Job is added, started (its
 /// `attempt-started`; there is no `job-started` Event), retried, merged, failed or cancelled.
 const KINDS: &[Kind] = &[
@@ -93,6 +93,7 @@ const KINDS: &[Kind] = &[
     Kind::PlanCreated,
     Kind::SessionRegistered,
     Kind::SessionMoved,
+    Kind::SessionState,
     Kind::JobAdded,
     Kind::AttemptStarted,
     Kind::JobRetried,
