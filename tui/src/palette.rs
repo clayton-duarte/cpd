@@ -9,7 +9,7 @@
 //!
 //! Changes from the spike: statuses are the read model's enums, not strings, so
 //! there is no "unknown" icon; cpd 2 has no `in_review` Job status, and `merging`
-//! (a running Job whose Attempt is merging) takes its place and its icon.
+//! (a running Job whose Attempt is checking or merging: "landing", yellow) takes its place and its icon.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,7 +30,7 @@ pub enum Meaning {
     NotStarted,
     /// A running Job; phase `dispatch`; PR checks pending.
     InProgress,
-    /// A merging Job; an open PR; phase `deploy`.
+    /// A landing Job (checking or merging); an open PR; phase `deploy`.
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
@@ -237,7 +237,7 @@ pub fn archived_text() -> Style {
 }
 
 /// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text inverted. A draft is
-/// magenta. `merging` is a running Job whose Attempt is merging; A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
+/// magenta. `merging` is a running Job whose Attempt is landing (checking or merging); A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
 pub fn job_pill(status: JobStatus, merging: bool, _stuck: bool) -> Style {
     pill_clickable(job_status(status, merging).1)
 }
@@ -329,7 +329,7 @@ pub(crate) mod check {
 // Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
 /// A queued Job: `nf-md-circle_outline` (U+F0766).
 pub const QUEUED: &str = "\u{F0766}";
-/// A merging Job: `nf-md-download_circle` (U+F1464).
+/// A landing Job: `nf-md-download_circle` (U+F1464).
 pub const MERGING: &str = "\u{F1464}";
 /// A merged Job: `nf-md-check_circle` (U+F05E0).
 pub const MERGED: &str = "\u{F05E0}";
@@ -351,7 +351,7 @@ pub const CHECKS_PENDING: &str = "\u{F0B94}";
 pub const CHECKS_NONE: &str = "\u{F0374}";
 
 /// Icon and meaning of a Job's status; `merging` is a `running` Job whose
-/// Attempt is merging (`JobCounts` counts it apart).
+/// Attempt is landing, checking or merging (`JobCounts` counts it apart).
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
         (JobStatus::Queued, _) => (QUEUED, Meaning::NotStarted),
@@ -364,11 +364,11 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     }
 }
 
-/// The Job statuses the legend lists: the name shown, the status and whether it is `merging`.
+/// The Job statuses the legend lists: the name shown, the status and whether it is `merging` (landing).
 pub const JOB_LEGEND: [(&str, JobStatus, bool); 6] = [
     ("queued", JobStatus::Queued, false),
     ("running", JobStatus::Running, false),
-    ("merging", JobStatus::Running, true),
+    ("landing", JobStatus::Running, true),
     ("merged", JobStatus::Merged, false),
     ("failed", JobStatus::Failed, false),
     ("draft", JobStatus::Draft, false),
@@ -379,7 +379,7 @@ pub fn attempt_status(status: AttemptStatus) -> Meaning {
     match status {
         AttemptStatus::Starting => Meaning::NotStarted,
         AttemptStatus::Running => Meaning::InProgress,
-        AttemptStatus::Merging => Meaning::Review,
+        AttemptStatus::Checking | AttemptStatus::Merging => Meaning::Review,
         AttemptStatus::Ended => Meaning::Done,
     }
 }
@@ -612,6 +612,7 @@ mod tests {
         let attempts = [
             (AttemptStatus::Starting, Meaning::NotStarted),
             (AttemptStatus::Running, Meaning::InProgress),
+            (AttemptStatus::Checking, Meaning::Review),
             (AttemptStatus::Merging, Meaning::Review),
             (AttemptStatus::Ended, Meaning::Done),
         ];

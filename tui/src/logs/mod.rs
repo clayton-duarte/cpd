@@ -11,6 +11,8 @@
 
 #[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+pub(crate) use view::layout_sample;
 mod view;
 
 use std::time::Duration;

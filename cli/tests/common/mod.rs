@@ -798,6 +798,20 @@ impl TestEnv {
         fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
     }
 
+    /// Replaces the repo `<owner>/<name>`'s policy file (contract §8.3), creating its directories, with `toml`.
+    pub fn repo_policy(&self, owner: &str, name: &str, toml: &str) {
+        let dir = self.cpd_home().join("policy/repos").join(owner);
+        fs::create_dir_all(&dir).expect("create the repo policy directory");
+        fs::write(dir.join(format!("{name}.toml")), toml).expect("write the repo policy file");
+    }
+
+    /// A `keyed_repo` whose repo policy file is removed: its repo is unconfigured (`repo_unconfigured`).
+    pub fn unconfigured_repo(&self, name: &str) -> PathBuf {
+        let repo = self.keyed_repo(name);
+        let _ = fs::remove_file(self.cpd_home().join(format!("policy/repos/acme/{name}.toml")));
+        repo
+    }
+
     /// `$CPD_HOME` of every command run here (empty at first).
     pub fn cpd_home(&self) -> PathBuf {
         self.root().join("cpd-home")
@@ -1013,6 +1027,9 @@ impl TestEnv {
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+        if !self.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+            self.repo_policy("acme", &name, "");
+        }
         url
     }
 

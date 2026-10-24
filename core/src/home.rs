@@ -20,7 +20,7 @@ pub enum Hook {
 }
 
 impl Hook {
-    /// The table name in `.config/wt.toml`, also used in log file names.
+    /// The hook's name: its key in the policy `hooks` domain, also used in log file names.
     pub fn as_str(self) -> &'static str {
         match self {
             Hook::PreStart => "pre-start",

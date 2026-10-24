@@ -79,7 +79,7 @@ fn the_legend_draws_the_new_glyphs() {
         text(&jobs[1])
     };
     assert!(sample("draft").contains('\u{F059}'), "{}", sample("draft"));
-    assert!(sample("merging").contains('\u{F1464}'), "{}", sample("merging"));
+    assert!(sample("landing").contains('\u{F1464}'), "{}", sample("landing"));
     let dots = section_text("Session Dots");
     assert!(dots.contains('\u{F1853}'), "{dots:?}");
     let precedence = format!("> {} > \u{F1853} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);

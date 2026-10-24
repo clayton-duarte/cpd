@@ -146,7 +146,7 @@ pub(crate) fn plan(env: &TestEnv, prs: &[(&str, &str)], jobs: &[FixtureJob]) {
 
 /// The rows of the box titled with `title` (its title row to its bottom border), the box's borders cut off.
 fn box_inside(screen: &[String], title: &str) -> Vec<String> {
-    let top = screen.iter().position(|l| l.trim_start().starts_with("╭ ") && l.contains(title)).unwrap_or_else(|| panic!("no box {title}:\n{}", screen.join("\n")));
+    let top = screen.iter().position(|l| l.trim_start().starts_with("╭─ ") && l.contains(title)).unwrap_or_else(|| panic!("no box {title}:\n{}", screen.join("\n")));
     screen[top + 1..]
         .iter()
         .take_while(|l| !l.trim_start().starts_with('╰'))
@@ -181,7 +181,7 @@ fn cancelled_pr_box_is_drawn_muted_after_live_ones() {
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.iter().any(|l| l.contains("web ·")));
     let text = screen.join("\n");
-    let row_of = |needle: &str| screen.iter().position(|l| l.trim_start().starts_with("╭ ") && l.contains(needle));
+    let row_of = |needle: &str| screen.iter().position(|l| l.trim_start().starts_with("╭─ ") && l.contains(needle));
     let (web, aaa) = (row_of("web ·").expect("the live box"), row_of("aaa ·").unwrap_or_else(|| panic!("the cancelled PR has its box:\n{text}")));
     assert!(web < aaa, "the cancelled box is below the live one:\n{text}");
     assert!(screen[aaa].contains("cancelled"), "its title says so: {}", screen[aaa]);

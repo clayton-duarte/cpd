@@ -22,6 +22,8 @@ mod background_tests;
 pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
+#[cfg(test)]
+mod section_title_tests;
 mod chat;
 mod cockpit;
 pub mod dialog;
@@ -30,6 +32,10 @@ mod history;
 mod input_box;
 #[cfg(test)]
 mod layout_dialog_tests;
+#[cfg(test)]
+mod layout_section_tests;
+#[cfg(test)]
+mod layout_plan_tests;
 #[cfg(test)]
 mod layout_popup_tests;
 #[cfg(test)]
@@ -43,6 +49,8 @@ pub mod logs;
 pub mod menu;
 #[cfg(test)]
 mod failed_pill_tests;
+#[cfg(test)]
+mod landing_tests;
 #[cfg(test)]
 mod moon_tests;
 pub mod trace;

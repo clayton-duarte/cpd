@@ -83,6 +83,8 @@ fn fx_with(config_extra: &str) -> Fx {
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
         assert!(env.tmux(args).status.success(), "tmux {args:?}");
     }
+    // The PRs are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     let fx = Fx { env, repo, lead };
     fx.pi("exit 0");
     let catalog: String = EFFORTS
@@ -98,8 +100,8 @@ fn fx_with(config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
     ));
@@ -138,11 +140,12 @@ impl Fx {
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
         prepare_lead_worktree(&repo, &plan, &path, &branch, "main", &setup).map_err(|f| f.error).unwrap();
         self.fixture(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
             repo.display(),
             path.display()
         ));
+        self.env.repo_policy("acme", key, "");
         (repo, path)
     }
 
@@ -177,13 +180,12 @@ impl Fx {
         ));
     }
 
-    /// Commits `.config/wt.toml` = `text` on the Lead Branch, where the
-    /// Attempt worktrees are cut from.
-    fn wt_toml(&self, text: &str) {
-        fs::create_dir_all(self.lead.join(".config")).unwrap();
-        fs::write(self.lead.join(".config/wt.toml"), text).unwrap();
-        self.env.git(&self.lead, &["add", "-A"]);
-        self.env.git(&self.lead, &["commit", "-q", "-m", "wt.toml"]);
+    /// Sets the `[hooks]` of the repo `acme/pay`'s policy file: `text` is written as a `.config/wt.toml` was
+    /// (`pre-start = "cmd"`, `[pre-merge]`), and an empty commit is made on the Lead Branch, where the Attempt worktrees are cut from.
+    fn hooks(&self, text: &str) {
+        let file = format!("[hooks]\n{text}").replace("\n[", "\n[hooks.");
+        self.env.repo_policy("acme", "pay", &file);
+        self.env.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     }
 
     /// `cpd <args>` with this env's CPD_HOME, as a hook or the Worker calls it.
@@ -313,11 +315,19 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(
         fx.kinds(ATTEMPT),
-        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "job-merged"]
+        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "attempt-status", "attempt-status", "job-merged"]
     );
     let statuses: Vec<Value> =
         fx.events(ATTEMPT).into_iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
-    assert_eq!(statuses, [json!({"from": "starting", "to": "running"}), json!({"from": "running", "to": "merging"})]);
+    assert_eq!(
+        statuses,
+        [
+            json!({"from": "starting", "to": "running"}),
+            json!({"check": "start", "from": "running", "to": "running", "what": "checks"}),
+            json!({"check": "end", "from": "running", "to": "running", "what": "checks"}),
+            json!({"from": "running", "to": "merging"}),
+        ]
+    );
     assert_eq!(fx.event(ATTEMPT, "session-moved")["data"]["place"], "work");
 
     // The Worker: its Session, its argv (§6.5) and its Spec (§16.1).
@@ -528,11 +538,8 @@ fn an_attempt_of_a_pr_in_another_repo_is_cut_from_and_merged_into_that_prs_branc
     fx.pi(WORKER);
     let (web, web_lead) = fx.add_pr("web");
     fx.add_job_in("web", "ui", &[]);
-    // The Lead Branch of the web PR defines its hooks: pre-start sees it as {{ base }}.
-    fs::create_dir_all(web_lead.join(".config")).unwrap();
-    fs::write(web_lead.join(".config/wt.toml"), "[pre-start]\nmark = \"echo {{ base }} > ../base-seen.txt\"\n").unwrap();
-    fx.env.git(&web_lead, &["add", "-A"]);
-    fx.env.git(&web_lead, &["commit", "-q", "-m", "wt.toml"]);
+    // The repo file of the web PR defines its hooks: pre-start sees the Lead Branch as {{ base }}.
+    fx.env.repo_policy("acme", "web", "[hooks.pre-start]\nmark = \"echo {{ base }} > ../base-seen.txt\"\n");
     let (pay_old, web_old) =
         (fx.lead_sha(), fx.env.git(&web, &["rev-parse", "refs/heads/cpd/pay/web"]));
 
@@ -585,7 +592,7 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 fn a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crashed() {
     let fx = fx_with("[timeouts]\nstore_busy_ms = 200\n");
     // A2's pre-start takes a second, so the driver's first write comes while the lock is held.
-    fx.wt_toml("[pre-start]\nwait = \"sleep 1\"\n");
+    fx.hooks("[pre-start]\nwait = \"sleep 1\"\n");
     fx.pi(WORKER);
 
     let out = fx.dispatch(JOB).ok();
@@ -763,7 +770,7 @@ fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
 #[test]
 fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
     let fx = fx();
-    fx.wt_toml("pre-start = \"exit 7\"\n");
+    fx.hooks("pre-start = \"exit 7\"\n");
 
     let out = fx.dispatch(JOB).ok();
     let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
@@ -835,7 +842,7 @@ fn assert_cancelled(fx: &Fx, attempt: &Value, reason: &str) {
 fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     let fx = fx();
     // pre-start runs in A2: the request is there at the safe point before A3.
-    fx.wt_toml(&format!("pre-start = \"{}\"\n", fx.cpd_line("job cancel api --reason early --plan pay > /dev/null")));
+    fx.hooks(&format!("pre-start = \"{}\"\n", fx.cpd_line("job cancel api --reason early --plan pay > /dev/null")));
 
     let out = fx.dispatch(JOB).ok();
     let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
@@ -1372,7 +1379,7 @@ fn open_fx() -> (Fx, PathBuf) {
     fx.fixture(&format!(
         "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{merged}' WHERE key = 'api';"
     ));
-    fx.wt_toml(&format!("[pre-merge]\ngate = \"echo slot=$CPD_TEST_SLOT head=$(git rev-parse HEAD) >> {}/gate.log\"\n", env.root().display()));
+    fx.hooks(&format!("[pre-merge]\ngate = \"echo slot=$CPD_TEST_SLOT head=$(git rev-parse HEAD) >> {}/gate.log\"\n", env.root().display()));
     gh_creates(env);
     fx.add_cpd_job("open-repo", "open");
     (fx, origin)
@@ -1449,6 +1456,22 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
     assert_eq!((opened[0].0, phase[0].0), (ours[0].0, ours[0].0), "one transaction");
 }
 
+/// An `open` Job's checks (base check, Gate) are one `checks` span, closed in the transaction that makes the Attempt `merging`.
+#[test]
+fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
+    let (fx, _origin) = open_fx();
+    fx.pi(SUBMIT_ONLY);
+    run_job(&fx, "open-repo");
+    let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
+    let statuses: Vec<Value> = fx.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
+    assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
+    let txns: String = fx.env.query(
+        "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
+    );
+    let txns: Vec<&str> = txns.split(',').collect();
+    assert_eq!(txns[2], txns[3], "the end and running -> merging share a transaction");
+}
+
 /// With a base that conflicts with the Lead Branch, the Worker's merge commit is required: the submit is refused `base_conflict` (before
 /// the Gate, so the Gate never runs on a head that the base would refuse), with the files and the commands, until the Worker has merged
 /// the base and resolved it. The merge commit then lands as it is (no rebase), the Gate runs on it, and the pull request opens.
@@ -1494,7 +1517,7 @@ fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker
 #[test]
 fn an_open_jobs_gate_failure_is_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
     let (fx, origin) = open_fx();
-    fx.wt_toml("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
+    fx.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
     fx.pi(SUBMIT_ONLY);
     let before = fx.remote(&origin, "cpd/pay");
 
