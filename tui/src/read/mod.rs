@@ -34,6 +34,9 @@ mod pulse;
 mod shared;
 mod tree;
 mod widgets;
+pub mod watch;
+#[cfg(test)]
+mod watch_tests;
 mod worker;
 
 pub use flow::{
