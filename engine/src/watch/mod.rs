@@ -25,6 +25,7 @@ mod inbox;
 mod liveness;
 mod lock;
 mod log;
+mod poll_run;
 mod pr;
 mod report;
 pub mod restart;
@@ -35,6 +36,8 @@ mod titles;
 mod workers;
 #[cfg(test)]
 mod pill_texts;
+#[cfg(test)]
+mod poll_run_tests;
 
 use std::fs;
 use std::io;
