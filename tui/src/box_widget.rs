@@ -145,3 +145,31 @@ impl<B: Widget> Widget for BoxWidget<'_, B> {
         }
     }
 }
+
+/// A section title (hs-d476): three rows, a blank one, the title row (`section::title`, from the area's first column to its
+/// last) and a blank one. Stateless; it writes nothing on the blank rows nor outside its area.
+pub struct SectionTitle<'a> {
+    #[allow(dead_code)] // read by `render`, which is a stub
+    title: &'a str,
+    #[allow(dead_code)]
+    count: Option<usize>,
+}
+
+impl<'a> SectionTitle<'a> {
+    /// The rows a section title takes: blank, title, blank.
+    pub const ROWS: u16 = 3;
+
+    pub fn new(title: &'a str, count: Option<usize>) -> Self {
+        SectionTitle { title, count }
+    }
+
+    /// The area under the three rows (zero height when `area` is shorter).
+    pub fn body(area: Rect) -> Rect {
+        let rows = Self::ROWS.min(area.height);
+        Rect::new(area.x, area.y + rows, area.width, area.height - rows)
+    }
+}
+
+impl Widget for SectionTitle<'_> {
+    fn render(self, _area: Rect, _buf: &mut Buffer) {}
+}

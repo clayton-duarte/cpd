@@ -20,6 +20,8 @@ mod background;
 pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
+#[cfg(test)]
+mod section_title_tests;
 mod chat;
 mod cockpit;
 pub mod dialog;
@@ -28,6 +30,8 @@ mod history;
 mod input_box;
 #[cfg(test)]
 mod layout_dialog_tests;
+#[cfg(test)]
+mod layout_section_tests;
 #[cfg(test)]
 mod layout_plan_tests;
 #[cfg(test)]

@@ -26,6 +26,9 @@ pub(crate) enum Kind {
     Rail,
     /// Rounded walls all round, the title is text (a PR's `api · repo 󱦰 main · dispatch`), not a pill: (8) does not apply.
     FullText,
+    /// A section title (`SectionTitle`): its rect is the three rows; the rows above and below the title row are blank and the
+    /// title row starts one column in (the margin) with `──`, then the pill's left cap when a pill fits.
+    Rule,
 }
 
 /// Where the pane's window sits on a scrolling canvas (the Plan view).
@@ -140,6 +143,15 @@ pub(crate) enum TreeCase {
     ContextFold,
 }
 
+/// The fixture the section samples draw: the title's three rows, or the body rows under it (no box, the container's margin).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SectionCase {
+    /// The section title, placed as a `Kind::Rule`.
+    Title,
+    /// The rows under the title: no box, only the margin and "nothing outside".
+    Rows,
+}
+
 /// A cell with nothing in it, whatever its style.
 pub(crate) fn blank(cell: &Cell) -> bool {
     cell.symbol().trim().is_empty()
@@ -217,6 +229,10 @@ pub(crate) fn check_at(subject: &str, width: u16, sample: &Sample, scroll: Scrol
             continue;
         }
         let name = placed.name;
+        if placed.kind == Kind::Rule {
+            check_rule(placed, buf, &fail);
+            continue;
+        }
         if clipped(placed) {
             continue;
         }
@@ -308,6 +324,34 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     if let Some(x) = pill.filter(|_| placed.kind != Kind::FullText) {
         if x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─" {
             fail(x, top, &format!("(8) box {name}: the title does not start `╭─` then the pill's left cap"));
+        }
+    }
+}
+
+/// A section title's three rows: blank above and below the title row, which starts one column in with `──` and then, when a
+/// pill fits, its left cap.
+fn check_rule(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
+    let (r, name) = (placed.rect, placed.name);
+    if r.height != 3 {
+        fail(r.x, r.y, &format!("(10) section title {name} {r:?} is not three rows"));
+    }
+    for y in [r.y, r.y + 2] {
+        for x in r.x..r.right() {
+            if !blank(&buf[(x, y)]) {
+                fail(x, y, &format!("(10) section title {name}: the row above or below the title row is not blank"));
+            }
+        }
+    }
+    let y = r.y + 1;
+    if r.width >= 3 && (sym(buf, r.x + 1, y) != "─" || sym(buf, r.x + 2, y) != "─") {
+        fail(r.x + 1, y, &format!("(10) section title {name}: the title row does not start one column in with `──`"));
+    }
+    if !blank(&buf[(r.x, y)]) || !blank(&buf[(r.right() - 1, y)]) {
+        fail(r.x, y, &format!("(10) section title {name}: the title row's first or last column is not blank"));
+    }
+    if let Some(x) = (r.x..r.right()).find(|&x| sym(buf, x, y) == PILL_LEFT) {
+        if x != r.x + 3 {
+            fail(x, y, &format!("(10) section title {name}: the pill's left cap is not right after `──`"));
         }
     }
 }

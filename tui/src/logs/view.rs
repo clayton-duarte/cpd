@@ -194,6 +194,36 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     }
 }
 
+/// The layout test's sample (`layout_tests`): the popup drawn as the view draws it, with three Events; its title is rows 0 to 2.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    let events = (0..3)
+        .map(|id| Event {
+            id: id + 1,
+            at: format!("2026-01-03T00:00:{id:02}.000Z"),
+            kind: "plan-phase".into(),
+            context: None,
+            plan: None,
+            session: None,
+            job: None,
+            attempt: None,
+            text: format!("event {id}"),
+            data: serde_json::json!({}),
+        })
+        .collect();
+    let mut log = Log::new(events);
+    log.fit(height);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "logs title", kind: Kind::Rule, rect: Rect::new(0, 0, width, 3), exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;

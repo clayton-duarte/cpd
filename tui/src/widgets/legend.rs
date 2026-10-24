@@ -324,6 +324,23 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
     }
 }
 
+/// The layout test's sample (`layout_tests`): the legend drawn as the view draws it; its title is rows 0 to 2 (row 2 is the
+/// body's first gap).
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    // the title row is tall enough for the whole body: a scrolled legend writes its position over the title's rule
+    let height = if case == SectionCase::Title { height.max(size().1) } else { height };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw(f, f.area())).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "legend title", kind: Kind::Rule, rect: Rect::new(0, 0, width, 3), exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

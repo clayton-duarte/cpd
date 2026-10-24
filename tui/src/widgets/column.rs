@@ -354,6 +354,27 @@ pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
     f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::error())), last);
 }
 
+/// The layout test's sample (`layout_tests`): the column drawn as the view draws it, with no pull request; the `PRs` title is
+/// its rows 3 to 5, which are the sample (the machine's rows above keep their own indent, they are not a section title's).
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    use ratatui::buffer::Buffer;
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &[], &machine, 0, 0))).unwrap();
+    let pane = Rect::new(0, 0, width, 3);
+    let mut buf = Buffer::empty(pane);
+    for (y, x) in (0..3).flat_map(|y| (0..width).map(move |x| (y, x))) {
+        buf[(x, y)] = terminal.backend().buffer()[(x, y + 3)].clone();
+    }
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "PRs title", kind: Kind::Rule, rect: pane, exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf, container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::read::PrState;
