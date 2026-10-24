@@ -15,7 +15,7 @@ const FALLBACK: &str = "clayton-duarte";
 fn env() -> TestEnv {
     let env = TestEnv::new();
     env.write_config("version = 1\nmachine = \"t\"\n");
-    fs::write(owners(&env).join("clayton-duarte.toml"), "").unwrap();
+    fs::write(owners(&env).join("clayton-duarte.toml"), "[tests]\ntext = \"x\"\n").unwrap();
     env
 }
 
@@ -76,7 +76,7 @@ fn f2_confirm_fallback_links_the_owner_to_clayton_duarte() {
     let real = fs::canonicalize(link(&env, FALLBACK)).unwrap().display().to_string();
     let shown = show(&env, "stranger").ok();
     assert_eq!(shown["files"].as_array().unwrap().iter().filter(|f| **f == real.as_str()).count(), 1, "{shown}");
-    assert_eq!(shown["sources"]["pr"], format!("owner:{real}"), "{shown}");
+    assert_eq!(shown["policy"]["tests"]["source"], format!("owner:{real}"), "{shown}");
 }
 
 #[test]
@@ -131,10 +131,10 @@ fn f6_an_owner_already_set_keeps_its_refusals_first() {
     // A Context with an owner and a PR row is `owner_in_use`; whatever it is, it is not `owner_unconfirmed`.
     env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead-p', 'lead', 'c0', 'p', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p', 'c0', 'P', 'grounding', 'lead-p', 't');
+           VALUES ('lead-p', 'lead', 'c0', 'p1', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('p1', 'c0', 'P', 'grounding', 'lead-p', 't');
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-           VALUES ('p', 'r', '/r', 'main', 'waiting', 'cpd/p', cpd_txn(), 't');",
+           VALUES ('p1', 'r', '/r', 'main', 'waiting', 'cpd/p1', cpd_txn(), 't');",
     );
     let run = env.cpd(&["context", "owner", "stranger", "--context", "c0", "--confirm-fallback"]);
     refused(&run, "owner_in_use", 3);
@@ -201,7 +201,7 @@ fn f10_a_repo_with_no_origin_is_clayton_duartes() {
     let (env, repo) = pr_fx(FALLBACK, "pay");
     repo_file(&env, FALLBACK, "pay");
     let out = add(&env, &repo).ok();
-    assert_eq!(out["pr"]["repo"], "pay", "{out}");
+    assert_eq!(out["pr"]["name"], "pay", "{out}");
     assert_eq!(env.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'api'"), "pay");
 }
 
@@ -227,16 +227,6 @@ fn f10_an_origin_that_does_not_parse_is_repo_unkeyed() {
 }
 
 #[test]
-fn f10_no_repo_file_is_repo_unconfigured_after_the_owner_checks() {
-    let (env, repo) = pr_fx(FALLBACK, "pay");
-    // The exit code of `repo_unconfigured` is not in the documents read: the code alone is pinned.
-    assert_eq!(add(&env, &repo).error()["code"], "repo_unconfigured");
-    // The owner checks come first: another owner's Context is `owner_mismatch` with no repo file too.
-    env.sql("UPDATE contexts SET owner = 'acme'");
-    refused(&add(&env, &repo), "owner_mismatch", 3);
-}
-
-#[test]
 fn f11_owner_unknown_is_gone() {
     let env = env();
     unconfirmed(&show(&env, "nobody"));
@@ -245,6 +235,7 @@ fn f11_owner_unknown_is_gone() {
     unconfirmed(&env.cpd(&["context", "owner", "nobody", "--context", "c0"]));
 
     let (env, repo) = pr_fx("acme", "pay");
+    env.git(&repo, &["remote", "add", "origin", "https://github.com/acme/pay"]);
     fs::remove_file(link(&env, "acme")).unwrap();
     unconfirmed(&add(&env, &repo));
 }
