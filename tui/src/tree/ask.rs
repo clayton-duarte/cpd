@@ -32,6 +32,18 @@ pub enum Ask {
     NamedPlan { context: ContextId, label: String },
 }
 
+/// The last row of the owner select: the owner is typed in an input, not among the known ones.
+pub(crate) const ANOTHER_OWNER: &str = "Another owner…";
+
+/// The label of the confirm popup's yes button for an unknown owner.
+pub(crate) const USE_FALLBACK: &str = "Use clayton-duarte's policy";
+
+/// The check of the typed owner login: the login lowercased, or why it is refused (a GitHub login, 1-39 characters).
+/// Stub: the owner input's validator.
+pub(crate) fn check_login(_text: &str) -> Result<String, String> {
+    todo!("validate a GitHub login")
+}
+
 /// The refusal of a title no id can be derived from.
 const NO_ID: &str = "A title needs at least two letters or digits, the first a letter, to make an id.";
 
@@ -157,7 +169,10 @@ impl Question {
                     Step::Run(action) => Ok(Some(action)),
                     Step::Owner { id, title: name, owners } => {
                         let owner = dialogs.select(title, "Owner:", &owners).map_err(failed)?;
-                        Ok(owner.map(|owner| Action::NewContext { id, title: name, owner }))
+                        if owner.as_deref() == Some(ANOTHER_OWNER) {
+                            todo!("ask the login in an input, then confirm an unknown one")
+                        }
+                        Ok(owner.map(|owner| Action::NewContext { id, title: name, owner, confirm_fallback: false }))
                     }
                 }
             }
@@ -294,7 +309,7 @@ mod tests {
     #[test]
     fn new_context_derives_its_id_from_the_title_against_the_taken_ones() {
         let run = |ids: &[&str]| input(Ask::NewContext { taken: taken(ids), owners: vec!["o".into()] }, "").ask(&Stub::typing("Building cpd!"));
-        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into() }));
+        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into(), confirm_fallback: false }));
         assert_eq!(run(&[]), new("building-cpd"));
         assert_eq!(run(&["building-cpd"]), new("building-cpd-2"));
         assert_eq!(run(&["building-cpd", "building-cpd-2"]), new("building-cpd-3"));

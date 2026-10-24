@@ -51,7 +51,7 @@ fn question(owners: &[&str]) -> Question {
 }
 
 fn new_context(id: &str, title: &str, owner: &str) -> Action {
-    Action::NewContext { id: ContextId::parse(id).unwrap(), title: title.into(), owner: owner.into() }
+    Action::NewContext { id: ContextId::parse(id).unwrap(), title: title.into(), owner: owner.into(), confirm_fallback: false }
 }
 
 #[test]
