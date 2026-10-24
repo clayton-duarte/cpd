@@ -16,6 +16,8 @@
 //! - the colours and icons are [`crate::palette`]'s.
 
 pub(crate) mod column;
+#[cfg(test)]
+mod kinds_tests;
 mod host;
 pub mod legend;
 
