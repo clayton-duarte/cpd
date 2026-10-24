@@ -176,13 +176,10 @@ impl Fx {
         self.env.cpd_home().join(format!("run/pay/logs/lead-{key}.pre-start.log")).display().to_string()
     }
 
-    /// Commits `.config/wt.toml` with `pre-start = <command>` to `repo`'s `main` and pushes it.
+    /// Sets `pre-start = <command>` in the `[hooks]` of `repo`'s policy file.
     fn pre_start(&self, repo: &Repo, command: &str) {
-        fs::create_dir_all(repo.path.join(".config")).unwrap();
-        fs::write(repo.path.join(".config/wt.toml"), format!("pre-start = \"{command}\"\n")).unwrap();
-        self.env.git(&repo.path, &["add", "-A"]);
-        self.env.git(&repo.path, &["commit", "-q", "-m", "pre-start"]);
-        self.env.git(&repo.path, &["push", "-q", "origin", "main"]);
+        let name = repo.path.file_name().unwrap().to_str().unwrap();
+        self.env.repo_policy("acme", name, &format!("[hooks]\npre-start = \"{command}\"\n"));
     }
 
     /// Lands a commit on the remote `main` through a second clone, so `repo` has not fetched it.

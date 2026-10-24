@@ -1,5 +1,5 @@
 //! The checks of the `test` and `impl` kinds at `attempt submit` (contract §7.7, commands.md §6.1): the red-test guard,
-//! and the repo's `[tests]` commands (`build`, `list`, `run`) run against the Job's named tests.
+//! and the repo's `[test-commands]` (`build`, `list`, `run`) run against the Job's named tests.
 
 use std::path::Path;
 use std::time::Duration;
@@ -7,10 +7,11 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::Env;
-use crate::config::RepoTests;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation};
 use crate::git::hooks::{Log, run_command};
+use crate::config::RepoTests;
+use crate::policy::Policy;
 use crate::ids::{AttemptId, PlanId};
 use crate::job::guard;
 use crate::plan::jobs::{self, Job};
@@ -56,12 +57,12 @@ pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, 
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
-        "The repo's .config/cpd.toml has no table [tests], so the tests of this Job cannot be checked. The Lead adds it to the Lead Branch; a PR with no behaviour is made with --shape docs or --shape config.",
+        "The repo's policy file has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to $CPD_HOME/policy/repos/<owner>/<name>.toml; a PR with no behaviour is made with --shape docs or --shape config.",
     )
     .with("job", job)
 }
 
-/// What a `[tests]` command ended as, when it did not exit as the check wants.
+/// What a `[test-commands]` command ended as, when it did not exit as the check wants.
 struct Ran {
     outcome: HookOutcome,
     tail: Option<String>,
@@ -70,7 +71,7 @@ struct Ran {
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
 /// `build`, the optional `list` and the `run` of the Job's named tests. HEAD is `sha`, the worktree clean.
-pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, root: &Path, lead: &str, sha: &str) -> Result<(), CpdError> {
+pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, policy: &Policy, root: &Path, lead: &str, sha: &str) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
     let tests = if job.kind == "impl" { guard::of(&all, &job).tests } else { guard::own(&job).0 };
     if job.kind == "test" {
@@ -89,7 +90,7 @@ pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, roo
             .with("paths", json!(missing)));
         }
     }
-    let Some(commands) = git::repo_tests(root, lead)? else { return Err(unconfigured(&job.key)) };
+    let Some(commands) = policy.test_commands.clone() else { return Err(unconfigured(&job.key)) };
     if tests.is_empty() {
         // An `impl` Job's tests are its `test` Jobs': with none, `run` would be told no test and might run them all (hs-d338).
         return Err(CpdError::new(
@@ -134,7 +135,7 @@ fn run_tests(
         let HookOutcome::Error(why) = &ran.outcome else { return None };
         let mut e = refuse(
             ErrorCode::TestsError,
-            format!("The repo's [tests] `{what}` command could not be judged: {why}. Ask the Lead: cpd ask {id} \"<question>\"."),
+            format!("The repo's [test-commands] `{what}` command could not be judged: {why}. Ask the Lead: cpd ask {id} \"<question>\"."),
             ran,
             tests,
         )
@@ -154,7 +155,7 @@ fn run_tests(
     if let HookOutcome::Failed { exit } = build.outcome {
         return Err(refuse(
             ErrorCode::TestsBuildFailed,
-            format!("The repo's [tests] `build` failed (exit {exit}): the branch does not build. Fix it, commit, and submit again; the tail is in details.tail."),
+            format!("The repo's [test-commands] `build` failed (exit {exit}): the branch does not build. Fix it, commit, and submit again; the tail is in details.tail."),
             &build,
             tests,
         ));

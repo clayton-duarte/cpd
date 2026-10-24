@@ -41,3 +41,5 @@ mod policy_scopes;
 mod review_job;
 mod review;
 mod spec;
+mod repo_config;
+mod repo_cmds;

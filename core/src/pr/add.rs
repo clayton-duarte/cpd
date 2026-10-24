@@ -14,11 +14,10 @@ use serde_json::json;
 use super::{AddArgs, Env, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git;
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
-use crate::policy::{PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
+use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
@@ -373,7 +372,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
-    let name = key_repo(&mut env, &plan, &repo)?;
+    let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
+    let unconfigured = (args.shape == "tdd" && policy.test_commands.is_none()).then(|| tests_unconfigured(&repo.display().to_string(), &policy_file));
     let base = env.store.read(|conn| classify_base(conn, args.base.as_deref()))?;
     let wanted = Wanted {
         base: wanted_base(&repo, base)?,
@@ -385,7 +385,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         needs,
     };
 
-    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, true))? {
+    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, unconfigured.as_ref()))? {
         Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
@@ -394,7 +394,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                 move_legacy_branch(&plan, legacy)?;
             }
             no_branch_clash(&repo, &plan, &wanted.key)?;
-            env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, false)? {
+            env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, None)? {
                 Decision::Already { status, lead_branch, appended, base, base_pr, needs } => {
                     Ok((status, lead_branch, appended, base, base_pr, needs, true))
                 }
@@ -444,6 +444,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 /// (`owner_mismatch`), whose policy files resolve (`owner_unknown`, `policy_invalid`). Returns the
 /// repo's name. Shared with `pr edit --repo`; reads and writes nothing.
 pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<RepoName, CpdError> {
+    Ok(key_repo_policy(env, plan, repo)?.0)
+}
+
+/// [`key_repo`] with the repo's resolved policy and the path of its policy file.
+fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoName, PathBuf, Policy), CpdError> {
     let (context, owner): (String, Option<String>) = env.store.read(|conn| {
         Ok(conn.query_row("SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1", [plan.as_str()], |r| {
             Ok((r.get(0)?, r.get(1)?))
@@ -457,8 +462,9 @@ pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<Repo
     if repo_owner != owner {
         return Err(owner_mismatch(&owner, &repo_owner));
     }
-    resolve(&env.home, &env.config.host, &PolicyKey::Repo(owner, name.clone()))?;
-    Ok(name)
+    let file = env.home.root().join("policy/repos").join(owner.as_str()).join(format!("{name}.toml"));
+    let policy = resolve(&env.home, &env.config.host, &PolicyKey::Repo(owner, name.clone()))?.policy;
+    Ok((name, file, policy))
 }
 
 /// `pr add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
@@ -473,8 +479,8 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     Ok(phase)
 }
 
-/// `read_tests`: the first decision reads the repo's `[tests]` (git, outside the write); the one inside the write transaction does not.
-fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -> Result<Decision, CpdError> {
+/// `unconfigured`: the refusal of a `tdd` PR whose repo policy has no `[test-commands]`; the first decision checks it, the one inside the write transaction does not.
+fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Option<&CpdError>) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
     if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
@@ -512,47 +518,24 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
         None => Vec::new(),
     };
     let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
-    if read_tests && wanted.shape == "tdd" {
-        require_tests_table(conn, plan, wanted, &resolved.base)?;
+    if let Some(error) = unconfigured {
+        return Err(error.clone());
     }
     check_template_keys_free(conn, plan, wanted)?;
     Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
 }
 
-/// A `tdd` PR needs the repo's `[tests]` (contract §7.7), read from `origin/<base>` (`<base>` with no `origin`): `tests_unconfigured`;
-/// a table that is not as documented is `config_invalid`. A stacked PR's base is its base PR's Lead Branch, which may not be on the
-/// remote yet: the table is then read from the base the stack lands on, followed through the base PRs.
-fn require_tests_table(conn: &Connection, plan: &PlanId, wanted: &Wanted, base: &str) -> Result<(), CpdError> {
-    let repo = Path::new(&wanted.repo);
-    let known = known_prs(conn, plan)?;
-    let mut base = base.to_owned();
-    let mut steps = 0;
-    let at = loop {
-        let at = git::tamper::base_ref(repo, &base)?;
-        if git::run::run(repo, &["rev-parse", "--verify", "--quiet", &format!("{at}^{{commit}}")])?.code == 0 {
-            break at;
-        }
-        steps += 1;
-        match known.iter().find(|p| p.repo == wanted.repo && p.lead_branch == base) {
-            Some(parent) if steps <= known.len() => base = parent.base.clone(),
-            _ => {
-                return Err(CpdError::new(ErrorCode::BaseNotFound, format!("The base {base} is not a branch of {}.", wanted.repo))
-                    .with("base", base));
-            }
-        }
-    };
-    if git::repo_tests(repo, &at)?.is_some() {
-        return Ok(());
-    }
-    Err(CpdError::new(
+/// `tests_unconfigured` (contract §7.7): a `tdd` PR needs the repo's policy file (`file`) to have `[test-commands]`.
+fn tests_unconfigured(repo: &str, file: &Path) -> CpdError {
+    CpdError::new(
         ErrorCode::TestsUnconfigured,
         format!(
-            "{} has no table [tests] in .config/cpd.toml on {at}, and a tdd PR needs it to check its test and impl Jobs. Add --shape docs or --shape config for a PR with no behaviour, or ask the Lead to commit the table (contract §7.7).",
-            wanted.repo
+            "{repo} has no [test-commands] in its policy file {}, and a tdd PR needs it to check its test and impl Jobs. Add --shape docs or --shape config for a PR with no behaviour, or ask the Lead to add the table (contract §7.7).",
+            file.display()
         ),
     )
-    .with("repo", wanted.repo.as_str())
-    .with("base", at))
+    .with("repo", repo)
+    .with("file", file.display().to_string())
 }
 
 /// None of the Job keys the shape lays out exists in the Plan (`job_key_exists`, `details.jobs`, §9.4).

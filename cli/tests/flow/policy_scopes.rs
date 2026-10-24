@@ -18,7 +18,7 @@ struct Fx {
 }
 
 impl Fx {
-    /// Machine `pro`, host `mac-pro`; owner `acme` with an empty file.
+    /// Machine `pro`, host `mac-pro`; owner `acme` and repo `acme/r` with an empty file each (a repo file is required).
     fn new() -> Fx {
         Fx::with_config("version = 1\nmachine = \"pro\"\nhost = \"mac-pro\"\n")
     }
@@ -28,6 +28,7 @@ impl Fx {
         env.write_config(config);
         let fx = Fx { env };
         fx.write("owners/acme.toml", OWNER_EMPTY);
+        fx.write("repos/acme/r.toml", "");
         fx
     }
 
@@ -208,9 +209,12 @@ fn files_lists_machine_then_owner_then_repo() {
 #[test]
 fn files_leaves_out_absent_files() {
     let fx = Fx::new();
-    assert_eq!(fx.repo()["files"], json!([fx.real("owners/acme.toml")]));
-    fx.write("repos/acme/r.toml", "");
     assert_eq!(fx.repo()["files"], json!([fx.real("owners/acme.toml"), fx.real("repos/acme/r.toml")]));
+    fx.write("machines/mac-pro.toml", "");
+    assert_eq!(
+        fx.repo()["files"],
+        json!([fx.real("machines/mac-pro.toml"), fx.real("owners/acme.toml"), fx.real("repos/acme/r.toml")])
+    );
 }
 
 // ------------------------------------------------------------ i7: exposure

@@ -86,14 +86,16 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                       VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
                     repo = fx.repo.display(),
                     lead = fx.lead.display()
                 ),
             )
         })
         .unwrap();
+    // The PR's policy is its repo's policy file, named as the PR.
+    fx.env.repo_policy("acme", "repo", "");
     (fx, origin)
 }
 
@@ -134,7 +136,7 @@ fn plan_without_prs(config_extra: &str) -> Fx {
         .write("fixture", |tx| {
             exec(
                 tx,
-                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+                "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
                  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
@@ -272,11 +274,13 @@ impl Fx {
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
         let prepared = prepare_lead_worktree(repo, &plan(), &path, &branch, "main", &setup).map_err(|f| f.error).unwrap();
         prepared.push().unwrap();
+        // The PR's policy is its repo's policy file, named as the PR.
+        self.env.repo_policy("acme", key, "");
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, 'main', 'dispatch', ?3, ?4, ?5, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, ?5, 't', 't')",
                     params![key, repo.to_str().unwrap(), branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())
@@ -294,11 +298,13 @@ impl Fx {
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
         let prepared = prepare_stacked_lead_worktree(repo, &plan(), &path, &branch, &base_pr.branch, &setup).map_err(|f| f.error).unwrap();
         prepared.push().unwrap();
+        // The PR's policy is its repo's policy file, named as the PR.
+        self.env.repo_policy("acme", key, "");
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, ?3, 'dispatch', ?4, ?5, ?6, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, ?6, 't', 't')",
                     params![key, repo.to_str().unwrap(), base_pr.branch, branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())
@@ -599,7 +605,7 @@ fn a_staged_edit_in_the_lead_worktree_is_kept_and_reported_stale() {
 fn tampered_when_the_diff_touches_a_protected_path() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
-    fx.commit(&worktree, ".config/wt.toml", "pre-merge = \"true\"\n");
+    fx.commit(&worktree, ".cpd/x", "x\n");
     fx.resubmit(&attempt, &worktree);
     let old = fx.lead_sha();
 
@@ -608,7 +614,7 @@ fn tampered_when_the_diff_touches_a_protected_path() {
     assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
     assert_eq!(fx.lead_sha(), old);
     let data = fx.assert_failed(&attempt, "api", "tampered");
-    assert!(data["detail"].as_str().unwrap().contains(".config/wt.toml"));
+    assert!(data["detail"].as_str().unwrap().contains(".cpd/x"));
 }
 
 #[test]
@@ -653,9 +659,9 @@ fn a_commit_after_submit_ends_tampered_and_merges_nothing() {
 }
 
 #[test]
-fn tampered_also_by_the_repos_own_protected_list_on_the_lead_branch() {
+fn tampered_also_by_the_protected_paths_of_the_prs_policy() {
     let fx = fx();
-    fx.advance_lead(".config/cpd.toml", "protected = [\"verify.sh\"]\n");
+    fx.env.repo_policy("acme", "repo", "[protected]\npaths = [\"verify.sh\"]\n");
     let (attempt, _) = fx.submitted("api", "verify.sh", "exit 0\n");
 
     let result = fx.merge(&attempt);
@@ -687,7 +693,7 @@ fn merge_the_base(fx: &Fx, attempt: &AttemptId, worktree: &Path) -> String {
 
 #[test]
 fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
-    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+    for path in [".cpd/x"] {
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -703,7 +709,7 @@ fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
 
 #[test]
 fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampered() {
-    for path in [".config/wt.toml", ".config/cpd.toml"] {
+    for path in [".cpd/x"] {
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -722,7 +728,7 @@ fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampere
 
 #[test]
 fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
-    for path in [".config/wt.toml", ".config/cpd.toml"] {
+    for path in [".cpd/x"] {
         let (fx, _) = fx_origin();
         base_edits(&fx, path, Some("protected = []\n"));
         fx.git(&fx.lead, &["merge", "-q", "--ff-only", "origin/main"]);
@@ -762,7 +768,7 @@ fn advance_and_push(fx: &Fx, pr: &Pr, path: &str, content: &str) {
 
 #[test]
 fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged() {
-    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+    for path in [".cpd/x"] {
         let (fx, base, web, attempt, worktree) = stacked_job();
         // The base PR's Lead Branch moves on, a protected file with it, and is pushed.
         advance_and_push(&fx, &base, path, "protected = [\"verify.sh\"]\n");
@@ -778,7 +784,7 @@ fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged()
 
 #[test]
 fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes_without_tampering() {
-    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+    for path in [".cpd/x"] {
         let (fx, _, web, attempt, worktree) = stacked_job();
         // `main`, the branch the stack lands on, changes a protected file the base PR's branch does not have yet.
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
@@ -794,7 +800,7 @@ fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes
 
 #[test]
 fn a_stacked_prs_job_that_changes_a_protected_file_to_anything_else_is_tampered() {
-    for path in [".config/wt.toml", ".config/cpd.toml"] {
+    for path in [".cpd/x"] {
         let (fx, base, web, attempt, worktree) = stacked_job();
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
         advance_and_push(&fx, &base, path, "protected = [\"base-pr\"]\n");
@@ -818,7 +824,7 @@ fn a_job_of_a_pr_that_is_not_stacked_gets_no_extra_base_for_a_protected_file_onl
     let one = fx.add_pr("one", &fx.repo, Some(origin.clone()));
     let other = fx.add_pr("other", &fx.repo, Some(origin));
     let (attempt, worktree) = fx.submitted_on(&one, "api", "api.txt", "api\n");
-    advance_and_push(&fx, &other, ".config/wt.toml", "pre-start = \"other\"\n");
+    advance_and_push(&fx, &other, ".cpd/x", "other\n");
     merge_ref(&fx, &attempt, &worktree, "origin/cpd/pay/other");
 
     let result = fx.merge(&attempt);
@@ -1343,10 +1349,10 @@ fn the_cas_and_the_dirty_check_are_those_of_the_prs_own_branch_and_worktree() {
 }
 
 #[test]
-fn the_tamper_list_is_that_of_the_prs_own_lead_branch() {
+fn the_tamper_list_is_that_of_the_prs_own_policy() {
     let (fx, schema, web) = two_prs(true, false);
-    // Only the schema PR's Lead Branch protects verify.sh.
-    fx.advance(&schema, ".config/cpd.toml", "protected = [\"verify.sh\"]\n");
+    // Only the schema PR's policy protects verify.sh.
+    fx.env.repo_policy("acme", "schema", "[protected]\npaths = [\"verify.sh\"]\n");
     let (api, _) = fx.submitted_on(&schema, "api", "verify.sh", "exit 0\n");
 
     let result = fx.merge(&api);

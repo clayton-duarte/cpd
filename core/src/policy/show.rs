@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
 use super::resolve::{machine_file, owners_dir, repos_dir};
-use super::domain::{FEEDBACK_CHECKS, GATE};
+use super::domain::{BUILD, FEEDBACK_CHECKS, GATE, LIST, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -177,6 +177,19 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
             (GATE, value(&resolved.policy.pr.gate)),
             (FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks)),
         ],
+        Domain::Hooks => {
+            let h = &resolved.policy.hooks;
+            vec![(PRE_START, value(&h.pre_start)), (PRE_COMMIT, value(&h.pre_commit)), (PRE_MERGE, value(&h.pre_merge))]
+        }
+        Domain::TestCommands => {
+            let t = resolved.policy.test_commands.as_ref();
+            vec![
+                (BUILD, value(&t.map(|t| &t.build))),
+                (RUN, value(&t.map(|t| &t.run))),
+                (LIST, value(&t.and_then(|t| t.list.as_ref()))),
+            ]
+        }
+        Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
         _ => Vec::new(),
     };
     let mut keys = Map::new();
