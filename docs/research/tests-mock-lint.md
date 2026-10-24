@@ -23,7 +23,7 @@ Decision for the User, found by the audit: the fmt diff is 104k lines because th
 | core | 183 of 189 | 23,175 | 4,191 | 27,366 |
 | engine | 30 of 31 | 2,146 | 28 | 2,174 |
 | tui | 110 of 113 | 16,510 | 2,975 | 19,485 |
-| cli | 166 of 163 + `tests/` helpers (166 files differ) | 1,058 | 53,662 | 54,720 |
+| cli | 166 (total `.rs` count not taken per crate) | 1,058 | 53,662 | 54,720 |
 | total | 489 | 42,889 | 60,856 | 103,745 |
 
 - "Changed lines" is the `+` and `-` lines of `fmt --check` output. Plus is about 4x minus (86k against 18k): rustfmt breaks long lines. Sample: `cli/build.rs:5` a 120-character chain becomes 5 lines. Test files are split by name; the test modules inside product files count as product.
