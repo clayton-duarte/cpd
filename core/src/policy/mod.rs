@@ -8,6 +8,7 @@
 //! - [`show`]: `cpd policy show`.
 
 mod domain;
+mod exposure;
 mod load;
 mod origin;
 mod resolve;
