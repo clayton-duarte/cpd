@@ -344,6 +344,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::section;
     use crate::read::Kind;
 
     static CAP_L: &str = "\u{e0b6}";
