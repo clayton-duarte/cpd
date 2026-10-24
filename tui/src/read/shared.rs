@@ -77,11 +77,19 @@ string_enum! {
 }
 
 impl AttemptStatus {
-    /// Landing (yellow): checking or merging. Stub: incomplete on purpose.
+    /// Landing (yellow): checking or merging.
     pub fn is_landing(self) -> bool {
-        matches!(self, AttemptStatus::Merging)
+        matches!(self, AttemptStatus::Checking | AttemptStatus::Merging)
     }
 }
+
+/// The ONE derivation of an Attempt's shown status, over an `attempts` row aliased `a` (hs-d604, hs-d605): a `running`
+/// Attempt whose latest `attempt-status` Event with a `check` field says `start` is in an open check span and shows
+/// `checking` (derived, never stored); every other Attempt shows its stored status. The lookup runs only for a
+/// `running` Attempt, on the `events_plan` index.
+pub(super) const SHOWN_STATUS: &str = "CASE WHEN a.status = 'running' AND (SELECT json_extract(e.data, '$.check')
+  FROM events e WHERE e.plan = a.plan AND e.attempt = a.id AND e.kind = 'attempt-status'
+   AND json_extract(e.data, '$.check') IS NOT NULL ORDER BY e.id DESC LIMIT 1) = 'start' THEN 'checking' ELSE a.status END";
 
 string_enum! {
     /// How an ended Attempt ended.
@@ -117,7 +125,7 @@ string_enum! {
     Place { Chat = "chat", Parked = "parked", Work = "work", None = "none" }
 }
 
-/// Jobs per status; a `running` Job whose Attempt is `merging` counts as `merging`.
+/// Jobs per status; a `running` Job whose Attempt is checking or merging (landing) counts as `merging`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct JobCounts {
     pub draft: usize,
@@ -329,10 +337,12 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
 
     let mut counts: BTreeMap<String, JobCounts> = BTreeMap::new();
     let mut stmt = conn.prepare(
-        "SELECT j.plan, j.status, count(*),
+        &format!(
+            "SELECT j.plan, j.status, count(*),
                 j.status = 'running' AND EXISTS (SELECT 1 FROM attempts a
-                  WHERE a.plan = j.plan AND a.job = j.key AND a.status = 'merging')
-           FROM jobs j WHERE ?1 IS NULL OR j.plan = ?1 GROUP BY j.plan, j.status, 4",
+                  WHERE a.plan = j.plan AND a.job = j.key AND {SHOWN_STATUS} IN ('checking', 'merging'))
+           FROM jobs j WHERE ?1 IS NULL OR j.plan = ?1 GROUP BY j.plan, j.status, 4"
+        ),
     )?;
     let mut rows = stmt.query([&only])?;
     while let Some(r) = rows.next()? {
