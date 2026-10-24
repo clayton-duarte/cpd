@@ -1446,10 +1446,10 @@ mod tests {
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[5], format!(" ├─{IDLE} shi┌─────────┐"), "{rows:?}");
+        assert_eq!(rows[5], format!(" ├─{IDLE} shi╭─────────╮"), "{rows:?}");
         assert_eq!(rows[6], format!(" ╰─{NEEDS_YOU} shi│ Open    │"));
         assert_eq!(rows[7], "        │ Rename… │", "drawn over the tree, an empty row too: {rows:?}");
-        assert_eq!(rows[12], "        └─────────┘", "over the empty row below the tree");
+        assert_eq!(rows[12], "        ╰─────────╯", "over the empty row below the tree");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1462,7 +1462,7 @@ mod tests {
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
-        assert_eq!((rows[13].ends_with(&box_row('┌', &"─".repeat(14), '┐')[27..]), rows[15].clone()), (true, box_row('└', &"─".repeat(14), '┘')));
+        assert_eq!((rows[13].ends_with(&box_row('╭', &"─".repeat(14), '╮')[27..]), rows[15].clone()), (true, box_row('╰', &"─".repeat(14), '╯')));
         // the menu is drawn over the Inbox title and its closing row, which show to its left
         assert!(rows[13].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "{rows:?}");
         assert!(rows[14].starts_with(&format!(" ╰{} up to date", crate::fold::TERMINATOR)) && rows[14].ends_with("│ New Context… │"), "{rows:?}");

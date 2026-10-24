@@ -19,7 +19,6 @@ const WALL_GLYPHS: [&str; 7] = ["╭", "╮", "╰", "╯", "│", "─", "├"]
 
 /// How a box is walled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum Kind {
     /// Rounded walls all round.
     Full,
@@ -29,7 +28,6 @@ pub(crate) enum Kind {
 
 /// Which assertion a named exemption lifts on its row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum Rule {
     /// The cell after the wall is blank (the rows whose glyph sits against the rail by record: hs-d337, hs-d339, hs-d484).
     Padding,
@@ -43,6 +41,7 @@ pub(crate) enum Rule {
 /// A row that keeps a recorded design, by name: the name carries the record id.
 #[derive(Clone, Debug)]
 pub(crate) struct Exempt {
+    #[allow(dead_code)] // the record id names the row for the reader of the sample; no check reads it
     pub name: &'static str,
     /// The row in the sample's buffer.
     pub row: u16,
