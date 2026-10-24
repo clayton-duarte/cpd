@@ -43,7 +43,7 @@ pub fn run(inv: &Invocation) -> Outcome {
 const KNOWN: &[&str] = &[
     "new-session", "has-session", "kill-server", "list-sessions", "new-window", "split-window", "list-windows",
     "list-panes", "rename-window", "swap-pane", "set", "show", "set-environment", "show-environment", "display",
-    "display-message",
+    "display-message", "select-pane", "kill-pane",
 ];
 
 struct Cx<'a> {
@@ -130,6 +130,8 @@ fn dispatch(cx: &mut Cx, c: &[String]) -> R<()> {
         "set-environment" => set_environment(cx, args),
         "show-environment" => show_environment(cx, args),
         "display" | "display-message" => display_message(cx, args),
+        "select-pane" => select_pane(cx, args),
+        "kill-pane" => kill_pane(cx, args),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -203,7 +205,7 @@ fn variable(cx: &Cx, loc: Loc, name: &str) -> Option<String> {
         return pane.or(window).or_else(|| option_in(db, "session", loc.session, name)).or_else(|| option_in(db, "server", 0, name));
     }
     let pane_row = |col: &str| -> Option<i64> {
-        s(db, &format!("SELECT {col} FROM panes WHERE id = ?1"), [loc.pane?])
+        s::<Option<i64>>(db, &format!("SELECT {col} FROM panes WHERE id = ?1"), [loc.pane?])?
     };
     Some(match name {
         "session_id" => format!("${}", loc.session),
@@ -434,6 +436,42 @@ fn swap_pane(cx: &mut Cx, args: &[String]) -> R<()> {
             .execute("UPDATE windows SET cur_pane = CASE cur_pane WHEN ?1 THEN ?2 WHEN ?2 THEN ?1 ELSE cur_pane END", (a, b))
             .map_err(fail)?;
     }
+    Ok(())
+}
+
+/// Only what the tests of this Job need: make the pane current.
+fn select_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+    let o = Opts::parse("select-pane", args, "DdeLlMmRUZPT:t:")?;
+    let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
+    cx.db
+        .execute("UPDATE windows SET cur_pane = ?1 WHERE id = ?2", (loc.pane, loc.window))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Only what the tests of this Job need: remove the pane (and its window, then its session, when it was
+/// the last). No hook fires; ids are not reused.
+fn kill_pane(cx: &mut Cx, args: &[String]) -> R<()> {
+    let o = Opts::parse("kill-pane", args, "at:")?;
+    let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
+    let (session, window, pane) = (loc.session, loc.window.expect("window"), loc.pane.expect("pane"));
+    let (db, fail) = (cx.db, |e: rusqlite::Error| e.to_string());
+    db.execute("DELETE FROM panes WHERE id = ?1", [pane]).map_err(fail)?;
+    db.execute("DELETE FROM env WHERE scope = 'pane' AND owner = ?1", [pane]).map_err(fail)?;
+    db.execute("DELETE FROM options WHERE scope = 'pane' AND owner = ?1", [pane]).map_err(fail)?;
+    let left: Option<i64> = s(db, "SELECT id FROM panes WHERE window = ?1 ORDER BY pos LIMIT 1", [window]);
+    if left.is_some() {
+        db.execute("UPDATE windows SET cur_pane = ?1 WHERE id = ?2 AND cur_pane = ?3", (left, window, pane)).map_err(fail)?;
+        return Ok(());
+    }
+    db.execute("DELETE FROM windows WHERE id = ?1", [window]).map_err(fail)?;
+    db.execute("DELETE FROM options WHERE scope = 'window' AND owner = ?1", [window]).map_err(fail)?;
+    let next: Option<i64> = s::<Option<i64>>(db, "SELECT max(id) FROM windows WHERE session = ?1", [session]).flatten();
+    if next.is_some() {
+        db.execute("UPDATE sessions SET cur_window = ?1 WHERE id = ?2 AND cur_window = ?3", (next, session, window)).map_err(fail)?;
+        return Ok(());
+    }
+    db.execute("DELETE FROM sessions WHERE id = ?1", [session]).map_err(fail)?;
     Ok(())
 }
 
