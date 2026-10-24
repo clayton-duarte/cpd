@@ -255,7 +255,7 @@ Where a Domain's value is set: cpd's default, a machine file, an owner file, or 
 _Avoid_: layer, level, override file
 
 **Repo policy file** (new):
-The repo scope of a Policy, `$CPD_HOME/policy/repos/<owner>/<name>.toml`: required for every repo cpd works on (`repo_unconfigured` when missing; an empty file means nothing to configure), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
+The repo scope of a Policy, `$CPD_HOME/policy/repos/<owner>/<name>.toml`: optional (a repo without one has no repo scope and inherits default, machine and owner; an empty file means the same), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
 
 **Host** (new, §8.2):
 The name of one machine from its ssh config `Host`, such as `homeserver`, `mac-pro` or `mac-air`. Named in config.toml §8.2 and defaults to the value of `machine` (contract §2.1). It uniquely identifies the machine's policy file `policy/machines/<host>.toml` and is never an id prefix or a Context field.
