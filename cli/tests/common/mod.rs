@@ -1045,6 +1045,16 @@ impl TestEnv {
         output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")
     }
 
+    /// Makes `tmux` on this env's PATH the fake tmux: a symlink `bin/tmux` to the built `fake-tmux`. Stub.
+    pub fn fake_tmux(&self) {
+        todo!("TestEnv::fake_tmux")
+    }
+
+    /// The fake's state of this env's socket (`None` while no server exists). Stub.
+    pub fn tmux_state(&self) -> Option<cpd::fakes::tmux::State> {
+        todo!("TestEnv::tmux_state")
+    }
+
     /// Installs `bin/<name>`: a shell script that records its argv (see
     /// [`TestEnv::calls`]) and then runs `body` (`sh` code; `"$@"` are its arguments).
     ///

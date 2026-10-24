@@ -9,6 +9,11 @@ publish.workspace = true
 name = "cpd"
 path = "src/main.rs"
 
+[[bin]]
+name = "fake-tmux"
+path = "src/bin/fake-tmux.rs"
+required-features = ["fakes"]
+
 [features]
 fakes = []
 
