@@ -935,27 +935,19 @@ mod tests {
                  VALUES ('{session}', 'pn-0a1b2c', '{kind}', 'plan.md', {port}, '{T}', {closed_at}, {ended});"
             ));
         }
-
-        fn plan_port_file(&self, port: &str) {
-            let path = self.home.plannotator_port(&PlanId::parse("pay").unwrap());
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, port).unwrap();
-        }
     }
 
     #[test]
-    fn a_plan_review_has_no_url_without_an_open_plan_row_even_with_a_port_file_hs_d502() {
+    fn a_plan_review_has_no_url_without_an_open_plan_row_hs_d502() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
-        f.plan_port_file("20000\n");
-        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "a port file alone is no open page");
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "no open plan row, no page");
     }
 
     #[test]
     fn a_plan_review_carries_the_review_hosts_page_on_the_open_plan_rows_port_hs_d502() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
-        f.plan_port_file("20000\n");
         f.tracked_kind("l-pay", "plan", 20007, false);
         unsafe { std::env::set_var(URL_HOST, "review.example") };
         let url = one(f.of(Kind::PlanReview)).url;
@@ -967,13 +959,11 @@ mod tests {
     fn a_closed_plan_row_or_an_open_annotate_row_gives_a_plan_review_no_url_hs_d502() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
-        f.plan_port_file("20000\n");
         f.tracked_kind("l-pay", "plan", 20007, true);
         assert_eq!(one(f.of(Kind::PlanReview)).url, None, "closed plan row");
         // plannotator_reviews is append-only: case 2 gets a fresh fixture
         let mut f = fixture("plan");
         f.review("r1", "pending");
-        f.plan_port_file("20000\n");
         f.tracked_kind("l-pay", "annotate", 20008, false);
         assert_eq!(one(f.of(Kind::PlanReview)).url, None, "open annotate row");
     }

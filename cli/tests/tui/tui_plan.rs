@@ -73,9 +73,10 @@ fn env() -> TestEnv {
     env
 }
 
-/// Whether the styled screen has the blue block of a selection (hs-d534, §6.1.1): background 4, as tmux prints it.
+/// Whether the styled screen has the blue block of a selection (hs-d534, hs-d594, §6.1.1): colour 4, inverted, so its caps are
+/// foreground 4 (the text is reversed, tmux prints no background), as tmux prints it.
 fn is_selected(styled: &str) -> bool {
-    styled.contains("48;5;4m") || styled.contains(";44m") || styled.contains("[44m")
+    styled.contains("38;5;4m") || styled.contains("[34m") || styled.contains(";34m")
 }
 
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
@@ -414,12 +415,6 @@ fn plan_under_review(number: u32, status: &str) -> String {
         )
 }
 
-fn write_port(env: &TestEnv, text: &str) {
-    let dir = env.cpd_home().join("run").join("ship");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("plannotator-port"), text).unwrap();
-}
-
 /// The screen with its escapes (`capture-pane -e`); tmux 3.4 keeps the OSC 8 links in it.
 fn styled_screen(env: &TestEnv, pane: &str) -> String {
     tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
@@ -528,21 +523,18 @@ fn a_follow_that_fails_is_shown_below_the_chart() {
     assert!(screen.iter().any(|l| l.contains("Event cursor")) && title(&screen), "{screen:?}");
 }
 
-/// P1: a pending Plan review is no row: the screen is the one of a Plan without it, with or without the port file.
+/// P1: a pending Plan review is no row: the screen is the one of a Plan without it.
 #[test]
 fn a_pending_plan_review_draws_no_row_above_the_boxes() {
-    for port in [None, Some("19433\n")] {
+    {
         let env = env();
         env.sql(&plan_under_review(2, "pending"));
-        if let Some(port) = port {
-            write_port(&env, port);
-        }
         let pane = start_view(&env);
         let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
         let shown = screen.join("\n");
-        assert_eq!(screen[0], "", "{port:?}:\n{shown}");
-        assert_eq!(screen[1], format!(" ╭ repo · repo 󱦰 main · #7 open {CUE} ╮"), "{port:?}:\n{shown}");
-        assert!(screen.iter().all(|l| !l.contains("Plan review")), "{port:?}:\n{shown}");
+        assert_eq!(screen[0], "", "{shown}");
+        assert_eq!(screen[1], format!(" ╭ repo · repo 󱦰 main · #7 open {CUE} ╮"), "{shown}");
+        assert!(screen.iter().all(|l| !l.contains("Plan review")), "{shown}");
         assert!(!styled_screen(&env, &pane).contains("localhost"));
     }
 }

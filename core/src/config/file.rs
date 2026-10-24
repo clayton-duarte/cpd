@@ -85,15 +85,6 @@ impl PortRange {
             _ => Err(bad()),
         }
     }
-
-    pub fn contains(self, port: u16) -> bool {
-        (self.first..=self.last).contains(&port)
-    }
-
-    /// The ports, lowest first.
-    pub fn ports(self) -> impl Iterator<Item = u16> {
-        self.first..=self.last
-    }
 }
 
 impl std::fmt::Display for PortRange {
@@ -230,10 +221,7 @@ pub struct Tmux {
     pub work_session: String,
 }
 
-const DEFAULT_LEAD_PI_PACKAGES: [&str; 2] = [
-    "npm:@plannotator/pi-extension@0.28.17",
-    "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
-];
+const DEFAULT_LEAD_PI_PACKAGES: [&str; 1] = ["npm:@plannotator/pi-extension@0.28.17"];
 
 impl Config {
     /// Reads `$CPD_HOME/config.toml`. `config_missing` when there is no file,
@@ -311,7 +299,7 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19441 }, |v| {
+        let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19456 }, |v| {
             PortRange::parse(text_of(&v)?)
         })?;
 

@@ -360,7 +360,7 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others
     let style = |needle: &str| {
         let (x, y) = find(&buf, needle);
         let m = buf[(x, y)].modifier;
-        (buf[(x, y)].bg == palette::selected().bg.unwrap(), m.contains(Modifier::BOLD))
+        (buf[(x, y)].fg == palette::selected().fg.unwrap() && m.contains(Modifier::REVERSED), m.contains(Modifier::BOLD))
     };
     // Both lines of the active one: the blue block (background 4) and bold.
     assert_eq!(style("acme/repo#20"), (true, true));
@@ -378,7 +378,7 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others
     assert!(w.prs.iter().all(|p| !p.active));
     let buf = render(46, 25, &w);
     let at = find(&buf, "Mine to review");
-    assert_ne!(buf[at].bg, palette::selected().bg.unwrap());
+    assert!(!buf[at].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]
@@ -1248,7 +1248,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.bg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
+            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
         }
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
         assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");

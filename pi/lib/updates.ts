@@ -52,7 +52,7 @@ export function contextCursorFrom(registeredEvent: number, entries: readonly unk
 export type RecordEvent = { event: number; record: string; seq: number };
 
 /** The Event kinds of the Manager's `Plans:` digest (commands.md §15.7, B3-A5). */
-export const PLAN_KINDS = ["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "escalation", "plan-done"] as const;
+export const PLAN_KINDS = ["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "plan-done"] as const;
 
 /** A Plan Event as `events list` prints it, reduced to what the digest needs. */
 export type PlanEvent = { event: number; at: string; plan: string; text: string; kind?: string; data?: Record<string, unknown> };
@@ -207,7 +207,6 @@ const PLAN_COUNTS: readonly { kind: string; say: (events: PlanKindEvent[]) => st
   },
   { kind: "pr-merged", say: (e) => `${plural(e.length, "PR", "PRs")} merged` },
   { kind: "job-failed", say: (e) => `${plural(e.length, "Job", "Jobs")} failed` },
-  { kind: "escalation", say: (e) => plural(e.length, "Escalation", "Escalations") },
   { kind: "plan-done", say: () => "done" },
 ];
 

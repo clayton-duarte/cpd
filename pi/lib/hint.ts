@@ -1,5 +1,6 @@
 import { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
+import { meaning, pill } from "./pill.ts";
 
 // Contract §6.1.1 (the Dango palette): a hint is text only, colour 8, no background.
 // pi draws its jump hint as theme.bg("selectedBg", theme.fg("text", label)); a theme alone does not reach it.
@@ -9,9 +10,8 @@ const HINT = /^ ↓ Jump to latest message( · \S+)? $/;
 // theme.bg("selectedBg", ` ${header} `): plain text, one space at each end. Contract §6.1.1: a title is a read-only grey pill, no padding.
 // Recognised by that shape alone, not by call site: the other selectedBg callers (selectors, tab bar, widget list rows) always
 // pass ANSI-bearing text (fg/bold wrapped), which this never matches; a stack lookup would also be fragile across bundlers.
-// Grey 7 title pill in the order the red test and contract 6.1.1 give: text, then ESC[49m, then ESC[39m (the tool pill painter
-// of compact-tools-indices.ts resets in the other order, which its own tests pin; the two are equivalent on screen).
-const titlePill = (text: string): string => `\x1b[37m\uE0B6\x1b[39m\x1b[47m\x1b[30m${text}\x1b[49m\x1b[39m\x1b[37m\uE0B4\x1b[39m`;
+// Grey 7 title pill: caps in the colour, the text reversed (the terminal's background on the colour).
+const titlePill = (text: string): string => pill(meaning("plain"), text);
 const HEADER = /^ ([^\s\x1b](?:[^\x1b]*[^\s\x1b])?) $/;
 // eslint-disable-next-line no-control-regex
 const SGR = /\x1b\[[0-9;]*m/g;
@@ -30,11 +30,10 @@ const isTabBar = (c: unknown): c is TabBarLike => {
   return o?.constructor?.name === "TabBar" && Array.isArray(o.props?.tabs) && typeof o.props?.submit === "object" && o.props.submit !== null;
 };
 const SEPARATOR = "\x1b[90m─\x1b[39m";
-const pillN = (n: number, text: string): string => titlePill(text).replaceAll("\x1b[37m", `\x1b[3${n}m`).replace("\x1b[47m", `\x1b[4${n}m`);
 function tabLine(bar: TabBarLike, width: number): string[] {
   const { tabs, submit } = bar.props;
-  const pills = tabs.map((t) => pillN(t.active ? 4 : t.answered ? 2 : 7, t.label));
-  pills.push(pillN(submit.active ? 4 : submit.allAnswered ? 2 : 7, "Submit"));
+  const pills = tabs.map((t) => pill(meaning(t.active ? "focus" : t.answered ? "done" : "plain"), t.label));
+  pills.push(pill(meaning(submit.active ? "focus" : submit.allAnswered ? "done" : "plain"), "Submit"));
   return [truncateToWidth(` ${pills.join(SEPARATOR)}`, width, ""), ""];
 }
 
