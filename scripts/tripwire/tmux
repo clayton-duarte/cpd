@@ -1,2 +1,45 @@
 #!/bin/sh
-exit 99
+# The Gate's tripwire (docs/implementing.md, Tests, "The guard"): first `tmux` on PATH for the test run.
+# Execs the real program only when NEXTEST_BINARY_ID + NEXTEST_TEST_NAME match a line of the allowlist
+# (allow.txt for tmux, allow-<program>.txt for any other name): `<binary_id> <prefix>  # <tag>: <reason>`.
+# Otherwise logs to ${TMPDIR:-/tmp}/tripwire.log, says so on stderr and exits 127.
+prog=$(basename "$0")
+here=$(cd "$(dirname "$0")" && pwd)
+if [ "$prog" = tmux ]; then allow="$here/allow.txt"; else allow="$here/allow-$prog.txt"; fi
+id=${NEXTEST_BINARY_ID:-}
+name=${NEXTEST_TEST_NAME:-}
+
+allowed=
+if [ -n "$id" ] && [ -n "$name" ] && [ -f "$allow" ]; then
+  while read -r a_id a_prefix _; do
+    case $a_id in '' | '#'*) continue ;; esac
+    [ "$a_id" = "$id" ] || continue
+    case $name in "$a_prefix"*) allowed=1; break ;; esac
+  done <"$allow"
+fi
+
+if [ -z "$allowed" ]; then
+  line="tripwire: real $prog called by $id $name: $prog $*"
+  echo "$line" >&2
+  echo "$line" >>"${TMPDIR:-/tmp}/tripwire.log"
+  exit 127
+fi
+
+# The real program: PATH without this directory.
+rest=
+old_ifs=$IFS
+IFS=:
+for d in $PATH; do
+  [ -n "$d" ] || continue
+  if [ -d "$d" ] && [ "$(cd "$d" && pwd)" = "$here" ]; then continue; fi
+  rest="${rest:+$rest:}$d"
+done
+IFS=$old_ifs
+PATH=$rest
+export PATH
+real=$(command -v "$prog" 2>/dev/null) || real=
+if [ -z "$real" ]; then
+  echo "tripwire: no real $prog behind the tripwire" >&2
+  exit 127
+fi
+exec "$real" "$@"
