@@ -1788,3 +1788,36 @@ fn after_a_pr_cancel_the_plan_can_be_archived() {
     archive().ok();
     assert!(!fx.env.query::<String>("SELECT coalesce(archived_at, '') FROM plans WHERE id = 'pay-1'").is_empty());
 }
+
+#[test]
+fn owner_is_in_use_while_a_plan_has_a_pr_row() {
+    let fx = fx("plan");
+    fs::write(fx.env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    fx.add("api", &fx.pay, &[]).ok();
+    let owner = |fx: &Fx| fx.env.cpd(&["context", "owner", "other", "--context", "ctx"]);
+
+    let run = owner(&fx);
+    let error = crate::common::refused(&run, "owner_in_use", 3);
+    assert_eq!(error["details"]["context"], "ctx");
+    assert_eq!(error["details"]["owner"], "acme");
+    assert_eq!(error["details"]["prs"], json!(["pay-1/api"]));
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE owner = 'acme'"), 1);
+    assert_eq!(fx.events("context-owner").len(), 0);
+
+    let same = fx.env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    assert_eq!(same["already"], true);
+
+    // A cancelled row still blocks.
+    fx.pr(&["cancel", "api"]).ok();
+    crate::common::refused(&owner(&fx), "owner_in_use", 3);
+    assert_eq!(fx.events("context-owner").len(), 0);
+}
+
+#[test]
+fn a_null_owner_is_still_set_while_a_pr_row_exists() {
+    let fx = fx("plan");
+    fx.add("api", &fx.pay, &[]).ok();
+    fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");
+    let out = fx.env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    assert_eq!(out["context"], json!({"id": "ctx", "owner": "acme"}));
+}

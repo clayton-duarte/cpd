@@ -35,7 +35,7 @@ pub(super) fn list() -> Result<Output, CpdError> {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             contexts.push(json!({
-                "id": row.id, "title": row.title, "jira": row.jira, "archived_at": row.archived_at,
+                "id": row.id, "title": row.title, "owner": row.owner, "jira": row.jira, "archived_at": row.archived_at,
                 "records": records, "open_questions": open_questions, "plans": plans,
             }));
         }

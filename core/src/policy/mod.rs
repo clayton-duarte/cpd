@@ -130,11 +130,18 @@ pub fn owner_unset(context: &ContextId) -> CpdError {
         .with("context", context.as_str())
 }
 
-/// `owner_set` (exit 3): `context owner` on a Context that has an owner.
-pub fn owner_set(context: &ContextId, owner: &OwnerLogin) -> CpdError {
-    CpdError::new(ErrorCode::OwnerSet, format!("The Context {context} already has the owner {owner}."))
-        .with("context", context.as_str())
-        .with("owner", owner.as_str())
+/// `owner_in_use` (exit 3): `context owner` changing the owner of a Context whose Plans have PR rows.
+pub fn owner_in_use(context: &ContextId, owner: &OwnerLogin, prs: &[String]) -> CpdError {
+    CpdError::new(
+        ErrorCode::OwnerInUse,
+        format!(
+            "The Context {context} has the owner {owner} and its Plans have PR rows ({}): the owner of a Context cannot change once a PR row exists.",
+            prs.join(", ")
+        ),
+    )
+    .with("context", context.as_str())
+    .with("owner", owner.as_str())
+    .with("prs", prs)
 }
 
 
@@ -432,8 +439,9 @@ mod tests {
         assert_eq!(e.details()["context"], "ctx");
         assert!(e.details().get("next").is_none() && e.message().contains("cpd context owner <login> --context ctx"));
 
-        let e = owner_set(&ctx, &acme);
-        assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerSet, 3));
+        let e = owner_in_use(&ctx, &acme, &["p/a".to_string()]);
+        assert_eq!((e.code(), e.exit().code()), (ErrorCode::OwnerInUse, 3));
+        assert_eq!(e.details()["prs"], serde_json::json!(["p/a"]));
         assert_eq!(e.details()["context"], "ctx");
         assert_eq!(e.details()["owner"], "acme");
     }

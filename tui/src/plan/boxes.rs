@@ -23,7 +23,7 @@ use ratatui::{
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull, UpdateState};
+use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
@@ -89,38 +89,32 @@ fn live_needs(prs: &[PrNode], i: usize) -> Vec<usize> {
     prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != PrStatus::Cancelled)).collect()
 }
 
-/// A PR state's word.
-fn state_text(state: PrState) -> &'static str {
-    match state {
-        PrState::Open => "open",
-        PrState::Merged => "merged",
-        PrState::Closed => "closed",
-    }
-}
-
-/// The word and colour of a pull request's state in a title: `updating` for a conflict while its update Job is not ended
-/// (hs-d532; running or waiting colour), else `conflict` (waiting: every box's pull request is one a
-/// Plan owns, so its Lead fixes it, hs-d302) for an open one that conflicts, else
-/// its state in the palette's PR state colour; a `closed` one is waiting too, and red only when `asked`: its Plan's Lead
-/// has an open `dialog` item, it asks the User (audit Q4). The title and its link's width both use it.
-fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
-    match pull.state {
-        PrState::Open if pull.conflicting => match pull.update {
-            Some(UpdateState::Running) => palette::PR_UPDATING_RUNNING,
-            Some(UpdateState::Queued) => palette::PR_UPDATING_QUEUED,
-            None => palette::PR_CONFLICT_OWNED,
-        },
-        PrState::Closed if asked => palette::PR_CLOSED_ASKED,
-        PrState::Open => (state_text(PrState::Open), palette::pr_open(pull.clean)),
-        state => (state_text(state), palette::pr_state(state)),
-    }
+/// The word and colour a title shows: the conflict word when there is one, else the state word (`pr_look`). The title and
+/// its link's width both use it.
+fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
+    let look = pr_look(&PrFacts {
+        state: pull.state,
+        draft: pull.draft,
+        clean: pull.clean,
+        conflicting: pull.conflicting,
+        owned: true, // every box's pull request is one a Plan owns
+        update: pull.update,
+        asked,
+    });
+    look.conflict.unwrap_or(look.state)
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, muted. While the Plan's Lead
+/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
 /// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`.
+#[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
+    title_of(pr, asked, false, frame)
+}
+
+/// [`title`] for a Plan that has a failed Job (`plan_failed`): its working Lead's dot is the red loader.
+fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -131,10 +125,10 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
         Some(pull) => {
             // the title is a hit target (the link): clickable text and the bright pairs
             spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
-            let (word, meaning) = state_word(pull, asked);
+            let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::Working, frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -170,7 +164,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), needs_user.lead_working), frame))
         .collect();
-    let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
+    // the tree's rule: the Plan has a failed Job
+    let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, frame)).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
     let size: Vec<(u16, u16)> = charts
         .iter()
@@ -251,7 +247,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             // the title starts after the corner and ends with one space; the `󱆭` is the cell before it, and the link
             // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󱆭`
             let dot = if pull.lead_working { 2 } else { 0 };
-            let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16 + dot;
+            let len = format!("#{} {} {CUE}", pull.number, word(pull, false).0).chars().count() as u16 + dot;
             link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
         }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
@@ -344,7 +340,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
-    use crate::read::{JobStatus, PrStatus};
+    use crate::read::PrState;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
 
@@ -362,7 +358,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None, draft: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
