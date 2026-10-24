@@ -65,7 +65,7 @@ pub fn age_text(minutes: i64) -> String {
 }
 
 /// The age cell, [`AGE_WIDTH`] wide, right-aligned: muted, as is `quiet <age>` (hs-d534: no longer a yellow).
-fn age_cell(row: &PulseRow) -> Span<'static> {
+pub(crate) fn age_cell(row: &PulseRow) -> Span<'static> {
     let age = row.age_minutes.map(age_text);
     if row.quiet {
         let text = age.map_or("quiet".to_owned(), |a| format!("quiet {a}"));

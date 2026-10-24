@@ -26,6 +26,9 @@
 //! [`Store`]: cpd_core::store::Store
 //! [`Store::read`]: cpd_core::store::Store::read
 
+mod age;
+#[cfg(test)]
+mod age_tests;
 mod dot;
 mod flow;
 mod follow;
@@ -36,6 +39,7 @@ mod tree;
 mod widgets;
 mod worker;
 
+pub use age::age_text;
 pub use flow::{
     AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, UpdateState, WorkerRef, chat_slot, flow,
     plan_boxes,
