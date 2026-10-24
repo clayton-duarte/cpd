@@ -1,8 +1,6 @@
 //! Which scopes may set which domain (contract §8.3, the domain table's `exposure` column;
 //! commands.md §22.1; decisions pro-d7, pro-d17, pro-d18).
 //!
-//! STUB: the bodies are `todo!()`; the red tests are `exposure_tests.rs`.
-//!
 //! The rules this API implements:
 //!
 //! - [`exposure`]: the scopes a domain may be set in, in the order machine, owner, repo. `pr`,
@@ -16,7 +14,8 @@
 
 use std::path::Path;
 
-use super::domain::{Domain, Scope};
+use super::domain::{exposure, Domain, Scope};
+use super::load::policy_invalid;
 use crate::error::CpdError;
 
 /// A policy scope (contract §8.3 "Model"), the less specific first.
@@ -27,14 +26,31 @@ pub enum ScopeKind {
     Repo,
 }
 
-/// The scopes `domain` may be set in, in the order machine, owner, repo.
-pub fn exposure(_domain: Domain) -> &'static [ScopeKind] {
-    todo!("exposure registry")
+impl ScopeKind {
+    fn word(self) -> &'static str {
+        match self {
+            ScopeKind::Machine => "machine",
+            ScopeKind::Owner => "owner",
+            ScopeKind::Repo => "repo",
+        }
+    }
 }
 
 /// Ok when every table `scope` sets is exposed to `kind`; else `policy_invalid` for `file`.
-pub fn check_exposed(_file: &Path, _kind: ScopeKind, _scope: &Scope) -> Result<(), CpdError> {
-    todo!("exposure check")
+pub fn check_exposed(file: &Path, kind: ScopeKind, scope: &Scope) -> Result<(), CpdError> {
+    for &domain in Domain::ALL {
+        if scope.sets(domain) && !exposure(domain).contains(&kind) {
+            let exposed: Vec<&str> = exposure(domain).iter().map(|k| k.word()).collect();
+            let why = format!(
+                "the table `{}` is exposed to {} only, not a {} file",
+                domain.name(),
+                exposed.join(", "),
+                kind.word()
+            );
+            return Err(policy_invalid(file, Some(domain.name()), why));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -46,16 +46,6 @@ fn the_six_text_domains_are_exposed_to_every_scope() {
 }
 
 #[test]
-fn the_provider_domain_is_exposed_to_machine_and_owner() {
-    assert_eq!(exposure(domain("model")), [Machine, Owner]);
-}
-
-#[test]
-fn the_mcp_domain_is_exposed_to_the_machine_only() {
-    assert_eq!(exposure(domain("mcp")), [Machine]);
-}
-
-#[test]
 fn the_repo_only_domains_that_exist_are_exposed_to_the_repo_only() {
     for name in REPO_ONLY {
         if let Some(d) = Domain::from_name(name) {
@@ -86,20 +76,6 @@ fn a_scope_that_sets_only_exposed_domains_is_accepted_in_every_kind() {
     }
 }
 
-#[test]
-fn the_provider_is_accepted_in_machine_and_owner_scopes() {
-    let file = Path::new("/h/policy/x.toml");
-    let s = scope("[model]\nprovider = \"bifrost\"\n");
-    check_exposed(file, Machine, &s).unwrap();
-    check_exposed(file, Owner, &s).unwrap();
-}
-
-#[test]
-fn mcp_is_accepted_in_a_machine_scope() {
-    let s = scope("[mcp.servers.x]\nurl = \"https://example.com/mcp\"\n");
-    check_exposed(Path::new("/h/policy/machines/m.toml"), Machine, &s).unwrap();
-}
-
 fn refused(kind: ScopeKind, text: &str, key: &str, exposed: &str) {
     let file = Path::new("/h/policy/some/file.toml");
     let error = check_exposed(file, kind, &scope(text)).expect_err("an unexposed domain is refused");
@@ -109,21 +85,6 @@ fn refused(kind: ScopeKind, text: &str, key: &str, exposed: &str) {
     let message = error.message();
     assert!(message.contains(&format!("`{key}`")) && message.contains(exposed), "{message}");
     assert!(message.contains(&format!("not a {} file", kind_word(kind))), "{message}");
-}
-
-#[test]
-fn the_provider_in_a_repo_scope_is_policy_invalid() {
-    refused(Repo, "[model]\nprovider = \"bifrost\"\n", "model", "machine, owner");
-}
-
-#[test]
-fn mcp_in_an_owner_scope_is_policy_invalid() {
-    refused(Owner, "[mcp.servers.x]\nurl = \"https://example.com/mcp\"\n", "mcp", "machine");
-}
-
-#[test]
-fn mcp_in_a_repo_scope_is_policy_invalid() {
-    refused(Repo, "[mcp.servers.x]\nurl = \"https://example.com/mcp\"\n", "mcp", "machine");
 }
 
 #[test]

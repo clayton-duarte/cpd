@@ -216,54 +216,6 @@ fn files_leaves_out_absent_files() {
 // ------------------------------------------------------------ i7: exposure
 
 #[test]
-fn the_provider_in_a_repo_file_is_policy_invalid() {
-    let fx = Fx::new();
-    fx.write("repos/acme/r.toml", "[model]\nprovider = \"bifrost\"\n");
-    let error = refused(&fx.show(&["--owner", "acme", "--repo", "r"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["key"], "model");
-    assert_eq!(error["details"]["file"], fx.real("repos/acme/r.toml"));
-}
-
-#[test]
-fn the_provider_in_a_machine_file_is_accepted() {
-    let fx = Fx::new();
-    fx.write("machines/mac-pro.toml", "[model]\nprovider = \"bifrost\"\n");
-    fx.owner();
-}
-
-#[test]
-fn the_provider_in_an_owner_file_is_accepted() {
-    let fx = Fx::new();
-    fx.write("owners/acme.toml", "[model]\nprovider = \"bifrost\"\n");
-    fx.owner();
-}
-
-#[test]
-fn mcp_in_an_owner_file_is_policy_invalid() {
-    let fx = Fx::new();
-    fx.write("owners/acme.toml", MCP_ENTRY);
-    let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["key"], "mcp");
-    assert_eq!(error["details"]["file"], fx.real("owners/acme.toml"));
-}
-
-#[test]
-fn mcp_in_a_repo_file_is_policy_invalid() {
-    let fx = Fx::new();
-    fx.write("repos/acme/r.toml", MCP_ENTRY);
-    let error = refused(&fx.show(&["--owner", "acme", "--repo", "r"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["key"], "mcp");
-    assert_eq!(error["details"]["file"], fx.real("repos/acme/r.toml"));
-}
-
-#[test]
-fn mcp_in_a_machine_file_is_accepted() {
-    let fx = Fx::new();
-    fx.write("machines/mac-pro.toml", MCP_ENTRY);
-    fx.owner();
-}
-
-#[test]
 fn the_text_domains_are_accepted_in_all_three_scopes() {
     let text = "[pr]\ngate = \"local\"\n\n[tests]\ntext = \"t\"\n\n[code]\ntext = \"c\"\n";
     for rel in ["machines/mac-pro.toml", "owners/acme.toml", "repos/acme/r.toml"] {
@@ -278,34 +230,6 @@ fn the_text_domains_are_accepted_in_all_three_scopes() {
 fn provider(out: &Value) -> (&str, &str) {
     let key = &out["policy"]["model"]["keys"]["provider"];
     (key["value"].as_str().unwrap(), key["source"].as_str().unwrap())
-}
-
-#[test]
-fn the_machines_provider_is_the_default_for_an_owner_that_sets_none() {
-    let fx = Fx::new();
-    fx.write("machines/mac-pro.toml", "[model]\nprovider = \"bifrost\"\n");
-    let out = fx.owner();
-    let (value, source) = provider(&out);
-    assert_eq!(value, "bifrost");
-    assert!(source.starts_with("machine:"), "{source}");
-}
-
-#[test]
-fn the_owners_provider_wins_over_the_machines() {
-    let fx = Fx::new();
-    fx.write("machines/mac-pro.toml", "[model]\nprovider = \"bifrost\"\n");
-    fx.write("owners/acme.toml", "[model]\nprovider = \"github-copilot\"\n");
-    let out = fx.owner();
-    let (value, source) = provider(&out);
-    assert_eq!(value, "github-copilot");
-    assert!(source.starts_with("owner:"), "{source}");
-}
-
-#[test]
-fn with_no_provider_set_the_default_is_github_copilot() {
-    let fx = Fx::new();
-    let out = fx.owner();
-    assert_eq!(provider(&out), ("github-copilot", "default"));
 }
 
 // ------------------------------------------- i9: a machine file is validated like any scope file

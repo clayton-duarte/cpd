@@ -218,7 +218,7 @@ fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Resul
         Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
         None => PolicyKey::Owner(owner),
     };
-    Ok(resolve(&env.home, &policy_key).map(|resolved| resolved.policy))
+    Ok(resolve(&env.home, &env.config.host, &policy_key).map(|resolved| resolved.policy))
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.

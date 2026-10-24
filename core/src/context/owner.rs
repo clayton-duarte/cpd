@@ -21,7 +21,7 @@ pub struct OwnerArgs {
 }
 
 pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, .. } = Env::open()?;
+    let Env { home, config, mut store } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     let login = &args.login;
     let out = |already: bool| {
@@ -43,7 +43,7 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
     if has_owner(row.owner)?.is_some() {
         return out(true);
     }
-    resolve(&home, &PolicyKey::Owner(login.clone()))?;
+    resolve(&home, &config.host, &PolicyKey::Owner(login.clone()))?;
     let already = store.write("context owner", |tx| {
         let changed =
             tx.execute("UPDATE contexts SET owner = ?1 WHERE id = ?2 AND owner IS NULL", [login.as_str(), id.as_str()])?;
