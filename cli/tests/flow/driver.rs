@@ -313,11 +313,19 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(
         fx.kinds(ATTEMPT),
-        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "job-merged"]
+        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "attempt-status", "attempt-status", "job-merged"]
     );
     let statuses: Vec<Value> =
         fx.events(ATTEMPT).into_iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
-    assert_eq!(statuses, [json!({"from": "starting", "to": "running"}), json!({"from": "running", "to": "merging"})]);
+    assert_eq!(
+        statuses,
+        [
+            json!({"from": "starting", "to": "running"}),
+            json!({"check": "start", "from": "running", "to": "running", "what": "checks"}),
+            json!({"check": "end", "from": "running", "to": "running", "what": "checks"}),
+            json!({"from": "running", "to": "merging"}),
+        ]
+    );
     assert_eq!(fx.event(ATTEMPT, "session-moved")["data"]["place"], "work");
 
     // The Worker: its Session, its argv (§6.5) and its Spec (§16.1).
@@ -1447,6 +1455,22 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
     assert_eq!(opened.iter().map(|e| e.1.clone()).collect::<Vec<_>>(), [json!({"pr": "repo", "number": 812, "url": PR_URL})]);
     assert_eq!((phase.len(), &phase[0].1["from"], &phase[0].1["to"]), (1, &json!("dispatch"), &json!("deploy")));
     assert_eq!((opened[0].0, phase[0].0), (ours[0].0, ours[0].0), "one transaction");
+}
+
+/// An `open` Job's checks (base check, Gate) are one `checks` span, closed in the transaction that makes the Attempt `merging`.
+#[test]
+fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
+    let (fx, _origin) = open_fx();
+    fx.pi(SUBMIT_ONLY);
+    run_job(&fx, "open-repo");
+    let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
+    let statuses: Vec<Value> = fx.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
+    assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
+    let txns: String = fx.env.query(
+        "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
+    );
+    let txns: Vec<&str> = txns.split(',').collect();
+    assert_eq!(txns[2], txns[3], "the end and running -> merging share a transaction");
 }
 
 /// With a base that conflicts with the Lead Branch, the Worker's merge commit is required: the submit is refused `base_conflict` (before

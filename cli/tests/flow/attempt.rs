@@ -155,9 +155,10 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
-                    params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files, review)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7, ?8)",
+                    // The pseudo-kind `review` is a `work` Job with the review flag.
+                    params![key, "f".repeat(64), tx.id(), pr.key, if kind == "review" { "work" } else { kind }, tests.map(|t| t.0), tests.map(|t| t.1), kind == "review"],
                 )?;
                 if let Some(names) = needs {
                     tx.execute(
@@ -262,9 +263,11 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0]["data"], json!({"from": "running", "to": "merging"}));
-    assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[0]["data"], json!({"from": "running", "to": "running", "check": "start", "what": "checks"}));
+    assert_eq!(events[1]["data"], json!({"from": "running", "to": "running", "check": "end", "what": "checks"}));
+    assert_eq!(events[2]["data"], json!({"from": "running", "to": "merging"}));
+    assert_eq!((events[2]["plan"].as_str(), events[2]["job"].as_str(), events[2]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
     assert_eq!(fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
 }
 
@@ -434,7 +437,9 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
     assert!(log.ends_with("logs/api-a1.pre-commit.log"), "{log}");
     assert!(fs::read_to_string(log).unwrap().contains("broken"));
     assert_eq!(fx.status(), "running");
-    assert_eq!(fx.events("attempt-status").len(), 0);
+    let events = fx.events("attempt-status");
+    let spans: Vec<_> = events.iter().map(|e| (e["data"]["check"].as_str(), e["data"]["what"].as_str())).collect();
+    assert_eq!(spans, [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
 }
 
 #[test]
@@ -517,7 +522,7 @@ impl Fx {
 }
 
 fn span(edge: &str) -> Value {
-    json!({"from": "running", "to": "running", "check": edge, "what": "tests"})
+    json!({"from": "running", "to": "running", "check": edge, "what": "checks"})
 }
 
 #[test]
@@ -744,14 +749,15 @@ fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
     fx.commit("tests/t.rs", "// red\n");
     refused(&fx.submit(), "check_failed", 3);
     assert!(!fx.tests_log("build").exists(), "the tests did not run");
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
 
-    // A `work` Job in a repo that has `[tests]`: nothing of it runs, and no span is recorded.
+    // A `work` Job in a repo that has `[tests]`: no kind check runs, and its checks are one span.
     let fx = fixture(&[(".config/cpd.toml", TESTS)]);
     fx.commit("BROKEN", "x\n");
     fx.submit().ok();
     assert_eq!(fx.seen("ran.txt"), None);
     assert!(!fx.tests_log("build").exists());
-    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
 }
 
 #[test]
@@ -772,6 +778,55 @@ fn a_kind_check_is_a_span_of_the_attempt_that_ends_also_when_it_refuses() {
     // The Events carry the Attempt and the Job.
     let events = fx.events("attempt-status");
     assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
+}
+
+impl Fx {
+    /// The `txn` of each `attempt-status` Event, oldest first, comma-joined.
+    fn status_txns(&self) -> Vec<i64> {
+        let text: String = self.env.query("SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' ORDER BY rowid)");
+        text.split(',').map(|t| t.parse().unwrap()).collect()
+    }
+}
+
+#[test]
+fn a_work_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
+    let fx = fixture(&[]);
+    fx.commit("a.txt", "x\n");
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    let txns = fx.status_txns();
+    assert_eq!(txns[1], txns[2], "the end and running -> merging share a transaction");
+    assert_ne!(txns[0], txns[1]);
+}
+
+#[test]
+fn a_refused_quick_check_ends_the_checks_span_and_leaves_the_attempt_running() {
+    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"exit 7\"\n")]);
+    fx.commit("a.txt", "x\n");
+    refused(&fx.submit(), "check_failed", 3);
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
+    assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn a_test_jobs_quick_check_and_tests_run_in_one_checks_span() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    let txns = fx.status_txns();
+    assert_eq!(txns[1], txns[2]);
+}
+
+/// Guards the rule that a review Job has no checks and no span (green today).
+#[test]
+fn a_review_jobs_submit_records_no_check_span() {
+    let fx = fixture_kind(&[], "review", None);
+    let findings = fx.home.root().join("run/pay/reviews/api.md");
+    fs::create_dir_all(findings.parent().unwrap()).unwrap();
+    fs::write(&findings, "- one finding\n").unwrap();
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
 }
 
 // ---------- attempt read ----------
