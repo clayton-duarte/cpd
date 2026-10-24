@@ -1,5 +1,4 @@
 //! The loop's one wait point: input, commit and read signals on one channel, the schedule of reads and the clock needs.
-#![allow(dead_code)] // the pump is tested but not yet wired into the view loop
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -26,6 +25,7 @@ impl Waker {
     pub fn commit(&self) {
         let _ = self.send.send(Signal::Commit);
     }
+    /// A result is ready to take: a read's or a background job's.
     pub fn read_done(&self) {
         let _ = self.send.send(Signal::Read);
     }

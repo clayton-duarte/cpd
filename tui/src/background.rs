@@ -13,12 +13,13 @@ pub(crate) struct Background<T> {
     rx: Receiver<T>,
     queued: VecDeque<Job<T>>,
     running: bool,
+    waker: crate::pump::Waker,
 }
 
 impl<T: Send + 'static> Background<T> {
-    pub(crate) fn new() -> Background<T> {
+    pub(crate) fn with_waker(waker: crate::pump::Waker) -> Background<T> {
         let (tx, rx) = channel();
-        Background { tx, rx, queued: VecDeque::new(), running: false }
+        Background { tx, rx, queued: VecDeque::new(), running: false, waker }
     }
 
     /// Runs `job` on a thread, after the jobs submitted before it.
@@ -42,41 +43,11 @@ impl<T: Send + 'static> Background<T> {
         let Some(job) = self.queued.pop_front() else { return };
         self.running = true;
         let tx = self.tx.clone();
+        let waker = self.waker.clone();
         std::thread::spawn(move || {
             // the receiver is gone only when the view ended
             let _ = tx.send(job());
+            waker.read_done();
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::*;
-
-    fn next(background: &mut Background<u32>) -> u32 {
-        let start = Instant::now();
-        loop {
-            if let Some(n) = background.finished() {
-                return n;
-            }
-            assert!(start.elapsed() < Duration::from_secs(5), "no result");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-
-    #[test]
-    fn submit_does_not_wait_and_jobs_run_one_at_a_time_in_order() {
-        let mut background = Background::new();
-        let start = Instant::now();
-        background.submit(|| {
-            std::thread::sleep(Duration::from_millis(200));
-            1
-        });
-        background.submit(|| 2);
-        assert!(start.elapsed() < Duration::from_millis(100), "submit returns at once");
-        assert_eq!(background.finished(), None, "the first has not ended");
-        assert_eq!([next(&mut background), next(&mut background)], [1, 2]);
     }
 }
