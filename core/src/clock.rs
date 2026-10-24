@@ -1,5 +1,6 @@
 //! The time, as contract §1.3 writes it.
 
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use time::macros::format_description;
@@ -28,29 +29,44 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
-        todo!("stub: the Clock Job implements SystemClock::now")
+        Instant::now()
     }
-    fn sleep(&self, _d: Duration) {
-        todo!("stub: the Clock Job implements SystemClock::sleep")
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d);
     }
+}
+
+#[derive(Default)]
+struct State {
+    elapsed: Duration,
+    naps: Vec<Duration>,
 }
 
 /// Virtual time: `sleep` records the nap and advances `now()` by it. A clone shares the state.
 #[derive(Clone)]
 pub struct ManualClock {
     start: Instant,
+    state: Arc<Mutex<State>>,
 }
 
 impl ManualClock {
     pub fn new() -> Self {
-        ManualClock { start: Instant::now() }
+        ManualClock { start: Instant::now(), state: Arc::default() }
     }
-    pub fn advance(&self, _d: Duration) {}
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().expect("the clock's state is never held across a panic")
+    }
+    /// Moves virtual time forward without recording a nap.
+    pub fn advance(&self, d: Duration) {
+        self.state().elapsed += d;
+    }
+    /// The virtual time passed since construction.
     pub fn elapsed(&self) -> Duration {
-        Duration::MAX
+        self.state().elapsed
     }
+    /// Every `sleep`, in order.
     pub fn naps(&self) -> Vec<Duration> {
-        vec![Duration::MAX]
+        self.state().naps.clone()
     }
 }
 
@@ -62,9 +78,13 @@ impl Default for ManualClock {
 
 impl Clock for ManualClock {
     fn now(&self) -> Instant {
-        self.start
+        self.start + self.elapsed()
     }
-    fn sleep(&self, _d: Duration) {}
+    fn sleep(&self, d: Duration) {
+        let mut state = self.state();
+        state.naps.push(d);
+        state.elapsed += d;
+    }
 }
 
 #[cfg(test)]
