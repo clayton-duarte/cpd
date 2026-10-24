@@ -24,7 +24,7 @@ use ratatui::{
 use crate::palette::{self, Meaning};
 use crate::pill;
 use cpd_core::config::Tier;
-use crate::read::{AttemptStatus, JobNode, JobStatus};
+use crate::read::{JobNode, JobStatus};
 use cpd_core::ids::JobKey;
 
 /// A Job's status as the chart draws it. A `cancelled` Job is a colour 8 pill, in its place; a `running` Job whose Attempt is
@@ -75,7 +75,7 @@ impl Live {
         match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
-            JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
+            JobStatus::Running if job.active_attempt().is_some_and(|a| a.status.is_landing()) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
             JobStatus::Failed if lead_working => Live::FailedWorked,

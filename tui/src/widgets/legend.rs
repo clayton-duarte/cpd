@@ -488,7 +488,7 @@ mod tests {
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
-        for name in ["queued", "running", "merging", "merged", "failed", "draft", "counters row"] {
+        for name in ["queued", "running", "landing", "merged", "failed", "draft", "counters row"] {
             assert!(names.contains(&name.to_owned()), "{name}: {names:?}");
         }
         let shown: String =
