@@ -83,6 +83,8 @@ const firstLine = (text: string): string => text.split("\n").find((l) => l.trim(
 
 export type Validation = {
   timeoutMs?: number;
+  /** Starts pi for the load. Default: node's `spawn`. */
+  spawn?: typeof spawn;
 };
 
 /**
@@ -97,7 +99,7 @@ export async function validatePackage(dir: string, v: Validation = {}): Promise<
   const scratch = mkdtempSync(join(tmpdir(), "cpd-validate-"));
   try {
     return await new Promise<string | undefined>((resolve) => {
-      const child = spawn("pi", ["--no-extensions", "--no-session", "-e", dir, "--mode", "rpc"], {
+      const child = (v.spawn ?? spawn)("pi", ["--no-extensions", "--no-session", "-e", dir, "--mode", "rpc"], {
         cwd: scratch,
         env: { ...process.env, PI_OFFLINE: "1", PI_CODING_AGENT_DIR: scratch },
         stdio: ["ignore", "ignore", "pipe"],

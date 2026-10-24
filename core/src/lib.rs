@@ -32,9 +32,13 @@ pub mod merge;
 pub mod metrics;
 pub mod plan;
 pub mod policy;
+pub mod pill;
 pub mod pr;
 pub mod review;
 pub mod secret;
 pub mod session;
 pub mod spec;
 pub mod store;
+
+#[cfg(test)]
+mod pill_tests;

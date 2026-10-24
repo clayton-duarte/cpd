@@ -7,7 +7,7 @@ use ratatui::buffer::{Buffer, Cell};
 use ratatui::style::Color;
 
 use super::*;
-use crate::palette::numbered::{C0, C8, C12, C15};
+use crate::palette::numbered::{C8, C12, C15};
 
 const L: &str = "\u{E0B6}";
 const R: &str = "\u{E0B4}";
@@ -201,7 +201,7 @@ fn kinds() -> Vec<Kind> {
     vec![confirm_kind, input_kind, text_kind, checklist_kind]
 }
 
-/// The pill at (`x`, `y`) reads `label`, its text is 0 on `colour` and its caps are `colour` on the terminal's background.
+/// The pill at (`x`, `y`) reads `label`, its text is inverted in `colour` and its caps are `colour` on the terminal's background.
 fn assert_pill(buf: &Buffer, x: u16, y: u16, label: &str, colour: Color) {
     let width = u16::try_from(label.chars().count()).unwrap();
     let reset = Cell::EMPTY.bg;
@@ -213,7 +213,8 @@ fn assert_pill(buf: &Buffer, x: u16, y: u16, label: &str, colour: Color) {
     }
     for at in x + 1..=x + width {
         let cell = &buf[(at, y)];
-        assert_eq!((cell.fg, cell.bg), (C0, colour), "the text at ({at}, {y}): {cell:?}");
+        assert_eq!((cell.fg, cell.bg), (colour, reset), "the text at ({at}, {y}): {cell:?}");
+        assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED), "the text at ({at}, {y}) is reversed: {cell:?}");
     }
 }
 

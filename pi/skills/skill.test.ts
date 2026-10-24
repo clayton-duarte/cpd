@@ -157,6 +157,16 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   assert.ok(keep.includes("--unblocks"));
 });
 
+test("cpd-manager does not watch a Worker's Escalation: the digest and the stall check name none, and it still never answers one", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  const line = (start: string) => text.split("\n").find((l) => l.startsWith(start)) ?? assert.fail(`no line ${start}`);
+  assert.doesNotMatch(line("- **Keep the work moving.**"), /Escalation/i);
+  assert.doesNotMatch(line("- **The turn-start message.**"), /Escalation/i);
+  assert.match(line("- A Plan's phases are"), /`job-failed`/);
+  assert.doesNotMatch(line("- A Plan's phases are"), /escalation/i);
+  assert.match(text, /never a Worker's Escalation/);
+});
+
 test("cpd-manager may create Leads and open sessions, and states its focus", () => {
   const text = skillFiles("cpd-manager")[0]!.text;
   const named = commandsNamed(text);

@@ -66,7 +66,7 @@ async function retryShow(host: Host, id: string, retry: AbortController, reporte
   const seen = new Set([reported]);
   let delay = host.timing.restartInitialMs;
   for (;;) {
-    await sleep(delay, undefined, { signal: retry.signal }).catch(() => undefined);
+    await (host.options.sleep ?? sleep)(delay, undefined, { signal: retry.signal }).catch(() => undefined);
     if (retry.signal.aborted) return undefined;
     delay = Math.min(delay * 2, host.timing.restartMaxMs);
     try {
@@ -212,6 +212,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     log: r.log,
     onLongRefusal: () => host.ctx?.ui.notify(LONG_REFUSAL_NOTICE),
     longRefusalMs: options.reload?.longRefusalMs,
+    now: options.reload?.now,
   });
 
   // Every plannotator session this Session opens is tracked (§15): reconcile now, then poll and on each plannotator result (adapter.ts).
@@ -259,6 +260,6 @@ export async function stop(host: Host): Promise<void> {
   r.follower.stop();
   r.unsubscribe.forEach((u) => u());
   if (r.reporting) {
-    await Promise.race([r.reporter.close({ state: "stopped" }), sleep(host.timing.shutdownWaitMs, undefined, { ref: false })]);
+    await Promise.race([r.reporter.close({ state: "stopped" }), (host.options.sleep ?? sleep)(host.timing.shutdownWaitMs, undefined, { ref: false })]);
   }
 }

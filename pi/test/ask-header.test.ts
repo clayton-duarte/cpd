@@ -20,7 +20,7 @@ const piMod = (await import(pathToFileURL(pi).href)) as { Theme: { prototype: Th
 const load = (): ThemeLike => themeMod.loadThemeFromPath(THEME.pathname, "256color");
 const original = piMod.Theme.prototype.bg;
 const E = "\x1b[";
-const PILL = `${E}37m\uE0B6${E}39m${E}47m${E}30mAssumptions${E}49m${E}39m${E}37m\uE0B4${E}39m`;
+const PILL = `${E}37m\uE0B6${E}7mAssumptions${E}27m${E}37m\uE0B4${E}39m`;
 /** rpiv-ask-user-question@2.13.8 view/tab-content-strategy.ts:112: theme.bg("selectedBg", ` ${question.header} `) */
 const header = (t: ThemeLike, h = "Assumptions") => t.bg("selectedBg", ` ${h} `);
 
@@ -31,7 +31,7 @@ test("the question's header badge is drawn as a grey pill with caps and no paddi
 	try {
 		const out = header(t);
 		assert.equal(out, PILL);
-		assert.doesNotMatch(out, /\x1b\[(2|7|48;|38;)/);
+		assert.doesNotMatch(out, /\x1b\[(2m|48;|38;)/);
 	} finally {
 		off();
 	}
@@ -42,7 +42,7 @@ test("the pill is what the real widget's call produces: bg selectedBg of a padde
 	const off = installHint();
 	try {
 		for (const h of ["Assumptions", "Scope", "Pick one"]) {
-			assert.equal(header(t, h), `${E}37m\uE0B6${E}39m${E}47m${E}30m${h}${E}49m${E}39m${E}37m\uE0B4${E}39m`);
+			assert.equal(header(t, h), `${E}37m\uE0B6${E}7m${h}${E}27m${E}37m\uE0B4${E}39m`);
 		}
 	} finally {
 		off();

@@ -1,12 +1,14 @@
+import type { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
 import { cpSync, existsSync, mkdirSync, renameSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { type Options } from "../lib/adapter.ts";
 import { fileURLToPath } from "node:url";
 import { identityOf, LONG_REFUSAL_NOTICE, LOAD_TIMEOUT_MS, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
-import { Fixture, ID, planShow, waitFor } from "./fake.ts";
+import { Fixture, ID, notify, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
 
@@ -26,8 +28,86 @@ const install = (f: Fixture, files: Record<string, string> = { "extension.ts": G
 
 const noticeFor = (reason: string) => `cpd: adapter update not loaded: ${reason}`;
 
+/** An extension the fake pi never finishes loading (a top-level await that never settles). */
+const HANGS = "await new Promise(() => {});\nexport default function () {}\n";
+
+/**
+ * Stands for pi in the pre-validation (`Validation.spawn`; the real pi is not ours): a child that, in process, answers as pi does for the package in `-e <dir>`:
+ * exit 0 when `extension.ts` loads, 1 with pi's message on stderr when it throws or has no default export function, and never ends when it never finishes loading.
+ * Its `kill` ends it, like SIGKILL. It has no `pid`, so the product's group kill (`process.kill(-pid)`) cannot reach a real process.
+ */
+function scriptedPi() {
+  type Run = { command: string; args: string[]; options: { cwd?: string; env?: NodeJS.ProcessEnv }; scratchExisted: boolean; killed: string[] };
+  const runs: Run[] = [];
+  const start = ((command: string, args: string[], options: Run["options"]) => {
+    const child = Object.assign(new EventEmitter(), { stderr: Object.assign(new EventEmitter(), { setEncoding: () => {} }), pid: undefined });
+    const run: Run = { command, args, options, scratchExisted: existsSync(options.cwd ?? ""), killed: [] };
+    runs.push(run);
+    let ended = false;
+    const end = (code: number | null, signal: string | null) => {
+      if (ended) return;
+      ended = true;
+      child.emit("close", code, signal);
+    };
+    Object.assign(child, {
+      kill: (signal: string) => {
+        run.killed.push(signal);
+        queueMicrotask(() => end(null, signal)); // a process's `close` follows its kill, it is not part of it
+        return true;
+      },
+    });
+    const entry = join(args[args.indexOf("-e") + 1]!, "extension.ts");
+    const source = readFileSync(entry, "utf8");
+    const failed = (why: string) => {
+      child.stderr.emit("data", `Error: Failed to load extension "${entry}": ${why}\nHint: Start without extensions using "pi -ne".\n`);
+      end(1, null);
+    };
+    queueMicrotask(() => {
+      const thrown = /^throw new Error\("(.*)"\);/.exec(source);
+      if (source.includes("await new Promise(() => {})")) return; // never finishes loading
+      if (thrown) failed(thrown[1]!);
+      else if (!/export default function/.test(source)) failed(`Extension does not export a valid factory function: ${entry}`);
+      else end(0, null);
+    });
+    return child as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+  return { runs, spawn: start };
+}
+
+/** Never ends: the adapter's shutdown wait (`Options.sleep`) is not a real timer in these tests; `reporter.close` is what ends it. */
+const neverSleep = (() => new Promise<undefined>(() => {})) as NonNullable<Options["sleep"]>;
+
+/** The interval of the adapter's poll in these tests (`Fixture.load` sets 20). */
+const TICK = 20;
+
+/** `options` for `Fixture.load`: the poll's `setInterval` (and `setTimeout` when `timers` says) on `t.mock.timers`, pi's load in process, no real shutdown wait. Make it before the adapter starts. */
+function arm(t: TestContext, options: Options = {}, timers: ("setInterval" | "setTimeout")[] = ["setInterval"]): Options {
+  t.mock.timers.enable({ apis: timers });
+  const reload = (options.reload ??= {});
+  if (!("spawn" in reload)) reload.spawn = scriptedPi().spawn;
+  return { sleep: neverSleep, ...options, reload };
+}
+
+/** Resolves when no `cpd` call is in flight and no command runs: everything the last tick set going has run to its end. */
+async function quiesce(f: Fixture): Promise<void> {
+  await f.quiet();
+  await waitFor("no command running", () => f.pi.commandsRunning.size === 0);
+  await f.quiet();
+}
+
+/** Advances the poll's virtual clock one interval at a time, letting what each tick started finish, until `cond` holds: no real time passes, and a hang is a count of ticks. */
+async function until<T>(t: TestContext, f: Fixture, what: string, cond: () => T | undefined | null | false, max = 200): Promise<T> {
+  for (let n = 0; ; n++) {
+    await quiesce(f);
+    const v = cond();
+    if (v) return v;
+    if (n >= max) throw new Error(`${max} polls passed without ${what}`);
+    t.mock.timers.tick(TICK);
+  }
+}
+
 /** A started adapter whose `ctx.reload()` behaves like pi's: shutdown, then start of the new load. */
-async function started(t: { after(fn: () => Promise<void>): void }, options: Options = {}): Promise<Fixture> {
+async function started(t: TestContext, options: Options = {}, timers?: ("setInterval" | "setTimeout")[]): Promise<Fixture> {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
@@ -35,7 +115,7 @@ async function started(t: { after(fn: () => Promise<void>): void }, options: Opt
     await f.pi.fire("session_shutdown", { reason: "reload" });
     await f.pi.fire("session_start", { reason: "reload" });
   };
-  f.load(options);
+  f.load(arm(t, options, timers));
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   return f;
@@ -51,12 +131,12 @@ type Hooks = { after(fn: () => void | Promise<void>): void };
  * and so retries at every tick. `after(n)` resolves when it has retried `n` more times: that many poll intervals passed since, a fact to wait for
  * where the test claims "nothing happens however many polls". Make it before the install it times.
  */
-function clock(t: Hooks, f: Fixture) {
+function clock(t: TestContext & Hooks, f: Fixture) {
   let retries = 0;
   const poll = pollAdapter({
     dir: f.adapterDir,
     intervalMs: 20,
-    validate: async () => (retries++, "never validates"),
+    validate: async () => (retries++, notify(), "never validates"),
     refusal: () => undefined,
     trigger: () => {},
     onRefused: () => {},
@@ -65,7 +145,7 @@ function clock(t: Hooks, f: Fixture) {
     onLongRefusal: () => {},
   });
   t.after(() => poll.stop());
-  return { after: (n: number) => { const at = retries; return waitFor(`${n} more polls`, () => retries >= at + n); } };
+  return { after: (n: number) => { const at = retries; return until(t, f, `${n} more polls`, () => retries >= at + n); } };
 }
 
 const ok: Guard = { idle: true, pending: false, state: "idle", editorText: "" };
@@ -82,7 +162,7 @@ test("guard: each condition refuses, all clear allows", () => {
 test("a changed adapter directory triggers its command once, with expandPromptTemplates, and reloads", async (t) => {
   const f = await started(t);
   install(f);
-  await waitFor("the reload", () => f.pi.reloads > 0);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
   await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
   assert.deepEqual(f.pi.userMessages, [{ content: `/${RELOAD_COMMAND}`, options: { expandPromptTemplates: true } }]);
   assert.ok(!f.pi.notices.some((n) => n.includes("cpd: adapter updated")), "no notice on a normal reload");
@@ -117,7 +197,7 @@ test("the poll watches the adapter symlink: repointing it to a new directory and
     await f.pi.fire("session_shutdown", { reason: "reload" });
     await f.pi.fire("session_start", { reason: "reload" });
   };
-  f.load({ reload: { dir: undefined } }, f.pi, adapter); // no `dir`: the adapter's own default path
+  f.load(arm(t, { reload: { dir: undefined } }), f.pi, adapter); // no `dir`: the adapter's own default path
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
 
@@ -127,7 +207,7 @@ test("the poll watches the adapter symlink: repointing it to a new directory and
   renameSync(join(share, "pi.link"), join(share, "pi"));
   rmSync(join(share, "pi.1"), { recursive: true });
 
-  await waitFor("the reload", () => f.pi.reloads > 0, 5000);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
   assert.ok(
     logLines(f).some((l) => l.includes("poll: watching") && l.includes(join(share, "pi")) && !l.includes("pi.1")),
     "the poll watches the link",
@@ -138,13 +218,13 @@ test("the poll watches the adapter symlink: repointing it to a new directory and
 test("ENOENT is the install in progress, not a change", async (t) => {
   const f = await started(t);
   rmSync(f.adapterDir, { recursive: true });
-  await waitFor("the poll to see it missing", () => logLines(f).some((l) => l.endsWith("the adapter directory is missing (an install in progress); waiting")));
+  await until(t, f, "the poll to see it missing", () => logLines(f).some((l) => l.endsWith("the adapter directory is missing (an install in progress); waiting")));
   assert.deepEqual(f.pi.userMessages, []);
   mkdirSync(f.adapterDir);
   writeFileSync(join(f.adapterDir, "extension.ts"), GOOD);
   writeFileSync(join(f.adapterDir, "package.json"), "{}");
   touch(f.adapterDir);
-  await waitFor("the trigger", () => f.pi.userMessages.length > 0);
+  await until(t, f, "the trigger", () => f.pi.userMessages.length > 0);
 });
 
 const conditions: [string, string, (f: Fixture) => unknown, (f: Fixture) => unknown][] = [
@@ -159,11 +239,11 @@ for (const [name, why, block, clear] of conditions) {
     const f = await started(t);
     await block(f);
     install(f);
-    await waitFor("the refusal", () => logLines(f).some((l) => l.endsWith(`poll: refused: ${why}`)));
+    await until(t, f, "the refusal", () => logLines(f).some((l) => l.endsWith(`poll: refused: ${why}`)));
     assert.deepEqual(f.pi.userMessages, [], "refused at the trigger");
     assert.equal(f.pi.reloads, 0);
     await clear(f);
-    await waitFor("the reload", () => f.pi.reloads > 0);
+    await until(t, f, "the reload", () => f.pi.reloads > 0);
     assert.equal(f.pi.userMessages.length, 1);
   });
 
@@ -183,7 +263,7 @@ test("a reload that did nothing is retried at the next tick", async (t) => {
   const f = await started(t);
   f.pi.onReload = () => {}; // like pi's mid-turn reload: resolves, nothing happens
   install(f);
-  await waitFor("two triggers", () => f.pi.userMessages.length >= 2);
+  await until(t, f, "two triggers", () => f.pi.userMessages.length >= 2);
   assert.ok(f.pi.reloads >= 2);
   assert.deepEqual(f.pi.commandErrors, []);
 });
@@ -291,7 +371,7 @@ for (const [name, files, reasonOf] of refused) {
     const c = clock(t, f);
     install(f, files);
     const reason = reasonOf(f);
-    await waitFor("the error", () => f.pi.errorNotices.length > 0);
+    await until(t, f, "the error", () => f.pi.errorNotices.length > 0);
     await c.after(5); // many polls
     assert.deepEqual(f.pi.errorNotices, [noticeFor(reason)], "once, not once per poll");
     assert.equal(f.pi.reloads, 0);
@@ -302,7 +382,7 @@ for (const [name, files, reasonOf] of refused) {
     // The same directory, repaired: the new identity is checked again and reloaded once.
     for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);
     touch(f.adapterDir);
-    await waitFor("the reload", () => f.pi.reloads > 0);
+    await until(t, f, "the reload", () => f.pi.reloads > 0);
     await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
     assert.equal(f.pi.reloads, 1);
     assert.equal(f.pi.userMessages.length, 1);
@@ -310,52 +390,61 @@ for (const [name, files, reasonOf] of refused) {
   });
 }
 
-/** An extension the fake pi never finishes loading (a top-level await that never settles, with a timer keeping the process alive). */
-const HANGS = "setInterval(() => {}, 1000);\nawait new Promise(() => {});\nexport default function () {}\n";
-
 test("a load that hangs is refused after the timeout, and tried again at a later poll", async (t) => {
-  // The timeout is read at every poll (`validatePackage(dir, options.reload)`). It is short only for the hanging package, which times out however
-  // long it is; the good one is validated under the generous bound, so how long the machine takes to load it is not the claim.
-  const reload = { timeoutMs: 300 };
-  const f = await started(t, { reload });
+  // The timeout is read at every poll (`validatePackage(dir, options.reload)`). The hanging package never ends: the clock passes the timeout, nothing else does.
+  const pi = scriptedPi();
+  const reload = { timeoutMs: 300, spawn: pi.spawn };
+  const f = await started(t, { reload }, ["setInterval", "setTimeout"]);
   install(f, { "extension.ts": HANGS, "package.json": "{}" });
-  await waitFor("the error", () => f.pi.errorNotices.length > 0);
+  await until(t, f, "pi to start loading the package", () => pi.runs.length > 0);
+  t.mock.timers.tick(299);
+  await quiesce(f);
+  assert.deepEqual(f.pi.errorNotices, [], "not yet: 299 ms of 300");
+  assert.deepEqual(pi.runs[0]!.killed, []);
+  t.mock.timers.tick(1);
+  await quiesce(f);
   assert.deepEqual(f.pi.errorNotices, [noticeFor("load timed out after 300 ms")]);
+  assert.deepEqual(pi.runs[0]!.killed, ["SIGKILL"], "the hung load is killed");
   assert.equal(f.pi.reloads, 0);
-  // The machine is free again: the next poll passes. No await between the three, so no poll validates the new package under the short bound
-  // (one that already began on the old package ends with the identity changed and starts over).
+  // The next poll passes.
   writeFileSync(join(f.adapterDir, "extension.ts"), GOOD);
   touch(f.adapterDir);
   reload.timeoutMs = LOAD_TIMEOUT_MS;
-  await waitFor("the reload", () => f.pi.reloads > 0);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
   assert.equal(f.pi.errorNotices.length, 1, "a timeout is a refusal shown once, not a failure");
 });
 
-test("validatePackage runs pi with no extensions, no session, the package, rpc mode, offline and an empty scratch agent directory it removes", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);
-  assert.equal(await validatePackage(f.adapterDir), undefined, "pi exits 0: the package loads");
-  const [call, ...more] = readFileSync(join(f.dir, "validate-calls.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  assert.deepEqual(more, [], "one pi run");
-  assert.deepEqual(call.argv, ["--no-extensions", "--no-session", "-e", f.adapterDir, "--mode", "rpc"]);
-  assert.equal(call.offline, "1");
-  assert.equal(call.agentDirExists, true);
-  assert.equal(dirname(call.agentDir), tmpdir());
-  assert.notEqual(call.agentDir, process.env.PI_CODING_AGENT_DIR);
-  assert.deepEqual(readdirSync(tmpdir()).filter((n) => join(tmpdir(), n) === call.agentDir), [], "the scratch directory is removed");
+test("validatePackage runs pi with no extensions, no session, the package, rpc mode, offline and an empty scratch agent directory it removes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-validate-"));
+  try {
+    for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(dir, file), content);
+    const pi = scriptedPi();
+    assert.equal(await validatePackage(dir, { spawn: pi.spawn }), undefined, "pi exits 0: the package loads");
+    assert.equal(pi.runs.length, 1, "one pi run");
+    const [call] = pi.runs;
+    assert.equal(call!.command, "pi");
+    assert.deepEqual(call!.args, ["--no-extensions", "--no-session", "-e", dir, "--mode", "rpc"]);
+    assert.equal(call!.options.env!.PI_OFFLINE, "1");
+    assert.equal(call!.scratchExisted, true);
+    assert.equal(call!.options.env!.PI_CODING_AGENT_DIR, call!.options.cwd);
+    assert.equal(dirname(call!.options.cwd!), tmpdir());
+    assert.notEqual(call!.options.cwd, process.env.PI_CODING_AGENT_DIR);
+    assert.equal(existsSync(call!.options.cwd!), false, "the scratch directory is removed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the same refusal is shown again after a poll that passed", async (t) => {
   const f = await started(t);
   const bad = { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" };
   install(f, bad);
-  await waitFor("the first error", () => f.pi.errorNotices.length === 1);
+  await until(t, f, "the first error", () => f.pi.errorNotices.length === 1);
   f.pi.onReload = () => {}; // the good package passes but pi does not reload it
   install(f);
-  await waitFor("the trigger", () => f.pi.userMessages.length > 0);
+  await until(t, f, "the trigger", () => f.pi.userMessages.length > 0);
   install(f, bad);
-  await waitFor("the second error", () => f.pi.errorNotices.length === 2);
+  await until(t, f, "the second error", () => f.pi.errorNotices.length === 2);
   assert.deepEqual(f.pi.errorNotices, [noticeFor(failedToLoad(f, "boom")), noticeFor(failedToLoad(f, "boom"))]);
 });
 
@@ -365,7 +454,7 @@ test("a validated install is tried when pi settles, though no tick ever sees pi 
   const f = await started(t);
   f.pi.idle = false;
   install(f);
-  await waitFor("the refusal", () => logLines(f).some((l) => l.endsWith("poll: refused: busy")));
+  await until(t, f, "the refusal", () => logLines(f).some((l) => l.endsWith("poll: refused: busy")));
   // The idle gap: pi is idle only while `agent_settled` runs. Timers cannot run in between, so no tick sees it.
   f.pi.idle = true;
   await f.pi.fire("agent_settled");
@@ -381,7 +470,7 @@ test("pi settling before the package validated, or while it is not idle, trigger
   assert.deepEqual(f.pi.userMessages, [], "nothing changed");
   f.pi.idle = false;
   install(f);
-  await waitFor("the refusal", () => logLines(f).some((l) => l.endsWith("poll: refused: busy")));
+  await until(t, f, "the refusal", () => logLines(f).some((l) => l.endsWith("poll: refused: busy")));
   await f.pi.fire("agent_settled"); // settled, but pi says it is not idle: the guard decides
   assert.deepEqual(f.pi.userMessages, []);
   assert.equal(f.pi.reloads, 0);
@@ -448,7 +537,7 @@ test("the log path is built from CPD_HOME and the session", () => {
 test("every decision of an install that reloads is logged, one line each, with a time", async (t) => {
   const f = await started(t);
   install(f);
-  await waitFor("the reload", () => f.pi.reloads > 0);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
   await waitFor("the command's end", () => decisions(f).includes("command: ctx.reload() returned"));
   assert.match(logLines(f)[0]!, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z start: unknown$/);
   const d = decisions(f).filter((l) => !l.startsWith("poll: watching"));
@@ -470,7 +559,7 @@ test("a pre-validation failure and the command's refusal are logged with their r
   const c = clock(t, f);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
   const failed = `poll: pre-validation failed: ${failedToLoad(f, "boom")}`;
-  await waitFor("the failure", () => decisions(f).includes(failed));
+  await until(t, f, "the failure", () => decisions(f).includes(failed));
   await c.after(5); // many polls: the same line is not repeated
   assert.equal(decisions(f).filter((l) => l === failed).length, 1);
   f.pi.editorText = "unsent";
@@ -484,33 +573,40 @@ test("a refusal that lasts is logged once, not at every poll", async (t) => {
   const c = clock(t, f);
   f.pi.pendingMessages = true;
   install(f);
-  await waitFor("the refusal", () => decisions(f).includes("poll: refused: pending"));
+  await until(t, f, "the refusal", () => decisions(f).includes("poll: refused: pending"));
   await c.after(5);
   assert.equal(decisions(f).filter((l) => l === "poll: refused: pending").length, 1);
 });
 
 test("a refusal of more than the limit tells the User once per install; a reload before it says nothing", async (t) => {
-  const f = await started(t, { reload: { longRefusalMs: 250 } });
+  let now = 0; // the adapter's clock (`reload.now`): it moves when the test says so
+  const f = await started(t, { reload: { longRefusalMs: 250, now: () => now } });
   const c = clock(t, f);
   f.pi.idle = false;
   install(f);
-  await waitFor("the notice", () => f.pi.notices.includes(LONG_REFUSAL_NOTICE), 5000);
+  await until(t, f, "the refusal", () => logLines(f).some((l) => l.endsWith("poll: refused: busy")));
+  assert.equal(f.pi.notices.includes(LONG_REFUSAL_NOTICE), false, "not yet: no time has passed");
+  now = 250;
+  await c.after(3);
+  assert.equal(f.pi.notices.includes(LONG_REFUSAL_NOTICE), false, "exactly the limit is not more than it");
+  now = 251;
+  await until(t, f, "the notice", () => f.pi.notices.includes(LONG_REFUSAL_NOTICE));
   await c.after(10); // many more polls
   assert.equal(f.pi.notices.filter((n) => n === LONG_REFUSAL_NOTICE).length, 1);
   assert.ok(decisions(f).some((l) => l.startsWith("poll: not reloaded") && l.endsWith("after the package validated; told the User")));
   assert.equal(f.pi.errorNotices.length, 0);
   f.pi.idle = true;
-  await waitFor("the reload", () => f.pi.reloads > 0);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
 });
 
 test("a package that does not validate is not a long refusal (a reload must not be advised)", async (t) => {
-  const f = await started(t, { reload: { longRefusalMs: 100 } });
+  let now = 0;
+  const f = await started(t, { reload: { longRefusalMs: 100, now: () => now } });
   const c = clock(t, f);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
-  const from = Date.now();
-  await waitFor("the failure", () => decisions(f).includes(`poll: pre-validation failed: ${failedToLoad(f, "boom")}`));
+  await until(t, f, "the failure", () => decisions(f).includes(`poll: pre-validation failed: ${failedToLoad(f, "boom")}`));
+  now = 1_000_000; // far past the limit
   await c.after(10);
-  await waitFor("longer than the limit", () => Date.now() - from > 100);
   assert.equal(f.pi.notices.includes(LONG_REFUSAL_NOTICE), false);
 });
 
@@ -527,13 +623,13 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   };
   mkdirSync(join(f.cpdHome, "run"));
   writeFileSync(join(f.cpdHome, "run", "adapter"), "a file where the log directory should be");
-  f.load();
+  f.load(arm(t));
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
   await waitFor("the notice", () => failures().length > 0);
   const c = clock(t, f);
   install(f);
-  await waitFor("the reload", () => f.pi.reloads > 0);
+  await until(t, f, "the reload", () => f.pi.reloads > 0);
   // `reloads` counts the call to `ctx.reload()`: the old run's shutdown and the new run's start (each a `cpd` child) come after it.
   await waitFor("the new run's notice", () => failures().length > 1);
   await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);

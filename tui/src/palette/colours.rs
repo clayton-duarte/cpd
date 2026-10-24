@@ -1,5 +1,5 @@
 //! Red tests for the palette of contract §6.1.1 (hs-d534), written from the docs alone: the 16 terminal colours by number, base for
-//! read-only and bright for clickable, the 15 > 7 > 8 text levels, blocks with text 0, no DIM and no REVERSED.
+//! read-only and bright for clickable, the 15 > 7 > 8 text levels, blocks inverted, no DIM.
 //! Colours are named through `palette::numbered` (no colour outside the palette), and the needles of the scan below are built at
 //! run time so that this file does not trip it.
 //!
@@ -8,7 +8,7 @@
 
 use ratatui::style::{Modifier, Style};
 
-use super::numbered::{C0, C1, C10, C11, C13, C14, C15, C2, C3, C4, C5, C6, C7, C8, C9};
+use super::numbered::{C1, C10, C11, C13, C14, C15, C2, C3, C4, C5, C6, C7, C8, C9};
 use super::{
     archived_text, asleep_text, dot_span, bright, clickable_text, color, count_style, color_clickable, job_pill, muted_text, pill_focus, pill_interactive,
     pill_static, read_only_text, selected, toggle_text, JobStatus, Meaning,
@@ -16,9 +16,9 @@ use super::{
 use crate::read::Dot;
 use crate::section;
 
-/// A block: the colour as background, text 0, no modifier.
-fn block(bg: ratatui::style::Color) -> Style {
-    Style::new().bg(bg).fg(C0)
+/// A block: the colour as foreground, reset background, reverse video.
+fn block(c: ratatui::style::Color) -> Style {
+    Style::new().fg(c).bg(ratatui::style::Color::Reset).add_modifier(Modifier::REVERSED)
 }
 
 /// Text: the colour as foreground, no modifier, no background.
@@ -27,9 +27,9 @@ fn text(fg: ratatui::style::Color) -> Style {
 }
 
 #[test]
-fn job_pills_are_their_status_colour_bright_with_black_text() {
+fn job_pills_are_their_status_colour_bright__inverted() {
     // (status, merging, stuck, the pill's background number): draft 13, queued 15, running 14, merging 11, merged 10,
-    // failed 9, cancelled 8; text 0.
+    // failed 9, cancelled 8; inverted.
     let table = [
         ("draft", JobStatus::Draft, false, false, C13),
         ("queued", JobStatus::Queued, false, false, C15),
@@ -87,29 +87,29 @@ fn each_meaning_has_its_decided_base_colour_and_bright_pair() {
 }
 
 #[test]
-fn selection_is_a_blue_block_with_black_text() {
+fn selection_is_a_blue_block__inverted() {
     let expected = block(C4);
-    assert_eq!(selected(), expected, "a cursor and a selection: background 4, text 0");
+    assert_eq!(selected(), expected, "a cursor and a selection: background 4, inverted");
     assert_eq!(pill_focus(), expected, "the focused pill is the same blue block");
     for style in [selected(), pill_focus()] {
-        assert!(!style.add_modifier.contains(Modifier::REVERSED), "a blue block, not reverse video: {style:?}");
+        assert!(style.add_modifier.contains(Modifier::REVERSED), "a blue block is reverse video: {style:?}");
     }
 }
 
 #[test]
-fn read_only_pills_are_grey_blocks_with_black_text() {
-    assert_eq!(pill_static(), block(C7), "a read-only pill: background 7, text 0");
-    // the title pill and the count pill as the views draw them: every block of the row is background 7, text 0
+fn read_only_pills_are_grey_inverted_blocks() {
+    assert_eq!(pill_static(), block(C7), "a read-only pill: colour 7, inverted");
+    // the title pill and the count pill as the views draw them: every block of the row is colour 7, inverted
     for line in [section::title("Inbox", Some(3), 30), section::collapsible_title("Inbox", Some(3), 30)] {
-        let blocks: Vec<_> = line.spans.iter().filter(|s| s.style.bg.is_some()).collect();
+        let blocks: Vec<_> = line.spans.iter().filter(|s| s.style.add_modifier.contains(Modifier::REVERSED)).collect();
         assert_eq!(blocks.len(), 2, "a title pill and a count pill: {line:?}");
         for span in blocks {
-            assert_eq!((span.style.bg, span.style.fg), (Some(C7), Some(C0)), "{span:?}");
+            assert_eq!((span.style.fg, span.style.bg), (Some(C7), Some(ratatui::style::Color::Reset)), "{span:?}");
         }
     }
 }
 
-/// No `DIM` anywhere under `tui/` (it becomes colour 8) and no `REVERSED` outside the palette module, `palette.rs` and `palette/` (a cursor is a blue block).
+/// No `DIM` anywhere under `tui/` (it becomes colour 8) and no `REVERSED` outside the palette module, `palette.rs`, `palette/` and the tests that pin the blocks' reverse video (a cursor is a blue block).
 #[test]
 fn no_dim_or_reversed_outside_the_palette() {
     let dim = [format!("Modifier::{}", "DIM"), format!(".{}()", "dim")];
@@ -121,7 +121,8 @@ fn no_dim_or_reversed_outside_the_palette() {
             if path.is_dir() {
                 walk(&path, dim, reversed, offenders);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let in_palette = path.file_name().is_some_and(|n| n == "palette.rs") || path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette"));
+                let pins_blocks = ["pill_colours.rs", "pill_tests.rs", "view_tests.rs", "input_tests.rs", "input_box_tests.rs"];
+                let in_palette = path.file_name().is_some_and(|n| n == "palette.rs" || pins_blocks.iter().any(|p| n == *p)) || path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette"));
                 let text = std::fs::read_to_string(&path).unwrap();
                 for (n, line) in text.lines().enumerate() {
                     let named = dim.iter().any(|s| line.contains(s)) || (!in_palette && reversed.iter().any(|s| line.contains(s)));
