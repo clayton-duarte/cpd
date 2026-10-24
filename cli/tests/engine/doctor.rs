@@ -394,7 +394,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
     let adapter = env.root().join("adapter").display().to_string();
     let settings = env.home().join(".pi/agent/settings.json");
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
-    fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0", {"source": "npm:@juicesharp/rpiv-ask-user-question"}]}"#).unwrap();
+    fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0"]}"#).unwrap();
     let run = doctor(&env);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
@@ -404,7 +404,6 @@ fn lead_packages_say_how_a_lead_gets_each() {
         json!([
             {"package": adapter, "by": "-e"},
             {"package": "npm:@plannotator/pi-extension@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
-            {"package": "npm:@juicesharp/rpiv-ask-user-question@2.13.8", "by": by_settings["by"], "settings": by_settings["settings"]},
         ])
     );
 
@@ -417,7 +416,7 @@ fn lead_packages_say_how_a_lead_gets_each() {
     let run = doctor(&env);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
-    assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.display().to_string()}));
+    assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.canonicalize().unwrap().display().to_string()}));
 }
 
 #[test]
@@ -720,6 +719,10 @@ fn link_sleep(env: &TestEnv) {
 
 const HANG: &str = "exec sleep 120";
 
+/// The deadline override of the tests where one probe hangs and the others must not: the override also covers the
+/// plain `--version` probes, and a spawn takes over 1 s on a loaded Mac at the start of the Gate.
+const DEADLINE: &str = "5";
+
 /// Asserts `name` failed with `tool_timeout` naming `tool` and its deadline of `seconds` (as the override set it),
 /// and the other checks still ran.
 fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str, seconds: &str) {
@@ -734,9 +737,9 @@ fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
     let env = healthy();
     link_sleep(&env);
     env.fake_gh(&format!("[ \"$1\" = auth ] && {HANG}; echo 'gh version 2.45.0 (2025-07-18)'"));
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", "1")]);
+    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", DEADLINE)]);
     run.ok();
-    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status", "1");
+    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status", DEADLINE);
     assert_eq!(checks(&run).len(), NAMES.len());
 }
 
@@ -768,7 +771,7 @@ fn a_hung_pi_node_is_a_failed_check() {
 
 /// The catalog probe's deadline is doctor's (10 s, commands.md §14.1), not the 30 s of
 /// the catalog's own cache fill: a node that answers `--version` and hangs on the module.
-/// The test sets doctor's deadline to 1 s (`CPD_TEST_DOCTOR_DEADLINE`, contract §1.2), and the probe reports it.
+/// The test sets doctor's deadline to 5 s (`CPD_TEST_DOCTOR_DEADLINE`, contract §1.2), and the probe reports it.
 #[test]
 fn a_hung_catalog_probe_is_killed_at_doctors_deadline() {
     let env = healthy();
@@ -776,12 +779,12 @@ fn a_hung_catalog_probe_is_killed_at_doctors_deadline() {
     fs::remove_file(env.bin().join("node")).unwrap();
     write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n"));
     let started = std::time::Instant::now();
-    let run = doctor_with(&env, &[("CPD_TEST_DOCTOR_DEADLINE", "1")]);
+    let run = doctor_with(&env, &[("CPD_TEST_DOCTOR_DEADLINE", DEADLINE)]);
     // time-claim: the probe is killed at doctor's deadline, long before the cache fill's 30 s; no per-poll signal from
     // the deadline.
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
     assert_doctor_failed(&run);
     assert_passes(&run, "pi_node");
     let c = assert_fails(&run, "tiers", "error", "tool_timeout");
-    assert_eq!(c["found"]["deadline_seconds"], 1, "{c}");
+    assert_eq!(c["found"]["deadline_seconds"], 5, "{c}");
 }

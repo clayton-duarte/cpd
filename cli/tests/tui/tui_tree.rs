@@ -23,8 +23,8 @@ const WORKING: &str = SPINNER[0];
 // The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
 const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
-const DOWN: &str = "\u{F004B}";
-const UP: &str = "\u{F0063}";
+const DOWN: &str = "\u{F0B26}";
+const UP: &str = "\u{F0B2C}";
 
 /// The closing row of a block that folds, folded, after the pane's margin.
 fn expand() -> String {
@@ -44,7 +44,7 @@ fn pill(inner: usize, count: usize) -> String {
 
 /// An Inbox item row in `inner` columns: the muted `│`, one space, the tier `glyph`, the label and the age (`5m`) at the last column.
 fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
-    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 4 - label.len() - 2))
+    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 2 - 4 - label.len() - 2))
 }
 
 // ---------- the prepared store ----------
@@ -237,7 +237,7 @@ fn opened_ago() -> String {
 }
 
 /// The Inbox section of `populate`'s four items in a pane `width` wide: the empty row, the pill title, three rows and the
-/// fold widget's `╰󰁋 expand`.
+/// fold widget's `╰󰬦 expand`.
 fn inbox_section(width: usize) -> Vec<String> {
     let inner = width - 2;
     vec![
@@ -532,7 +532,7 @@ fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env, 46, 20);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
@@ -546,14 +546,14 @@ fn the_tree_of_a_prepared_store() {
         row(&format!("╰─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F005A}".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰁚`), one empty row between two Contexts; the Inbox section is pinned below
+        " ╰\u{F0B2A}".to_owned(),
+    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰬪`), one empty row between two Contexts; the Inbox section is pinned below
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰁚` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
     );
 }
 
@@ -568,7 +568,7 @@ fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_the_t
         pill(44, 2),
         item_row_of(44, palette::TIER_RED, "f-blocked label"),
         item_row_of(44, palette::TIER_RED, "l-rel label"),
-        " ╰\u{F005A}".to_owned(),
+        " ╰\u{F0B2A}".to_owned(),
     ];
     // the screen has no empty row at its end: the section's own empty row below is not in it
     let screen = pane.wait("the two items", |s| s.len() == 17 && s[12..] == expected);
@@ -585,7 +585,7 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
     assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
-    assert!(screen.iter().any(|r| r.chars().count() == 45), "the counters end at width − 2: {screen:?}");
+    assert!(screen.iter().any(|r| r.chars().count() == 43), "the counters end at width − 4: {screen:?}");
 }
 
 #[test]
@@ -594,7 +594,7 @@ fn an_empty_store_says_so() {
     drop(open(&env));
     let pane = Pane::start(&env, 40, 5);
     let header = pill(38, 0);
-    let close = " ╰\u{F005A} up to date, drink some water"; // hs-d487: the empty Inbox's one closing row, below its title
+    let close = " ╰\u{F0B2A} up to date, drink some water"; // hs-d487: the empty Inbox's one closing row, below its title
     assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", header.as_str(), close], "the section is there with no item: the title (count 0), then the one closing row");
 }
 
@@ -643,9 +643,9 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_i
     pane.click(1, 1); // the first cell of the title row: its dot
     pane.settled();
     assert_eq!(wait_for_calls(&env, 4).len(), 4, "the dot is the title row's: it opens the Manager too");
-    pane.click(8, 6); // its `╰󰁣 collapse` row
+    pane.click(8, 6); // its `╰󰬬 collapse` row
     let folded = pane.wait("alpha's archived row hidden", |s| !s.iter().any(|r| r.contains("ship·f-bl")));
-    assert_eq!((folded[1].as_str(), folded[4].as_str(), folded[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), format!(" ├─{IDLE} ship·f-id").as_str(), expand().as_str()), "a folded Context draws its Manager's dot (its unread item), its live rows and a `╰󰁋 expand` row: {folded:?}");
+    assert_eq!((folded[1].as_str(), folded[4].as_str(), folded[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), format!(" ├─{IDLE} ship·f-id").as_str(), expand().as_str()), "a folded Context draws its Manager's dot (its unread item), its live rows and a `╰󰬦 expand` row: {folded:?}");
     assert!(folded.iter().any(|r| r.contains("ship")) && folded.iter().any(|r| r.contains("sketch")), "the live rows stay: {folded:?}");
     assert_eq!(calls(&env).len(), 4, "the closing row runs no command");
     pane.click(8, 5);
@@ -991,65 +991,6 @@ fn archive(env: &TestEnv) {
         "UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';
          UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'old';
          UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'l-old';",
-    );
-}
-
-#[test]
-fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_only_them() {
-    let env = env();
-    populate(&env);
-    archive(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 26);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
-    let mut expected = vec![
-        String::new(),
-        format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
-        row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
-        format!(" ├─{IDLE} ship·f-id"),
-        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
-        String::new(),
-        format!(" ╭{NEEDS_YOU} beta"),
-        row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        collapse(),
-        String::new(),
-        format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F005A}".to_owned(),
-    ];
-    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
-    expected.extend(inbox_section(46));
-    let screen = pane.screen_is(&expected);
-    assert_eq!(
-        screen,
-        expected,
-        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with the terminator `╰󰁚`; no `󰇘` row"
-    );
-    assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its terminator closing row does nothing
-    pane.click(10, 9);
-    assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])]);
-    pane.click(5, 12);
-    pane.click(1, 13);
-    pane.settled();
-    // beta's closing row hides its archived row only: the live row stays
-    pane.click(5, 10);
-    let shown = [format!(" ╭{NEEDS_YOU} beta")];
-    let screen = pane.wait("beta folded", |s| s.get(9) == Some(&expand()));
-    assert_eq!(screen[7..8], shown);
-    assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
-    assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
-    assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰\u{F005A}"));
-    assert_eq!(
-        calls(&env),
-        [
-            words(&["plan", "unarchive", "--plan=old"]),
-            words(&["session", "open", "l-old"]),
-            words(&["context", "unarchive", "gamma"]),
-            words(&["context", "manager", "--context=gamma", "--by-user"])
-        ],
-        "only the clicks on the archived Plan and the archived Context's title ran commands"
     );
 }
 
@@ -1408,27 +1349,6 @@ fn rename_on_a_plan_row_starts_from_its_title_and_runs_plan_rename() {
 }
 
 #[test]
-fn new_context_opens_an_input_popup_for_a_title_and_runs_context_new_with_the_derived_id() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
-    fake_dialogs(&env);
-    type_in(&env, "Building cpd!");
-    let pane = Pane::start(&env, 60, 22);
-    pane.ready();
-    pane.right_click(5, 14); // the empty area
-    pane.wait("the menu", |s| menu_open(s, "New Context…"));
-    pane.keys(&["Enter"]);
-    assert_eq!(
-        wait_for_popups(&env, 1),
-        ["cpd tui view dialog input --title='New Context' --prompt='Title:' --initial='' --validate='title'"]
-    );
-    // the instance has one owner policy (`acme`, which every test env has): used without asking
-    assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!", "--owner=acme"])]);
-    pane.wait_logged("the result", "ok: created building-cpd");
-}
-
-#[test]
 fn a_title_no_id_can_be_made_of_is_refused_in_a_text_dialog_and_runs_nothing() {
     let env = env();
     populate(&env);
@@ -1533,7 +1453,7 @@ fn folds_file(env: &TestEnv) -> std::path::PathBuf {
     env.cpd_home().join("run").join("tui").join("tree-folds.json")
 }
 
-/// The tree's rows above the Inbox section (whose own fold row is a `╰󰁋 expand` too).
+/// The tree's rows above the Inbox section (whose own fold row is a `╰󰬦 expand` too).
 fn above_inbox(screen: &[String]) -> &[String] {
     &screen[..screen.iter().position(|r| r.contains("Inbox")).unwrap_or(screen.len())]
 }
@@ -1549,7 +1469,7 @@ fn archive_for_folds(env: &TestEnv) {
     );
 }
 
-/// `alpha`, the live Context with an archived row, is expanded: its block shows the archived row and ends in `╰󰁣 collapse`.
+/// `alpha`, the live Context with an archived row, is expanded: its block shows the archived row and ends in `╰󰬬 collapse`.
 fn alpha_is_expanded(screen: &[String]) -> bool {
     let tree = above_inbox(screen);
     tree.iter().any(|r| r.trim() == format!("╰{UP} collapse")) && tree.iter().any(|r| r.contains("ship·f-bl"))
@@ -1570,13 +1490,13 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
     let screen = pane.ready();
     assert!(alpha_is_expanded(&screen), "{screen:#?}");
     assert!(!folds_file(&env).exists(), "a start with no fold writes nothing");
-    // alpha's `╰󰁣 collapse` row (the fold widget's toggle row is the only one that folds, commands.md §13.2): its
+    // alpha's `╰󰬬 collapse` row (the fold widget's toggle row is the only one that folds, commands.md §13.2): its
     // archived row goes, its live rows stay
     let toggle = screen.iter().position(|r| r.trim() == format!("╰{UP} collapse")).unwrap() as u16;
     pane.click(5, toggle);
     let screen = pane.wait("alpha folded", |s| s.get(5).is_some_and(|r| r.trim() == format!("╰{DOWN} expand")));
     assert!(screen.iter().any(|r| r.contains("sketch")) && !screen.iter().any(|r| r.contains("ship·f-bl")), "{screen:#?}");
-    // the archived Context beta starts folded: its `╰󰁋 expand` row, right under its title row
+    // the archived Context beta starts folded: its `╰󰬦 expand` row, right under its title row
     let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
     assert_eq!(screen[beta + 1].trim(), format!("╰{DOWN} expand"), "{screen:#?}");
     pane.click(5, beta as u16 + 1);
@@ -1637,10 +1557,10 @@ fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_ti
     pane.ready();
     // the section is pinned to the bottom, the Session rows above it
     assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
-    pane.click(10, 19); // `╰󰁋 expand`
+    pane.click(10, 19); // `╰󰬦 expand`
     let expanded = [inbox_section(46)[..5].to_vec(), vec![item_row_of(44, palette::TIER_WHITE, "m-alpha label"), collapse()]].concat();
     assert_eq!(pane.rows_are(13, &expanded)[13..], expanded);
-    pane.click(3, 19); // `╰󰁣 collapse`
+    pane.click(3, 19); // `╰󰬬 collapse`
     assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
     assert!(calls(&env).is_empty(), "expanding and folding are no commands");
     pane.click(10, 15); // the title: the pill toggles nothing

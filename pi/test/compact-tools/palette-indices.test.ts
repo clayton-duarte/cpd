@@ -1,6 +1,6 @@
 /**
  * compact-tools draws indexed colours 0-15 only (docs/contract.md 6.1.1 and 6.9, hs-d534, hs-d545):
- * no RGB, no faint, no reverse, no derived value. Rails and metadata are 8, the running dot and
+ * no RGB, no faint, no derived value, reverse video (ESC[7m / ESC[27m) only inside a pill, between its caps, and never colour 0 as text (ESC[30m). Rails and metadata are 8, the running dot and
  * the working label 6, fold toggles 7, diff lines text 2 and 1 with no background.
  */
 import assert from "node:assert/strict";
@@ -30,7 +30,9 @@ function apply(params: string, paint: Paint): string | undefined {
 		if (parts[i]!.includes(":")) return parts[i];
 		if (n === 0) { paint.fg = undefined; paint.bg = undefined; }
 		else if (n === 1 || n === 4 || (n >= 22 && n <= 24)) continue;
-		else if (n >= 30 && n <= 37) paint.fg = n - 30;
+		else if (n === 7 || n === 27) continue; // reverse video: checked as pill structure in refused()
+		else if (n === 30) return parts[i]; // the cockpit never draws index 0 as text
+		else if (n >= 31 && n <= 37) paint.fg = n - 30;
 		else if (n >= 90 && n <= 97) paint.fg = n - 90 + 8;
 		else if (n === 39) paint.fg = undefined;
 		else if (n >= 40 && n <= 47) paint.bg = n - 40;
@@ -54,6 +56,12 @@ function refused(lines: string[]): string[] {
 		for (const match of line.matchAll(SGR)) {
 			const bad = apply(match[1]!, { fg: undefined, bg: undefined });
 			if (bad !== undefined) found.push(`${bad} in ${readable(line)}`);
+		}
+		for (const match of line.matchAll(/\x1b\[(7|27)m/gu)) {
+			const before = line.slice(0, match.index);
+			const after = line.slice(match.index + match[0].length);
+			const inPill = match[1] === "7" ? before.endsWith("\uE0B6") : after.replace(/^(\x1b\[[0-9;]*m)*/u, "").startsWith("\uE0B4");
+			if (!inPill) found.push(`reverse video outside a pill's caps in ${readable(line)}`);
 		}
 	}
 	return found;
@@ -82,7 +90,7 @@ function indexedAt(line: string, needle: string, expected: number): void {
 	assert.equal(paintAt(line, needle).fg, expected, `${needle} is colour ${expected} in ${readable(line)}`);
 }
 
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 
 /** One tool row in the fold language's defaults, driven as Pi drives it, drawn at each stage. */
 function stages(harness: Harness, name: string, id: string, failed: boolean, expanded: boolean) {
@@ -245,7 +253,9 @@ test("the running dot and working label are colour 6", async () => {
 				apply(match[1]!, paint);
 			}
 			if (plain(message.slice(last)) !== "") colours.add(paint.fg);
-			assert.deepEqual([...colours].sort(), [0, 6], `the label is a pill: caps 6, text 0 on bg 6 in ${readable(message)}`);
+			assert.deepEqual([...colours], [6], `the label is a pill: caps 6, text inverted in ${readable(message)}`);
+			assert.deepEqual(refused([message]), [], readable(message));
+			assert.ok(message.includes(`\uE0B6${ESC}[7m`) && message.includes(`${ESC}[27m${ESC}[36m\uE0B4`), `reverse between the caps in ${readable(message)}`);
 		}
 	});
 });

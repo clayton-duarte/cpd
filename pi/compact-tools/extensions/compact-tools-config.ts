@@ -3,13 +3,13 @@
  *
  * Two keys beyond upstream's, both optional; cpd's defaults are the fold language:
  *   fold:   "status" | "toggle"                 default "toggle" (upstream's is "status")
- *   toggle: { expand: string, collapse: string } default { expand: U+F004B, collapse: U+F0063 }
+ *   toggle: { expand: string, collapse: string } default { expand: U+F0B26, collapse: U+F0B2C }
  * mergeConfig parses `fold` with parseChoice (an unknown value warns and keeps the previous one)
  * and `toggle` field by field: each glyph must be a non-empty string without control characters
  * or newlines, otherwise warn and keep the previous glyph. Project settings override global ones
  * field by field, like every other key. The merged config gains `fold` and `toggle`.
  * Glyphs may be literal code points or JSON escapes: JSON.parse (readJson) accepts both;
- * U+F004B is "\uDB80\uDC4B" and U+F0063 is "\uDB80\uDC63" (surrogate pairs).
+ * U+F0B26 is "\uDB82\uDF26" and U+F0B2C is "\uDB82\uDF2C" (surrogate pairs).
  * The defaults below are cpd's, not upstream's: fold, toggle and tools (docs/implementing.md, "The compact-tools extension").
  * `fold` only acts when style is "compact"; claude, codex and off ignore it.
  */
@@ -38,7 +38,7 @@ export const DEFAULT_CONFIG: CompactToolsConfig = {
 	tools: ["read", "write", "edit", "bash", "grep", "find", "ls"],
 	previewLines: 10,
 	fold: "toggle",
-	toggle: { expand: "\u{F004B}", collapse: "\u{F0063}" },
+	toggle: { expand: "\u{F0B26}", collapse: "\u{F0B2C}" },
 	auto_compact: {
 		read: true,
 		write: true,

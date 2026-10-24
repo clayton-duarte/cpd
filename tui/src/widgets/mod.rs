@@ -25,7 +25,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
 use super::palette;
@@ -133,7 +133,7 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
-/// PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
+/// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
 /// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
 fn show(
@@ -167,7 +167,7 @@ fn show(
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
-                    open.menu.draw_at(f, pane, frame);
+                    open.menu.draw_at(f, pane.inner(Margin::new(1, 0)), frame);
                 }
             })?;
             (redraw, drawn_frame) = (false, Some(frame));
@@ -181,7 +181,7 @@ fn show(
                 // an open menu takes every key and click
                 let outcome = match &event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => open.menu.key(*key),
-                    Event::Mouse(m) => open.menu.mouse(pane, *m),
+                    Event::Mouse(m) => open.menu.mouse(pane.inner(Margin::new(1, 0)), *m),
                     _ => Outcome::Stay,
                 };
                 match outcome {

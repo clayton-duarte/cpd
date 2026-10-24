@@ -29,7 +29,7 @@ const SOURCES = [
 
 test("pi/package.json lists the adapter and the compact-tools extension, each a file, and the skills as before", () => {
 	const manifest = json(join(PI, "package.json"));
-	assert.deepEqual(manifest.pi.extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts"]);
+	assert.deepEqual(manifest.pi.extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"]);
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
 	assert.deepEqual(manifest.pi.themes, ["./themes"]);
 	// An entry whose file is missing makes pi fail to load the adapter: the entry and the files come in one change.
@@ -41,13 +41,13 @@ test("pi/package.json lists the adapter and the compact-tools extension, each a 
 test("extensions/ holds the fork's source files under their names, but compact-tools-release.ts, and the double-load module, importing nothing else", () => {
 	const names = readdirSync(join(EXTENSION, "extensions")).filter((name) => name.endsWith(".ts")).sort();
 	assert.deepEqual(names, [...SOURCES].sort());
-	// ...which import only pi, pi-tui, node: modules and each other, so the package gains no dependency.
+	// ...which import only pi, pi-tui, node: modules, each other and the shared pill atom (lib/pill.ts), so the package gains no dependency.
 	const found: string[] = [];
 	for (const name of names) {
 		const source = readFileSync(join(EXTENSION, "extensions", name), "utf8");
 		for (const match of source.matchAll(/(?:from\s+|import\(\s*)["']([^"']+)["']/gu)) {
 			const specifier = match[1]!;
-			if (!(specifier.startsWith("./") || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
+			if (!(specifier.startsWith("./") || specifier === "../../lib/pill.ts" || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
 		}
 	}
 	assert.deepEqual(found, []);

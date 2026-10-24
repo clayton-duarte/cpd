@@ -4,33 +4,35 @@
 # pi, offline, in an empty temporary agent dir (docs/implementing.md,
 # "Checking a pi version"). Exit 0 and one `pi-check: ok (<version>)` line,
 # or exit 1 and `pi-check: FAIL: <step and why>` with the tail of pi's output.
-# Needs tmux and node (step 3 runs pi's interactive mode, the only one that
-# activates); a machine without them fails step 0, never skips (hs-d355).
+# Needs python3 and node (step 3 runs pi's interactive mode, the only one that
+# activates, and that needs a tty: scripts/pi-check-pty.py gives it a pty); a
+# machine without them fails step 0, never skips (hs-d355).
 #
 # hs-d355, docs/implementing.md "Checking a pi version":
 # - The Gate runs it: `npm run verify` calls `scripts/pi-check.sh
 #   node_modules/.bin/pi`, the pi package.json pins, against this checkout's adapter.
-# - The fake cpd holds no answers of its own: it records its argv, sleeps for
-#   `events follow`, and runs `node pi/test/answers.ts <argv>` for the rest,
-#   the same answers the adapter's tests use, so a field the adapter starts
-#   requiring fails `npm test` and this check together.
+# - The fake cpd holds no answers of its own: it records its argv, tells the
+#   runner on a fifo for `events follow` (then blocks on another fifo, no `sleep`),
+#   and runs `node pi/test/answers.ts <argv>` for the rest, the same answers the
+#   adapter's tests use, so a field the adapter starts requiring fails `npm test`
+#   and this check together.
 # - It never starts a model turn: every pi command runs under `env -i` with an
 #   allow-list (PATH LANG LC_ALL LC_CTYPE TERM when set, plus HOME TMPDIR
-#   TMUX_TMPDIR GATE_RUN (when set) PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
+#   GATE_RUN (when set) PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
 #   which it sets itself): no provider key, no proxy, no base URL.
-# - It runs on macOS too: scripts/check-portable.sh covers this file.
+# - It runs on macOS too: scripts/check-portable.sh covers this file and the runner.
 # - A pass stays a pass (hs-d463; docs/implementing.md "Checking a pi version"): the
 #   exit status is fixed before the cleanup runs and the cleanup cannot change it.
-#   The cleanup kills the private tmux server and waits (2 s, then SIGKILL of the
-#   pane's process group, 1 s) for its processes, retries `rm -rf` every 0.5 s for
-#   at most PI_CHECK_CLEANUP_SECS (default 5), and on failure only warns
-#   (`pi-check: warning: could not remove <tmp>`); it never prints FAIL.
-# - Every tmux call is a UTF-8 client (hs-d463; contract §6.1): `tmux -u`, in the one
-#   function `tmx`, whatever LANG/LC_ALL the caller has.
+#   The runner kills pi's whole process group and waits for it before it returns (also
+#   on SIGTERM and SIGINT); the cleanup then retries `rm -rf` every PI_CHECK_CLEANUP_PAUSE
+#   seconds (default 0.5) for at most PI_CHECK_CLEANUP_SECS (default 5), and on failure
+#   only warns (`pi-check: warning: could not remove <tmp>`); it never prints FAIL.
+# - PI_CHECK_ACTIVATION_SECS (default 60) is how long step 3 waits for `events follow`.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 adapter_dir="$root/pi"
+pty_py="$root/scripts/pi-check-pty.py"
 pi_cmd=${1:-pi}
 
 fail() {
@@ -39,12 +41,12 @@ fail() {
   exit 1
 }
 
-# Step 0, tools: step 3 needs tmux and the fake cpd needs node. A machine without them fails, never skips.
-for tool in tmux node; do
+# Step 0, tools: step 3 needs python3 (the pty) and the fake cpd needs node. A machine without them fails, never skips.
+for tool in python3 node; do
   command -v "$tool" >/dev/null 2>&1 || fail "step 0 (tools): $tool is not installed (step 3 needs it)"
 done
 
-# The pane starts in another directory: a relative pi command (the Gate's node_modules/.bin/pi) is made absolute.
+# pi runs in another directory: a relative pi command (the Gate's node_modules/.bin/pi) is made absolute.
 pi_bin=${pi_cmd%% *}
 case $pi_bin in
   /*) ;;
@@ -52,11 +54,10 @@ case $pi_bin in
 esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-check.XXXXXX")
-socket="pi-check-${GATE_RUN:-x}-$$"
 
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# The allow-list (no model turn): what every pi command and the tmux client see, under `env -i`.
+# The allow-list (no model turn): what every pi command sees, under `env -i`.
 allow=
 for name in PATH LANG LC_ALL LC_CTYPE TERM; do
   eval "isset=\${$name+1}"
@@ -64,47 +65,25 @@ for name in PATH LANG LC_ALL LC_CTYPE TERM; do
   eval "value=\$$name"
   allow="$allow $name=$(shq "$value")"
 done
-# GATE_RUN (the Gate's run id, scripts/gate-run.sh) stays, so the run finds this check's processes; TMUX_TMPDIR is inside
-# $tmp, so the server's socket is removed with it (tmux leaves a socket file when its server exits; hygiene.md bug 4).
+# GATE_RUN (the Gate's run id, scripts/gate-run.sh) stays, so the run finds this check's processes; TMPDIR is $tmp,
+# so everything pi writes is removed with it.
 if [ -n "${GATE_RUN:-}" ]; then allow="$allow GATE_RUN=$(shq "$GATE_RUN")"; fi
-allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") TMUX_TMPDIR=$(shq "$tmp/tmux") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
+allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
 cleanenv() { eval "env -i $allow \"\$@\""; }
-tmx() { cleanenv tmux -u -L "$socket" "$@"; }
 
-# The process ids of the private server's panes, recorded while they live (tmux >= 3.8 prints none once a pane's tty closed).
-pane_pids=
-record_panes() { pane_pids="$pane_pids $(tmx list-panes -a -F '#{pane_pid}' 2>/dev/null || true)"; }
-
-# True while a process of the group $1 lives (tmux makes a pane's process a session leader: its group id is its pid).
-group_alive() { kill -0 -- "-$1" 2>/dev/null; }
-
-# Waits, polling every 0.1 s, for at most $1 tenths of a second, until no pane's process group lives.
-wait_panes() {
-  waits=0
-  while [ "$waits" -lt "$1" ]; do
-    alive=0
-    for pid in $pane_pids; do
-      if group_alive "$pid"; then alive=1; fi
-    done
-    [ "$alive" -eq 1 ] || return 0
-    waits=$((waits + 1))
-    sleep 0.1
-  done
-  return 1
-}
+# The runner of step 3, while it runs.
+runner=
 
 # The cleanup never changes the check's exit status (hs-d463): the status is saved first,
-# every command here may fail, and the last line exits with it. It stops the private
-# server and waits for its processes (a child still writing into $tmp made `rm -rf` fail
+# every command here may fail, and the last line exits with it. It stops the runner (which
+# kills pi's group and waits for it: a child still writing into $tmp made `rm -rf` fail
 # `Directory not empty` on macOS), retries the removal, and only warns when it cannot.
 cleanup() {
   status=$?
   set +e
-  record_panes
-  tmx kill-server >/dev/null 2>&1
-  if ! wait_panes 20; then
-    for pid in $pane_pids; do kill -9 -- "-$pid" 2>/dev/null; done
-    wait_panes 10
+  if [ -n "$runner" ]; then
+    kill -TERM "$runner" 2>/dev/null
+    wait "$runner" 2>/dev/null
   fi
   tries=0
   limit=$((${PI_CHECK_CLEANUP_SECS:-5} * 2))
@@ -115,14 +94,14 @@ cleanup() {
       echo "pi-check: warning: could not remove $tmp: $err" >&2
       break
     fi
-    sleep 0.5
+    python3 "$pty_py" pause "${PI_CHECK_CLEANUP_PAUSE:-0.5}"
   done
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-mkdir "$tmp/agent" "$tmp/bin" "$tmp/home" "$tmp/tmux"
+mkdir "$tmp/agent" "$tmp/bin" "$tmp/home"
 
 version=$(cleanenv $pi_cmd --version 2>&1) || fail "step 1 (version): '$pi_cmd --version' failed: $version"
 echo "$pi_cmd --version: $version"
@@ -133,16 +112,18 @@ if ! cleanenv $pi_cmd --no-extensions --no-session -e "$adapter_dir" --mode rpc 
 fi
 
 # Step 3, activation: the adapter only activates in interactive mode (ctx.mode "tui"),
-# so pi runs in a private tmux server. A fake cpd records its argv, sleeps for
-# `events follow` and answers the rest from pi/test/answers.ts, the adapter's own test
+# so pi runs on a pty (the runner). A fake cpd records its argv, writes to the `follow`
+# fifo and blocks on the `hold` fifo (nobody writes it; the runner kills it) for
+# `events follow`, and answers the rest from pi/test/answers.ts, the adapter's own test
 # answers; pass when it was called with `events follow`.
 calls="$tmp/calls"
 : >"$calls"
+mkfifo "$tmp/follow" "$tmp/hold"
 cat >"$tmp/bin/cpd" <<FAKE
 #!/bin/sh
 echo "\$*" >>"$calls"
 case "\$1 \$2" in
-  "events follow") exec sleep 60 ;;
+  "events follow") echo follow >"$tmp/follow"; exec cat "$tmp/hold" ;;
   *) exec node "$adapter_dir/test/answers.ts" "\$@" ;;
 esac
 FAKE
@@ -150,25 +131,26 @@ chmod 755 "$tmp/bin/cpd"
 
 session=$(node -p 'crypto.randomUUID()')
 
-tmx -f /dev/null new-session -d -x 120 -y 30 -c "$tmp/home" \
-  "env -i $allow PATH=$(shq "$tmp/bin:$PATH") CPD_SESSION='$session' CPD_HOME=$(shq "$tmp/home") \
-   $pi_cmd --no-extensions --no-session --session-id '$session' -e '$adapter_dir' 2>'$tmp/tui.err'; echo \"pi exited \$?\" >>'$tmp/tui.err'" \
-  || fail "step 3 (activation): cannot start tmux"
-record_panes
+eval "set -- $allow PATH=$(shq "$tmp/bin:$PATH") CPD_SESSION=$(shq "$session") CPD_HOME=$(shq "$tmp/home")"
+python3 "$pty_py" run --seconds "${PI_CHECK_ACTIVATION_SECS:-60}" --follow "$tmp/follow" --cwd "$tmp/home" --stderr "$tmp/tui.err" --out "$tmp/pty.out" -- \
+  env -i "$@" $pi_cmd --no-extensions --no-session --session-id "$session" -e "$adapter_dir" &
+runner=$!
+status=0
+wait "$runner" || status=$?
+runner=
 
-tries=0
-until grep -q '^events follow' "$calls"; do
-  tries=$((tries + 1))
-  if [ "$tries" -gt 150 ] || ! tmx has-session 2>/dev/null; then
-    tmx capture-pane -p >>"$tmp/tui.err" 2>/dev/null || true
+case $status in
+  0) ;;
+  130) exit 130 ;;
+  *)
     {
       echo "fake cpd calls:"
       cat "$calls"
       cat "$tmp/tui.err"
-    } >"$tmp/step3.out"
-    fail "step 3 (activation): the adapter did not run 'cpd events follow' within 15 s" "$tmp/step3.out"
-  fi
-  sleep 0.1
-done
+      tail -n +2 "$tmp/pty.out"
+    } >"$tmp/step3.out" 2>/dev/null
+    fail "step 3 (activation): the adapter did not run 'cpd events follow': $(head -n 1 "$tmp/pty.out" 2>/dev/null)" "$tmp/step3.out"
+    ;;
+esac
 
 echo "pi-check: ok ($version)"

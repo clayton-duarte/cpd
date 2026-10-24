@@ -9,6 +9,8 @@
 //! - [`view`]: the state and the drawing;
 //! - [`popup_args`] and [`open_at`]: the popup, which `cpd tui action logs` and the Inbox click open.
 
+#[cfg(test)]
+mod margin_tests;
 mod view;
 
 use std::time::Duration;

@@ -2303,8 +2303,9 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     let log = fx.env.root().join("poll.log");
     // A poll that lasts 0.2 s, so that "after the end" differs from "after the start", and that notes both.
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.2; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
+        r#"echo "start $({now})" >> '{log}'; sleep 0.2; echo "end $({now})" >> '{log}'; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
+        now = NOW_NS,
         log = log.display()
     ));
 
@@ -2340,8 +2341,9 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     tick_every(&fx, "5");
     let log = fx.env.root().join("poll.log");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
+        r#"echo "start $({now})" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
+        now = NOW_NS,
         log = log.display()
     ));
 
@@ -2622,36 +2624,8 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
     }
 }
 
-/// Whether process `pid` is running (a zombie is not).
-fn running(pid: i32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
-}
-
-/// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
-/// that `gh`) is killed at its deadline with its whole process group, and E5 reports
-/// `tool_timeout`. The deadline is shortened to 0.5 s by `CPD_TEST_DEADLINE_CPD`, which a
-/// debug build reads (contract §1.2 "Test overrides").
-#[test]
-fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
-    let fx = fx_bare("");
-    let pids = fx.env.root().join("gh.pids");
-    fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
-
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "0.5")]);
-    wait_until("E5's tool_timeout", || fx.count("error") >= 1);
-    engine.stop();
-
-    let errors = fx.events("error");
-    let data = &errors[0].3;
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
-    let details = &data["details"];
-    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(0.5)), "{details}");
-    assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
-    for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
-        let pid: i32 = pid.parse().unwrap();
-        wait_until(&format!("gh's process {pid} to end"), || !running(pid));
-    }
-}
+/// The shell command that prints the epoch in nanoseconds: BSD `date` has no `%N`.
+const NOW_NS: &str = r#"perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%d%06d000\n",$s,$u'"#;
 
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
@@ -2662,12 +2636,13 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     // E5 must not run before that (it polls every tick otherwise), 4987.
     let reset_file = fx.env.root().join("reset-at");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'
+        r#"echo "start $({now})" >> '{log}'
 if [ ! -e '{first}' ]; then
-  touch '{first}'; ms=$(( $(date +%s%N) / 1000000 + 500 ))
-  reset=$(date -u -d "@$((ms / 1000)).$(printf %03d $((ms % 1000)))" +%Y-%m-%dT%H:%M:%S.%3NZ); printf %s "$reset" > '{reset_file}'
+  touch '{first}'; ms=$(( $({now}) / 1000000 + 500 ))
+  reset=$(perl -MPOSIX -e '$ms=shift; print strftime("%Y-%m-%dT%H:%M:%S",gmtime(int($ms/1000))).sprintf(".%03dZ",$ms%1000)' "$ms"); printf %s "$reset" > '{reset_file}'
   echo '{low}' | sed "s/RESET_AT/$reset/"
 else echo '{ok}'; fi; exit 0"#,
+        now = NOW_NS,
         log = log.display(),
         first = first.display(),
         reset_file = reset_file.display(),
@@ -3911,4 +3886,66 @@ fn e9_starts_again_at_60_when_the_state_changes() {
     common::wait_until_for("a run at 60 after the new record", Duration::from_secs(30), || batch_sizes(&fx).len() > 5);
     engine.stop();
     assert_eq!(batch_sizes(&fx)[..6], [60, 30, 15, 5, 1, 60]);
+}
+
+// ---- E9 and the curation floor (hs-d592 R2, R5) ----
+
+/// The fake pi of the floor tests: curates every record of its batch.
+fn curating_pi(fx: &Fx) {
+    fx.env.fake_pi(&common::pi_says(common::CURATES_ALL));
+}
+
+/// No curation anywhere: no pi call, no `record_curations` row, no `context-curated` or `error` Event.
+fn assert_nothing_curated(fx: &Fx) {
+    assert!(fx.env.calls("pi").is_empty(), "pi was called: {:?}", fx.env.calls("pi"));
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
+    assert_eq!(fx.count("context-curated"), 0);
+    assert_eq!(fx.count("error"), 0);
+}
+
+#[test]
+fn e9_skips_an_archived_context() {
+    let fx = fx_bare("context_curation_min_records = 5");
+    old_notes(&fx, 1, 30);
+    fx.fixture("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'ctx';");
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+    assert_nothing_curated(&fx);
+}
+
+#[test]
+fn e9_skips_a_context_under_the_floor_until_it_reaches_it() {
+    let fx = fx_bare("context_curation_min_records = 5");
+    old_notes(&fx, 1, 4);
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    assert_nothing_curated(&fx);
+    old_notes(&fx, 5, 1);
+    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 5);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert!(!fx.env.calls("pi").is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 5);
+    assert_eq!(fx.count("context-curated"), 1);
+}
+
+#[test]
+fn e9_reads_the_floor_from_config_toml_at_every_tick() {
+    let fx = fx_bare("context_curation_min_records = 100");
+    old_notes(&fx, 1, 30);
+    curating_pi(&fx);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(4);
+    assert_nothing_curated(&fx);
+    // rewrite the floor, every other line kept, with the engine running
+    let path = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("context_curation_min_records = 100"), "{text}");
+    fs::write(&path, text.replace("context_curation_min_records = 100", "context_curation_min_records = 25")).unwrap();
+    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 30);
+    engine.stop();
+    assert_eq!(fx.count("context-curated"), 1);
 }

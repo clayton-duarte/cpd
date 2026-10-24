@@ -1,6 +1,6 @@
 /**
  * Tool pills and the Thinking pill (docs/contract.md sections 6.1.1 and 6.9): a block is its colour as
- * background with text 0 (\x1b[30m), caps U+E0B6 / U+E0B4 in the colour as foreground. Running (and not
+ * reverse video (\x1b[7m ... \x1b[27m, text in the terminal background), caps U+E0B6 / U+E0B4 in the colour as foreground. Running (and not
  * yet started) cyan 6, done green 2, failed red 1, Thinking grey 7 (hs-d557). Indexed SGR only.
  */
 import assert from "node:assert/strict";
@@ -16,7 +16,8 @@ const ESC = "\x1b[";
 const COLOUR = { cyan: 6, green: 2, red: 1, grey: 7 } as const;
 const fg = (n: number) => `${ESC}${30 + n}m`;
 const bg = (n: number) => `${ESC}${40 + n}m`;
-const TEXT0 = `${ESC}30m`;
+const INVERT = `${ESC}7m`;
+const REVERT = `${ESC}27m`;
 
 /** The pill the colour draws around a title: left cap, title on the colour with text 0, right cap. */
 function pillAround(colour: number, line: string): void {
@@ -26,8 +27,9 @@ function pillAround(colour: number, line: string): void {
 	const right = line.indexOf(RIGHT, left);
 	assert.ok(right > left, `a right cap in ${JSON.stringify(line)}`);
 	const body = line.slice(left + 1, right);
-	assert.ok(body.includes(bg(colour)), `title on bg ${colour}: ${JSON.stringify(body)}`);
-	assert.ok(body.includes(TEXT0), `title text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.includes(INVERT) && body.includes(REVERT), `title inverted: ${JSON.stringify(body)}`);
+	assert.ok(!body.includes(bg(colour)) && !body.includes(`${ESC}30m`), `no bg, no text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(INVERT) && body.endsWith(`${REVERT}${fg(colour)}`), `whole pill shape: ${JSON.stringify(body)}`);
 	assert.ok(line.slice(right).startsWith(RIGHT));
 }
 
@@ -87,7 +89,7 @@ test("the caps of a tool pill take its colour on the terminal background", async
 		assert.ok(lastBg.length === 0 || lastBg.at(-1) === 49 || lastBg.at(-1) === 0, `${phase}: left cap on the terminal background`);
 		assert.ok(beforeLeft.endsWith(fg(colour)), `${phase}: left cap fg ${colour}: ${JSON.stringify(head)}`);
 		const beforeRight = head.slice(0, right);
-		assert.ok(/\x1b\[(0|49)m(\x1b\[[0-9;]*m)*$/u.test(beforeRight) && beforeRight.endsWith(fg(colour)),
+		assert.ok(/\x1b\[(0|27|49)m(\x1b\[[0-9;]*m)*$/u.test(beforeRight) && beforeRight.endsWith(fg(colour)),
 			`${phase}: right cap fg ${colour} on the terminal background: ${JSON.stringify(head)}`);
 	}
 });
@@ -136,7 +138,7 @@ test("a folded thinking block shows the expand toggle and none of its text", asy
 	const block = await thinking();
 	try {
 		const lines = block.draw().map(plain).map((line) => line.trim());
-		assert.deepEqual(lines, [`╭─${LEFT}Thinking…${RIGHT}`, "\u2570\u{F004B} expand"]);
+		assert.deepEqual(lines, [`╭─${LEFT}Thinking…${RIGHT}`, "\u2570\u{F0B26} expand"]);
 	} finally { block.end(); }
 });
 
@@ -149,7 +151,7 @@ test("toggling a thinking block shows its whole text", async () => {
 		assert.equal(lines[0], `╭─${LEFT}Thinking…${RIGHT}`);
 		assert.ok(lines.includes("\u2502 Inspect the renderer."), JSON.stringify(lines));
 		assert.ok(lines.includes("\u2502 Keep the cache."), JSON.stringify(lines));
-		assert.equal(lines.at(-1), "\u2570\u{F0063} collapse", JSON.stringify(lines));
+		assert.equal(lines.at(-1), "\u2570\u{F0B2C} collapse", JSON.stringify(lines));
 	} finally { block.end(); }
 });
 

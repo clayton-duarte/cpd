@@ -48,12 +48,6 @@ for (const [tool, input] of OPENERS) {
     }
   });
 
-  test(`${name}: G2 refuses a PLANNOTATOR_PORT that is not one port`, () => {
-    for (const v of [undefined, "", "19432-19441", "abc", "0", "70000", "19432,19433"]) {
-      assert.deepEqual(call(tool, input, { env: { ...goodEnv, PLANNOTATOR_PORT: v } }), { block: true, reason: G2("PLANNOTATOR_PORT is not one port") }, String(v));
-    }
-  });
-
   test(`${name}: G3 refuses an absent registry and one of the wrong shape, naming the cause and the fix`, () => {
     for (const store of [{}, { [REGISTRY_KEY]: {} }, { [REGISTRY_KEY]: "x" }, { [REGISTRY_KEY]: { ...goodRegistry(), openFor: 1 } }]) {
       assert.deepEqual(call(tool, input, { store }), { block: true, reason: G3 });
@@ -70,6 +64,23 @@ for (const [tool, input] of OPENERS) {
     assert.equal(call(tool, input, { env: { ...goodEnv, CPD_SESSION: "" }, live: false, store: {} }), undefined);
   });
 }
+
+test("G2 passes a PLANNOTATOR_PORT that is a port range", () => {
+  for (const [tool, input] of OPENERS) {
+    for (const v of ["19437", "19432-19456", "20000-20000", "1-65535"]) {
+      assert.equal(call(tool, input, { env: { ...goodEnv, PLANNOTATOR_PORT: v } }), undefined, `${tool} ${v}`);
+    }
+  }
+});
+
+test("G2 refuses a PLANNOTATOR_PORT that is neither a port nor a range of ports", () => {
+  for (const [tool, input] of OPENERS) {
+    for (const v of [undefined, "", "abc", "0", "70000", "19432,19433", "19441-19432", "0-5", "1-70000", "19432-", "-19441", "a-b", "19432-19441-19450", " 19432-19441"]) {
+      assert.deepEqual(call(tool, input, { env: { ...goodEnv, PLANNOTATOR_PORT: v } }), { block: true, reason: G2("PLANNOTATOR_PORT is not a port or a range of ports") }, `${tool} ${String(v)}`);
+    }
+  }
+});
+
 
 test("G1 comes before G2, and G2 before G3", () => {
   const input = { action: "annotate" };

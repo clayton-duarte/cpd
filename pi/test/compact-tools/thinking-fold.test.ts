@@ -1,8 +1,8 @@
 /**
  * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking…`
- * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
- * `╰󰁋 expand`, expanded the whole text on rails 8 in text 7 then `╰󰁣 collapse`. Headings stay text.
- * The hidden view (hideThinkingBlock: true) stays the plain `Thinking…` with no toggle.
+ * (inverted 7, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
+ * `╰󰬦 expand`, expanded the whole text on rails 8 in text 7 then `╰󰬬 collapse`. Headings stay text.
+ * With hideThinkingBlock: true the view still starts folded (pill and expand row); pi's hidden label is only a step of Ctrl+T.
  * Rows may carry the cockpit's one leading space, so rows are compared without it.
  */
 import assert from "node:assert/strict";
@@ -23,8 +23,8 @@ test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, for
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
-const EXPAND = "\u{F004B}";
-const COLLAPSE = "\u{F0063}";
+const EXPAND = "\u{F0B26}";
+const COLLAPSE = "\u{F0B2C}";
 const NERD = { expand: EXPAND, collapse: COLLAPSE };
 const ESC = "\x1b[";
 const rows = (block: string) => block.split("\n").map((line) => plain(line).trim());
@@ -69,7 +69,7 @@ test("a thinking block folds to one Thinking pill and an expand toggle", () => {
 	}
 });
 
-test("the Thinking pill is bg 7 with text 0 and caps 7", () => {
+test("the Thinking pill is inverted in 7 with caps 7", () => {
 	const head = folded(SOURCE).split("\n").find((line) => line.includes(LEFT))!;
 	assert.ok(head, "a head row with a pill");
 	const left = head.indexOf(LEFT);
@@ -77,8 +77,8 @@ test("the Thinking pill is bg 7 with text 0 and caps 7", () => {
 	assert.ok(right > left, "a right cap");
 	assert.ok(head.slice(0, left).endsWith(`${ESC}37m`), `left cap in fg 7: ${JSON.stringify(head)}`);
 	const body = head.slice(left + 1, right);
-	assert.ok(body.includes(`${ESC}47m`), `title on bg 7: ${JSON.stringify(body)}`);
-	assert.ok(body.includes(`${ESC}30m`), `title text 0: ${JSON.stringify(body)}`);
+	assert.ok(body.startsWith(`${ESC}7m`) && body.endsWith(`${ESC}27m${ESC}37m`), `title inverted: ${JSON.stringify(body)}`);
+	assert.ok(!body.includes(`${ESC}47m`) && !body.includes(`${ESC}30m`), `no bg 7, no text 0: ${JSON.stringify(body)}`);
 	assert.ok(!/\x1b\[(36|46|96|106)m/u.test(head), "no cyan");
 });
 
@@ -125,7 +125,7 @@ test("headings inside thinking stay text and make no pill", () => {
 	assert.ok(rows(expanded(SOURCE)).some((row) => row.startsWith("│ ") && row.includes("Check the code")));
 });
 
-test("the hidden view stays plain Thinking…", () => {
+test("hideThinkingBlock true in settings.json starts the view folded", () => {
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	const dir = mkdtempSync(join(tmpdir(), "thinking-fold-"));
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -139,7 +139,7 @@ test("the hidden view stays plain Thinking…", () => {
 			ui: { theme, setHiddenThinkingLabel: (value?: string) => { label = value; }, onTerminalInput: () => () => {} },
 		} as unknown as ExtensionContext);
 		const view = transform!(SOURCE, { messageType: "assistant-thinking", isStreaming: false, availableWidth: 80 });
-		assert.equal(view, "Thinking…", "no pill, no toggle, no rails");
+		assert.deepEqual(rows(view), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`], "folded: pill and the expand row");
 		assert.ok(label, "the hidden label is set");
 		assert.equal(plain(label), "Thinking…");
 		assert.ok(!label.includes(LEFT) && !label.includes(RIGHT), "no pill");

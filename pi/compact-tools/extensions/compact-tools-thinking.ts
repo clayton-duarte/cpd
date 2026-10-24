@@ -9,11 +9,10 @@
  *   detail   = expanded. Title, the "│" detail lines as today, then for a section with detail
  *            "╰" + toggle.collapse + " collapse · ctrl+t toggle • click to hide" (the hint after
  *            " · ", dim, as today). A section without detail has no toggle row.
+ * Every block starts folded (summary); a click toggles it, whatever pi's hideThinkingBlock says.
  * Replaces today's "└ ctrl+t toggle • click to hide" control row; the "└ " prefix is not used.
  */
-import { AssistantMessageComponent, getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { AssistantMessageComponent, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import {
 	isKeyRelease,
 	isKeyRepeat,
@@ -23,6 +22,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { chrome, fgOpen, ink, paint, TEXT, thinkingPill } from "./compact-tools-indices.ts";
+import { hookMethod } from "./compact-tools-hook.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
 
 export type ThinkingView = "summary" | "detail" | "hidden";
@@ -162,8 +162,7 @@ function renderThinkingSections(
 				: [];
 			if (view === "detail" && detail) {
 				const styleDetailPrefix = options.styleDetailPrefix ?? ((prefix: string) => prefix);
-				const connector = `${styleDetailPrefix("│")}  `;
-				const detailOutput = `${title}  \n${connector}\n${compactDetail(detail, availableWidth, styleDetailPrefix)}`;
+				const detailOutput = `${title}  \n${compactDetail(detail, availableWidth - 2, styleDetailPrefix)}`;
 				return controlLines.length > 0 ? `${detailOutput}\n${hardBreak(controlLines)}` : detailOutput;
 			}
 			return hardBreak([title, ...controlLines]);
@@ -181,50 +180,49 @@ export function renderThinkingView(
 	return renderThinkingSections(splitThinkingSections(markdown), view, availableWidth, options);
 }
 
-function getInitialThinkingPhase(): ThinkingPhase {
-	try {
-		const settings = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8")) as {
-			hideThinkingBlock?: unknown;
-		};
-		return settings.hideThinkingBlock === true ? "hidden" : "summary";
-	} catch {
-		return "summary";
-	}
-}
-
 /** The bound controllers, the latest last: pi gives a message no way to name the one that owns it. */
 const bound: ThinkingCycleController[] = [];
 
 type ThinkingMessage = {
+	hideThinkingBlock: boolean;
 	thinkingVisibilityOverrides: Map<number, boolean>;
-	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; text?: string; setText?: (text: string) => void } }> };
+	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; theme?: { italic: (text: string) => string }; text?: string; setText?: (text: string) => void } }> };
 	updateContent(message: unknown, isStreaming?: boolean): void;
 };
 
-type PatchedUpdate = ((this: ThinkingMessage, message: unknown, isStreaming?: boolean) => void) & { original?: unknown };
+const HOOK_NAME = "assistant.thinking";
 
 /**
- * pi's thinking block has two cuts we do not want: a click on a visible block records an override that
- * swaps in pi's plain hidden label (never our expanded view), and its Markdown/hidden label are drawn
- * with italic. Both are decided inside AssistantMessageComponent.updateContent, which offers no hook,
- * so it is wrapped once while a controller is bound: a click override becomes our fold toggle, and the
- * italic is cancelled on the thinking children it just built (the agent's reply keeps pi's emphasis).
+ * pi's thinking block has cuts we do not want: a click on a visible block records an override that
+ * swaps in pi's plain hidden label (never our expanded view), its Markdown/hidden label are drawn
+ * with italic, and its hideThinkingBlock flag decides the first view. All are decided inside
+ * AssistantMessageComponent.updateContent, which offers no hook, so it is wrapped once per process
+ * (hookMethod: a reload only replaces the behavior, so the newest load's controller owns it): a click
+ * override becomes our fold toggle, visibility is ours while a controller is bound, and the italic is
+ * cancelled on the thinking children it just built (the agent's reply keeps pi's emphasis).
  */
-function patchedUpdate(original: (message: unknown, isStreaming?: boolean) => void): PatchedUpdate {
-	const wrapper: PatchedUpdate = function (this: ThinkingMessage, message, isStreaming) {
-		const owner = bound[bound.length - 1];
-		const clicked = owner?.takeClick(this.thinkingVisibilityOverrides) ?? false;
-		original.call(this, message, isStreaming);
-		if (!owner) return;
-		for (const { child } of this.contentContainer.children) {
-			if (!child) continue;
-			if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
-			else if (typeof child.text === "string" && child.setText) child.setText(child.text.replace(/\x1b\[2?3m/gu, ""));
-		}
-		if (clicked) owner.refresh();
-	};
-	wrapper.original = original;
-	return wrapper;
+function thinkingBehavior(self: ThinkingMessage, args: any[], original: (...args: any[]) => any): unknown {
+	const owner = bound[bound.length - 1];
+	if (!owner) return original.apply(self, args);
+	const clicked = owner.takeClick(self.thinkingVisibilityOverrides);
+	const piHidden = self.hideThinkingBlock;
+	self.hideThinkingBlock = owner.hidden;
+	let result: unknown;
+	try {
+		result = original.apply(self, args);
+	} finally {
+		self.hideThinkingBlock = piHidden;
+	}
+	for (const { child } of self.contentContainer.children) {
+		if (!child) continue;
+		// Emphasis spans (*em*, _em_, quotes) take their italic from the Markdown's theme: give this thinking
+		// child a theme whose italic is the identity (links, lists, tables inherit it; the reply is untouched).
+		if (child.theme) child.theme = { ...child.theme, italic: (text) => text };
+		if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
+		else if (typeof child.text === "string" && child.setText) child.setText(child.text.replace(/\x1b\[2?3m/gu, ""));
+	}
+	if (clicked) owner.refresh();
+	return result;
 }
 
 export class ThinkingCycleController {
@@ -273,11 +271,15 @@ export class ThinkingCycleController {
 	 * instead, so the block expands or folds rather than turning into pi's plain label.
 	 */
 	takeClick(overrides: Map<number, boolean>): boolean {
-		if (overrides.size === 0 || !this.hasToggleableThinking || this.phase === "hidden") return false;
-		if (![...overrides.values()].includes(true)) return false;
+		if (overrides.size === 0) return false;
 		overrides.clear();
-		this.phase = thinkingViewForPhase(this.phase) === "detail" ? "summary" : "detail";
+		if (!this.hasToggleableThinking) return false;
+		this.phase = this.phase !== "hidden" && thinkingViewForPhase(this.phase) === "detail" ? "summary" : "detail";
 		return true;
+	}
+
+	get hidden(): boolean {
+		return this.phase === "hidden";
 	}
 
 	refresh(): void {
@@ -290,18 +292,23 @@ export class ThinkingCycleController {
 		this.context = ctx;
 		this.theme = ctx.ui.theme;
 		this.hasToggleableThinking = false;
-		// Match Pi's persisted host visibility after startup or /reload. When the
-		// host is hidden, Markdown transformers are not invoked at all. Pi wraps
-		// this label in thinkingText, so an inner text span keeps it consistent with
+		// Every block starts folded whatever pi's hideThinkingBlock says. Pi wraps
+		// the hidden label in thinkingText, so an inner text span keeps it consistent with
 		// completed summary titles.
-		this.phase = getInitialThinkingPhase();
+		this.phase = "summary";
 		const hiddenLabel = ink("text", this.theme.bold("Thinking…"));
 		// Pi does not currently expose transcript invalidation directly. Updating
 		// this label rebuilds assistant Markdown and requests a render without
 		// changing the message or its hidden/visible state.
 		this.refreshThinking = () => ctx.ui.setHiddenThinkingLabel(hiddenLabel);
-		const prototype = AssistantMessageComponent.prototype as unknown as { updateContent: PatchedUpdate };
-		if (!prototype.updateContent.original) prototype.updateContent = patchedUpdate(prototype.updateContent);
+		const prototype = AssistantMessageComponent.prototype as unknown as { updateContent: ((...args: any[]) => any) & { original?: unknown } };
+		// An older load's once-per-process wrapper (own `original`, no hook record) is unwrapped first.
+		if (!Object.hasOwn(prototype, Symbol.for(`pi-compact-tools.hook.${HOOK_NAME}`))
+			&& typeof prototype.updateContent === "function"
+			&& typeof prototype.updateContent.original === "function") {
+			prototype.updateContent = prototype.updateContent.original as typeof prototype.updateContent;
+		}
+		hookMethod(prototype, "updateContent", HOOK_NAME, thinkingBehavior as never);
 		this.refreshThinking();
 		this.unsubscribe = ctx.ui.onTerminalInput((data) => {
 			const input = classifyThinkingToggleInput(data);

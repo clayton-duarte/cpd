@@ -2,7 +2,7 @@
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
 //! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
 //! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
-//! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with 3 or fewer the terminator `╰󰁚` (U+F005A; hs-d574), with none no
+//! the muted `╰󰬦 expand` that expands the list inline and becomes `╰󰬬 collapse`, with 3 or fewer the terminator `╰󰬪` (U+F0B2A; hs-d574), with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
 //! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
 //! (`dialog::scroll::cue`, [`Shape`]).
@@ -31,7 +31,7 @@ use crate::widgets::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
-/// How many item rows the section shows before the `╰󰁋 expand` row.
+/// How many item rows the section shows before the `╰󰬦 expand` row.
 pub const SHOWN: usize = 3;
 
 /// The columns before the label: the fold's `│`, one space, the item's tier glyph and a space.
@@ -49,7 +49,7 @@ pub enum Hit {
     Header,
     /// The item at this index of the snapshot's Inbox.
     Item(usize),
-    /// `╰󰁋 expand` or `╰󰁣 collapse`.
+    /// `╰󰬦 expand` or `╰󰬬 collapse`.
     Toggle,
 }
 
@@ -89,7 +89,7 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, the terminator `╰󰁚`, or
+    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, the terminator `╰󰬪`, or
     /// with no item the up-to-date row, hs-d487; hs-d574) and the empty row below; expanded, at most the cap, but not less than
     /// collapsed.
     pub fn height(self) -> u16 {
@@ -256,7 +256,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰁚` (hs-d574). `engine-down`
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰬪` (hs-d574). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
 /// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
@@ -345,7 +345,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
     for dy in 0..area.height.min(shape.height()) {
         let full = Rect::new(area.x, area.y + dy, area.width, 1);
         let row = full.inner(Margin::new(1, 0));
-        let width = usize::from(row.width);
+        let width = usize::from(row.width).saturating_sub(2); // the content ends at column W-4 (the rail's right padding)
         let at = usize::from(dy);
         match shape.hit(dy) {
             Some(Hit::Header) => {
@@ -743,7 +743,7 @@ mod tests {
         let buffer = terminal.backend().buffer().clone();
         let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
         let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
-        let close = " ╰\u{F005A} up to date, drink some water";
+        let close = format!(" ╰{} up to date, drink some water", crate::fold::TERMINATOR);
         let rows: Vec<String> = (0..6).map(row).collect();
         assert_eq!(rows[..3], ["".to_owned(), title, close.to_owned()], "the empty row, the title with count 0, the closing row: {rows:?}");
         assert!(rows[3..].iter().all(String::is_empty), "no other row: {rows:?}");

@@ -23,7 +23,7 @@ struct Server {
 /// The wrapper gets its own `TMUX_TMPDIR` (`Tmux::with_tmpdir`): the process environment is never touched.
 fn server() -> Server {
     let env = TestEnv::new();
-    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux"));
+    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.tmux_tmpdir());
     Server { env, tmux }
 }
 
@@ -45,7 +45,7 @@ struct DefaultDirServer(String);
 
 impl DefaultDirServer {
     fn socket_file(&self) -> std::path::PathBuf {
-        Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata("/proc/self").unwrap().uid() })).join(&self.0)
+        Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata(std::env::current_exe().unwrap()).unwrap().uid() })).join(&self.0)
     }
 }
 
@@ -159,12 +159,12 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
 /// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
 /// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4},},\
+#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}\
+#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
-#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4}}}}";
+#[noreverse]\u{e0b4}}}}";
 
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
@@ -500,7 +500,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
     // left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[fg=colour0]#[bg=blue]Retry Payouts#[fg=blue]#[bg=default]\u{e0b4}");
+    assert_eq!(border(), "#[fg=colour4]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
 /// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
@@ -511,24 +511,24 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
             "#[fg=colour8]\u{2500}#[default]\
-             #[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
-             #[range=user|legend]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]\
+             #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
-             #[range=user|logs]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]",
+             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
         );
-    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[fg=colour0]#[bg=colour3]preview: #{@cpd_preview}#[fg=colour3]#[bg=default]\u{e0b4}#[default],}\
+    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]#[align=right]\
-         #[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]\
+         #[fg=colour8]\u{e0b6}#[reverse]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
-         #[fg=colour8]#[bg=default]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]#{@cpd_version}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
+         #[noreverse]\u{e0b4}#[default]\
+         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]";
-    let format = cpd_core::host::tmux::STATUS_FORMAT;
+    let format = cpd_core::host::tmux::STATUS_FORMAT.as_str();
     assert!(format.starts_with(&prefix), "{format}");
     assert!(format.ends_with(suffix), "{format}");
 }
@@ -679,7 +679,7 @@ fn list_panes_parses_for_a_caller_without_a_utf8_locale() {
     for locale in LOCALES {
         let env = TestEnv::new();
         let program = tmux_as_caller_with(&env, "tmux-caller", locale);
-        let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux")).with_program(program);
+        let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.tmux_tmpdir()).with_program(program);
         if let Err(e) = tmux.ensure_session("cpd", "main", &sleeper(env.root())) {
             failures.push(format!("{locale:?}: ensure_session: {e:?}"));
             continue;
@@ -698,7 +698,7 @@ fn list_panes_parses_for_a_caller_without_a_utf8_locale() {
 fn every_tmux_method_runs_tmux_with_u_first() {
     let env = TestEnv::new();
     let fake = env.fake("tmux-recorder", "exit 0");
-    let tmux = Tmux::with_tmpdir("cpdt-argv", env.root().join("tmux")).with_program(&fake);
+    let tmux = Tmux::with_tmpdir("cpdt-argv", env.tmux_tmpdir()).with_program(&fake);
 
     let argv = tmux.argv(&["list-panes".into()]);
     assert_eq!(&argv[..2], ["tmux", "-u"], "{argv:?}");
@@ -743,7 +743,7 @@ fn every_tmux_method_runs_tmux_with_u_first() {
 fn apply_status_line_sets_the_global_cpd_version_option() {
     let env = TestEnv::new();
     let fake = env.fake("tmux-recorder", "exit 0");
-    let tmux = Tmux::with_tmpdir("cpdt-version", env.root().join("tmux")).with_program(&fake);
+    let tmux = Tmux::with_tmpdir("cpdt-version", env.tmux_tmpdir()).with_program(&fake);
     tmux.apply_status_line("cpd", "0.0.5-5ba3a1d3").unwrap();
     let calls: Vec<String> = env.calls("tmux-recorder").iter().map(|c| c.join(" ")).collect();
     assert!(calls.iter().any(|c| c.ends_with("set -g @cpd_version 0.0.5-5ba3a1d3")), "{calls:#?}");

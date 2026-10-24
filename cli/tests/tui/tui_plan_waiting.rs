@@ -11,7 +11,7 @@ fn chart(screen: &[String]) -> Vec<String> {
     screen[top + 1..]
         .iter()
         .take_while(|l| !l.trim_start().starts_with('╰'))
-        .map(|l| l.chars().skip(3).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned())
+        .map(|l| l.chars().skip(2).collect::<String>().trim_end().trim_end_matches('│').trim_end().to_owned())
         .collect()
 }
 

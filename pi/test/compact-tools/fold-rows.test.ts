@@ -54,7 +54,7 @@ test("a running tool row has no dot, only the cyan pill", async () => {
 	const head = lines[0]!;
 	assert.ok(plain(head).startsWith(`${HEAD}${LEFT}`), `head ${JSON.stringify(plain(head))}`);
 	assert.ok(!/\u2981/u.test(lines.join("")), "no dot glyph U+2981");
-	assert.ok(head.includes("\x1b[46m"), `pill on bg 6: ${JSON.stringify(head)}`);
+	assert.ok(head.includes("\x1b[36m\uE0B6\x1b[7m"), `pill on bg 6: ${JSON.stringify(head)}`);
 	assert.ok(head.includes("\x1b[36m"), `cap in fg 6: ${JSON.stringify(head)}`);
 });
 
@@ -93,8 +93,8 @@ test("lead and rails are 8 and the toggle is 7 on every tool row", async () => {
 				assert.ok(line.includes(`\x1b[90m${glyph}`) || line.includes(`\x1b[90m ${glyph}`), `${glyph} in 8: ${JSON.stringify(line)}`);
 			}
 		}
-		const close = lines.find((line) => /[\u{F004B}\u{F0063}]/u.test(line))!;
-		assert.match(close, /\x1b\[37m[^\x1b]*(\u{F004B}|\u{F0063})/u, `toggle in 7: ${JSON.stringify(close)}`);
+		const close = lines.find((line) => /[\u{F0B26}\u{F0B2C}]/u.test(line))!;
+		assert.match(close, /\x1b\[37m[^\x1b]*(\u{F0B26}|\u{F0B2C})/u, `toggle in 7: ${JSON.stringify(close)}`);
 	}
 });
 
@@ -114,9 +114,9 @@ test("no pill or toggle uses a colour above 7", async () => {
 				}
 			}
 			if (phase === "running") continue;
-			const close = lines.find((line) => /[\u{F004B}\u{F0063}]/u.test(line));
+			const close = lines.find((line) => /[\u{F0B26}\u{F0B2C}]/u.test(line));
 			assert.ok(close, `a toggle in ${JSON.stringify(lines)}`);
-			assert.ok(!/\x1b\[(9\d|10\d)m[^\x1b]*[\u{F004B}\u{F0063}]/u.test(close), `toggle above 7: ${JSON.stringify(close)}`);
+			assert.ok(!/\x1b\[(9\d|10\d)m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u.test(close), `toggle above 7: ${JSON.stringify(close)}`);
 		}
 	}
 });

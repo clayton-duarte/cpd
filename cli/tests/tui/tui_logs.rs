@@ -98,7 +98,7 @@ fn a_long_event_is_cut_with_an_ellipsis_and_an_empty_log_says_so() {
     assert_eq!(rows(&render(20, 2, &mut log)), [" none yet", ""]);
     append(&mut store, 0, &[("plan-phase", "a very long event text indeed")]);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events);
-    assert_eq!(rows(&render(20, 1, &mut log)), [" 00:00:00 a very lo…"]);
+    assert_eq!(rows(&render(20, 1, &mut log)), [" 00:00:00 a very l…"]);
 }
 
 #[test]

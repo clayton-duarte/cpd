@@ -28,7 +28,7 @@ use super::inbox::{self, Hit, Jump, Shape};
 use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
-use super::rows::{self, Id, Row};
+use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
@@ -143,7 +143,7 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (title, items, `╰󰁣 collapse`) are shown, not only the first three, in the rows the column's
+    /// The Inbox section's rows (title, items, `╰󰬬 collapse`) are shown, not only the first three, in the rows the column's
     /// split gives it ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
     /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
@@ -269,7 +269,7 @@ impl View {
     /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| s.dot == Dot::Working && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
+        sessions.any(|s| matches!(s.dot, Dot::Working | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
     }
 
     /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
@@ -598,14 +598,13 @@ impl View {
         if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
         }
-        let items = rows::items(&self.tree, self.state.opened(), 0, 0);
-        let drawn = self.state.flatten(&items);
-        let anchor = drawn.iter().position(|f| f.identifier == path)?;
+        let drawn = rows::items(&self.tree, self.state.opened(), 0, 0);
+        let anchor = drawn.iter().position(|f| f.path == path)?;
         let live: Vec<(usize, &SessionNode)> = drawn
             .iter()
             .enumerate()
             .filter_map(|(i, f)| {
-                let row = rows::row(&self.tree, &f.identifier).filter(|r| !r.archived())?;
+                let row = rows::row(&self.tree, &f.path).filter(|r| !r.archived())?;
                 let session = row.session().filter(|s| !archiving.iter().any(|a| a.id == s.id))?;
                 Some((i, session))
             })
@@ -637,7 +636,7 @@ impl View {
             return self.click_inbox(at.y - self.inbox_area.y);
         }
         let Some(path) = self.row_at(at) else { return Effect::None };
-        // only a closing row (`╰󰁋 expand`, `╰󰁣 collapse`) shows or hides a Context's archived rows; the title row keeps its own action:
+        // only a closing row (`╰󰬦 expand`, `╰󰬬 collapse`) shows or hides a Context's archived rows; the title row keeps its own action:
         // a live Context's row opens its Manager (B3-A6), a live Session row opens it and an archived one shows its
         // history
         if rows::click_toggle(&mut self.state, &self.tree, &path) {
@@ -657,7 +656,7 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its first (the empty one): `╰󰁋 expand` and `╰󰁣 collapse` toggle the inline
+    /// A left click on the Inbox section, `row` rows below its first (the empty one): `╰󰬦 expand` and `╰󰬬 collapse` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
         match self.shape().hit(row) {
@@ -697,13 +696,13 @@ impl View {
         }
     }
 
-    /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
+    /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        let path = self.state.rendered_at(at)?.to_vec();
+        let Hits { rows, paths } = self.tree_scroll.hits();
+        let path = rows.contains(at).then(|| paths.get(usize::from(at.y - rows.y)))??;
         // an empty row between two Contexts is no row
-        rows::row(&self.tree, &path)?;
-        let above = at.y.checked_sub(1).and_then(|y| self.state.rendered_at(Position::new(at.x, y)));
-        (above != Some(path.as_slice())).then_some(path)
+        rows::row(&self.tree, path)?;
+        Some(path.clone())
     }
 
     /// The text of the footer: the error of the last snapshot, if any (a lasting state, commands.md §17 "No notes").
@@ -906,7 +905,7 @@ mod tests {
         assert_eq!(asked(press(&mut view, KeyCode::Char('n'))), Question::input("New Plan", ask, String::new()));
     }
 
-    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text).
+    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text, a select picks its first option).
     fn answered(question: Question, text: Option<&'static str>) -> Result<Option<Action>, String> {
         struct Answer(Option<&'static str>);
         impl Dialogs for Answer {
@@ -915,6 +914,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(self.0.is_some())
+            }
+            fn select(&self, _: &str, _: &str, options: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
+                Ok(self.0.map(|_| options[0].clone()))
             }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
@@ -962,11 +964,11 @@ mod tests {
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[13..15].iter().all(|r| r.is_empty()) && rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16] == " ╰\u{F005A} up to date, drink some water" && rows[17].is_empty(), "no row for a prompt: {rows:?}");
+        assert!(rows[13..15].iter().all(|r| r.is_empty()) && rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16] == format!(" ╰{} up to date, drink some water", crate::fold::TERMINATOR) && rows[17].is_empty(), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
         view.error = Some("closed".into());
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[15] == " ╰\u{F005A} up to date, drink some water" && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
+        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[15] == format!(" ╰{} up to date, drink some water", crate::fold::TERMINATOR) && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
         assert_eq!(rows[17], " closed", "an error is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -989,10 +991,10 @@ mod tests {
         view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE })
     }
 
-    /// The closing row `╰󰁋 expand` of a Context with archived rows, as the tree draws it (after the margin).
-    const EXPAND: &str = " ╰\u{F004B} expand";
-    /// The closing row `╰󰁣 collapse`.
-    const COLLAPSE: &str = " ╰\u{F0063} collapse";
+    /// The closing row `╰󰬦 expand` of a Context with archived rows, as the tree draws it (after the margin).
+    const EXPAND: &str = " ╰\u{F0B26} expand";
+    /// The closing row `╰󰬬 collapse`.
+    const COLLAPSE: &str = " ╰\u{F0B2C} collapse";
 
     #[test]
     fn a_click_folds_a_context_and_opens_a_session_and_hides_the_cursor() {
@@ -1000,13 +1002,13 @@ mod tests {
         press(&mut view, KeyCode::Down);
         view.state.select(vec!["alpha".into(), "sketch".into()]);
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 8, 7), Effect::None, "the `╰󰁣 collapse` row of the Context `alpha`");
+        assert_eq!(click(&mut view, 8, 7), Effect::None, "the `╰󰬬 collapse` row of the Context `alpha`");
         let rows = drawn(&mut view, 44, 16);
         assert_eq!((rows[1].as_str(), rows[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), EXPAND), "the live rows stay: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "only the archived rows are hidden: {rows:?}");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "a click selects nothing");
         assert!(!view.cursor_shown());
-        assert_eq!(click(&mut view, 8, 5), Effect::None, "`╰󰁋 expand` unfolds it");
+        assert_eq!(click(&mut view, 8, 5), Effect::None, "`╰󰬦 expand` unfolds it");
         drawn(&mut view, 44, 16);
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
         assert_eq!(click(&mut view, 8, 4), Effect::Run(Action::Open(sid("f-idle"))), "a fork row");
@@ -1026,7 +1028,7 @@ mod tests {
         for column in [1, 3, 8, 42] {
             assert_eq!(click(&mut view, column, 7), Effect::None, "column {column} of the closing row runs no command");
             assert_eq!(drawn(&mut view, 44, 16)[5], EXPAND, "and folds it");
-            assert_eq!(click(&mut view, column, 5), Effect::None, "`╰󰁋 expand` runs no command");
+            assert_eq!(click(&mut view, column, 5), Effect::None, "`╰󰬦 expand` runs no command");
             assert_eq!(drawn(&mut view, 44, 16)[7], COLLAPSE, "and unfolds it");
         }
         click(&mut view, 8, 7);
@@ -1110,11 +1112,11 @@ mod tests {
     }
 
     #[test]
-    fn the_counters_end_at_width_minus_2_and_the_cursor_row_is_inverted_between_the_margins() {
+    fn the_counters_end_at_width_minus_4_and_the_cursor_row_is_inverted_between_the_margins() {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(42) == Some('5'), "{ship:?}");
+        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
         let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
@@ -1192,14 +1194,14 @@ mod tests {
         assert_eq!((rows[13].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
     }
 
-    const UP_COLLAPSE: &str = "╰\u{F0063} collapse";
-    const DOWN_EXPAND: &str = "╰\u{F004B} expand";
+    const UP_COLLAPSE: &str = "╰\u{F0B2C} collapse";
+    const DOWN_EXPAND: &str = "╰\u{F0B26} expand";
 
     fn file_in(dir: &tempfile::TempDir) -> FoldsFile {
         FoldsFile::at(&cpd_core::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap())
     }
 
-    /// The first row at or after row `from` that reads `row` (trimmed): the fold widget's `╰󰁣 collapse` / `╰󰁋 expand`
+    /// The first row at or after row `from` that reads `row` (trimmed): the fold widget's `╰󰬬 collapse` / `╰󰬦 expand`
     /// rows are the only ones that fold (rows.rs).
     fn row_of(rows: &[String], from: usize, row: &str) -> u16 {
         (from + rows[from..].iter().position(|r| r.trim() == row).unwrap_or_else(|| panic!("{row:?} in {rows:#?}"))) as u16
@@ -1355,7 +1357,7 @@ mod tests {
     fn archived_open() -> View {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 24);
-        click(&mut view, 1, 16); // `╰󰁋 expand` of the archived Context
+        click(&mut view, 1, 16); // `╰󰬦 expand` of the archived Context
         let rows = drawn(&mut view, 44, 24);
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         view
@@ -1405,7 +1407,7 @@ mod tests {
         assert_eq!((rows[13].ends_with(&box_row('┌', &"─".repeat(14), '┐')[27..]), rows[15].clone()), (true, box_row('└', &"─".repeat(14), '┘')));
         // the menu is drawn over the Inbox title and its closing row, which show to its left
         assert!(rows[13].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "{rows:?}");
-        assert!(rows[14].starts_with(" ╰\u{F005A} up to date") && rows[14].ends_with("│ New Context… │"), "{rows:?}");
+        assert!(rows[14].starts_with(&format!(" ╰{} up to date", crate::fold::TERMINATOR)) && rows[14].ends_with("│ New Context… │"), "{rows:?}");
     }
 
     #[test]
@@ -1732,35 +1734,6 @@ mod tests {
     }
 
     #[test]
-    fn new_context_with_several_owners_asks_which_after_the_title() {
-        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
-        let question = popup_at(&mut view, 8, 15, 0);
-        // two popups: the title, then the owner (`Owner (<owners>):`); a name that is no owner is refused after it
-        struct Typed(std::cell::RefCell<Vec<(String, &'static str)>>, &'static str);
-        impl Dialogs for Typed {
-            fn input(&self, _: &str, prompt: &str, _: &str, _: Validator) -> Result<Option<String>, cpd_core::error::CpdError> {
-                let n = self.0.borrow().len();
-                let text = if n == 0 { "Building cpd!" } else { self.1 };
-                self.0.borrow_mut().push((prompt.to_owned(), text));
-                Ok(Some(text.to_owned()))
-            }
-            fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
-                Ok(false)
-            }
-            fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
-                Ok(serde_json::json!({}))
-            }
-        }
-        let typed = Typed(Default::default(), "other");
-        let run = question.clone().ask(&typed).unwrap().unwrap();
-        assert_eq!(typed.0.borrow().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["Title:", "Owner (clayton-duarte, other):"]);
-        assert_eq!(run, Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "other".into() });
-        assert_eq!(run.argv(), ["context", "new", "building-cpd", "--title=Building cpd!", "--owner=other"]);
-        let refused = question.ask(&Typed(Default::default(), "nobody")).unwrap_err();
-        assert_eq!(refused, "No owner policy nobody: choose one of clayton-duarte, other.");
-    }
-
-    #[test]
     fn new_context_opens_an_input_popup_for_a_title_and_derives_the_id() {
         let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml"]);
         let question = popup_at(&mut view, 8, 15, 0);
@@ -1960,15 +1933,15 @@ mod tests {
 
     /// An item row at 43 columns: the margin, the fold's `│`, one space, the tier glyph, a space, the label, the age ending at the last column of the inner area.
     fn item_row(glyph: &str, label: &str, age: &str) -> String {
-        format!(" │ {glyph} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+        format!(" │ {glyph} {label}{}{age}", " ".repeat(39 - 4 - label.chars().count() - age.chars().count()))
     }
 
-    /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F005A, the words.
-    const EMPTY_CLOSE: &str = " ╰\u{F005A} up to date, drink some water";
+    /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F0B2A, the words.
+    const EMPTY_CLOSE: &str = " ╰\u{F0B2A} up to date, drink some water";
 
     /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
     fn cue_row(arrow: char, n: usize) -> String {
-        format!(" │{:>40}", format!("{arrow} {n} more"))
+        format!(" │{:>38}", format!("{arrow} {n} more"))
     }
 
     /// A scroll cue row of the tree at 43 columns: the margin, the cue right-aligned in the 41 columns of the inner area.
@@ -1995,9 +1968,9 @@ mod tests {
         assert_eq!(rows[11], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
         assert_eq!(rows[12], item_row(palette::TIER_RED, "acme/api#12 checks failed", "5m"));
         assert_eq!(rows[13], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[14], " ╰󰁚", "nothing to fold");
+        assert_eq!(rows[14], " ╰󰬪", "nothing to fold");
         assert_eq!(rows[15], "", "the empty row below the section");
-        assert_eq!(rows[11].chars().count(), 42, "the age ends in column 41, the last of the inner area");
+        assert_eq!(rows[11].chars().count(), 40, "the age ends in column 39 (W-4)");
     }
 
     #[test]
@@ -2029,7 +2002,7 @@ mod tests {
             let cell = &buf[(x, 14)];
             if cell.symbol() != " " {
                 let want = if cell.symbol() == "╰" { palette::muted_text() } else { palette::toggle_text() }.fg.unwrap();
-                assert_eq!(cell.fg, want, "`╰󰁋 expand`: a muted corner, then colour 7: column {x}");
+                assert_eq!(cell.fg, want, "`╰󰬦 expand`: a muted corner, then colour 7: column {x}");
                 assert!(!cell.modifier.contains(Modifier::BOLD));
             }
         }
@@ -2039,13 +2012,13 @@ mod tests {
         assert_eq!(click(&mut view, 20, 11), Effect::Run(Action::Open(sid("f-blocked"))), "an item jumps");
         assert!(!view.inbox_expanded, "an item row does not toggle");
         assert_eq!(click(&mut view, 20, 14), Effect::None);
-        assert!(view.inbox_expanded, "`╰󰁋 expand` does");
+        assert!(view.inbox_expanded, "`╰󰬦 expand` does");
         let rows = text_rows(&draw_now(&mut view, 43, 16));
         assert_eq!(rows[14], COLLAPSE);
         assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).unwrap() as u16), Effect::None);
         assert!(view.inbox_expanded, "the title does not fold it");
         click(&mut view, 20, 14);
-        assert!(!view.inbox_expanded, "`╰󰁣 collapse` does");
+        assert!(!view.inbox_expanded, "`╰󰬬 collapse` does");
     }
 
     #[test]
@@ -2067,12 +2040,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 33 columns
-        assert_eq!(label.chars().count(), 33);
+        let label = "f-blocked: a very long questio…"; // 39 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 31 columns
+        assert_eq!(label.chars().count(), 31);
         assert_eq!(rows[13], format!(" │ {} {label} 42s", palette::TIER_RED));
-        view.tree.inbox[0].label = "x".repeat(33);
+        view.tree.inbox[0].label = "x".repeat(31);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(31)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2102,7 +2075,7 @@ mod tests {
             assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
             assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
-        assert_eq!(buf[(40, 11)].fg, muted, "the age");
+        assert_eq!(buf[(38, 11)].fg, muted, "the age");
     }
 
     #[test]
@@ -2504,7 +2477,7 @@ mod tests {
             })
             .collect();
         draw_now(&mut view, 43, 40);
-        assert_eq!(click(&mut view, 20, 38), Effect::None, "`╰󰁋 expand` expands");
+        assert_eq!(click(&mut view, 20, 38), Effect::None, "`╰󰬦 expand` expands");
         let rows = text_rows(&draw_now(&mut view, 43, 40));
         (view, rows)
     }
@@ -2524,7 +2497,7 @@ mod tests {
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(50));
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree is above it");
-        assert_eq!(rows[12], " ╰󰁚", "the tree's rows are its 12, then the section's empty row");
+        assert_eq!(rows[12], " ╰󰬪", "the tree's rows are its 12, then the section's empty row");
         assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
         assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
         assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
@@ -2660,9 +2633,9 @@ mod tests {
         let (view, rows) = shared(sample(), 3, false, 31);
         assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
         assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")), "{rows:?}");
-        assert_eq!(rows[12], " ╰󰁚", "the tree's last row: {rows:?}");
+        assert_eq!(rows[12], " ╰󰬪", "the tree's last row: {rows:?}");
         assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
-        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰁚", ""), "{rows:?}");
+        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰬪", ""), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
     }
 
@@ -2683,7 +2656,7 @@ mod tests {
     #[test]
     fn a_long_tree_and_a_short_expanded_inbox_give_the_rest_to_the_tree() {
         let (view, rows) = shared(long_tree(60), 4, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 23, 41, 8), "the empty row, the title, four items, `╰󰁣 collapse` and the empty row");
+        assert_eq!(view.inbox_area, Rect::new(1, 23, 41, 8), "the empty row, the title, four items, `╰󰬬 collapse` and the empty row");
         assert_eq!((rows[23].clone(), rows[24].clone(), label(&rows[28]).to_owned(), rows[29].clone()), (String::new(), header(4), "item 03".to_owned(), COLLAPSE.to_owned()));
         assert_eq!(rows[22], cue_row_at('▼', 40), "the tree has 22 rows: {rows:?}");
         assert!(!rows[1..22].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
@@ -2923,7 +2896,7 @@ mod tests {
         assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
         starts(9, format!(" ╰─{NEEDS_YOU} rel"));
         assert_eq!(rows[10], "");
-        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰁚").count(), 1, "no terminator line but the Context with no row's: {rows:#?}");
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰬪").count(), 1, "no terminator line but the Context with no row's: {rows:#?}");
     }
 
     #[test]
@@ -2943,10 +2916,10 @@ mod tests {
         starts(10, format!(" ╰─{NEEDS_YOU} rel"));
         assert_eq!(rows[11], "");
         assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[13], " ╰󰁚", "a Context with no row at all ends with the terminator");
+        assert_eq!(rows[13], " ╰󰬪", "a Context with no row at all ends with the terminator");
         assert_eq!(rows[14], "");
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
-        assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰁋 expand`");
+        assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰬦 expand`");
         assert_eq!(rows[17], "");
     }
 
@@ -2954,7 +2927,7 @@ mod tests {
     fn a_context_with_no_row_at_all_is_its_title_and_the_terminator() {
         let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
         let rows = drawn(&mut View::new(tree, true), 44, 10);
-        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰\u{F005A}".to_owned()]);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), format!(" ╰{}", crate::fold::TERMINATOR)]);
     }
 
     #[test]
@@ -2974,7 +2947,7 @@ mod tests {
         assert_eq!(rows[16], header(3));
         assert_eq!(rows[17], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
         assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[20], " ╰󰁚", "nothing to fold");
+        assert_eq!(rows[20], " ╰󰬪", "nothing to fold");
         assert_eq!(rows[21], "", "the empty row below the section");
     }
 
@@ -2983,7 +2956,7 @@ mod tests {
         // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
         let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
         assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[12], " ╰󰁚");
+        assert_eq!(rows[12], " ╰󰬪");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
         assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));

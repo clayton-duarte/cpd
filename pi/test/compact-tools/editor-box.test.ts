@@ -1,5 +1,6 @@
-/** The input widget: pi's Editor drawn as a rounded box in the cockpit palette (contract 6.1.1, 6.9 "The input widget"). */
+/** The input widget: pi's Editor drawn as a rounded box in the Dango palette (contract 6.1.1, 6.9 "The input widget"). */
 import "./pinned-themes.ts";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync } from "node:fs";
@@ -14,7 +15,7 @@ import { initTheme, theme } from "../../../node_modules/@earendil-works/pi-codin
 process.env.PI_CODING_AGENT_DIR ??= mkdtempSync(join(tmpdir(), "editor-box-"));
 initTheme("dark", false);
 
-const LOADER = [0xf0766, 0xf0a9e, 0xf0a9f, 0xf0aa0, 0xf0aa1, 0xf0aa2, 0xf0aa3, 0xf0aa4, 0xf0aa5].map((code) => String.fromCodePoint(code));
+const LOADER = MOON_FRAMES;
 const FRAME = `[${LOADER.join("")}]`;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
@@ -249,9 +250,9 @@ test("the border is colour 6 while the agent works whatever the focus", async ()
 			const top = strip(rows[0]!);
 			assert.match(top, new RegExp(`^ ╭─${LEFT_CAP}${FRAME} Preparing tools…${RIGHT_CAP}─+╮ $`, "u"), top);
 			assert.equal(visibleWidth(top), 50);
-			// The pill is one colour block: caps 6, bg 6, text 0 with the frame inside it, nothing of its own.
+			// The pill is one colour block: caps 6 and text inverted (ESC[7m) with the frame inside it, nothing of its own.
 			const pill = rows[0]!.slice(rows[0]!.indexOf(LEFT_CAP));
-			assert.ok(pill.includes("\x1b[46m") && pill.includes("\x1b[30m"), readable(pill));
+			assert.ok(pill.includes("\x1b[7m") && pill.includes("\x1b[27m") && !pill.includes("\x1b[46m") && !pill.includes("\x1b[30m"), readable(pill));
 			assert.match(rows[0]!, new RegExp(`\x1b\\[36m${LEFT_CAP}`, "u"));
 			assert.match(rows[0]!, new RegExp(`\x1b\\[36m${RIGHT_CAP}`, "u"));
 		}

@@ -27,7 +27,7 @@
       "default": "toggle"
     },
     "toggle": {
-      "description": "Glyphs for fold: toggle. The defaults are the cockpit's own toggle glyphs, Nerd Font code points U+F004B and U+F0063; set plain glyphs if you have no Nerd Font.",
+      "description": "Glyphs for fold: toggle. The defaults are the cockpit's own toggle glyphs, Nerd Font code points U+F0B26 and U+F0B2C; set plain glyphs if you have no Nerd Font.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -35,16 +35,16 @@
           "description": "Glyph before 'expand' on a folded row.",
           "type": "string",
           "minLength": 1,
-          "default": "\uDB80\uDC4B"
+          "default": "\uDB82\uDF26"
         },
         "collapse": {
           "description": "Glyph before 'collapse' on an expanded row.",
           "type": "string",
           "minLength": 1,
-          "default": "\uDB80\uDC63"
+          "default": "\uDB82\uDF2C"
         }
       },
-      "default": { "expand": "\uDB80\uDC4B", "collapse": "\uDB80\uDC63" }
+      "default": { "expand": "\uDB82\uDF26", "collapse": "\uDB82\uDF2C" }
     },
     "tools": {
       "description": "Built-in tools that use compact rendering. Omitted tools keep Pi's default renderer.",

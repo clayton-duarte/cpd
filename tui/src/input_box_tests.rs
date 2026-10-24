@@ -105,7 +105,7 @@ fn input_box_cursor_is_the_blue_block_and_a_space_past_the_end() {
 }
 
 #[test]
-fn input_box_border_is_15_unfocused_and_12_focused_and_the_label_is_a_grey_pill() {
+fn the_label_pill_is_the_border_colour_blue_12_focused_and_white_15_unfocused() {
     for (focused, border) in [(false, numbered::C15), (true, numbered::C12)] {
         let buf = drawn("Title", "abc", 3, focused, 44);
         for x in [1, 2] {
@@ -123,11 +123,15 @@ fn input_box_border_is_15_unfocused_and_12_focused_and_the_label_is_a_grey_pill(
         for x in 1..43 {
             assert_eq!(buf[(x, 2)].fg, border, "bottom {x}");
         }
-        assert_eq!((buf[(3, 0)].symbol(), buf[(3, 0)].fg), (L, numbered::C7));
+        // hs-d578 F9: the label pill follows the border: text 0 on the border colour, caps in it on the terminal's background
+        let reset = ratatui::buffer::Cell::EMPTY.bg;
+        assert_eq!((buf[(3, 0)].symbol(), buf[(3, 0)].fg, buf[(3, 0)].bg), (L, border, reset));
         for x in 4..9 {
-            assert_eq!((buf[(x, 0)].bg, buf[(x, 0)].fg), (numbered::C7, numbered::C0), "pill {x}");
+            let cell = &buf[(x, 0)];
+            assert_eq!((cell.fg, cell.bg), (border, reset), "pill {x}");
+            assert!(cell.modifier.contains(ratatui::style::Modifier::REVERSED), "pill {x} is reversed: {cell:?}");
         }
-        assert_eq!((buf[(9, 0)].symbol(), buf[(9, 0)].fg), (R, numbered::C7));
+        assert_eq!((buf[(9, 0)].symbol(), buf[(9, 0)].fg, buf[(9, 0)].bg), (R, border, reset));
         for x in [3, 4, 5] {
             assert_eq!(buf[(x, 1)].fg, numbered::C15, "text {x}");
         }
