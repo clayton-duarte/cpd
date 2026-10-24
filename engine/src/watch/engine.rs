@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, workers};
+use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -403,6 +403,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     };
 
     let tick = engine.config.watch.tick_seconds.duration();
+    let mut failing = false;
     while !stopping() {
         let began = Instant::now();
         // The next engine says when this one stopped from it when it leaves no `watch-stopped`.
@@ -410,17 +411,35 @@ pub(super) fn run() -> Result<Output, CpdError> {
             engine.log.line(&format!("{} ({})", e.message(), e.code().as_str()));
         }
         engine.tick();
-        // The next tick comes at the earlier of a tick from now and E5's due time (§3.7): a poll is not held to a tick boundary.
-        // A finished poll is applied at the next nap, and E5's due time starts then.
+        // Read after the tick's steps: the commits of the children it started count as another's.
+        let seen = engine.store.data_version();
+        let mut committed = false;
+        // The next tick comes at the earliest of a tick from its start, E5's due time and, when another process
+        // committed, half a second from its start (§3.7). A finished poll is applied at the next nap.
         while !stopping() {
             pr::reap(&mut engine);
+            if !committed {
+                match (&seen, engine.store.data_version()) {
+                    (Ok(before), Ok(now)) => {
+                        failing = false;
+                        committed = *before != now;
+                    }
+                    (_, Err(e)) => {
+                        committed = true;
+                        if !failing {
+                            engine.log.line(&format!("cannot read the store's data version: {} ({})", e.message(), e.code().as_str()));
+                        }
+                        failing = true;
+                    }
+                    (Err(_), Ok(_)) => committed = true,
+                }
+            }
             let now = Instant::now();
-            let next = pr::due(&engine, began).map_or(began + tick, |due| (began + tick).min(due));
-            let left = next.saturating_duration_since(now);
-            if left.is_zero() {
+            let next = wake::next_tick(began, now, tick, pr::due(&engine, now), committed);
+            if now >= next {
                 break;
             }
-            std::thread::sleep(NAP.min(left));
+            std::thread::sleep(NAP.min(next - now));
         }
     }
 
