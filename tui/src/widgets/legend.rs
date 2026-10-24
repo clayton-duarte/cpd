@@ -24,6 +24,7 @@ use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
+use crate::box_widget::SectionTitle;
 use crate::section;
 use crate::{Capture, run_view};
 
@@ -261,7 +262,7 @@ pub fn draw(f: &mut Frame, area: Rect) {
 fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
-    f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(title.width))), title);
+    f.render_widget(SectionTitle::new(INTRO, None), head);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
     for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {

@@ -149,9 +149,7 @@ impl<B: Widget> Widget for BoxWidget<'_, B> {
 /// A section title (hs-d476): three rows, a blank one, the title row (`section::title`, from the area's first column to its
 /// last) and a blank one. Stateless; it writes nothing on the blank rows nor outside its area.
 pub struct SectionTitle<'a> {
-    #[allow(dead_code)] // read by `render`, which is a stub
     title: &'a str,
-    #[allow(dead_code)]
     count: Option<usize>,
 }
 
@@ -171,5 +169,11 @@ impl<'a> SectionTitle<'a> {
 }
 
 impl Widget for SectionTitle<'_> {
-    fn render(self, _area: Rect, _buf: &mut Buffer) {}
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if area.height < 2 || area.width == 0 {
+            return;
+        }
+        let row = Rect::new(area.x, area.y + 1, area.width, 1);
+        ratatui::widgets::Paragraph::new(crate::section::title(self.title, self.count, usize::from(area.width))).render(row, buf);
+    }
 }
