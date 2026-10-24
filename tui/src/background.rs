@@ -13,19 +13,13 @@ pub(crate) struct Background<T> {
     rx: Receiver<T>,
     queued: VecDeque<Job<T>>,
     running: bool,
-    waker: Option<crate::pump::Waker>,
+    waker: crate::pump::Waker,
 }
 
 impl<T: Send + 'static> Background<T> {
-    pub(crate) fn new() -> Background<T> {
-        let (tx, rx) = channel();
-        Background { tx, rx, queued: VecDeque::new(), running: false, waker: None }
-    }
-
-    // not called until the loops convert
-    #[allow(dead_code)]
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Background<T> {
-        Background { waker: Some(waker), ..Background::new() }
+        let (tx, rx) = channel();
+        Background { tx, rx, queued: VecDeque::new(), running: false, waker }
     }
 
     /// Runs `job` on a thread, after the jobs submitted before it.
@@ -53,9 +47,7 @@ impl<T: Send + 'static> Background<T> {
         std::thread::spawn(move || {
             // the receiver is gone only when the view ended
             let _ = tx.send(job());
-            if let Some(waker) = waker {
-                waker.read_done();
-            }
+            waker.read_done();
         });
     }
 }
