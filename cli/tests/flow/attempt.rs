@@ -263,9 +263,11 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0]["data"], json!({"from": "running", "to": "merging"}));
-    assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[0]["data"], json!({"from": "running", "to": "running", "check": "start", "what": "checks"}));
+    assert_eq!(events[1]["data"], json!({"from": "running", "to": "running", "check": "end", "what": "checks"}));
+    assert_eq!(events[2]["data"], json!({"from": "running", "to": "merging"}));
+    assert_eq!((events[2]["plan"].as_str(), events[2]["job"].as_str(), events[2]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
     assert_eq!(fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
 }
 
@@ -435,7 +437,9 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
     assert!(log.ends_with("logs/api-a1.pre-commit.log"), "{log}");
     assert!(fs::read_to_string(log).unwrap().contains("broken"));
     assert_eq!(fx.status(), "running");
-    assert_eq!(fx.events("attempt-status").len(), 0);
+    let events = fx.events("attempt-status");
+    let spans: Vec<_> = events.iter().map(|e| (e["data"]["check"].as_str(), e["data"]["what"].as_str())).collect();
+    assert_eq!(spans, [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
 }
 
 #[test]

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{Env, span};
+use super::Env;
 use crate::config::RepoTests;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation};
@@ -68,7 +68,7 @@ struct Ran {
     log: String,
 }
 
-/// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then in a span the
+/// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
 /// `build`, the optional `list` and the `run` of the Job's named tests. HEAD is `sha`, the worktree clean.
 pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, root: &Path, lead: &str, sha: &str) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
@@ -99,7 +99,7 @@ pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, roo
         .with("job", job.key.as_str())
         .with("jobs", json!(Vec::<String>::new())));
     }
-    span::within(env, plan, id, &job.key, "tests", |env| run_tests(env, plan, id, &job, &tests, &commands, root, lead))
+    run_tests(env, plan, id, &job, &tests, &commands, root, lead)
 }
 
 #[allow(clippy::too_many_arguments)]
