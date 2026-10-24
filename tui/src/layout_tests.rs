@@ -253,7 +253,7 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
             }
         }
         for x in r.x + 1..=right {
-            if x > last_content && inked(&buf[(x, y)]) && !(x == right && !rail) {
+            if x > last_content && !blank(&buf[(x, y)]) && !(x == right && !rail) {
                 fail(x, y, &format!("(4) box {name}: content past column {last_content}"));
             }
         }

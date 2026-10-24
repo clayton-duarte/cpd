@@ -8,7 +8,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, Mous
 use ratatui::layout::{Position, Rect};
 use crate::palette::{self, Meaning};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
+
+use crate::box_widget::{BoxWidget, Walls};
 
 /// The columns a busy entry's spinner takes beside its label: a space and the glyph.
 const SPINNER_WIDTH: usize = 2;
@@ -140,31 +142,22 @@ impl<E: Entry> Menu<E> {
         let lines: Vec<Line> = self
             .items
             .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let width = usize::from(rect.width.saturating_sub(4));
-                let mut spans = vec![Span::raw(" ")];
+            .map(|item| {
+                let mut spans = Vec::new();
                 if item.busy() {
-                    // the spinner is a mark of its own (yellow, a merge); the label and the padding are the entry's
                     let spinner = crate::palette::SPINNER[frame % crate::palette::SPINNER.len()];
                     spans.push(Span::raw(format!("{} ", item.label())));
                     spans.push(Span::styled(spinner, palette::fg_clickable(Meaning::Review)));
-                    spans.push(Span::raw(" ".repeat(width.saturating_sub(item.label().chars().count() + 2))));
                 } else {
-                    spans.push(Span::raw(format!("{:<width$}", item.label())));
+                    spans.push(Span::raw(item.label()));
                 }
-                spans.push(Span::raw(" "));
-                let line = Line::from(spans);
-                // clickable text, or the blue block (a mark inside it keeps no colour of its own)
-                if i == self.selected {
-                    Line::from(line.spans.into_iter().map(|s| Span::styled(s.content, palette::selected())).collect::<Vec<_>>()).style(palette::selected())
-                } else {
-                    line.style(palette::clickable_text())
-                }
+                Line::from(spans).style(palette::clickable_text())
             })
             .collect();
+                let selected = self.selected as u16;
         f.render_widget(Clear, rect);
-        f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::ALL).border_style(palette::muted_text())), rect);
+        let body = Paragraph::new(lines);
+        f.render_widget(BoxWidget::new(Walls::Full, palette::muted_text(), body).highlight(selected..selected + 1), rect);
     }
 }
 
@@ -300,7 +293,7 @@ mod tests {
         let rows: Vec<String> = (0..7).map(|y| (0..20).map(|x| buf[(x, y)].symbol()).collect()).collect();
         assert_eq!(
             rows,
-            ["xxxxxxxxxxxxxxxxxxxx", "xxx┌───────────┐xxxx", "xxx│ New Plan… │xxxx", "xxx│ Rename…   │xxxx", "xxx│ Copy id   │xxxx", "xxx│ Archive   │xxxx", "xxx└───────────┘xxxx"]
+            ["xxxxxxxxxxxxxxxxxxxx", "xxx╭───────────╮xxxx", "xxx│ New Plan… │xxxx", "xxx│ Rename…   │xxxx", "xxx│ Copy id   │xxxx", "xxx│ Archive   │xxxx", "xxx╰───────────╯xxxx"]
                 .map(|r| r.chars().take(20).collect::<String>()),
         );
         assert_eq!((buf[(5, 2)].bg, buf[(5, 2)].fg), (palette::selected().bg.unwrap(), palette::selected().fg.unwrap()), "the selected item: the blue block");

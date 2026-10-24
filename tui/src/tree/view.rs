@@ -777,6 +777,8 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
+    // a right click inside the Inbox opens only an item's menu: an empty Inbox has none, so click just above it
+    let row = if view.inbox_area.contains(Position::new(column, row)) { view.inbox_area.y.saturating_sub(1) } else { row };
     view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE });
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     let rect = view.menu.as_ref().expect("the right click opens a menu").rect(view.pane);
