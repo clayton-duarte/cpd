@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -28,6 +28,12 @@ fn sym(buf: &Buffer, x: u16, y: u16) -> String {
 
 fn row(buf: &Buffer, y: u16, x0: u16, x1: u16) -> String {
     (x0..x1).map(|x| sym(buf, x, y)).collect()
+}
+
+/// A cell painted as `sel`: its fg and the REVERSED modifier (`bg` is `Reset` either way).
+fn lit(buf: &Buffer, x: u16, y: u16, sel: Style) -> bool {
+    let st = buf[(x, y)].style();
+    st.fg == sel.fg && st.add_modifier.contains(Modifier::REVERSED)
 }
 
 fn full() -> Walls<'static> {
@@ -91,9 +97,9 @@ fn box_full_draws_rounded_walls_the_title_after_the_corner_and_a_line_and_the_bo
     let title = Line::from(vec![Span::raw("ab"), Span::styled("cd", palette::muted_text())]);
     let area = Rect::new(1, 1, 12, 4);
     let buf = draw(BoxWidget::new(full(), border, Xs).title(title), area);
-    assert_eq!(row(&buf, 1, 1, 13), "╭─abcd──────╮");
+    assert_eq!(row(&buf, 1, 1, 13), "╭─abcd─────╮");
     assert_eq!(buf[(1, 1)].style().fg, border.fg);
-    assert_eq!(buf[(4, 1)].style().fg, palette::muted_text().fg);
+    assert_eq!(buf[(5, 1)].style().fg, palette::muted_text().fg);
     for y in [2u16, 3] {
         assert_eq!(sym(&buf, 1, y), "│");
         assert_eq!(sym(&buf, 12, y), "│");
@@ -135,18 +141,18 @@ fn box_highlight_paints_the_body_rows_between_the_walls_padding_included_and_a_r
     // Full: body row 1 (the second) only, between the walls.
     let buf = draw(BoxWidget::new(full(), border, Xs).highlight(1..2), Rect::new(1, 1, 10, 5));
     for x in 2..10 {
-        assert_eq!(buf[(x, 3)].style().bg, sel.bg, "x={x}");
-        assert_ne!(buf[(x, 2)].style().bg, sel.bg, "x={x}");
-        assert_ne!(buf[(x, 4)].style().bg, sel.bg, "x={x}");
+        assert!(lit(&buf, x, 3, sel), "x={x}");
+        assert!(!lit(&buf, x, 2, sel), "x={x}");
+        assert!(!lit(&buf, x, 4, sel), "x={x}");
     }
-    assert_ne!(buf[(1, 3)].style().bg, sel.bg);
-    assert_ne!(buf[(10, 3)].style().bg, sel.bg);
+    assert!(!lit(&buf, 1, 3, sel));
+    assert!(!lit(&buf, 10, 3, sel));
     // Rail: the whole row of the area, rail column included.
     let area = Rect::new(1, 1, 10, 6);
     let buf = draw(BoxWidget::new(rail(), border, Xs).highlight(0..1), area);
     for x in 1..11 {
-        assert_eq!(buf[(x, 3)].style().bg, sel.bg, "x={x}");
-        assert_ne!(buf[(x, 4)].style().bg, sel.bg, "x={x}");
+        assert!(lit(&buf, x, 3, sel), "x={x}");
+        assert!(!lit(&buf, x, 4, sel), "x={x}");
     }
 }
 

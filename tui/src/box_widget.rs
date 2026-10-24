@@ -6,8 +6,10 @@ use std::ops::Range;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::widgets::Widget;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Widget};
+
+use crate::palette;
 
 /// The box spacing rule (hs-d578, hs-d476).
 pub mod spacing {
@@ -22,8 +24,8 @@ pub mod spacing {
     pub const MIN_WIDTH: u16 = 2 + 2 * PAD_X + 1;
 
     /// `area` less [`MARGIN_X`] on each side.
-    pub fn contain(_area: Rect) -> Rect {
-        unimplemented!()
+    pub fn contain(area: Rect) -> Rect {
+        Rect::new(area.x + MARGIN_X, area.y, area.width.saturating_sub(2 * MARGIN_X), area.height)
     }
 }
 
@@ -36,7 +38,6 @@ pub enum Walls<'a> {
 }
 
 /// A box: walls, an optional title, a body and an optional highlight.
-#[allow(dead_code, reason = "the stub reads no field yet")]
 pub struct BoxWidget<'a, B: Widget> {
     walls: Walls<'a>,
     border: Style,
@@ -71,12 +72,76 @@ pub struct Geometry {
 }
 
 /// Pure: the widget and the views both call it.
-pub fn geometry(_walls: &Walls, _area: Rect) -> Geometry {
-    unimplemented!()
+pub fn geometry(walls: &Walls, area: Rect) -> Geometry {
+    let (min_rows, top) = match walls {
+        Walls::Full => (2, 0),
+        Walls::Rail { .. } => (4, spacing::FOLD_MARGIN_Y),
+    };
+    let fits = area.width >= spacing::MIN_WIDTH && area.height >= min_rows;
+    let inner = if !fits {
+        Rect::ZERO
+    } else {
+        Rect::new(
+            area.x + 1 + spacing::PAD_X,
+            area.y + 1 + top,
+            area.width - 2 - 2 * spacing::PAD_X,
+            area.height - 2 - 2 * top,
+        )
+    };
+    Geometry {
+        wall: area,
+        inner,
+        title_row: area.y + top,
+        closing_row: match walls {
+            Walls::Full => None,
+            Walls::Rail { .. } => Some(area.y + area.height.saturating_sub(2)),
+        },
+    }
 }
 
 impl<B: Widget> Widget for BoxWidget<'_, B> {
-    fn render(self, _area: Rect, _buf: &mut Buffer) {
-        unimplemented!()
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let g = geometry(&self.walls, area);
+        if g.inner == Rect::ZERO {
+            return;
+        }
+        let area = area.intersection(buf.area);
+        match &self.walls {
+            Walls::Full => {
+                let mut block = Block::bordered().border_type(BorderType::Rounded).border_style(self.border);
+                if let Some(title) = self.title {
+                    let mut spans = vec![Span::styled("─", self.border)];
+                    spans.extend(title.spans);
+                    block = block.title(Line::from(spans).style(title.style));
+                }
+                block.render(area, buf);
+            }
+            Walls::Rail { closing } => {
+                let right = area.x + area.width;
+                let cap = |buf: &mut Buffer, y: u16, glyph: &str, line: Option<&Line>| {
+                    buf[(area.x, y)].set_symbol(glyph).set_style(self.border);
+                    if let Some(line) = line {
+                        line.render(Rect::new(area.x + 1, y, right - area.x - 1, 1), buf);
+                    }
+                };
+                cap(buf, g.title_row, "╭", self.title.as_ref());
+                let closing_row = g.closing_row.unwrap_or(g.title_row);
+                for y in g.title_row + 1..closing_row {
+                    cap(buf, y, "│", None);
+                }
+                cap(buf, closing_row, "╰", Some(closing));
+            }
+        }
+        self.body.render(g.inner, buf);
+        if let Some(rows) = self.highlight {
+            let end = rows.end.min(g.inner.height);
+            let (x, width) = match self.walls {
+                Walls::Full => (area.x + 1, area.width - 2),
+                Walls::Rail { .. } => (area.x, area.width),
+            };
+            for r in rows.start..end {
+                buf.set_style(Rect::new(x, g.inner.y + r, width, 1), palette::selected());
+            }
+        }
     }
 }
