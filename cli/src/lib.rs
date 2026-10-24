@@ -4,6 +4,9 @@
 pub mod cli;
 pub mod interface;
 
+#[cfg(feature = "fakes")]
+pub mod fakes;
+
 use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;

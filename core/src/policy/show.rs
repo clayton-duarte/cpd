@@ -6,7 +6,7 @@ use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
-use super::resolve::{owners_dir, repos_dir};
+use super::resolve::{machine_file, owners_dir, repos_dir};
 use super::domain::{FEEDBACK_CHECKS, GATE};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
@@ -111,7 +111,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if args.repo.is_some() && args.owner.is_none() {
         return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
     }
-    let Env { home, mut store, .. } = Env::open()?;
+    let Env { home, mut store, config, .. } = Env::open()?;
     let (role, key) = if let Some(pr) = &args.pr {
         let plan = args.plan.as_ref().ok_or_else(|| {
             CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
@@ -130,10 +130,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         (Some(role), key)
     };
     check_file_names(&home)?;
-    let resolved = resolve(&home, &key)?;
+    let resolved = resolve(&home, &config.host, &key)?;
 
-    // The files read, owner first: the owner's exists (resolve refused otherwise).
-    let mut files = vec![owners_dir(&home).join(format!("{}.toml", key.owner()))];
+    // The files read, machine first; the owner's exists (resolve refused otherwise).
+    let mut files = vec![machine_file(&home, &config.host), owners_dir(&home).join(format!("{}.toml", key.owner()))];
     if let PolicyKey::Repo(owner, name) = &key {
         files.push(repos_dir(&home).join(owner.as_str()).join(format!("{name}.toml")));
     }

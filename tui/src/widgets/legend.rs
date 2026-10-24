@@ -25,7 +25,6 @@ use crate::palette::{self, Meaning};
 use crate::pill::pill;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
-use crate::section;
 use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;

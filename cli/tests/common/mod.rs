@@ -224,6 +224,8 @@ teardown() {
   stop_tmux
   # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
   [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
+  # The fake tmux's state files of this socket and the derived ones (`fake-tmux-<socket>.db*`, `fake-tmux-<socket>-*`).
+  rm -f "$tmuxdir/fake-tmux-$socket".db* "$tmuxdir/fake-tmux-$socket"-*
   rm -rf "$dir"
 }
 
@@ -857,6 +859,7 @@ impl TestEnv {
             .env("CPD_HOME", self.cpd_home())
             .env("HOME", self.home())
             .env("TMUX_TMPDIR", self.tmux_tmpdir())
+            .env("FAKE_TMUX_SERVER_PID", std::process::id().to_string())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -1043,6 +1046,18 @@ impl TestEnv {
     /// `tmux -L <private socket> <args>` in this env.
     pub fn tmux(&self, args: &[&str]) -> Output {
         output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")
+    }
+
+    /// Makes `tmux` on this env's PATH the fake tmux: a symlink `bin/tmux` to the built `fake-tmux`. Idempotent.
+    pub fn fake_tmux(&self) {
+        let link = self.bin().join("tmux");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_fake-tmux"), &link).expect("link bin/tmux to the fake tmux");
+    }
+
+    /// The fake's state of this env's socket (`None` while no server exists).
+    pub fn tmux_state(&self) -> Option<cpd::fakes::tmux::State> {
+        cpd::fakes::tmux::State::open(&self.tmux_tmpdir(), self.tmux_socket())
     }
 
     /// Installs `bin/<name>`: a shell script that records its argv (see

@@ -17,6 +17,8 @@
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
+#[cfg(test)]
+mod background_tests;
 pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
