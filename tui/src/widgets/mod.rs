@@ -478,6 +478,7 @@ mod tests {
             active: false,
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
+            plan_failed: false,
             merging: false,
         }
     }

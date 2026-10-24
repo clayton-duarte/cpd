@@ -26,7 +26,7 @@ use crate::fold;
 use crate::link::link;
 use crate::merge::Pull;
 use crate::palette;
-use crate::read::Tree;
+use crate::read::{Tree, age_text};
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
@@ -157,19 +157,9 @@ impl Shape {
     }
 }
 
-/// An age in the largest whole unit: `42s`, `5m`, `3h`, `2d`. A negative age (a clock that went back) is `0s`.
-pub fn age(seconds: i64) -> String {
-    match seconds.max(0) {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86400),
-    }
-}
-
 /// The age of an item opened at `opened_at` (§1.3's RFC 3339), at `now`; `?` when the stored time does not parse.
 fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
-    OffsetDateTime::parse(opened_at, &Rfc3339).map_or_else(|_| "?".to_owned(), |t| age((now - t).whole_seconds()))
+    OffsetDateTime::parse(opened_at, &Rfc3339).map_or_else(|_| "?".to_owned(), |t| age_text((now - t).whole_seconds()))
 }
 
 /// What a click on an item does besides the OSC 8 link.
@@ -493,28 +483,6 @@ mod tests {
 
     fn sid(s: &str) -> SessionId {
         SessionId::parse(s).unwrap()
-    }
-
-    #[test]
-    fn an_age_is_the_largest_whole_unit() {
-        let cases = [
-            (0, "0s"),
-            (42, "42s"),
-            (59, "59s"),
-            (60, "1m"),
-            (299, "4m"),
-            (300, "5m"),
-            (3599, "59m"),
-            (3600, "1h"),
-            (3 * 3600 + 59 * 60, "3h"),
-            (86399, "23h"),
-            (86400, "1d"),
-            (2 * 86400 + 86399, "2d"),
-            (-5, "0s"),
-        ];
-        for (seconds, text) in cases {
-            assert_eq!(age(seconds), text, "{seconds} s");
-        }
     }
 
     #[test]
