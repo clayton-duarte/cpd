@@ -273,7 +273,7 @@ mod tests {
     fn a_repo_without_a_file_is_repo_unconfigured_after_the_owner_check() {
         let (_d, home) = home();
         let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnknown, "the owner is checked first");
+        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
         write(&home, "owners/acme.toml", "");
         let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
         assert_eq!((err.code(), err.exit().code()), (ErrorCode::RepoUnconfigured, 3));
@@ -292,7 +292,7 @@ mod tests {
         assert!(matches!(r.sources.get(Domain::Pr).source, Source::Owner(_)));
         // A missing owner file is still `owner_unconfirmed`.
         let err = resolve_lenient(&home, &host(), &repo_key("nobody", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnknown);
+        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
     }
 
     #[test]
