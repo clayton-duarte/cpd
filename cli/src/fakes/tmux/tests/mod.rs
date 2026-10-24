@@ -1,6 +1,10 @@
+mod chain;
 mod create;
 mod format;
+mod hooks;
+mod kill;
 mod options;
+mod pane_io;
 mod server;
 mod target;
 

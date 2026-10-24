@@ -2,11 +2,13 @@
 //! argv on `;` and runs each command inside one `BEGIN IMMEDIATE` transaction. This Job: state, targets,
 //! options and formats; the other subcommands answer `unknown command: <name>`.
 
+pub mod ctl;
 pub mod format;
+pub mod hooks;
 pub mod state;
 pub mod target;
 
-pub use state::{Pane, SessionRow, State, WindowRow};
+pub use state::{KeyLog, Pane, SessionRow, State, WindowRow};
 
 use rusqlite::Connection;
 use state::{db_path, next_id};

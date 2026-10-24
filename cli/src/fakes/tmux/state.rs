@@ -59,6 +59,14 @@ pub struct Pane {
     pub options: Vec<(String, String)>,
 }
 
+/// One `send-keys` call: the pane, the key arguments, whether `-l` was given.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyLog {
+    pub pane: String,
+    pub keys: Vec<String>,
+    pub literal: bool,
+}
+
 /// Read-only view of one socket's state.
 pub struct State {
     db: Connection,
@@ -133,5 +141,26 @@ impl State {
             .expect("query")
             .map(|r| r.expect("row"))
             .collect()
+    }
+    /// The hooks set with `set-hook -g`: (name, command), in the order set. Stub.
+    pub fn hooks(&self) -> Vec<(String, String)> {
+        let _ = &self.db;
+        Vec::new()
+    }
+    /// The `send-keys` log, in call order. Stub.
+    pub fn keys(&self) -> Vec<KeyLog> {
+        Vec::new()
+    }
+    /// The names of the attached clients (`attach`). Stub.
+    pub fn clients(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// The argv (subcommand name first) of each `display-popup` call. Stub.
+    pub fn popups(&self) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+    /// The argv (subcommand name first) of each `display-menu` call. Stub.
+    pub fn menus(&self) -> Vec<Vec<String>> {
+        Vec::new()
     }
 }
