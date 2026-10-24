@@ -30,7 +30,7 @@ pub fn ctl(cx: &mut Cx, args: &[String]) -> R<()> {
             let text = rest[1..].join(" ");
             cx.db
                 .execute(
-                    "INSERT INTO screens VALUES (?1, ?2) ON CONFLICT (pane) DO UPDATE SET text = excluded.text",
+                    "INSERT INTO screens (pane, text) VALUES (?1, ?2) ON CONFLICT (pane) DO UPDATE SET text = excluded.text",
                     (pane, text),
                 )
                 .map_err(fail)?;

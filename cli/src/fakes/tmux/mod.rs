@@ -328,8 +328,8 @@ fn add_window(cx: &Cx, session: i64, name: Option<&str>, o: &Opts, select: bool)
     let cwd = o.val('c').map_or_else(|| cx.inv.cwd.display().to_string(), str::to_string);
     let (w, h) = (int(o.val('x'), 80)?, int(o.val('y'), 24)?);
     let argv = serde_json::to_string(&o.rest).expect("argv json");
-    db.execute("INSERT INTO windows VALUES (?1, ?2, ?3, ?4)", (window, session, name, pane)).map_err(fail)?;
-    db.execute("INSERT INTO panes VALUES (?1, ?2, 0, ?3, ?4, 0, NULL, ?5, ?6, ?7)", (pane, window, argv, cwd, 10000 + pane, w, h))
+    db.execute("INSERT INTO windows (id, session, name, cur_pane) VALUES (?1, ?2, ?3, ?4)", (window, session, name, pane)).map_err(fail)?;
+    db.execute("INSERT INTO panes (id, window, pos, argv, cwd, dead, dead_status, pid, width, height) VALUES (?1, ?2, 0, ?3, ?4, 0, NULL, ?5, ?6, ?7)", (pane, window, argv, cwd, 10000 + pane, w, h))
         .map_err(fail)?;
     store_env(db, "pane", pane, &o.all('e')).map_err(fail)?;
     if select {
@@ -341,7 +341,7 @@ fn add_window(cx: &Cx, session: i64, name: Option<&str>, o: &Opts, select: bool)
 fn store_env(db: &Connection, scope: &str, owner: i64, pairs: &[&str]) -> rusqlite::Result<()> {
     for p in pairs {
         let (k, v) = p.split_once('=').unwrap_or((p, ""));
-        db.execute("INSERT OR REPLACE INTO env VALUES (?1, ?2, ?3, ?4)", (scope, owner, k, v))?;
+        db.execute("INSERT OR REPLACE INTO env (scope, owner, key, value) VALUES (?1, ?2, ?3, ?4)", (scope, owner, k, v))?;
     }
     Ok(())
 }
@@ -355,7 +355,7 @@ fn new_session(cx: &mut Cx, args: &[String]) -> R<()> {
     }
     let session = next_id(cx.db, "session").map_err(|e| e.to_string())?;
     let name = o.val('s').map_or_else(|| session.to_string(), str::to_string);
-    cx.db.execute("INSERT INTO sessions VALUES (?1, ?2, NULL)", (session, name)).map_err(|e| e.to_string())?;
+    cx.db.execute("INSERT INTO sessions (id, name, cur_window) VALUES (?1, ?2, NULL)", (session, name)).map_err(|e| e.to_string())?;
     let loc = add_window(cx, session, o.val('n'), &o, true)?;
     if o.has('P') {
         say(cx, o.val('F').unwrap_or("#{session_name}:"), loc);
@@ -403,7 +403,7 @@ fn split_window(cx: &mut Cx, args: &[String]) -> R<()> {
     db.execute("UPDATE panes SET pos = pos + 1 WHERE window = ?1 AND pos >= ?2", (window, pos)).map_err(fail)?;
     let cwd = o.val('c').map_or(cwd, str::to_string);
     let argv = serde_json::to_string(&o.rest).expect("argv json");
-    db.execute("INSERT INTO panes VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, ?6, ?7, ?8)", (pane, window, pos, argv, cwd, 10000 + pane, width, height))
+    db.execute("INSERT INTO panes (id, window, pos, argv, cwd, dead, dead_status, pid, width, height) VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, ?6, ?7, ?8)", (pane, window, pos, argv, cwd, 10000 + pane, width, height))
         .map_err(fail)?;
     store_env(db, "pane", pane, &o.all('e')).map_err(fail)?;
     if !o.has('d') {
@@ -522,7 +522,7 @@ fn set(cx: &mut Cx, args: &[String]) -> R<()> {
     let value = if o.has('a') { old.unwrap_or_default() + &given } else { given };
     cx.db
         .execute(
-            "INSERT INTO options VALUES (?1, ?2, ?3, ?4) ON CONFLICT (scope, owner, key) DO UPDATE SET value = excluded.value",
+            "INSERT INTO options (scope, owner, key, value) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (scope, owner, key) DO UPDATE SET value = excluded.value",
             (scope, owner, name, value),
         )
         .map_err(fail)?;
@@ -569,7 +569,7 @@ fn set_environment(cx: &mut Cx, args: &[String]) -> R<()> {
         return Ok(());
     }
     let value = if o.has('r') { None } else { Some(o.rest.get(1).cloned().unwrap_or_default()) };
-    cx.db.execute("INSERT OR REPLACE INTO env VALUES (?1, ?2, ?3, ?4)", (scope, owner, name, value)).map_err(fail)?;
+    cx.db.execute("INSERT OR REPLACE INTO env (scope, owner, key, value) VALUES (?1, ?2, ?3, ?4)", (scope, owner, name, value)).map_err(fail)?;
     Ok(())
 }
 

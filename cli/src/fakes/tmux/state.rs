@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS clients (seq INTEGER PRIMARY KEY AUTOINCREMENT, name 
 
 /// Next id of a kind (`session`, `window`, `pane`).
 pub fn next_id(db: &Connection, kind: &str) -> rusqlite::Result<i64> {
-    db.execute("INSERT OR IGNORE INTO counters VALUES (?1, 0)", [kind])?;
+    db.execute("INSERT OR IGNORE INTO counters (name, next) VALUES (?1, 0)", [kind])?;
     let n: i64 = db.query_row("SELECT next FROM counters WHERE name = ?1", [kind], |r| r.get(0))?;
     db.execute("UPDATE counters SET next = next + 1 WHERE name = ?1", [kind])?;
     Ok(n)

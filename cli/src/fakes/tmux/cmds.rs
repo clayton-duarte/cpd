@@ -155,7 +155,7 @@ pub fn capture_pane(cx: &mut Cx, args: &[String]) -> R<()> {
 
 fn store_buffer(db: &Connection, name: Option<&str>, data: &str) -> R<()> {
     db.execute(
-        "INSERT INTO buffers VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET data = excluded.data",
+        "INSERT INTO buffers (name, data) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET data = excluded.data",
         (name.unwrap_or("buffer0"), data),
     )
     .map_err(fail)?;

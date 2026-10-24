@@ -175,7 +175,7 @@ pub fn set_hook(cx: &mut Cx, args: &[String]) -> R<()> {
         }
     }
     cx.db
-        .execute("INSERT INTO hooks VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET cmd = excluded.cmd", (name, cmd))
+        .execute("INSERT INTO hooks (name, cmd) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET cmd = excluded.cmd", (name, cmd))
         .map_err(fail)?;
     Ok(())
 }
@@ -198,7 +198,7 @@ pub fn bind(cx: &mut Cx, args: &[String]) -> R<()> {
     let table = if o.has('n') { "root" } else { o.val('T').unwrap_or("prefix") };
     cx.db
         .execute(
-            "INSERT INTO bindings VALUES (?1, ?2, ?3) ON CONFLICT (key) DO UPDATE SET tbl = excluded.tbl, cmd = excluded.cmd",
+            "INSERT INTO bindings (key, tbl, cmd) VALUES (?1, ?2, ?3) ON CONFLICT (key) DO UPDATE SET tbl = excluded.tbl, cmd = excluded.cmd",
             (key, table, cmd.join(" ")),
         )
         .map_err(|e| e.to_string())?;
