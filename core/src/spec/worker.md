@@ -210,7 +210,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `base_not_found`: the base branch is not on the remote. Ask the Lead.
 - `gate_failed`: the Gate failed on your head (the tail is in `details`). Fix it, commit, then submit again.
 - `gate_error`: the Gate could not run. Ask the Lead.
-- `owner_unset`, `owner_unknown`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
+- `owner_unset`, `owner_unconfirmed`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
 {% endif %}
 - `attempt_not_running`: the Attempt was stopped. Stop.
 

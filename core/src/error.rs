@@ -100,7 +100,8 @@ error_codes! {
     TitleFailed = "title_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
-    OwnerUnknown = "owner_unknown" => Failure,
+    OwnerUnconfirmed = "owner_unconfirmed" => Failure,
+    FallbackMissing = "fallback_missing" => Failure,
     RepoUnkeyed = "repo_unkeyed" => Failure,
 
     // Exit 2: usage error.
@@ -462,7 +463,8 @@ mod tests {
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
             (ErrorCode::PolicyInvalid, 1),
-            (ErrorCode::OwnerUnknown, 1),
+            (ErrorCode::OwnerUnconfirmed, 1),
+            (ErrorCode::FallbackMissing, 1),
             (ErrorCode::RepoUnkeyed, 1),
             (ErrorCode::OwnerMismatch, 3),
             (ErrorCode::OwnerUnset, 3),

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use super::domain::{merge, Policy, Scope, Source, Sources};
 use super::exposure::ScopeKind;
 use super::load::{load_scope_file, parse_scope, policy_invalid};
-use super::{owner_unknown, PolicyKey, Resolved};
+use super::{owner_unconfirmed, PolicyKey, Resolved};
 use crate::home::CpdHome;
 use crate::ids::{HostName, OwnerLogin};
 
@@ -40,7 +40,7 @@ pub(super) fn machine_file(home: &CpdHome, host: &HostName) -> PathBuf {
     machines_dir(home).join(format!("{host}.toml"))
 }
 
-fn owner_file(home: &CpdHome, owner: &OwnerLogin) -> PathBuf {
+pub(super) fn owner_file(home: &CpdHome, owner: &OwnerLogin) -> PathBuf {
     owners_dir(home).join(format!("{owner}.toml"))
 }
 
@@ -71,17 +71,17 @@ fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
 
 /// The policy of `key`: cpd's default, then the machine file, the owner file and the repo file,
 /// per domain, the whole domain replaced. A key whose owner has no file is
-/// `owner_unknown`, even when its repo file exists.
+/// `owner_unconfirmed`, even when its repo file exists.
 pub fn resolve(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
     match layers(home, host, key)? {
         Some(layers) => Ok(merge_layers(&layers)),
-        None => Err(owner_unknown(key.owner())),
+        None => Err(owner_unconfirmed(home, key.owner())),
     }
 }
 
 /// [`resolve`] for a `pull_requests` row no PR owns:
 /// an owner without a file is cpd's default, source `default (no owner file)`,
-/// not `owner_unknown`.
+/// not `owner_unconfirmed`.
 pub fn resolve_unowned_row(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
     match layers(home, host, key)? {
         Some(layers) => Ok(merge_layers(&layers)),

@@ -441,7 +441,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
 
 /// Keys the repo (contract §8.3, hs-d288), in the order of commands.md §9.4: the Plan's Context
 /// has an owner (`owner_unset`), the repo keys from its `origin` (`repo_unkeyed`), of that owner
-/// (`owner_mismatch`), whose policy files resolve (`owner_unknown`, `policy_invalid`). Returns the
+/// (`owner_mismatch`), whose policy files resolve (`owner_unconfirmed`, `policy_invalid`). Returns the
 /// repo's name. Shared with `pr edit --repo`; reads and writes nothing.
 pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<RepoName, CpdError> {
     let (context, owner): (String, Option<String>) = env.store.read(|conn| {

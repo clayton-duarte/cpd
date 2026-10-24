@@ -27,6 +27,14 @@ pub fn parse_origin(url: &str) -> Option<(OwnerLogin, RepoName)> {
 /// (`repo_unkeyed` when it has none, or one that does not key it).
 pub fn repo_key(repo: &Path) -> Result<(OwnerLogin, RepoName), CpdError> {
     let url = origin_url(repo)?;
+    if url.is_none() {
+        // No remote: clayton-duarte's, named by the directory (contract §8.3).
+        let name = repo.file_name().and_then(|n| n.to_str()).and_then(|n| RepoName::parse(n).ok());
+        return match name {
+            Some(name) => Ok((OwnerLogin::parse(super::FALLBACK_OWNER).expect("a valid login"), name)),
+            None => Err(repo_unkeyed(None)),
+        };
+    }
     url.as_deref().and_then(parse_origin).ok_or_else(|| repo_unkeyed(url.as_deref()))
 }
 

@@ -484,10 +484,10 @@ fn add_keys_the_repo_before_anything_is_written() {
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
     assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("other")));
 
-    // owner_unknown (exit 1): the Context's owner has no policy file.
+    // owner_unconfirmed (exit 1): the Context's owner has no policy file.
     fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
     fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
-    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unknown", 1, writes);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unconfirmed", 1, writes);
     assert_eq!(error["details"]["owner"], "acme");
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
 

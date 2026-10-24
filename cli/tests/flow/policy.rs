@@ -240,14 +240,14 @@ fn owner_unset_names_the_next_command() {
 }
 
 #[test]
-fn owner_unknown_even_with_a_repo_file() {
+fn owner_unconfirmed_even_with_a_repo_file() {
     let fx = Fx::new();
     let home = fx.env.cpd_home();
     fs::create_dir_all(home.join("policy/repos/ghost")).unwrap();
     fs::write(home.join("policy/repos/ghost/x.toml"), REPO_FILE).unwrap();
-    let error = refused(&fx.show(&["--owner", "ghost", "--repo", "x"]), "owner_unknown", 1);
+    let error = refused(&fx.show(&["--owner", "ghost", "--repo", "x"]), "owner_unconfirmed", 1);
     assert_eq!(error["details"]["owner"], "ghost");
-    refused(&fx.show(&["--owner", "ghost"]), "owner_unknown", 1);
+    refused(&fx.show(&["--owner", "ghost"]), "owner_unconfirmed", 1);
 }
 
 #[test]

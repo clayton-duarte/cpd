@@ -144,7 +144,7 @@ fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
     refused(env.cpd(&["context", "new", CTX, "--title", "T"]), 2, "usage");
     refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "-bad-"]), 2, "usage");
     // An owner without `policy/owners/<login>.toml`.
-    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unknown");
+    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]), "nothing written");
     // The login is lowercased before the file is looked up.
@@ -168,7 +168,7 @@ fn owner_sets_a_missing_owner_and_appends_context_owner() {
     clear_owner(&env);
     fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
 
-    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unknown");
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(events(&env, "context-owner").len(), 0);
     refused(env.cpd(&["context", "owner", "acme", "--context", "no-such"]), 4, "context_not_found");
@@ -218,7 +218,7 @@ fn owner_changes_while_the_context_has_no_pr_row() {
 fn owner_still_needs_the_new_owners_policy_file() {
     let env = hs();
     new_context(&env);
-    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unknown");
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["owner"], "acme");
     assert_eq!(events(&env, "context-owner").len(), 0);

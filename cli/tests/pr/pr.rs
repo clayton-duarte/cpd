@@ -3791,7 +3791,7 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     let errors = fx.policy_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].0, "bob");
-    assert_eq!(errors[0].1["code"], "owner_unknown");
+    assert_eq!(errors[0].1["code"], "owner_unconfirmed");
     assert_eq!(errors[0].1["details"]["plan"], "bob");
     assert_eq!(errors[0].1["details"]["pr"], "shop");
     assert_eq!(errors[0].1["details"]["owner"], "gone");
