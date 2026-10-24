@@ -160,14 +160,14 @@ fn counters_are_in_their_status_colour_bright_and_a_failed_count_is_red() {
 }
 
 #[test]
-fn the_red_loader_is_the_28_moon_frames_in_red_and_archived_the_first_in_colour_8() {
+fn the_red_loader_is_the_28_moon_frames_in_red_and_archived_the_hollow_ring_in_colour_8() {
     let moons = ["\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}", "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}", "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}", "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}"];
     for f in 0..56 {
         let span = dot_span(Dot::Fixing, f, false);
         assert_eq!(span.content, moons[f % 28], "frame {f}");
         assert_eq!(span.style, text(C9), "frame {f}: red 9");
         let archived = dot_span(Dot::Fixing, f, true);
-        assert_eq!(archived.content, moons[0], "archived, frame {f}: the first frame");
+        assert_eq!(archived.content, "\u{E3D5}", "archived, frame {f}: the hollow ring");
         assert_eq!(archived.style, archived_text(), "archived, frame {f}");
         assert_eq!(archived.style, text(C8));
     }
