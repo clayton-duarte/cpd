@@ -77,18 +77,18 @@ test("the pill has caps 6, its text inverted and no padding inside the caps", ()
 	} finally { w.dispose(); }
 });
 
-test("the loader frame sits inside the pill in text 0 and steps through the eight moon phases at 100 ms", () => {
+test("the loader frame sits inside the pill in text 0 and steps through the 28 moon_alt phases at 50 ms", () => {
 	const w = working();
 	try {
 		for (let step = 0; step < LOADER.length + 1; step++) {
 			const row = w.row();
 			const plain = strip(row);
 			const body = plain.slice(plain.indexOf(LEFT_CAP) + 1, plain.indexOf(RIGHT_CAP));
-			assert.ok(body.startsWith(LOADER[step % 8]!), `frame ${step % 8} opens the pill, got ${JSON.stringify(body)}`);
-			assert.ok(!plain.slice(0, plain.indexOf(LEFT_CAP)).match(/[\u{f0000}-\u{fffff}]/u), "no loader frame outside the pill");
+			assert.ok(body.startsWith(LOADER[step % 28]!), `frame ${step % 28} opens the pill, got ${JSON.stringify(body)}`);
+			assert.ok(!plain.slice(0, plain.indexOf(LEFT_CAP)).match(/[\u{e3c8}-\u{e3e3}\u{f0000}-\u{fffff}]/u), "no loader frame outside the pill");
 			const bodyRaw = row.slice(row.indexOf("\x1b[46m"));
-			assert.ok(!bodyRaw.slice(0, bodyRaw.indexOf(LOADER[step % 8]!)).includes("\x1b[36m"), "the frame has no colour of its own");
-			timerClock.tick(100);
+			assert.ok(!bodyRaw.slice(0, bodyRaw.indexOf(LOADER[step % 28]!)).includes("\x1b[36m"), "the frame has no colour of its own");
+			timerClock.tick(50);
 		}
 	} finally { w.dispose(); }
 });
