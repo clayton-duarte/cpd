@@ -3580,17 +3580,18 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 #### Files
 
 - **cpd's default** is `core/src/policy/default.toml`, compiled into the binary (`include_str!`) and parsed by the same loader as every scope file, so the code and `cpd policy show` have one source. It sets every domain, and holds today's behaviour except `pr.gate = "ci"` (hs-d292): before policies, `pr open`, `pr push` and `pr rebase` always ran the Gate. Every `text` is empty.
-- **The owner and repo scopes** are files of the instance (§1.4):
+- **The three scope files** are files of the instance (§1.4), sharing one grammar and domain tables:
 
   ```
   $CPD_HOME/policy/
-    owners/<owner>.toml          the owner scope; required for every owner a Context uses
-    repos/<owner>/<name>.toml    the repo scope; optional
+    machines/<host>.toml          the machine scope, optional; the machine's ssh `Host` from config.toml §8.2
+    owners/<owner>.toml           the owner scope; required for every owner a Context uses
+    repos/<owner>/<name>.toml     the repo scope; optional
   ```
 
-- **The path is the key.** A file has no owner or name field to disagree with its path. A file name that is not a valid owner login or repo name (§2.1) is `policy_invalid`.
+- **The path is the key.** A file has no owner or name field to disagree with its path. A file name that is not a valid owner login, repo name, or host (§2.1, §8.2) is `policy_invalid`.
 - **Any file may be a symlink**; `cpd policy show` prints its realpath.
-- **Every owner a Context uses needs its owner file** (`owner_unknown`). An empty owner file is the explicit "cpd's default in every domain". The repo scope is optional: a repo with no file resolves every domain from its owner and the default.
+- **Every owner a Context uses needs its owner file** (`owner_unknown`). An empty owner file is the explicit "cpd's default in every domain". The machine and repo scopes are optional: a machine without a file, or a repo without a file, resolves every domain from the next less specific scope and the default.
 - **No policy in a repo's committed files yet**: `.config/cpd.toml` keeps only `protected` (§7.5) and `[tests]` (§7.7), and a policy table there is `config_invalid` as any unknown key (hs-d288).
 
 The owner file of `clayton-duarte` comes from the User's dotfiles on every machine (hs-d292). It sets `pr` only: the local Gate, no feedback from GitHub checks (its repos run no GitHub Actions; the Gate is the check, and only mergeability matters, hs-d283), and the conflict procedure of hs-d289 (rebase onto the base, the Gate, push through cpd; the Lead resolves a conflict itself, at once, hs-d269):
@@ -3611,14 +3612,15 @@ cpd's own default for a conflict (hs-d289) is the same procedure without the loc
 
 #### Precedence and replace
 
-- **Most specific wins, per domain** (hs-d279): repo > owner > default. Domains resolve independently: a repo file may set `pr` and take `instructions` from its owner. No domain adds up across scopes.
+- **Most specific wins, per domain** (hs-d279): repo > owner > machine > default. Domains resolve independently: a repo file may set `pr` and take `instructions` from its owner. No domain adds up across scopes.
 - **A scope that has a `[domain]` table sets the whole domain.** Its `text` replaces the less specific `text`. A typed key the table leaves out takes **cpd's default** for that key, never a less specific scope's: an owner sets `gate = "local"` and `feedback.checks = "none"`, one of its repos sets `[pr] gate = "ci"`; that repo's `feedback.checks` is cpd's `any`, shown by `cpd policy show` as `repo:<path> (key default)`.
 - **An empty table** (`[pr]` and nothing under it) means cpd's default for that whole domain, explicitly, overriding a less specific scope.
 - A domain no scope sets is cpd's default. A resolved policy is therefore total.
+- **Exposure rule**: a file of a scope may set only the domains exposed to that scope (§8.3, the domain table's `exposure` column); a table of any other domain in it is `policy_invalid`, with `details.file` the file and `details.key` the domain's table name, message `` `<domain>` is set in <exposed scopes> files only, not in a <scope> file `` (the scopes joined by ', ' in the order machine, owner, repo).
 
 #### Keys and resolution
 
-**Every consumer resolves exactly one key, derived by cpd from the one database row it acts on** (hs-d288), through one entry point, `policy::resolve(home, &PolicyKey)`, which reads only the compiled default and the files of `$CPD_HOME/policy/`. No consumer reads a policy from a cwd, a machine or another row.
+**Every consumer resolves exactly one key, derived by cpd from the one database row it acts on** (hs-d288), through one entry point, `policy::resolve(home, &PolicyKey)`, which reads only the compiled default and the files of `$CPD_HOME/policy/` on the machine of the process. No consumer reads a policy from a cwd, another machine, or another row.
 
 | Consumer | Key |
 |---|---|
@@ -3636,7 +3638,7 @@ Every input is parsed once, at the boundary: a scope file at the first resolve o
 
 | Condition | Code | Exit | `details` | Raised by |
 |---|---|---|---|---|
-| a scope file is not TOML; names an unknown domain (`mcp` and `hooks` included), an unknown key, a wrong type or an enum value outside its set; or its file name is not a valid login or name | `policy_invalid` | 1 | `file`, `key` (null when the file does not parse) | any resolve; `cpd policy show` |
+| a scope file is not TOML; names an unknown domain, an unknown key, a wrong type or an enum value outside its set; has a domain not exposed to its scope; or its file name is not a valid login, repo name, or host | `policy_invalid` | 1 | `file`, `key` (null when the file does not parse), or the domain's table name and file for an unexposed domain | any resolve; `cpd policy show` |
 | a key's owner has no `owners/<owner>.toml`, also when its repo file exists (never for a row no PR owns, above) | `owner_unknown` | 1 | `owner` | `context new`, `context owner`, `pr add`, any resolve for a Context, a PR or a Session |
 | the repo cannot be keyed from `origin`: it has no `origin`, the URL is not `https://github.com/<o>/<n>` or `git@github.com:<o>/<n>` (each with or without `.git`; a non-`github.com` host and an SSH host alias such as `git@github-work:<work-owner>/x.git` are refused) | `repo_unkeyed` | 1 | `url` (null when there is no `origin`) | `pr add`, `pr edit --repo` |
 | the repo's owner is not the Context's | `owner_mismatch` | 3 | `owner` (the Context's), `repo_owner` | `pr add`, `pr edit --repo` |

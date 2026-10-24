@@ -3232,8 +3232,8 @@ Prints the effective configuration: defaults merged with `config.toml` (§8), ea
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
- "config": {"version": 1, "machine": "hs", "concurrency": 3, "retry_cap": 2, "lead_tier": "O2", "tiers": {"O": "github-copilot/claude-opus-5.5", "S": "…", "H": "…"}, "timeouts": {"attempt_minutes": 30, "…": "…"}, "watch": {"tick_seconds": 5, "…": "…"}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
- "sources": {"version": "file", "machine": "file", "concurrency": "default", "tiers.O": "default"}}
+ "config": {"version": 1, "machine": "hs", "host": "homeserver", "concurrency": 3, "retry_cap": 2, "lead_tier": "O2", "tiers": {"O": "github-copilot/claude-opus-5.5", "S": "…", "H": "…"}, "timeouts": {"attempt_minutes": 30, "…": "…"}, "watch": {"tick_seconds": 5, "…": "…"}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
+ "sources": {"version": "file", "machine": "file", "host": "default", "concurrency": "default", "tiers.O": "default"}}
 ```
 
 `sources` has one entry per leaf key. Idempotent: read-only.
@@ -4152,13 +4152,13 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
 | every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 
-Effects: none. One read transaction for the key's rows, then the compiled default and the key's files (`owners/<owner>.toml`, and for a `Repo` key `repos/<owner>/<name>.toml` when it exists), each parsed once. No subprocess.
+Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`machines/<host>.toml` when it exists, `owners/<owner>.toml`, `repos/<owner>/<name>.toml` for a `Repo` key when it exists), each parsed once. No subprocess. `check_file_names`: an entry of `machines/` must be `<host>.toml` where `<host>` is valid (§8.2), else `policy_invalid`.
 
-Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read; and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. A domain's `source` is `default`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
+Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
- "files": ["/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
+ "files": ["/home/clayton/.cpd/policy/machines/homeserver.toml", "/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
  "policy": {
    "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
           "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
