@@ -396,20 +396,20 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// The eight moon phases, `nf-md-moon_new` (U+F0F64), `moon_waxing_crescent` (F0F67), `moon_first_quarter` (F0F61),
-/// `moon_waxing_gibbous` (F0F68), `moon_full` (F0F62), `moon_waning_gibbous` (F0F66), `moon_last_quarter` (F0F63),
-/// `moon_waning_crescent` (F0F65): the one loader of pi and the cockpit (hs-d579). The working dot and a running Job's pill
-/// show one per [`frame`]; the idle dot is the first, the needs-you dot the full moon. https://www.nerdfonts.com/cheat-sheet
-pub const SPINNER: [&str; 8] = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
+/// The 28 `moon_alt` phases of Nerd Fonts 3.5.1 (weather): U+E3E3 new, U+E3C8..U+E3CD waxing crescent 1-6, U+E3CE first quarter,
+/// U+E3CF..U+E3D4 waxing gibbous 1-6, U+E3D5 full, U+E3D6..U+E3DB waning gibbous 1-6, U+E3DC third quarter, U+E3DD..U+E3E2 waning
+/// crescent 1-6: the one loader of pi and the cockpit (hs-d616), one per [`frame`] of [`FRAME_MS`]. The working dot and a running
+/// Job's pill show one per frame; the idle dot is the first, the needs-you dot the full moon (frame 14).
+pub const SPINNER: [&str; 28] = ["\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}", "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}", "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}", "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}"];
 
-/// An idle Session: `nf-md-moon_new`, the first frame.
+/// An idle Session: `moon_alt_new`, the first frame.
 pub const IDLE: &str = SPINNER[0];
 /// A stopped Session: the new moon, drawn dim.
 pub const STOPPED: &str = IDLE;
 /// A Session that waits for another agent (hs-d303): `nf-md-circle_opacity` (U+F1853), in `Meaning::Waiting`.
 pub const WAITING: &str = "\u{F1853}";
-/// A Session that needs the User (coloured by case): `nf-md-moon_full`.
-pub const NEEDS_YOU: &str = "\u{F0F62}";
+/// A Session that needs the User (coloured by case): `moon_alt_full` (U+E3D5), frame 14.
+pub const NEEDS_YOU: &str = SPINNER[14];
 
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
@@ -451,12 +451,12 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
 }
 
 /// How long one frame of the spinner lasts, in milliseconds.
-const FRAME_MS: u128 = 100;
+pub const FRAME_MS: u64 = 50;
 
-/// The spinner frame at `now`: `(unix ms / 100) % 8`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / FRAME_MS) % 28`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-    ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
+    ((ms / u128::from(FRAME_MS)) % SPINNER.len() as u128) as usize
 }
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
@@ -660,9 +660,9 @@ mod tests {
         let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
-        assert_eq!(SPINNER.len(), 8);
-        assert_eq!((SPINNER[0], SPINNER[4]), ("\u{F0F64}", "\u{F0F62}"));
-        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[4]));
+        assert_eq!(SPINNER.len(), 28);
+        assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[14]));
     }
 
     #[test]
@@ -714,9 +714,10 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_eight() {
+    fn the_frame_is_the_unix_time_in_twentieths_of_a_second_modulo_28() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 0, 0, 1, 2]);
+        assert_eq!(FRAME_MS, 50);
+        assert_eq!([0, 49, 50, 99, 100, 1399, 1400, 1450, 1500].map(at), [0, 0, 1, 1, 2, 27, 0, 1, 2]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 
