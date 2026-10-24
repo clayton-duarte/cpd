@@ -1,26 +1,23 @@
-//! Reading a hook from `.config/wt.toml` (contract §7.3): the three forms of
-//! worktrunk, with commands in file order.
+//! A hook's commands (contract §7.3): the three forms of worktrunk, with commands in file order.
 
-use std::fs;
-use std::io::ErrorKind;
-use std::path::Path;
-
+use serde::{Deserialize, Serialize};
 use toml::de::{DeTable, DeValue};
+use toml::Spanned;
 
-use super::HookError;
-use crate::home::Hook;
 
 /// One command of a hook, as written (not yet rendered).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookCommand {
     /// The key it has in a table or block; `None` for `hook = "cmd"`.
     pub name: Option<String>,
+    #[serde(rename = "command")]
     pub template: String,
 }
 
 /// A hook's commands: blocks run in order, the commands of a block together.
 /// `hook = "cmd"` and `[hook]` are one block; `[[hook]]` is one block each.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Pipeline {
     pub blocks: Vec<Vec<HookCommand>>,
 }
@@ -36,26 +33,10 @@ impl Pipeline {
     }
 }
 
-/// `<worktree>/.config/wt.toml`, read now. A missing file or table is an empty
-/// pipeline; anything malformed is `HookError::Invalid`.
-pub fn load(worktree: &Path, hook: Hook) -> Result<Pipeline, HookError> {
-    let path = worktree.join(".config").join("wt.toml");
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Pipeline::default()),
-        Err(e) => return Err(HookError::Io(format!("Cannot read {}: {e}.", path.display()))),
-    };
-    parse(&text, hook).map_err(HookError::Invalid)
-}
-
-/// The `hook` table of a `wt.toml` text. The error is a sentence.
-pub fn parse(text: &str, hook: Hook) -> Result<Pipeline, String> {
-    let name = hook.as_str();
-    let doc = DeTable::parse(text).map_err(|e| format!(".config/wt.toml is not valid TOML: {e}"))?;
-    let Some((_, value)) = doc.get_ref().iter().find(|(k, _)| k.get_ref().as_ref() == name) else {
-        return Ok(Pipeline::default());
-    };
-    let bad = |what: &str| format!("`{name}` in .config/wt.toml must be a string, a table of strings or an array of tables of strings, {what}.");
+/// The pipeline a hook's value is, in any of the three forms (`what` names the key in the error sentence).
+/// Read from the `[hooks]` table of a policy file.
+pub fn parse_value(value: &Spanned<DeValue<'_>>, what: &str) -> Result<Pipeline, String> {
+    let bad = |why: &str| format!("{what} must be a string, a table of strings or an array of tables of strings, {why}.");
     let blocks = match value.get_ref() {
         DeValue::String(s) => vec![vec![HookCommand { name: None, template: s.to_string() }]],
         DeValue::Table(t) => vec![block(t).map_err(|w| bad(&w))?],
@@ -88,6 +69,17 @@ fn block(table: &DeTable<'_>) -> Result<Vec<HookCommand>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::home::Hook;
+
+    /// The `hook` key of a TOML text, as the policy loader reads it.
+    fn parse(text: &str, hook: Hook) -> Result<Pipeline, String> {
+        let doc = DeTable::parse(text).map_err(|e| e.to_string())?;
+        let name = hook.as_str();
+        match doc.get_ref().iter().find(|(k, _)| k.get_ref().as_ref() == name) {
+            Some((_, value)) => parse_value(value, name),
+            None => Ok(Pipeline::default()),
+        }
+    }
 
     fn cmd(name: Option<&str>, template: &str) -> HookCommand {
         HookCommand { name: name.map(str::to_owned), template: template.to_owned() }

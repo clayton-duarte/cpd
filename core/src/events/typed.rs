@@ -191,7 +191,7 @@ impl NewEvent {
         make(Kind::AttemptStatus, text, json!({"from": from, "to": to}))
     }
 
-    /// The start of a check span of `attempt submit` (contract §7.7): `from` = `to` = `running`, `what` `tests` or `gate`.
+    /// The start of a check span of `attempt submit` (contract §7.7): `from` = `to` = `running`, `what` `checks`.
     pub fn attempt_check_start(text: impl Into<String>, what: &str) -> NewEvent {
         make(Kind::AttemptStatus, text, json!({"from": "running", "to": "running", "check": "start", "what": what}))
     }

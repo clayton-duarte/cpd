@@ -1255,7 +1255,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
     }
     let counters = row(&buf, find(&buf, "counters row").1);
     assert!(counters.contains("1⋅1⋅2⋅0⋅3"), "{counters}");
-    assert!(counters.contains("queued⋅running⋅merging⋅failed⋅merged"), "{counters}");
+    assert!(counters.contains("queued⋅running⋅landing⋅failed⋅merged"), "{counters}");
 }
 
 #[test]

@@ -85,6 +85,8 @@ fn fx() -> Fx {
     .unwrap();
     File::options().write(true).open(&lead_file).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
 
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required.
+    env.repo_policy("acme", "pay", "");
     let fx = Fx { env, repo, lead, lead_file };
     fx.pi("exit 0");
     let catalog: String = EFFORTS
@@ -95,13 +97,13 @@ fn fx() -> Fx {
         .collect();
     fx.fixture(&format!(
         "{catalog}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, file, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '{file}', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
         file = fx.lead_file.display(),
         repo = fx.repo.display(),
         lead = fx.lead.display()

@@ -140,19 +140,16 @@ impl Fx {
         // The repo, its hooks (§7.3) and a bare `origin`.
         let repo = env.keyed_repo("pay").canonicalize().unwrap();
         let hooks = env.root().join("hooks.log");
-        fs::create_dir_all(repo.join(".config")).unwrap();
-        fs::write(
-            repo.join(".config/wt.toml"),
-            format!(
-                "pre-start = \"echo pre-start {{{{ branch }}}} >> {log}\"\n\
+        env.repo_policy(
+            "acme",
+            "pay",
+            &format!(
+                "[hooks]\npre-start = \"echo pre-start {{{{ branch }}}} >> {log}\"\n\
                  pre-commit = \"echo pre-commit {{{{ branch }}}} >> {log}\"\n\
                  pre-merge = \"test -f api.txt && test -f ui.txt && echo pre-merge {{{{ branch }}}} >> {log}\"\n",
                 log = hooks.display()
             ),
-        )
-        .unwrap();
-        env.git(&repo, &["add", "-A"]);
-        env.git(&repo, &["commit", "-q", "-m", "hooks"]);
+        );
         let origin = env.root().join("origin.git");
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
         env.local_origin(&repo, &origin);
@@ -412,18 +409,20 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         let about: Vec<Value> = events.iter().filter(|e| e["attempt"] == attempt).cloned().collect();
         assert_eq!(
             kinds(&about),
-            ["attempt-started", "attempt-status", "attempt-status", "job-merged"],
+            ["attempt-started", "attempt-status", "attempt-status", "attempt-status", "attempt-status", "job-merged"],
             "{key}: {about:?}"
         );
         assert_eq!(about[0]["data"], json!({"number": 1, "tier": tier, "origin": "ladder"}));
         assert_eq!(about[1]["data"], json!({"from": "starting", "to": "running"}));
-        assert_eq!(about[2]["data"], json!({"from": "running", "to": "merging"}));
+        assert_eq!(about[2]["data"], json!({"check": "start", "from": "running", "to": "running", "what": "checks"}));
+        assert_eq!(about[3]["data"], json!({"check": "end", "from": "running", "to": "running", "what": "checks"}));
+        assert_eq!(about[4]["data"], json!({"from": "running", "to": "merging"}));
         let submit = submitted(&fx.repo.parent().unwrap().join(format!("submit-{attempt}.json")));
         assert_eq!(submit["submitted"], true, "{submit}");
         let shown = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"].clone();
         assert_eq!((&shown["status"], &shown["outcome"], &shown["cause"]), (&json!("ended"), &json!("merged"), &json!("merged")));
-        assert_eq!(shown["merged_sha"], about[3]["data"]["sha"]);
-        assert_eq!(about[3]["data"]["tier"], tier);
+        assert_eq!(shown["merged_sha"], about[5]["data"]["sha"]);
+        assert_eq!(about[5]["data"]["tier"], tier);
         // The Worker's Session: registered, started in the work session.
         let worker = shown["worker_session"].as_str().unwrap();
         let mine: Vec<&Value> = events.iter().filter(|e| e["session"] == worker).collect();

@@ -21,7 +21,7 @@ use cpd_core::store::Store;
 
 use super::tree::visible_items;
 use super::shared::{
-    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, bad_row, id, plan_heads, tier,
+    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, plan_heads, tier,
     value_enum,
 };
 
@@ -403,10 +403,10 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
 /// Every Attempt of the Plan by Job key, oldest first, with its Worker's state.
 fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<AttemptNode>>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT a.job, a.id, a.number, a.tier, a.origin, a.status, a.outcome, a.cause, a.started_at, a.submitted_at,
+        &format!("SELECT a.job, a.id, a.number, a.tier, a.origin, {SHOWN_STATUS}, a.outcome, a.cause, a.started_at, a.submitted_at,
                 a.ended_at, a.worker_session, s.state, s.state_label, s.state_at
            FROM attempts a LEFT JOIN sessions s ON s.id = a.worker_session
-          WHERE a.plan = ?1 ORDER BY a.job, a.number",
+          WHERE a.plan = ?1 ORDER BY a.job, a.number"),
     )?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut by_job: BTreeMap<String, Vec<AttemptNode>> = BTreeMap::new();

@@ -39,7 +39,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::gate::Slots;
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{ContextId, HostName, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -195,21 +195,28 @@ impl Env {
 /// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
 /// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
 fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
-    pr_policy_resolved(env, plan, key)?
+    pr_policy_resolved(env, plan, key, resolve)?
 }
 
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
-/// which a consumer of many rows (the poll) reports for its row and goes on.
-fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Result<Policy, CpdError>, CpdError> {
-    let (context, owner, name): (String, Option<String>, Option<String>) = env.store.read(|conn| {
-        Ok(conn.query_row(
-            "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
-              WHERE r.plan = ?1 AND r.key = ?2",
-            [plan.as_str(), key.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?)
-    })?;
+/// which a consumer of many rows (the poll) reports for its row and goes on. `resolve` is the strict [`resolve`], or
+/// the poll's `resolve_lenient` (a missing repo file is no repo scope).
+fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+    let (home, host) = (env.home.clone(), env.config.host.clone());
+    env.store.read(|conn| pr_policy_in(conn, &home, &host, plan, key, resolve))
+}
+
+type ResolveFn = fn(&CpdHome, &HostName, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
+
+/// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
+fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+    let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
+        "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
+          WHERE r.plan = ?1 AND r.key = ?2",
+        [plan.as_str(), key.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
     let Some(owner) = owner else {
         return Ok(Err(owner_unset(&ContextId::parse(&context)?)));
     };
@@ -218,7 +225,20 @@ fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Resul
         Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
         None => PolicyKey::Owner(owner),
     };
-    Ok(resolve(&env.home, &env.config.host, &policy_key).map(|resolved| resolved.policy))
+    Ok(resolve(home, host, &policy_key).map(|resolved| resolved.policy))
+}
+
+/// The strict policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
+/// Worker Spec) reads, through its Job's PR. `repo_unconfigured` when the PR's repo has no policy file.
+pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+    pr_policy_in(conn, home, host, plan, key, resolve)?
+}
+
+/// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
+pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
+    let pr: String = conn.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
+    let key = PrKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
+    policy_of_pr(conn, home, host, plan, &key)
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
@@ -272,13 +292,15 @@ fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow
 
 /// How the Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
 /// `setup_minutes`, `pre-merge` with `gate_minutes`, `branch` the Lead Branch.
-fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
+fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
         lead_branch: &pr.lead_branch,
         base: &pr.base,
         pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        pre_start_commands: &policy.hooks.pre_start,
+        pre_merge_commands: &policy.hooks.pre_merge,
         slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
@@ -297,7 +319,7 @@ fn gate_then(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, t
     if policy.pr.gate != Gate::Local {
         return Ok(());
     }
-    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))
+    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, policy, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))
 }
 
 /// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed

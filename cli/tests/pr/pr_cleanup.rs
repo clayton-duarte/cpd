@@ -77,6 +77,8 @@ fn plan() -> PlanId {
 fn fx(keys: &[&'static str]) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
+    // The PRs are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
     env.local_origin(&repo, &origin);
@@ -125,9 +127,9 @@ fn fx(keys: &[&'static str]) -> Fx {
         sql += &format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                VALUES ('acme/pay', {n}, 'https://github.com/acme/pay/pull/{n}', 'PR {n}', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+             INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
                               pr_number, pr_url, pr_opened_at, pull_request)
-               VALUES ('pay', '{key}', '{repo}', 'main', 'open', '{branch}', '{lead}', cpd_txn(), 't', 't',
+               VALUES ('pay', '{key}', '{repo}', 'pay', 'main', 'open', '{branch}', '{lead}', cpd_txn(), 't', 't',
                        {n}, 'https://github.com/acme/pay/pull/{n}', 'opened', (SELECT id FROM pull_requests WHERE number = {n}));",
             n = pr.number,
             key = pr.key,
@@ -223,13 +225,11 @@ impl Fx {
         list.lines().filter_map(|l| l.strip_prefix("worktree ")).map(PathBuf::from).collect()
     }
 
-    /// Commits `.config/wt.toml` on PR `key`'s Lead Branch and pushes it.
+    /// Sets the repo file's `[hooks]` to `toml`, and pushes an empty commit of PR `key`'s Lead Branch.
     fn hooks(&self, key: &str, toml: &str) {
         let pr = self.pr(key);
-        fs::create_dir_all(pr.lead.join(".config")).unwrap();
-        fs::write(pr.lead.join(".config/wt.toml"), toml).unwrap();
-        self.git(&pr.lead, &["add", "-A"]);
-        self.git(&pr.lead, &["commit", "-q", "-m", "hooks"]);
+        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
+        self.git(&pr.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
         self.git(&pr.lead, &["push", "-q", "origin", &pr.lead_branch]);
     }
 

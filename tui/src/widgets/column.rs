@@ -13,7 +13,7 @@ use super::host::Usage;
 use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette::{self, Meaning};
-use crate::section;
+use crate::box_widget::SectionTitle;
 use crate::read::{Dot, OpenPr, PrFacts, PrState, ReviewDecision, pr_look};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
@@ -224,10 +224,6 @@ fn block(mut line: Line<'static>, width: usize) -> Line<'static> {
     line
 }
 
-fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
-    f.render_widget(Paragraph::new(section::title(title, count, usize::from(area.width))), area);
-}
-
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
 /// tree's Inbox section scrolls with the same code, one row an item).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,16 +280,14 @@ pub struct Drawn {
 /// (commands.md §17 "No notes"); the snapshot's error is [`draw_error`]'s. `frame` is the spinner's frame (`palette::frame`) for the rows whose
 /// Lead is working. Returns where a click reaches an owned PR or a merge icon.
 pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scroll: usize, frame: usize) -> Drawn {
-    let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
+    let [_top, home, prs_header, prs] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(SectionTitle::ROWS),
         Constraint::Min(1),
     ])
     .areas(area);
-    render_header(f, prs_header, "PRs", Some(open.len()));
+    f.render_widget(SectionTitle::new("PRs", Some(open.len())), prs_header);
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     let height = usize::from(prs.height);
     let win = window(open.len(), height, 2, scroll);
@@ -352,6 +346,27 @@ pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
     let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
     f.render_widget(Clear, last);
     f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::error())), last);
+}
+
+/// The layout test's sample (`layout_tests`): the column drawn as the view draws it, with no pull request; the `PRs` title is
+/// its rows 3 to 5, which are the sample (the machine's rows above keep their own indent, they are not a section title's).
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    use ratatui::buffer::Buffer;
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &[], &machine, 0, 0))).unwrap();
+    let pane = Rect::new(0, 0, width, 3);
+    let mut buf = Buffer::empty(pane);
+    for (y, x) in (0..3).flat_map(|y| (0..width).map(move |x| (y, x))) {
+        buf[(x, y)] = terminal.backend().buffer()[(x, y + 3)].clone();
+    }
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "PRs title", kind: Kind::Rule, rect: pane, exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf, container: pane, boxes }
 }
 
 #[cfg(test)]
@@ -416,9 +431,9 @@ mod tests {
     #[test]
     fn the_prs_header_carries_the_count_of_the_open_pull_requests() {
         let header = |width: u16, count| {
-            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-            terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
-            row(terminal.backend().buffer(), 0)
+            let mut terminal = Terminal::new(TestBackend::new(width, SectionTitle::ROWS)).unwrap();
+            terminal.draw(|f| f.render_widget(SectionTitle::new("PRs", count), f.area())).unwrap();
+            row(terminal.backend().buffer(), 1)
         };
         assert_eq!(header(20, Some(3)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}3\u{E0B4}", "─".repeat(8)));
         assert_eq!(header(30, Some(12)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}12\u{E0B4}", "─".repeat(30 - 8 - 4 - 1)));

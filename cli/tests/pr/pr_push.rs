@@ -36,6 +36,8 @@ fn fx(status: &str) -> Fx {
     let env = TestEnv::new();
     env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.git_repo("pay").canonicalize().unwrap();
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
     env.local_origin(&repo, &origin);
@@ -71,8 +73,8 @@ fn fx(status: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't', {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', '{lead}', cpd_txn(), 't', 't'{values});",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', cpd_txn(), 't', 't'{values});",
         repo = repo.display(),
         lead = lead.display(),
     );
@@ -102,12 +104,10 @@ impl Fx {
         self.lead_sha()
     }
 
-    /// Commits the Lead worktree's `.config/wt.toml`.
+    /// Sets the repo file's `[hooks]` to `toml` (`pre-merge = "cmd"` lines), and commits an empty commit on the Lead Branch.
     fn hooks(&self, toml: &str) -> String {
-        fs::create_dir_all(self.lead.join(".config")).unwrap();
-        fs::write(self.lead.join(".config/wt.toml"), toml).unwrap();
-        self.git(&self.lead, &["add", "-A"]);
-        self.git(&self.lead, &["commit", "-q", "-m", "hooks"]);
+        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
+        self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
         self.lead_sha()
     }
 

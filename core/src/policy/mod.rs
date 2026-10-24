@@ -37,7 +37,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
-pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_machine, resolve_unowned_row};
+pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_lenient, resolve_machine, resolve_unowned_row};
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -133,6 +133,19 @@ pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Resu
         let _ = std::fs::remove_file(&tmp);
         io(e)
     })
+}
+
+/// `repo_unconfigured` (exit 3): the repo has no `repos/<owner>/<name>.toml` (`file`); an empty one is valid.
+pub fn repo_unconfigured(owner: &OwnerLogin, name: &RepoName, file: &std::path::Path) -> CpdError {
+    CpdError::new(
+        ErrorCode::RepoUnconfigured,
+        format!(
+            "The repo {owner}/{name} has no policy file: create {} (an empty file means nothing to configure).",
+            file.display()
+        ),
+    )
+    .with("repo", format!("{owner}/{name}"))
+    .with("file", file.display().to_string())
 }
 
 /// `repo_unkeyed` (exit 1): the repo cannot be keyed from `origin`; `url` is `None` with no `origin`.
@@ -251,8 +264,48 @@ mod tests {
     fn a_repo_without_a_file_resolves_from_its_owner() {
         let (_d, home) = home();
         write(&home, "owners/acme.toml", "[code]\ntext = \"c\"\n");
+        write(&home, "repos/acme/other.toml", "");
         let r = resolve(&home, &host(), &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.code.text, "c");
+    }
+
+    #[test]
+    fn a_repo_without_a_file_is_repo_unconfigured_after_the_owner_check() {
+        let (_d, home) = home();
+        let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::OwnerUnknown, "the owner is checked first");
+        write(&home, "owners/acme.toml", "");
+        let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
+        assert_eq!((err.code(), err.exit().code()), (ErrorCode::RepoUnconfigured, 3));
+        assert_eq!(err.details()["repo"], "acme/other");
+        assert!(err.details()["file"].as_str().unwrap().ends_with("policy/repos/acme/other.toml"));
+        // An Owner key never raises it.
+        resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+    }
+
+    #[test]
+    fn the_lenient_resolve_takes_a_missing_repo_file_as_no_repo_scope() {
+        let (_d, home) = home();
+        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
+        let r = resolve_lenient(&home, &host(), &repo_key("acme", "other")).unwrap();
+        assert_eq!(r.policy.pr.gate, Gate::Local);
+        assert!(matches!(r.sources.get(Domain::Pr).source, Source::Owner(_)));
+        // A missing owner file is still `owner_unconfirmed`.
+        let err = resolve_lenient(&home, &host(), &repo_key("nobody", "other")).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::OwnerUnknown);
+    }
+
+    #[test]
+    fn the_repo_only_domains_are_policy_invalid_in_an_owner_file() {
+        for (domain, text) in [
+            ("hooks", "[hooks]\npre-start = \"x\"\n"),
+            ("test-commands", "[test-commands]\nbuild = \"b\"\nrun = \"r\"\n"),
+            ("protected", "[protected]\npaths = []\n"),
+        ] {
+            let err = invalid(text);
+            assert_eq!(err.details()["key"], domain);
+            assert!(err.message().contains("exposed to repo only"), "{err:?}");
+        }
     }
 
     #[test]
@@ -304,7 +357,8 @@ mod tests {
     fn invalid_files_are_policy_invalid_with_file_and_key() {
         let key = |text: &str| invalid(text).details()["key"].clone();
         assert_eq!(key("[mcp]\n"), serde_json::json!("mcp"));
-        assert_eq!(key("[hooks]\ntext = \"x\"\n"), serde_json::json!("hooks"));
+        assert_eq!(key("[hooks]\ntext = \"x\"\n"), serde_json::json!("hooks.text"), "no `text` in a repo-only domain");
+        assert_eq!(key("[protected]\ntext = \"x\"\n"), serde_json::json!("protected.text"));
         assert_eq!(key("[bogus]\n"), serde_json::json!("bogus"));
         assert_eq!(key("[pr]\nbogus = 1\n"), serde_json::json!("pr.bogus"));
         assert_eq!(key("[pr.feedback]\nbogus = 1\n"), serde_json::json!("pr.feedback.bogus"));
@@ -528,6 +582,12 @@ mod tests {
 
         for row in &rows {
             let domain = Domain::from_name(&row.domain).unwrap();
+            // A repo-only domain (empty audience) has list and optional values, documented in prose: no table
+            // of `key = value` spans to compare, and the repo-only tests pin their defaults.
+            if audience(domain).is_empty() {
+                assert!(row.keys.is_empty(), "{} documents no `key = value` spans", row.domain);
+                continue;
+            }
             // Typed keys and their defaults.
             let mut found = Vec::new();
             leaves(&row.domain, &policy_json[&row.domain], &mut found);

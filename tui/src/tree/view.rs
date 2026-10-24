@@ -256,6 +256,10 @@ impl View {
     /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
     /// cell and a click on them does nothing.
     /// Whether the set changed (the pane is then redrawn).
+    pub fn merging(&self) -> &BTreeSet<String> {
+        &self.merging
+    }
+
     pub fn set_merging(&mut self, pulls: BTreeSet<String>) -> bool {
         std::mem::replace(&mut self.merging, pulls) != self.merging
     }
