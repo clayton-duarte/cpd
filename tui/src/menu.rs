@@ -136,7 +136,7 @@ impl<E: Entry> Menu<E> {
         self.draw_at(f, pane, crate::palette::frame(std::time::SystemTime::now()));
     }
 
-    /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 8]` (hs-d495).
+    /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 28]` (hs-d495).
     pub fn draw_at(&self, f: &mut Frame, pane: Rect, frame: usize) {
         let rect = self.rect(pane);
         let lines: Vec<Line> = self

@@ -42,8 +42,8 @@ test("a cpd block closes with the chevron circles and ends with the right chevro
   assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), ` ╰${TERM}`);
 });
 
-test("the loader keeps its eight moon frames, U+F0F61 included, and the waiting glyph is not one of them", () => {
-  const moons = [0xF0F64, 0xF0F67, 0xF0F61, 0xF0F68, 0xF0F62, 0xF0F66, 0xF0F63, 0xF0F65].map(G);
+test("the loader has the 28 moon_alt frames and the waiting glyph is not one of them", () => {
+  const moons = [0xE3E3, ...Array.from({ length: 27 }, (_, i) => 0xE3C8 + i)].map(G);
   assert.deepEqual([...LOADER_FRAMES], moons);
   assert.ok(!LOADER_FRAMES.includes(G(0xF1853)));
 });
