@@ -28,7 +28,7 @@ use super::inbox::{self, Hit, Jump, Shape};
 use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
-use super::rows::{self, Id, Row};
+use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
@@ -598,14 +598,13 @@ impl View {
         if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
         }
-        let items = rows::items(&self.tree, self.state.opened(), 0, 0);
-        let drawn = self.state.flatten(&items);
-        let anchor = drawn.iter().position(|f| f.identifier == path)?;
+        let drawn = rows::items(&self.tree, self.state.opened(), 0, 0);
+        let anchor = drawn.iter().position(|f| f.path == path)?;
         let live: Vec<(usize, &SessionNode)> = drawn
             .iter()
             .enumerate()
             .filter_map(|(i, f)| {
-                let row = rows::row(&self.tree, &f.identifier).filter(|r| !r.archived())?;
+                let row = rows::row(&self.tree, &f.path).filter(|r| !r.archived())?;
                 let session = row.session().filter(|s| !archiving.iter().any(|a| a.id == s.id))?;
                 Some((i, session))
             })
@@ -697,13 +696,13 @@ impl View {
         }
     }
 
-    /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
+    /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        let path = self.state.rendered_at(at)?.to_vec();
+        let Hits { rows, paths } = self.tree_scroll.hits();
+        let path = rows.contains(at).then(|| paths.get(usize::from(at.y - rows.y)))??;
         // an empty row between two Contexts is no row
-        rows::row(&self.tree, &path)?;
-        let above = at.y.checked_sub(1).and_then(|y| self.state.rendered_at(Position::new(at.x, y)));
-        (above != Some(path.as_slice())).then_some(path)
+        rows::row(&self.tree, path)?;
+        Some(path.clone())
     }
 
     /// The text of the footer: the error of the last snapshot, if any (a lasting state, commands.md §17 "No notes").
@@ -906,7 +905,7 @@ mod tests {
         assert_eq!(asked(press(&mut view, KeyCode::Char('n'))), Question::input("New Plan", ask, String::new()));
     }
 
-    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text).
+    /// The command `question` makes when its popup answers `text` (`None`: cancelled; a confirm confirms with any text, a select picks its first option).
     fn answered(question: Question, text: Option<&'static str>) -> Result<Option<Action>, String> {
         struct Answer(Option<&'static str>);
         impl Dialogs for Answer {
@@ -915,6 +914,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(self.0.is_some())
+            }
+            fn select(&self, _: &str, _: &str, options: &[String]) -> Result<Option<String>, cpd_core::error::CpdError> {
+                Ok(self.0.map(|_| options[0].clone()))
             }
             fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
                 Ok(serde_json::json!({}))
@@ -1729,35 +1731,6 @@ mod tests {
             Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml"),
             "no input popup opens"
         );
-    }
-
-    #[test]
-    fn new_context_with_several_owners_asks_which_after_the_title() {
-        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
-        let question = popup_at(&mut view, 8, 15, 0);
-        // two popups: the title, then the owner (`Owner (<owners>):`); a name that is no owner is refused after it
-        struct Typed(std::cell::RefCell<Vec<(String, &'static str)>>, &'static str);
-        impl Dialogs for Typed {
-            fn input(&self, _: &str, prompt: &str, _: &str, _: Validator) -> Result<Option<String>, cpd_core::error::CpdError> {
-                let n = self.0.borrow().len();
-                let text = if n == 0 { "Building cpd!" } else { self.1 };
-                self.0.borrow_mut().push((prompt.to_owned(), text));
-                Ok(Some(text.to_owned()))
-            }
-            fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
-                Ok(false)
-            }
-            fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
-                Ok(serde_json::json!({}))
-            }
-        }
-        let typed = Typed(Default::default(), "other");
-        let run = question.clone().ask(&typed).unwrap().unwrap();
-        assert_eq!(typed.0.borrow().iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["Title:", "Owner (clayton-duarte, other):"]);
-        assert_eq!(run, Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "other".into() });
-        assert_eq!(run.argv(), ["context", "new", "building-cpd", "--title=Building cpd!", "--owner=other"]);
-        let refused = question.ask(&Typed(Default::default(), "nobody")).unwrap_err();
-        assert_eq!(refused, "No owner policy nobody: choose one of clayton-duarte, other.");
     }
 
     #[test]

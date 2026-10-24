@@ -2,7 +2,7 @@
 //! meets the line. Each test lays panes out on a private server, has tmux expand `STATUS_FORMAT` for a client of a given
 //! width and reads the row back as cells (or as the raw expansion); nothing here names how the fill is spelled.
 
-use super::palette::{cells, show, Cell, Server};
+use super::palette::{show, Cell, Server};
 use super::*;
 
 const J: char = '\u{2538}';
