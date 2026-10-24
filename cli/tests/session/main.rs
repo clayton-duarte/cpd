@@ -8,6 +8,7 @@ mod board;
 mod host;
 mod mcp_attach;
 mod pill_lines;
+mod plannotator_env;
 mod session_list_archived;
 mod session_asleep;
 mod session_first_message;

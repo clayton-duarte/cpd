@@ -155,7 +155,7 @@ pub(crate) fn cockpit(env: &TestEnv) {
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
     let sleep = format!("sleep {SLEEP_SECONDS}");
-    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().copied().chain([";"])).collect();
+    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().map(String::as_str).chain([";"])).collect();
     args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
     let tree = ok(&args);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
@@ -1559,7 +1559,7 @@ fn run_refusals() {
     assert!(env.calls("pi").is_empty());
 }
 
-// ---------- run: the Plan's plannotator port ----------
+// ---------- run: the plannotator environment ----------
 
 /// A fake `pi` that records `PLANNOTATOR_PORT` per Session and exits with status 1 (not a quit), and the
 /// session files of both Plans' Leads, so `session run` resumes them.
@@ -1600,35 +1600,6 @@ fn capture(env: &TestEnv, pane: &str) -> String {
     String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", pane]).stdout).unwrap()
 }
 
-fn recorded_ports(env: &TestEnv, id: &str) -> Vec<String> {
-    fs::read_to_string(env.home().join(format!("ports.{id}"))).map(|t| t.lines().map(str::to_owned).collect()).unwrap_or_default()
-}
-
-#[test]
-fn run_gives_each_plan_its_port_and_keeps_it_across_a_restart() {
-    let env = TestEnv::new();
-    port_fixture(&env);
-
-    let pane1 = run_lead(&env, LEAD1);
-    wait_until("the first Lead's pi", || recorded_ports(&env, LEAD1).len() == 1);
-    let pane2 = run_lead(&env, LEAD2);
-    wait_until("the second Lead's pi", || recorded_ports(&env, LEAD2).len() == 1);
-    assert_eq!(recorded_ports(&env, LEAD1), ["19432"], "the Plan's port replaces the inherited one");
-    assert_eq!(recorded_ports(&env, LEAD2), ["19433"]);
-    let home = home(&env);
-    let file = |plan: &str| fs::read_to_string(home.plannotator_port(&PlanId::parse(plan).unwrap())).unwrap();
-    assert_eq!((file("pay").as_str(), file("other").as_str()), ("19432\n", "19433\n"));
-
-    // The second Lead is restarted first: it keeps its port; so does the first.
-    for (pane, id) in [(&pane2, LEAD2), (&pane1, LEAD1)] {
-        wait_until("the resume prompt", || capture(&env, pane).contains("Press Enter to resume"));
-        env.tmux(&["send-keys", "-t", pane, "Enter"]);
-        wait_until("the restart", || recorded_ports(&env, id).len() == 2);
-    }
-    assert_eq!(recorded_ports(&env, LEAD1), ["19432", "19432"]);
-    assert_eq!(recorded_ports(&env, LEAD2), ["19433", "19433"]);
-}
-
 #[test]
 fn run_gives_the_lead_remote_and_the_review_host() {
     let env = TestEnv::new();
@@ -1648,36 +1619,6 @@ fn run_gives_the_lead_remote_and_the_review_host() {
     let (remote, host) = hosts2.trim_end().split_once(' ').unwrap();
     assert_eq!(remote, "1");
     assert!(host == "localhost" || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| !ip.is_loopback()), "{host}");
-}
-
-#[test]
-fn run_with_the_range_full_says_no_port_and_waits_for_enter() {
-    let env = TestEnv::new();
-    port_fixture(&env);
-    // One port in the range: the first Lead holds it.
-    let config = fs::read_to_string(env.cpd_home().join("config.toml")).unwrap();
-    assert!(config.contains("lead_pi_packages = []\n"));
-    let config = config.replacen("lead_pi_packages = []\n", "lead_pi_packages = []\nplannotator_ports = \"19432-19432\"\n", 1);
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-
-    run_lead(&env, LEAD1);
-    wait_until("the first Lead's pi", || recorded_ports(&env, LEAD1).len() == 1);
-    assert_eq!(recorded_ports(&env, LEAD1), ["19432"]);
-
-    let pane = run_lead(&env, LEAD2);
-    wait_until("no_port", || capture(&env, &pane).contains("Press Enter to retry."));
-    let shown = capture(&env, &pane);
-    assert!(shown.contains("no_port"), "{shown}");
-    assert!(shown.contains("held by pay (19432)"), "{shown}");
-    assert!(recorded_ports(&env, LEAD2).is_empty(), "pi is not started");
-
-    // Still full: Enter shows it again. The holder lets go: Enter starts pi with the port.
-    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
-    wait_until("the message again", || capture(&env, &pane).matches("Press Enter to retry.").count() == 2);
-    assert!(recorded_ports(&env, LEAD2).is_empty());
-    fs::remove_file(home(&env).plannotator_port(&PlanId::parse("pay").unwrap())).unwrap();
-    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
-    wait_until("pi with the port", || recorded_ports(&env, LEAD2) == ["19432"]);
 }
 
 // ---------- run: the User's quit archives (commands.md §10.8) ----------

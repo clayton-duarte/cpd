@@ -11,7 +11,6 @@
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`resume`]: `session resume`, a Lead or Manager blocked by the loop guard, resumed;
 //! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
-//! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7);
 //! - `reload`: when it restarts pi (reload on install, adapter watchdog);
 //! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
@@ -21,7 +20,6 @@ mod first_message;
 mod fork_wait;
 mod history;
 mod moves;
-mod port;
 mod reload;
 mod resolve;
 mod resume;

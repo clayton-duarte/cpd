@@ -50,7 +50,7 @@ async function started(f: Fixture) {
 
 async function restart(f: Fixture) {
   const n = f.follows().length;
-  f.file("exit-next", "0");
+  f.exitNext(0);
   await waitFor("a restart", () => f.follows().length === n + 1);
 }
 

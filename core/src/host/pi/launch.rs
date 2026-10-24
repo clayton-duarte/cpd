@@ -41,12 +41,20 @@ pub enum LeadStart {
     Resume { model: String, file: PathBuf },
 }
 
-/// What a Lead's pi gets for plannotator (contract §6.5): `PLANNOTATOR_PORT` when there is a port, always
+/// What a Lead's pi gets for plannotator (contract §6.5): `PLANNOTATOR_PORT` (the configured range),
 /// `PLANNOTATOR_REMOTE=1`, and `PLANNOTATOR_URL_HOST=<url_host>`, the review host ([`crate::host::addr::review_host`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plannotator {
-    pub port: Option<String>,
+    pub port: String,
     pub url_host: String,
+}
+
+impl Plannotator {
+    /// What a Lead's and a Manager's pi gets: `PLANNOTATOR_PORT` is the configured range
+    /// (`plannotator_ports`), `PLANNOTATOR_URL_HOST` the review host `url_host`.
+    pub fn from_config(config: &crate::config::Config, url_host: String) -> Plannotator {
+        Plannotator { port: config.plannotator_ports.to_string(), url_host }
+    }
 }
 
 /// A Lead's pi launch.
@@ -55,7 +63,7 @@ pub struct LeadLaunch<'a> {
     pub home: &'a CpdHome,
     pub session: &'a SessionId,
     /// The Lead's Plan; `None` for a Context's Manager, which gets no
-    /// `CPD_PLAN` and no `PLANNOTATOR_*` but `PLANNOTATOR_UPDATE_CHECK`.
+    /// `CPD_PLAN` and no `PLANNOTATOR_DATA_DIR`.
     pub plan: Option<&'a PlanId>,
     /// The `-e` sources to pass, from [`extensions_to_pass`].
     pub extensions: &'a [String],
@@ -132,26 +140,22 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
 fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
         // A Context's Manager (contract §6.5, "Manager").
-        let mut env = BTreeMap::from([
+        let env = BTreeMap::from([
             session_path(launch.home),
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
             ("PLANNOTATOR_REMOTE".to_owned(), "1".to_owned()),
+            ("PLANNOTATOR_PORT".to_owned(), launch.plannotator.port.clone()),
             (URL_HOST.to_owned(), launch.plannotator.url_host.clone()),
             (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
         ]);
-        if let Some(port) = &launch.plannotator.port {
-            env.insert("PLANNOTATOR_PORT".into(), port.clone());
-        }
         return env;
     };
     let mut env = base_env(launch.home, launch.session, plan);
     env.insert("PLANNOTATOR_DATA_DIR".into(), launch.home.plan_dir(plan).join("plannotator").display().to_string());
     env.insert("PLANNOTATOR_UPDATE_CHECK".into(), "0".into());
-    if let Some(port) = &launch.plannotator.port {
-        env.insert("PLANNOTATOR_PORT".into(), port.clone());
-    }
+    env.insert("PLANNOTATOR_PORT".into(), launch.plannotator.port.clone());
     env.insert("PLANNOTATOR_REMOTE".into(), "1".into());
     env.insert(URL_HOST.into(), launch.plannotator.url_host.clone());
     env
@@ -235,8 +239,8 @@ mod tests {
         e
     }
 
-    fn plannotator(port: Option<&str>) -> Plannotator {
-        Plannotator { port: port.map(str::to_owned), url_host: "192.168.3.3".into() }
+    fn plannotator(port: &str) -> Plannotator {
+        Plannotator { port: port.to_owned(), url_host: "192.168.3.3".into() }
     }
 
     fn lead_launch(start: LeadStart, plannotator: &Plannotator) -> Launch {
@@ -252,13 +256,13 @@ mod tests {
     #[test]
     fn a_resume_runs_on_the_given_model() {
         let start = LeadStart::Resume { model: "p/m:medium".into(), file: "/s/a.jsonl".into() };
-        let argv = lead_launch(start, &plannotator(None)).argv;
+        let argv = lead_launch(start, &plannotator("19432-19456")).argv;
         assert_eq!(argv[..5], ["pi", "--model", "p/m:medium", "--session", "/s/a.jsonl"]);
     }
 
     #[test]
     fn every_role_skips_the_pi_version_check() {
-        let plannotator = plannotator(None);
+        let plannotator = plannotator("19432-19456");
         let resume = LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() };
         assert_eq!(lead_launch(resume, &plannotator).env["PI_SKIP_VERSION_CHECK"], "1");
         let home = home();
@@ -291,13 +295,13 @@ mod tests {
             extensions: &[],
             fork: None,
         });
-        let lead = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() }, &plannotator(None));
+        let lead = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() }, &plannotator("19432-19456"));
         let manager = super::lead(&LeadLaunch {
             home: &home,
             session: &session,
             plan: None,
             extensions: &[],
-            plannotator: &plannotator(None),
+            plannotator: &plannotator("19432-19456"),
             start: LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() },
         });
         for (role, launch) in [("worker", worker), ("lead", lead), ("manager", manager)] {
@@ -313,7 +317,7 @@ mod tests {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
-        let plannotator = plannotator(Some("19432"));
+        let plannotator = plannotator("19432");
         let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: Some("/cpd-home/run/ctx/manager-message.md".into()) };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
@@ -339,7 +343,7 @@ mod tests {
         let home = home();
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
-        let plannotator = plannotator(Some("19437"));
+        let plannotator = plannotator("19437");
         let start = LeadStart::Resume { model: "p/m:high".into(), file: "/cpd-home/sessions/m.jsonl".into() };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(launch.env["PLANNOTATOR_REMOTE"], "1");
@@ -358,6 +362,7 @@ mod tests {
             ("PLANNOTATOR_UPDATE_CHECK", "0"),
             ("PLANNOTATOR_REMOTE", "1"),
             ("PLANNOTATOR_URL_HOST", "192.168.3.3"),
+            ("PLANNOTATOR_PORT", "19432-19456"),
             ("PI_SKIP_VERSION_CHECK", "1"),
         ]);
         e.extend(env(extra));
@@ -371,7 +376,7 @@ mod tests {
             name: "cpd rust lead".into(),
             first_message: Some("/cpd-home/run/cpd2/lead-message.md".into()),
         };
-        let launch = lead_launch(start, &plannotator(None));
+        let launch = lead_launch(start, &plannotator("19432-19456"));
         assert_eq!(
             launch.argv,
             strs(&[
@@ -384,12 +389,12 @@ mod tests {
     }
 
     #[test]
-    fn every_lead_gets_remote_and_the_review_host_and_the_port_when_there_is_one() {
+    fn every_lead_gets_remote_and_the_review_host_and_the_port_range() {
         let start = LeadStart::Resume { model: "p/m:high".into(), file: "/s/x.jsonl".into() };
-        let without = lead_launch(start.clone(), &plannotator(None)).env;
-        assert_eq!((without["PLANNOTATOR_REMOTE"].as_str(), without["PLANNOTATOR_URL_HOST"].as_str()), ("1", "192.168.3.3"));
-        assert!(!without.contains_key("PLANNOTATOR_PORT"));
-        assert_eq!(lead_launch(start, &plannotator(Some("19432"))).env, lead_env(&[("PLANNOTATOR_PORT", "19432")]));
+        let env = lead_launch(start.clone(), &plannotator("19432-19456")).env;
+        assert_eq!((env["PLANNOTATOR_REMOTE"].as_str(), env["PLANNOTATOR_URL_HOST"].as_str()), ("1", "192.168.3.3"));
+        assert_eq!(env["PLANNOTATOR_PORT"], "19432-19456");
+        assert_eq!(lead_launch(start, &plannotator("19500-19510")).env, lead_env(&[("PLANNOTATOR_PORT", "19500-19510")]));
     }
 
     #[test]
@@ -400,7 +405,7 @@ mod tests {
             source_file: "/s/2026_6f1c.jsonl".into(),
             first_message: first_message.map(PathBuf::from),
         };
-        let launch = lead_launch(fork(Some("/cpd-home/run/cpd2/messages/x.md")), &plannotator(None));
+        let launch = lead_launch(fork(Some("/cpd-home/run/cpd2/messages/x.md")), &plannotator("19432-19456"));
         assert_eq!(
             launch.argv,
             strs(&[
@@ -410,14 +415,14 @@ mod tests {
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
-        let silent = lead_launch(fork(None), &plannotator(None));
+        let silent = lead_launch(fork(None), &plannotator("19432-19456"));
         assert_eq!(silent.argv[silent.argv.len() - 2..], strs(&["-n", "pay-4521"]));
         assert!(!silent.argv.contains(&"--".to_owned()));
     }
 
     #[test]
     fn resumed_lead() {
-        let launch = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/x.jsonl".into() }, &plannotator(None));
+        let launch = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/x.jsonl".into() }, &plannotator("19432-19456"));
         assert_eq!(
             launch.argv,
             strs(&[

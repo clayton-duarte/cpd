@@ -31,7 +31,10 @@ export function pnVerdict(state: GuardState, call: GuardCall): { block: true; re
   if (env.PLANNOTATOR_REMOTE !== "1") return G2("PLANNOTATOR_REMOTE is not 1");
   if (loopback(env.PLANNOTATOR_URL_HOST ?? "")) return G2("PLANNOTATOR_URL_HOST is empty or a loopback name or address");
   const port = env.PLANNOTATOR_PORT ?? "";
-  if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return G2("PLANNOTATOR_PORT is not one port");
+  const isPort = (t: string) => /^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 65535;
+  const [a, b, ...rest] = port.split("-");
+  const ok = rest.length === 0 && (b === undefined ? isPort(a) : isPort(a) && isPort(b) && Number(a) <= Number(b));
+  if (!ok) return G2("PLANNOTATOR_PORT is not a port or a range of ports");
   if (!registryReadable(state.store)) return refuse(G3_TEXT);
   return undefined;
 }

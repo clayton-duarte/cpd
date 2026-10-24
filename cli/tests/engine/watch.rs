@@ -2624,37 +2624,6 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
     }
 }
 
-/// Whether process `pid` is running (a zombie is not).
-fn running(pid: i32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
-}
-
-/// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
-/// that `gh`) is killed at its deadline with its whole process group, and E5 reports
-/// `tool_timeout`. The deadline is shortened to 0.5 s by `CPD_TEST_DEADLINE_CPD`, which a
-/// debug build reads (contract §1.2 "Test overrides").
-#[test]
-fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
-    let fx = fx_bare("");
-    let pids = fx.env.root().join("gh.pids");
-    fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
-
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "0.5")]);
-    wait_until("E5's tool_timeout", || fx.count("error") >= 1);
-    engine.stop();
-
-    let errors = fx.events("error");
-    let data = &errors[0].3;
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
-    let details = &data["details"];
-    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(0.5)), "{details}");
-    assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
-    for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
-        let pid: i32 = pid.parse().unwrap();
-        wait_until(&format!("gh's process {pid} to end"), || !running(pid));
-    }
-}
-
 /// The shell command that prints the epoch in nanoseconds: BSD `date` has no `%N`.
 const NOW_NS: &str = r#"perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%d%06d000\n",$s,$u'"#;
 

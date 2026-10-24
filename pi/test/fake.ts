@@ -1,75 +1,215 @@
-import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { type ChildProcess, type spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { appendFileSync, chmodSync, type FSWatcher, watch, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
+import { PassThrough } from "node:stream";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { answers, ID, policyShow, sessionShow, shown } from "./answers.ts";
 import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
-/** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
+/**
+ * A fake `cpd` and a fake pi, in this process, so the adapter is tested through its real boundaries (pi's `exec`, the `spawn` of its follower)
+ * and no node child runs per call (a process start-up is hundreds of ms under load, against the adapter's 200-300 ms limits).
+ * What waits is event-driven: every change a test can wait for is announced with {@link notify}, and {@link waitFor} looks again then.
+ */
 
-const FAKE_CPD = `#!/usr/bin/env node
-const fs = require("fs");
-const path = require("path");
-const dir = process.env.FAKE_CPD_DIR;
-const argv = process.argv.slice(2);
-const log = (o) => fs.appendFileSync(path.join(dir, "calls.jsonl"), JSON.stringify({ ...o, t: Date.now() }) + "\\n");
-const read = (f) => { try { return fs.readFileSync(path.join(dir, f), "utf8"); } catch { return undefined; } };
-const flag = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const watchers = new Set<() => void>();
 
-async function follow() {
-  const since = Number(flag("--since"));
-  // the handler first: once the pid is visible a SIGTERM may come, and before the handler it would kill without a trace
-  process.on("SIGTERM", () => { fs.writeFileSync(path.join(dir, "killed-" + process.pid), "1"); process.exit(143); });
-  fs.appendFileSync(path.join(dir, "follower.pids"), process.pid + "\\n");
-  let done = 0;
-  const print = () => {
-    const lines = (read("events.jsonl") || "").split("\\n").filter(Boolean);
-    while (done < lines.length) {
-      const line = lines[done++];
-      let id;
-      try { id = JSON.parse(line).id; } catch {}
-      if (Number.isSafeInteger(id) && id <= since) continue;
-      // opt-in \`id-less-once\`: an id-less line is printed by the first follower to reach it only (a new binary that no longer fails)
-      if (id === undefined && read("id-less-once") !== undefined) {
-        if ((read("id-less-printed") || "").split("\\n").includes(line)) continue;
-        fs.appendFileSync(path.join(dir, "id-less-printed"), line + "\\n");
+/** Announces that something a `waitFor` condition reads may have changed. */
+export function notify(): void {
+  for (const w of [...watchers]) w();
+}
+
+/** The timers of the fake's own delays and timeouts (`respond(..., { delay })`, `ExecOptions.timeout`): real ones, until a test passes others. */
+export type Timers = { setTimeout(run: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
+const realTimers: Timers = { setTimeout: (run, ms) => setTimeout(run, ms), clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout) };
+
+const flagOf = (argv: string[], name: string): string | undefined => {
+  const i = argv.indexOf(name);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+
+type Answer = { stdout: unknown; exit?: number; delay?: number };
+
+/** The child process of a fake `cpd events follow`: `stdout`, `kill()`, `pid` and the `exit` and `close` events of a real one. */
+class FakeFollower extends EventEmitter {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  /** Lines of `FakeCpd.lines` printed so far. */
+  private done = 0;
+  private finished = false;
+
+  readonly pid: number;
+  private readonly since: number;
+  private readonly cpd: FakeCpd;
+
+  constructor(pid: number, since: number, cpd: FakeCpd) {
+    super();
+    this.pid = pid;
+    this.since = since;
+    this.cpd = cpd;
+  }
+
+  /** Prints what was emitted since the last time, then ends as `failFollower` or `exitNext` say. Every line emitted before an exit is printed before it. */
+  pump(): void {
+    if (this.finished) return;
+    const cpd = this.cpd;
+    for (; this.done < cpd.lines.length; this.done++) {
+      const line = cpd.lines[this.done]!;
+      let id: unknown;
+      try {
+        id = JSON.parse(line).id;
+      } catch {
+        // not JSON: no id
       }
-      process.stdout.write(line + "\\n");
+      if (Number.isSafeInteger(id) && (id as number) <= this.since) continue;
+      // `idLessOnce`: an id-less line is printed by the first follower to reach it only (a new binary that no longer fails)
+      if (id === undefined && cpd.idLessOnceSet) {
+        if (cpd.idLessPrinted.has(line)) continue;
+        cpd.idLessPrinted.add(line);
+      }
+      this.stdout.write(line + "\n");
     }
-  };
-  for (;;) {
-    print();
-    const failure = read("follow-failure.json");
-    if (failure !== undefined) {
-      const f = JSON.parse(failure);
-      process.stdout.write(f.line + "\\n");
-      process.exit(f.exit);
+    if (cpd.failure !== undefined) {
+      this.stdout.write(cpd.failure.line + "\n");
+      this.finish(cpd.failure.exit);
+    } else if (cpd.exitNextCode !== undefined) {
+      const code = cpd.exitNextCode;
+      cpd.exitNextCode = undefined;
+      this.finish(code);
     }
-    const exitNext = read("exit-next");
-    // every line emitted before \`exit-next\` is printed before the exit: a test's Events reach the adapter before the restart
-    if (exitNext !== undefined) { print(); fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
-    await sleep(10);
+  }
+
+  /** Like a SIGTERM the fake's handler answers with exit 143. */
+  kill(_signal?: string): boolean {
+    if (this.finished) return false;
+    this.cpd.killedPids.add(this.pid);
+    this.finish(143);
+    return true;
+  }
+
+  private finish(code: number): void {
+    this.finished = true;
+    this.stdout.end();
+    this.stderr.end();
+    // the `close` of a child follows the end of its stdout, once the reader has everything
+    this.stdout.once("end", () => {
+      this.emit("exit", code, null);
+      this.emit("close", code, null);
+      this.cpd.followersRunning.delete(this);
+      notify();
+    });
+    notify();
   }
 }
 
-(async () => {
-  log({ phase: "start", argv, since: flag("--since") });
-  if (argv[0] === "events" && argv[1] === "follow") return follow();
-  const key = argv.slice(0, 2).join("-");
-  // a call with no \`--context\` (the machine-wide read) may be answered apart: \`<a>-<b>@<kind>@machine\`
-  const machine = flag("--context") === undefined ? read("resp/" + key + "@" + flag("--kind") + "@machine.json") : undefined;
-  const r = JSON.parse(machine || read("resp/" + key + "@" + flag("--kind") + ".json") || read("resp/" + key + "-" + argv[2] + ".json") || read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
-  let feedback;
-  if (flag("--feedback-file")) feedback = fs.readFileSync(flag("--feedback-file"), "utf8");
-  if (r.delay) await sleep(r.delay);
-  log({ phase: "end", argv, feedback });
-  process.stdout.write(typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout));
-  process.exit(r.exit || 0);
-})();
-`;
+export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
+
+/** What the fake `cpd` knows and has seen: the answers, the Events the followers print, the calls. The Fixture owns one; a second `FakePi` runs against the same one. */
+export class FakeCpd {
+  timers: Timers = realTimers;
+  readonly responses = new Map<string, Answer>();
+  /** The Event lines emitted so far (objects as JSON). */
+  readonly lines: string[] = [];
+  readonly callLog: Call[] = [];
+  /** Every follower started, by pid; `killedPids` are the ones `kill()` ended. */
+  readonly followers: FakeFollower[] = [];
+  readonly followersRunning = new Set<FakeFollower>();
+  readonly killedPids = new Set<number>();
+  /** The exit code the next follower to reach it ends with, once. */
+  exitNextCode: number | undefined;
+  /** Every follower prints `line` and ends with `exit`, until cleared. */
+  failure: { line: string; exit: number } | undefined;
+  idLessOnceSet = false;
+  readonly idLessPrinted = new Set<string>();
+  /** Calls in flight with a delay: what ends each as killed. */
+  private readonly pending = new Set<() => void>();
+  private tick = 0;
+  private pids = 0;
+
+  private log(call: Omit<Call, "t">): void {
+    this.callLog.push({ ...call, t: ++this.tick });
+    notify();
+  }
+
+  /** The answer of an argv: `<a>-<b>@<kind>@machine` for a call with no `--context`, `<a>-<b>@<kind>`, `<a>-<b>-<c>`, `<a>-<b>`, then `{"ok":true}`. */
+  private answer(argv: string[]): Answer {
+    const key = argv.slice(0, 2).join("-");
+    const kind = flagOf(argv, "--kind");
+    const machine = flagOf(argv, "--context") === undefined && kind !== undefined ? this.responses.get(`${key}@${kind}@machine`) : undefined;
+    return machine ?? (kind === undefined ? undefined : this.responses.get(`${key}@${kind}`)) ?? this.responses.get(`${key}-${argv[2]}`) ?? this.responses.get(key) ?? { stdout: { ok: true } };
+  }
+
+  /** `cpd <argv>` as pi's `exec` runs it: `signal` and `timeout` end it as `killed`, like pi's. */
+  call(argv: string[], options: ExecOptions): Promise<ExecResult> {
+    const killed: ExecResult = { stdout: "", stderr: "", code: 0, killed: true };
+    const { signal, timeout } = options;
+    if (signal?.aborted) return Promise.resolve(killed);
+    this.log({ phase: "start", argv, since: flagOf(argv, "--since") });
+    const r = this.answer(argv);
+    let feedback: string | undefined;
+    const file = flagOf(argv, "--feedback-file");
+    try {
+      if (file !== undefined) feedback = readFileSync(file, "utf8");
+    } catch (e) {
+      return new Promise((resolve) => setImmediate(resolve, { stdout: "", stderr: String(e), code: 1, killed: false }));
+    }
+    return new Promise((resolve) => {
+      let delayTimer: unknown;
+      let limit: unknown;
+      const conclude = (result: ExecResult) => {
+        if (delayTimer !== undefined) this.timers.clearTimeout(delayTimer);
+        if (limit !== undefined) this.timers.clearTimeout(limit);
+        signal?.removeEventListener("abort", abort);
+        this.pending.delete(abort);
+        resolve(result);
+      };
+      const abort = () => conclude(killed);
+      const end = () => {
+        this.log({ phase: "end", argv, feedback });
+        conclude({ stdout: typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout), stderr: "", code: r.exit ?? 0, killed: false });
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      if (r.delay) {
+        // stays in flight until the delay is over, the timeout, the signal or `cancelPending`
+        this.pending.add(abort);
+        delayTimer = this.timers.setTimeout(end, r.delay);
+        if (timeout) limit = this.timers.setTimeout(abort, timeout);
+      } else {
+        setImmediate(end);
+      }
+    });
+  }
+
+  /** `spawn("cpd", ["events", "follow", …])`: a fake follower that prints the Events emitted so far with an id above `--since`, then each new one at once. */
+  spawn = ((_command: string, argv: string[]) => {
+    const since = Number(flagOf(argv, "--since"));
+    const follower = new FakeFollower(++this.pids, since, this);
+    this.followers.push(follower);
+    this.followersRunning.add(follower);
+    this.log({ phase: "start", argv, since: flagOf(argv, "--since") });
+    follower.pump();
+    return follower as unknown as ChildProcess;
+  }) as unknown as typeof spawn;
+
+  /** Every follower looks again at what it has to print and whether it ends. */
+  pump(): void {
+    for (const f of [...this.followersRunning]) f.pump();
+    notify();
+  }
+
+  /** Ends every call still in flight with a delay, as killed. */
+  cancelPending(): void {
+    for (const abort of [...this.pending]) abort();
+  }
+}
+
+/** The fake `cpd` a `FakePi` made without one runs against: the one of the Fixture alive. */
+let active: FakeCpd | undefined;
+
+/** Stands in the Fixture's directory for the installed `cpd`: the adapter stats the first `cpd` on `PATH` (its identity, §15.2 step 0) and never runs it, the fake runs in process. */
+const CPD_FILE = `#!/bin/sh\n# stands for the installed cpd: the adapter stats this file, the tests' fake cpd answers in process (pi/test/fake.ts)\nexit 1\n`;
 
 /**
  * Stands for pi in the pre-validation (`pi --no-extensions --no-session -e <dir> --mode rpc`; the real one is pi's, not a dependency of this repo): loads
@@ -82,7 +222,7 @@ const path = require("path");
 const argv = process.argv.slice(2);
 const dir = argv[argv.indexOf("-e") + 1];
 const entry = path.join(dir, "extension.ts");
-fs.appendFileSync(path.join(process.env.FAKE_CPD_DIR, "validate-calls.jsonl"), JSON.stringify({ argv, cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, offline: process.env.PI_OFFLINE, agentDirExists: fs.existsSync(process.env.PI_CODING_AGENT_DIR) }) + "\\n");
+fs.appendFileSync(path.join(process.env.FAKE_PI_DIR, "validate-calls.jsonl"), JSON.stringify({ argv, cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, offline: process.env.PI_OFFLINE, agentDirExists: fs.existsSync(process.env.PI_CODING_AGENT_DIR) }) + "\\n");
 import(entry).then((m) => {
   if (typeof m.default !== "function") throw new Error("Extension does not export a valid factory function: " + entry);
   process.exit(0);
@@ -97,9 +237,9 @@ export const OTHER = "11111111-2222-4333-8444-555555555555";
 
 export type Report = { argv: string[]; what?: string; code?: string; message?: string; session?: string; details?: Record<string, unknown> };
 
-export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
-
 export class Fixture {
+  /** The fake `cpd` (answers, Events, calls, followers) this Fixture and every `FakePi` made without one run against. */
+  readonly cpd = new FakeCpd();
   readonly dir = mkdtempSync(join(tmpdir(), "pi-test-"));
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
@@ -107,24 +247,28 @@ export class Fixture {
   readonly agentDir = join(this.dir, "agent");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
+  /** What the adapter writes under `CPD_HOME` (its log: `adapterLog()`) is announced by the file system, so a `waitFor` on it looks again then. */
+  private readonly watcher: FSWatcher;
 
   constructor() {
     mkdirSync(join(this.dir, "bin"));
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
+    this.watcher = watch(this.cpdHome, { recursive: true }, () => notify());
     mkdirSync(this.adapterDir);
     writeFileSync(join(this.dir, "bin", "pi"), FAKE_PI);
     chmodSync(join(this.dir, "bin", "pi"), 0o755);
-    writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
+    writeFileSync(join(this.dir, "bin", "cpd"), CPD_FILE);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
-    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME", "PI_CODING_AGENT_DIR"]) this.saved[k] = process.env[k];
+    for (const k of ["PATH", "FAKE_PI_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME", "PI_CODING_AGENT_DIR"]) this.saved[k] = process.env[k];
     process.env.PATH = `${join(this.dir, "bin")}:${process.env.PATH}`;
-    process.env.FAKE_CPD_DIR = this.dir;
+    process.env.FAKE_PI_DIR = this.dir;
     process.env.CPD_SESSION = ID;
     process.env.CPD_HOME = this.cpdHome;
     process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
-    this.pi = new FakePi();
+    active = this.cpd;
+    this.pi = new FakePi(this.cpd);
     for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
     this.respond("board-take", { ok: true, session: ID, taken: [] }); // a Lead or Manager takes its board posts at every turn start (commands.md §15.7)
     this.respond("events-list", { ok: true, events: [], next: 0 });
@@ -140,29 +284,49 @@ export class Fixture {
   }
   private installs = 0;
 
-  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
+  /** What `cpd <a> <b>` prints (an object, or a raw string) and exits with, and how long (`delay`, ms of the fake's timers) it stays in flight. Key `<a>-<b>`; `<a>-<b>-<c>` answers `cpd <a> <b> <c>` first; `<a>-<b>@<kind>` answers a call whose first `--kind` is `<kind>`, before both. */
   respond(key: string, stdout: unknown, extra: { exit?: number; delay?: number } = {}): void {
-    this.write(join("resp", `${key}.json`), JSON.stringify({ stdout, ...extra }));
+    this.cpd.responses.set(key, { stdout, ...extra });
   }
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
   emit(...lines: unknown[]): void {
     for (const l of lines) {
-      appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+      this.cpd.lines.push(typeof l === "string" ? l : JSON.stringify(l));
       const id = (l as { id?: unknown }).id;
       if (typeof id === "number") this.lastId = Math.max(this.lastId, id);
     }
+    this.cpd.pump();
+  }
+
+  /** The next follower to look ends with `code`, after printing every line emitted so far; once. */
+  exitNext(code: number): void {
+    this.cpd.exitNextCode = code;
+    this.cpd.pump();
+  }
+
+  /** Every follower prints `line` (a failure envelope) and ends with `exit`, until `clearFollowerFailure`. */
+  failFollower(line: string, exit: number): void {
+    this.cpd.failure = { line, exit };
+    this.cpd.pump();
+  }
+
+  clearFollowerFailure(): void {
+    this.cpd.failure = undefined;
+  }
+
+  /** An id-less line is printed by the first follower to reach it only: the new `cpd` no longer fails, the restarted follower does not print the line again. */
+  idLessOnce(): void {
+    this.cpd.idLessOnceSet = true;
   }
 
   /** The highest Event id emitted so far (a `drain` marker follows it, and a restart's cursor passes it). */
   private lastId = 0;
 
+  /** Writes a file of the Fixture's directory (the adapter reads `agent/compact-tools.json`), atomically (write, then rename). */
   file(name: string, content: string): void {
-    this.write(name, content);
-  }
-
-  /** Atomic (write, then rename): the fake `cpd` polls these files and must never read one half written. */
-  private write(name: string, content: string): void {
+    const moved: Record<string, string> = { "exit-next": "exitNext", "follow-failure.json": "failFollower", "id-less-once": "idLessOnce" };
+    if (name in moved) throw new Error(`the fake cpd reads no file \`${name}\` any more: use f.${moved[name]}()`);
     const tmp = join(this.dir, `.tmp-${++this.writes}`);
     writeFileSync(tmp, content);
     renameSync(tmp, join(this.dir, name));
@@ -187,9 +351,9 @@ export class Fixture {
     return p;
   }
 
+  /** Every call so far, in order; `t` counts the records (a call's `end` is after its `start`). */
   calls(): Call[] {
-    const f = join(this.dir, "calls.jsonl");
-    return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+    return [...this.cpd.callLog];
   }
 
   /** argv of the calls that started, in order, without `events follow`, `--version`, `policy show` (see `policyCalls`) and the mention-id reads (§15.14: `session list`, `plan list`, `context list`). */
@@ -232,18 +396,18 @@ export class Fixture {
     return this.follows().map((c) => Number(c.since));
   }
 
+  /** The pid of every fake follower started (a counter), and whether `kill()` ended one. */
   pids(): number[] {
-    const f = join(this.dir, "follower.pids");
-    return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map(Number) : [];
+    return this.cpd.followers.map((f) => f.pid);
   }
 
   killed(pid: number): boolean {
-    return existsSync(join(this.dir, `killed-${pid}`));
+    return this.cpd.killedPids.has(pid);
   }
 
   /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
   load(options: Options = {}, pi: FakePi = this.pi, adapterFn: typeof adapter = adapter): void {
-    const start = options.spawn ?? spawn;
+    const start = options.spawn ?? this.cpd.spawn;
     // The caller's own `reload` object, completed: the adapter reads it at every poll, so a test can change `timeoutMs` while it runs.
     const reload = options.reload ?? {};
     if (!("dir" in reload)) reload.dir = this.adapterDir; // an explicit `dir: undefined` leaves the adapter's own default path
@@ -262,10 +426,9 @@ export class Fixture {
     await waitFor("no cpd call in flight", () => this.pi.execsRunning.size === 0);
   }
 
-  /** Resolves when every fake follower started so far is gone and node has seen it end. */
+  /** Resolves when every fake follower started so far is gone and its `close` was seen. */
   async exited(): Promise<void> {
-    await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
-    await new Promise((resolve) => setImmediate(resolve)); // the `close` event of a child follows its exit
+    await waitFor("every fake follower to exit", () => this.cpd.followersRunning.size === 0, 10_000);
   }
 
   /**
@@ -291,28 +454,19 @@ export class Fixture {
       await this.pi.fire("session_shutdown").catch(() => {});
     } while (this.pi.commandsRunning.size > 0);
     try {
-      // `session_shutdown` SIGTERMs the followers without waiting, and the fake's handler still writes `killed-<pid>` into the dir: remove it only once every follower is gone.
-      await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
-      // A `cpd` process (a one-shot call such as a poll's `--version`, or a follower not yet in `follower.pids`) logs into the dir until it is gone.
-      await waitFor("every fake cpd process to close", () => this.pi.childrenRunning.size === 0, 10_000);
+      // `session_shutdown` SIGTERMs the followers without waiting; a call still in flight with a delay is ended, as pi's would at the end of its process.
+      this.cpd.cancelPending();
+      await waitFor("every fake follower to exit", () => this.cpd.followersRunning.size === 0, 10_000);
+      await waitFor("every fake cpd call to end", () => this.pi.execsRunning.size === 0 && this.pi.childrenRunning.size === 0, 10_000);
     } finally {
+      this.watcher.close();
+      if (active === this.cpd) active = undefined;
       for (const [k, v] of Object.entries(this.saved)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
     }
     rmSync(this.dir, { recursive: true, force: true });
-  }
-}
-
-/** Whether a process exists (signal 0 only checks). A child not yet reaped by node still counts: it is gone once node has seen it exit. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ESRCH") return false;
-    throw e;
   }
 }
 
@@ -327,6 +481,19 @@ export type FakeDialog = { kind: "select" | "editor"; title: string; options: st
 export type Sent = { message: Message; options: SendOptions };
 
 export class FakePi implements PiApi {
+  /** `cpd` is the fake `cpd` its `exec` runs against: the Fixture's, unless one is given. */
+  private readonly own: FakeCpd | undefined;
+
+  constructor(own?: FakeCpd) {
+    this.own = own;
+  }
+
+  private get cpd(): FakeCpd {
+    const cpd = this.own ?? active;
+    if (cpd === undefined) throw new Error("no fake cpd: a Fixture makes one, and a FakePi made without one runs against the Fixture alive");
+    return cpd;
+  }
+
   private handlers = new Map<string, ((event: any, ctx: Ctx) => unknown)[]>();
   private listeners = new Map<string, ((data: unknown) => void)[]>();
   readonly sent: Sent[] = [];
@@ -356,6 +523,7 @@ export class FakePi implements PiApi {
   readonly events = {
     emit: (channel: string, data: unknown) => {
       this.emitted.push({ channel, data });
+      notify();
       for (const l of [...(this.listeners.get(channel) ?? [])]) l(data);
     },
     on: (channel: string, handler: (data: unknown) => void) => {
@@ -373,26 +541,30 @@ export class FakePi implements PiApi {
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
 
-  /** Every process the adapter started (a call or a follower) that node has not yet seen close. `execFile` answers a call aborted or timed out at once, while its killed process may still be starting up, so `execsRunning` is not enough to know nothing more is written into the dir. */
+  /** Every process the adapter started (a follower) that node has not yet seen close. */
   readonly childrenRunning = new Set<ChildProcess>();
 
   track<T extends ChildProcess>(child: T): T {
     this.childrenRunning.add(child);
-    child.once("close", () => this.childrenRunning.delete(child));
+    child.once("close", () => {
+      this.childrenRunning.delete(child);
+      notify();
+    });
     return child;
   }
 
-  /** Like pi's `execCommand`: `timeout` and `signal` SIGTERM the process, and the result says `killed` (its `code` is then not an exit code). */
-  exec(command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
+  /** Like pi's `execCommand`, answered in process by the fake `cpd`: `timeout` and `signal` end the call and the result says `killed` (its `code` is then not an exit code). */
+  async exec(command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
+    if (command !== "cpd") throw new Error(`the fake pi runs only cpd, not ${command}`);
     this.execsRunning.add(args);
     this.execOptions.push({ command, args, options });
-    return new Promise((resolve) => {
-      this.track(execFile(command, args, { ...options, encoding: "utf8" }, (err, stdout, stderr) => {
-        this.execsRunning.delete(args);
-        const killed = err !== null && (err.killed === true || err.name === "AbortError");
-        resolve({ stdout, stderr, code: killed ? 0 : err ? (typeof err.code === "number" ? err.code : 1) : 0, killed });
-      }));
-    });
+    notify();
+    try {
+      return await this.cpd.call(args, options);
+    } finally {
+      this.execsRunning.delete(args);
+      notify();
+    }
   }
 
   /** What `exec` was called with, in order. */
@@ -402,14 +574,17 @@ export class FakePi implements PiApi {
     if (!options || typeof message.content !== "string") throw new Error("the adapter always passes send options and a string content");
     this.sent.push({ message: { ...message, content: message.content }, options });
     this.entries.push({ type: "custom_message", customType: message.customType, content: message.content, display: message.display, details: message.details });
+    notify();
   };
 
   appendEntry(customType: string, data: unknown): void {
     this.entries.push({ type: "custom", customType, data });
+    notify();
   }
 
   setSessionName(name: string): void {
     this.sessionName = name;
+    notify();
   }
 
   getSessionName(): string | undefined {
@@ -440,12 +615,17 @@ export class FakePi implements PiApi {
   /** Like pi: with `expandPromptTemplates` a registered extension command runs at once (not awaited by the sender). */
   sendUserMessage(content: string, options: { expandPromptTemplates: boolean }): void {
     this.userMessages.push({ content, options });
+    notify();
     const handler = options.expandPromptTemplates && content.startsWith("/") ? this.commands.get(content.slice(1).split(" ")[0]!) : undefined;
     if (!handler) return;
     const running: Promise<void> = handler("", this.commandCtx())
       .catch((e) => void this.commandErrors.push(e))
-      .finally(() => void this.commandsRunning.delete(running));
+      .finally(() => {
+        this.commandsRunning.delete(running);
+        notify();
+      });
     this.commandsRunning.add(running);
+    notify();
   }
 
   /** What `ctx.isProjectTrusted()` answers. */
@@ -467,9 +647,11 @@ export class FakePi implements PiApi {
           if (d.settled) return;
           d.settled = true;
           resolve(value);
+          notify();
         },
       };
       this.dialogs.push(d);
+      notify();
       if (signal?.aborted) d.answer(undefined);
       else signal?.addEventListener("abort", () => d.answer(undefined), { once: true });
     });
@@ -492,17 +674,20 @@ export class FakePi implements PiApi {
 
   async setModel(model: { provider: string; id: string }): Promise<boolean> {
     this.modelsSet.push(model);
+    notify();
     return this.modelAccepted;
   }
 
   setThinkingLevel(level: string): void {
     this.thinkingSet.push(level);
+    notify();
   }
 
   ctx(): Ctx {
     const ui = {
       notify: (m: string, level?: string) => {
         this.notices.push(m);
+        notify();
         if (level === "error") this.errorNotices.push(m);
       },
       setStatus: () => {},
@@ -531,6 +716,7 @@ export class FakePi implements PiApi {
       ...this.ctx(),
       reload: async () => {
         this.reloads++;
+        notify();
         await this.onReload();
         stale = true;
       },
@@ -574,14 +760,46 @@ export class FakePi implements PiApi {
   }
 }
 
-export async function waitFor<T>(what: string, fn: () => T | undefined | null | false, ms = 15000): Promise<T> {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    const v = fn();
-    if (v) return v;
-    if (Date.now() > deadline) throw new Error(`timed out after ${ms} ms waiting for ${what}`);
-    await sleep(10);
-  }
+/**
+ * Resolves with the first truthy `fn()`, looked at once now and again after every {@link notify} (once the work that caused it has run to its next macrotask).
+ * `ms` only fails a hang: a rejection naming `what`. Nothing polls.
+ */
+export function waitFor<T>(what: string, fn: () => T | undefined | null | false, ms = 15000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let queued = false;
+    let settled = false;
+    const stop = () => {
+      settled = true;
+      watchers.delete(wake);
+      realTimers.clearTimeout(hang);
+    };
+    const look = () => {
+      queued = false;
+      if (settled) return;
+      try {
+        const v = fn();
+        if (!v) return;
+        stop();
+        resolve(v);
+      } catch (e) {
+        stop();
+        reject(e);
+      }
+    };
+    const wake = () => {
+      if (queued) return;
+      queued = true;
+      setImmediate(look);
+    };
+    const onHang = () => {
+      stop();
+      reject(new Error(`timed out after ${ms} ms waiting for ${what}`));
+    };
+    watchers.add(wake);
+    // The one timer of a wait, real whatever the fake's `timers` are, and only to fail a hang; it also keeps node alive while the adapter's own (unref'd) timers are what will end the wait.
+    const hang = realTimers.setTimeout(onHang, ms);
+    look();
+  });
 }
 
 /** `session state` argvs, without the session id, as `idle`, `blocked:<label>` or `waiting:<label>`. */
