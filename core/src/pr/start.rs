@@ -306,21 +306,22 @@ fn pre_start_log(home: &CpdHome, plan: &PlanId, key: &PrKey) -> PathBuf {
 
 /// Creates the PR's Lead worktree and runs `pre-start` in it (§7.2), in the PR's repo, for a PR that is not
 /// stacked: the one `plan lock` starts (§3.1: it starts only PRs with no base PR).
-pub fn prepare(home: &CpdHome, config: &Config, plan: &PlanId, pr: &PrRow) -> Result<Prepared, Failed> {
-    prepare_as(home, config, plan, pr, false)
+pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow) -> Result<Prepared, Failed> {
+    prepare_as(home, config, store, plan, pr, false)
 }
 
 /// [`prepare`], `stacked` being whether the PR is stacked on a base PR: its Lead Branch is then cut from that
 /// PR's Lead Branch head (§7.2).
-fn prepare_as(home: &CpdHome, config: &Config, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
+fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &pr.key;
+    // The PR's policy is strict: a repo without its file is `repo_unconfigured`, and nothing was created.
+    let policy = store.read(|conn| super::policy_of_pr(conn, home, &config.host, plan, key)).map_err(Failed::Other)?;
     let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
     let setup = Setup {
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
     };
-    let prepare = if stacked { git::worktree::prepare_stacked_lead_worktree } else { git::prepare_lead_worktree };
-    match prepare(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, &setup) {
+    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, stacked, &setup, &policy.hooks.pre_start) {
         Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());
@@ -374,7 +375,7 @@ pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, 
     // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
     let pr = &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
     let stacked = store.read(|conn| base_pr(conn, plan, pr)).map_err(Failed::Other)?.is_some();
-    let pushed = prepare_as(home, config, plan, pr, stacked)?.push();
+    let pushed = prepare_as(home, config, store, plan, pr, stacked)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
         Ok(()) => Ok(pushed),
         Err(e) => {

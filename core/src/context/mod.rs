@@ -72,7 +72,7 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
-    /// Set the owner of a Context that has none (§3.13)
+    /// Set or change the owner of a Context (§3.13)
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
     Delete(DeleteArgs),
@@ -170,6 +170,9 @@ pub struct NewArgs {
     /// The GitHub owner of every repo the Context's Plans work on, its policy key
     #[arg(long, value_name = "login")]
     owner: OwnerLogin,
+    /// Link an unknown owner to clayton-duarte's policy (the User confirmed)
+    #[arg(long)]
+    confirm_fallback: bool,
 }
 
 #[derive(Args, Debug)]
@@ -307,7 +310,7 @@ fn context_json(row: &ContextRow) -> Value {
 fn new(args: NewArgs) -> Result<Output, CpdError> {
     let Env { home, config, mut store, .. } = Env::open()?;
     let title = Text::from(args.title.clone());
-    let (row, already) = Contexts::new(&config, &mut store).create(&home, &args.id, &title, args.jira.as_ref(), &args.owner)?;
+    let (row, already) = Contexts::new(&config, &mut store).create(&home, &args.id, &title, args.jira.as_ref(), &args.owner, args.confirm_fallback)?;
     let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);

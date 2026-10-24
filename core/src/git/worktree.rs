@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::hooks::{HookOutcome, Operation, run_hook};
+use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
 use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
@@ -135,9 +135,10 @@ pub struct Created {
     pub push_failed: Option<CpdError>,
 }
 
-/// Runs `pre-start` in `path`; on any failure removes the worktree and branch
+/// Runs `pre_start` (the policy's `hooks.pre-start`) in `path`; on any failure removes the worktree and branch
 /// and returns `setup_failed` (contract §7.2).
 fn run_setup(
+    pre_start: &Pipeline,
     dir: &Path,
     path: &Path,
     branch: &str,
@@ -145,7 +146,7 @@ fn run_setup(
     setup: &Setup,
 ) -> Result<(), CpdError> {
     let op = Operation { branch: base_branch };
-    let result = run_hook(Hook::PreStart, path, Some(&op), setup.timeout, &setup.log);
+    let result = run_hook(Hook::PreStart, pre_start, path, Some(&op), setup.timeout, &setup.log);
     let failure = match result {
         Ok(r) if r.outcome == HookOutcome::Passed => return Ok(()),
         Ok(r) => {
@@ -447,7 +448,7 @@ pub fn prepare_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare(repo, plan, path, branch, base, false, setup)
+    prepare_pr_lead_worktree(repo, plan, path, branch, base, false, setup, &Pipeline::default())
 }
 
 /// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
@@ -461,10 +462,13 @@ pub fn prepare_stacked_lead_worktree(
     base: &str,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
-    prepare(repo, plan, path, branch, base, true, setup)
+    prepare_pr_lead_worktree(repo, plan, path, branch, base, true, setup, &Pipeline::default())
 }
 
-fn prepare(
+/// [`prepare_lead_worktree`] (or [`prepare_stacked_lead_worktree`], when `stacked`) running `pre_start`, the PR's policy
+/// `hooks.pre-start` (§7.3), after the worktree is created. The two above run no hook: they are for a caller with none.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_pr_lead_worktree(
     repo: &Path,
     plan: &PlanId,
     path: &Path,
@@ -472,6 +476,7 @@ fn prepare(
     base: &str,
     stacked: bool,
     setup: &Setup,
+    pre_start: &Pipeline,
 ) -> Result<Prepared, StartFailure> {
     let at = |step| move |error| StartFailure { step, error };
     let in_worktree = at(Step::Worktree);
@@ -520,7 +525,7 @@ fn prepare(
             return Err(in_worktree(e));
         }
     };
-    run_setup(repo, path, branch, base, setup).map_err(at(Step::PreStart))?;
+    run_setup(pre_start, repo, path, branch, base, setup).map_err(at(Step::PreStart))?;
     Ok(Prepared { path: path.to_path_buf(), branch: branch.to_owned(), base_sha, remote })
 }
 
@@ -528,8 +533,13 @@ fn prepare(
 /// `pre-start` in it (contract §7.2 for a PR made by migration 4), then pushes
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
+    create_lead_worktree_with(repo, plan, base, setup, &Pipeline::default())
+}
+
+/// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
+pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, setup).map_err(|f| f.error)?;
+    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &lead_branch(plan), base, false, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
@@ -561,13 +571,25 @@ pub fn create_attempt_worktree(
     attempt: &AttemptId,
     setup: &Setup,
 ) -> Result<Created, CpdError> {
+    create_attempt_worktree_with(repo, lead_worktree, plan, attempt, setup, &Pipeline::default())
+}
+
+/// [`create_attempt_worktree`] running `pre_start`, the PR's policy `hooks.pre-start`; the one above runs no hook.
+pub fn create_attempt_worktree_with(
+    repo: &Path,
+    lead_worktree: &Path,
+    plan: &PlanId,
+    attempt: &AttemptId,
+    setup: &Setup,
+    pre_start: &Pipeline,
+) -> Result<Created, CpdError> {
     let path = attempt_worktree_path(repo, plan, attempt)?;
     let lead = checked_out_lead_branch(lead_worktree, plan)?;
     let branch = attempt_branch(plan, attempt);
 
     let base_sha = rev_parse(lead_worktree, &format!("refs/heads/{lead}"))?;
     ok(lead_worktree, &["worktree", "add", "-b", &branch, path_str(&path)?, &base_sha])?;
-    run_setup(lead_worktree, &path, &branch, &lead, setup)?;
+    run_setup(pre_start, lead_worktree, &path, &branch, &lead, setup)?;
     Ok(Created { path, branch, base_sha, push_failed: None })
 }
 

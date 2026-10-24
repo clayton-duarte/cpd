@@ -39,6 +39,13 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
     fixture_kind(files, "work", None)
 }
 
+/// [`fixture`] whose repo policy file is `file` (its `[hooks]`).
+fn hooked(file: &str) -> Fx {
+    let fx = fixture(&[]);
+    fx.env.repo_policy("acme", "pay", file);
+    fx
+}
+
 /// [`fixture`] with Job `api` of `kind` and, for a `test` Job, its `(tests, test_files)` as JSON arrays.
 fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>) -> Fx {
     fixture_needing(files, kind, tests, None)
@@ -65,15 +72,17 @@ fn fixture_needing(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str
     let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
+    env.repo_policy("acme", "pay", "");
     let mut fx = Fx { env, home, repo, lead, work: PathBuf::new() };
     fx.env.sql(&format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{}', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
         fx.repo.display(),
         fx.lead.display()
     ));
@@ -126,9 +135,10 @@ impl Fx {
         }
         self.env.git(&lead, &["add", "-A"]);
         self.env.git(&lead, &["commit", "-q", "-m", "setup", "--allow-empty"]);
+        self.env.repo_policy("acme", key, "");
         self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{key}', '{}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
@@ -155,9 +165,10 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
-                    params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files, review)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7, ?8)",
+                    // The pseudo-kind `review` is a `work` Job with the review flag.
+                    params![key, "f".repeat(64), tx.id(), pr.key, if kind == "review" { "work" } else { kind }, tests.map(|t| t.0), tests.map(|t| t.1), kind == "review"],
                 )?;
                 if let Some(names) = needs {
                     tx.execute(
@@ -262,9 +273,11 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!(events[0]["data"], json!({"from": "running", "to": "merging"}));
-    assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
+    assert_eq!(events.len(), 3, "{events:?}");
+    assert_eq!(events[0]["data"], json!({"from": "running", "to": "running", "check": "start", "what": "checks"}));
+    assert_eq!(events[1]["data"], json!({"from": "running", "to": "running", "check": "end", "what": "checks"}));
+    assert_eq!(events[2]["data"], json!({"from": "running", "to": "merging"}));
+    assert_eq!((events[2]["plan"].as_str(), events[2]["job"].as_str(), events[2]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
     assert_eq!(fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
 }
 
@@ -357,24 +370,25 @@ fn submit_refuses_an_attempt_with_no_commit_on_top_of_the_base() {
 
 #[test]
 fn submit_refuses_a_diff_that_touches_protected_paths() {
-    let fx = fixture(&[(".config/cpd.toml", "protected = [\"verify.sh\", \"scripts/ci/\"]\n"), ("verify.sh", "#!/bin/sh\n")]);
+    let fx = fixture(&[("verify.sh", "#!/bin/sh\n")]);
+    fx.env.repo_policy("acme", "pay", "[protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n");
     fx.commit("src/fine.rs", "ok\n");
     fx.commit("verify.sh", "#!/bin/sh\nexit 0\n");
     fx.commit("scripts/ci/run.sh", "x\n");
     fx.commit(".cpd/note", "x\n");
-    fx.commit(".config/wt.toml", "[pre-commit]\nnothing = \"true\"\n");
     let error = refused(&fx.submit(), "gate_tampered", 3);
     let mut paths: Vec<String> = serde_json::from_value(error["details"]["paths"].clone()).unwrap();
     paths.sort();
-    assert_eq!(paths, [".config/wt.toml", ".cpd/note", "scripts/ci/run.sh", "verify.sh"]);
+    assert_eq!(paths, [".cpd/note", "scripts/ci/run.sh", "verify.sh"]);
     assert_eq!(fx.status(), "running");
 }
 
 #[test]
-fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
+fn submit_takes_the_protected_list_from_the_policy_of_the_jobs_pr() {
     let fx = fixture(&[]);
-    // Only the web PR's Lead Branch protects verify.sh.
-    let web = fx.add_pr("web", &[(".config/cpd.toml", "protected = [\"verify.sh\"]\n")]);
+    // Only the web PR's repo policy protects verify.sh.
+    let web = fx.add_pr("web", &[]);
+    fx.env.repo_policy("acme", "web", "[protected]\npaths = [\"verify.sh\"]\n");
     let ui = fx.attempt_in(&web, "ui", "running");
     let on = |dir: &Path, path: &str| {
         fs::write(dir.join(path), "exit 0\n").unwrap();
@@ -387,7 +401,7 @@ fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
     let error = refused(&fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]), "gate_tampered", 3);
     assert_eq!(error["details"]["paths"], json!(["verify.sh"]));
     assert_eq!(fx.env.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
-    // The first PR's Lead Branch has no such list: the same file is fine there.
+    // The first PR's repo policy has no such list: the same file is fine there.
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
 }
@@ -395,7 +409,8 @@ fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
 #[test]
 fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
     let fx = fixture(&[]);
-    let web = fx.add_pr("web", &[(".config/wt.toml", "[pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n")]);
+    let web = fx.add_pr("web", &[]);
+    fx.env.repo_policy("acme", "web", "[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
     let ui = fx.attempt_in(&web, "ui", "running");
     fs::write(ui.join("ui.txt"), "ui\n").unwrap();
     fx.env.git(&ui, &["add", "-A"]);
@@ -414,7 +429,7 @@ fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
 
 #[test]
 fn submit_runs_the_quick_check_and_keeps_its_tail() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n");
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
@@ -426,7 +441,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
 
 #[test]
 fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n");
     fx.commit("a.txt", "a\n");
     let error = refused(&fx.submit(), "check_failed", 3);
     assert!(error["details"]["tail"].as_str().unwrap().contains("broken"), "{error}");
@@ -434,18 +449,20 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
     assert!(log.ends_with("logs/api-a1.pre-commit.log"), "{log}");
     assert!(fs::read_to_string(log).unwrap().contains("broken"));
     assert_eq!(fx.status(), "running");
-    assert_eq!(fx.events("attempt-status").len(), 0);
+    let events = fx.events("attempt-status");
+    let spans: Vec<_> = events.iter().map(|e| (e["data"]["check"].as_str(), e["data"]["what"].as_str())).collect();
+    assert_eq!(spans, [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
 }
 
 #[test]
 fn submit_refuses_a_quick_check_that_could_not_run() {
-    let killed = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo before; kill -9 $$\"\n")]);
+    let killed = hooked("[hooks.pre-commit]\ncheck = \"echo before; kill -9 $$\"\n");
     killed.commit("a.txt", "a\n");
     let error = refused(&killed.submit(), "check_error", 1);
     assert!(error["details"]["tail"].as_str().unwrap().contains("before"), "{error}");
     assert_eq!(killed.status(), "running");
 
-    let invalid = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n")]);
+    let invalid = hooked("[hooks.pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n");
     invalid.commit("a.txt", "a\n");
     let error = refused(&invalid.submit(), "check_error", 1);
     assert!(error["details"]["reason"].as_str().unwrap().contains("hook_invalid"), "{error}");
@@ -467,22 +484,24 @@ fn submit_checks_its_arguments_and_selection() {
 
 // ---------- attempt submit: the checks of the `test` and `impl` kinds (contract §7.7, commands.md §6.1) ----------
 
-/// A repo's `[tests]`, as fake commands (they run in the Attempt worktree, `sh -c`): `build` fails while `BROKEN` exists,
+/// A repo's `[test-commands]`, as fake commands (they run in the Attempt worktree, `sh -c`): `build` fails while `BROKEN` exists,
 /// `run` fails unless `GREEN` exists, so a test Job that adds neither is red and one that adds `GREEN` is not. Each leaves a
 /// trace beside the worktree: `ran.txt` the named tests it was given, `slot.txt` the slot it was told it holds.
-const TESTS: &str = "[tests]\n\
+const TESTS: &str = "[test-commands]\n\
     build = \"echo building; test ! -e BROKEN\"\n\
     run = \"echo running; echo {{ tests }} > ../ran.txt; echo slot=[$CPD_TEST_SLOT] > ../slot.txt; test -e GREEN\"\n";
 
 /// `TESTS` with a `list` that exists for the one name `t::one` only; it traces the names it was asked about.
-const TESTS_LIST: &str = "[tests]\n\
+const TESTS_LIST: &str = "[test-commands]\n\
     build = \"true\"\n\
     list = \"echo {{ test }} >> ../listed.txt; test {{ test }} = t::one || test {{ test }} = t::two\"\n\
     run = \"echo {{ tests }} > ../ran.txt; false\"\n";
 
 /// Job `api` is a `test` Job of the named test `t::one`, held in `tests/t.rs`.
 fn red(toml: &str) -> Fx {
-    fixture_kind(&[(".config/cpd.toml", toml)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)))
+    let fx = fixture_kind(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    fx.env.repo_policy("acme", "pay", toml);
+    fx
 }
 
 /// Job `api` is an `impl` Job that needs the merged `test` Job `t` (the tests `t::one` and `t::two`, in `tests/`).
@@ -492,7 +511,8 @@ fn green(toml: &str, approved: Option<&str>) -> Fx {
 
 /// [`green`] with the tests `t` names.
 fn green_naming(toml: &str, approved: Option<&str>, names: &str) -> Fx {
-    let fx = fixture_needing(&[(".config/cpd.toml", toml)], "impl", None, Some(names));
+    let fx = fixture_needing(&[], "impl", None, Some(names));
+    fx.env.repo_policy("acme", "pay", toml);
     if let Some(paths) = approved {
         fx.env.sql(&format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"));
     }
@@ -500,7 +520,7 @@ fn green_naming(toml: &str, approved: Option<&str>, names: &str) -> Fx {
 }
 
 impl Fx {
-    /// A file the fake `[tests]` commands left beside the Attempt worktree (`None`: it was never written).
+    /// A file the fake `[test-commands]` commands left beside the Attempt worktree (`None`: it was never written).
     fn seen(&self, name: &str) -> Option<String> {
         fs::read_to_string(self.work.parent().unwrap().join(name)).ok()
     }
@@ -517,7 +537,7 @@ impl Fx {
 }
 
 fn span(edge: &str) -> Value {
-    json!({"from": "running", "to": "running", "check": edge, "what": "tests"})
+    json!({"from": "running", "to": "running", "check": edge, "what": "checks"})
 }
 
 #[test]
@@ -576,7 +596,8 @@ fn the_tests_commands_are_not_given_a_test_slot() {
 
 #[test]
 fn a_test_job_must_change_a_path_its_test_files_name_or_is_refused_test_files_missing() {
-    let fx = fixture_kind(&[(".config/cpd.toml", TESTS)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs","tests/more/"]"#)));
+    let fx = fixture_kind(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs","tests/more/"]"#)));
+    fx.env.repo_policy("acme", "pay", TESTS);
     fx.commit("tests/t.rs", "// red\n");
     let error = refused(&fx.submit(), "test_files_missing", 3);
     assert_eq!(error["details"]["paths"], json!(["tests/more/"]));
@@ -590,44 +611,31 @@ fn a_test_job_must_change_a_path_its_test_files_name_or_is_refused_test_files_mi
 
 #[test]
 fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigured() {
-    let fx = red("protected = []\n");
+    let fx = red("");
     fx.commit("tests/t.rs", "// red\n");
     let error = refused(&fx.submit(), "tests_unconfigured", 3);
     let message = error["message"].as_str().unwrap();
     assert!(message.contains("--shape docs") && message.contains("config"), "{message}");
     assert_eq!(fx.status(), "running");
 
-    let fx = green("protected = []\n", None);
+    let fx = green("", None);
     fx.commit("src/lib.rs", "// green\n");
     refused(&fx.submit(), "tests_unconfigured", 3);
 }
 
 #[test]
-fn a_tests_table_that_is_not_as_documented_is_config_invalid() {
-    // The table is part of `.config/cpd.toml` (contract §7.5, §7.7): a valid one, `list` included, is read.
-    let fx = red("protected = [\"verify.sh\"]\n[tests]\nbuild = \"true\"\nlist = \"echo {{ test }}\"\nrun = \"false\"\n");
+fn a_test_commands_table_with_a_list_is_read() {
+    // The table is part of the repo's policy file (contract §7.7, §8.3); a table that is not as documented is `policy_invalid`.
+    let fx = red("[protected]\npaths = [\"verify.sh\"]\n[test-commands]\nbuild = \"true\"\nlist = \"echo {{ test }}\"\nrun = \"false\"\n");
     fx.commit("tests/t.rs", "// red\n");
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
-
-    for (toml, key) in [
-        ("[tests]\nbuild = \"true\"\n", "run"),                                          // `run` missing
-        ("[tests]\nrun = \"true\"\n", "build"),                                           // `build` missing
-        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nlist = \"true\"\n", "list"),         // `list` without the variable `test`
-        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nextra = \"true\"\n", "extra"),       // any other key
-    ] {
-        let fx = red(toml);
-        fx.commit("tests/t.rs", "// red\n");
-        let error = refused(&fx.submit(), "config_invalid", 1);
-        assert_eq!(error["details"]["file"], ".config/cpd.toml", "{toml}");
-        assert!(error["message"].as_str().unwrap().contains(key), "the message names `{key}`: {error}");
-        assert_eq!(fx.status(), "running", "{toml}");
-    }
 }
 
 #[test]
 fn list_refuses_a_name_that_matches_no_test_before_run_for_a_test_job() {
-    let fx = fixture_kind(&[(".config/cpd.toml", TESTS_LIST)], "test", Some((r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#)));
+    let fx = fixture_kind(&[], "test", Some((r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#)));
+    fx.env.repo_policy("acme", "pay", TESTS_LIST);
     fx.commit("tests/t.rs", "// red\n");
     let error = refused(&fx.submit(), "tests_not_found", 3);
     let details = &error["details"];
@@ -657,9 +665,9 @@ fn list_refuses_a_name_that_matches_no_test_for_an_impl_job_too_and_passes_when_
 #[test]
 fn a_command_that_cannot_run_is_tests_error_and_changes_nothing() {
     for (toml, what) in [
-        ("[tests]\nbuild = \"kill -9 $$\"\nrun = \"true\"\n", "build killed by a signal"),
-        ("[tests]\nbuild = \"true\"\nrun = \"kill -9 $$\"\n", "run killed by a signal"),
-        ("[tests]\nbuild = \"echo {{ no_such_variable }}\"\nrun = \"true\"\n", "hook_invalid"),
+        ("[test-commands]\nbuild = \"kill -9 $$\"\nrun = \"true\"\n", "build killed by a signal"),
+        ("[test-commands]\nbuild = \"true\"\nrun = \"kill -9 $$\"\n", "run killed by a signal"),
+        ("[test-commands]\nbuild = \"echo {{ no_such_variable }}\"\nrun = \"true\"\n", "hook_invalid"),
     ] {
         let fx = red(toml);
         fx.commit("tests/t.rs", "// red\n");
@@ -739,19 +747,22 @@ fn only_an_impl_job_is_guarded_and_only_the_files_of_the_test_jobs_it_needs() {
 
 #[test]
 fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
-    let toml = ("[pre-commit]\ncheck = \"exit 7\"\n", "[tests]\nbuild = \"echo building\"\nrun = \"false\"\n");
-    let fx = fixture_kind(&[(".config/wt.toml", toml.0), (".config/cpd.toml", toml.1)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    let toml = ("[hooks.pre-commit]\ncheck = \"exit 7\"\n", "[test-commands]\nbuild = \"echo building\"\nrun = \"false\"\n");
+    let fx = fixture_kind(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    fx.env.repo_policy("acme", "pay", &format!("{}{}", toml.0, toml.1));
     fx.commit("tests/t.rs", "// red\n");
     refused(&fx.submit(), "check_failed", 3);
     assert!(!fx.tests_log("build").exists(), "the tests did not run");
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
 
-    // A `work` Job in a repo that has `[tests]`: nothing of it runs, and no span is recorded.
-    let fx = fixture(&[(".config/cpd.toml", TESTS)]);
+    // A `work` Job in a repo that has `[test-commands]`: no kind check runs, and its checks are one span.
+    let fx = fixture(&[]);
+    fx.env.repo_policy("acme", "pay", TESTS);
     fx.commit("BROKEN", "x\n");
     fx.submit().ok();
     assert_eq!(fx.seen("ran.txt"), None);
     assert!(!fx.tests_log("build").exists());
-    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
 }
 
 #[test]
@@ -772,6 +783,55 @@ fn a_kind_check_is_a_span_of_the_attempt_that_ends_also_when_it_refuses() {
     // The Events carry the Attempt and the Job.
     let events = fx.events("attempt-status");
     assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
+}
+
+impl Fx {
+    /// The `txn` of each `attempt-status` Event, oldest first, comma-joined.
+    fn status_txns(&self) -> Vec<i64> {
+        let text: String = self.env.query("SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' ORDER BY rowid)");
+        text.split(',').map(|t| t.parse().unwrap()).collect()
+    }
+}
+
+#[test]
+fn a_work_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
+    let fx = fixture(&[]);
+    fx.commit("a.txt", "x\n");
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    let txns = fx.status_txns();
+    assert_eq!(txns[1], txns[2], "the end and running -> merging share a transaction");
+    assert_ne!(txns[0], txns[1]);
+}
+
+#[test]
+fn a_refused_quick_check_ends_the_checks_span_and_leaves_the_attempt_running() {
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"exit 7\"\n");
+    fx.commit("a.txt", "x\n");
+    refused(&fx.submit(), "check_failed", 3);
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
+    assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn a_test_jobs_quick_check_and_tests_run_in_one_checks_span() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    let txns = fx.status_txns();
+    assert_eq!(txns[1], txns[2]);
+}
+
+/// Guards the rule that a review Job has no checks and no span (green today).
+#[test]
+fn a_review_jobs_submit_records_no_check_span() {
+    let fx = fixture_kind(&[], "review", None);
+    let findings = fx.home.root().join("run/pay/reviews/api.md");
+    fs::create_dir_all(findings.parent().unwrap()).unwrap();
+    fs::write(&findings, "- one finding\n").unwrap();
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
 }
 
 // ---------- attempt read ----------
@@ -875,7 +935,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
 
 #[test]
 fn show_names_the_check_log_once_a_quick_check_has_run() {
-    let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo hi\"\n")]);
+    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo hi\"\n");
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let out = fx.cpd(&["show", "api-a1"]).ok();

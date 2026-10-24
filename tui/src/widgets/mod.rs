@@ -1,9 +1,9 @@
 //! The `widgets` view (commands.md §13.2, §17): the Dispatch column, the
 //! machine-wide right column of the cockpit. It takes one snapshot of the read
-//! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it looks at the Events and at the pull
-//! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
-//! once per [`COALESCE`]; the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
-//! pull requests, the CPU, GPU and memory, the error, the size, a click or the wheel changed, not on every tick. It makes no write of
+//! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it blocks on the [`Pump`] and reads on
+//! the reader thread when the store committed (the watcher) or the safety poll is due, at most one read per frame; the
+//! CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when a read result, the
+//! CPU, GPU and memory, the error, the size, a click or the wheel changed, and at each frame while a spinner turns. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
 //! icon opens. A right click on a PR row opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), which then
 //! takes every key and click until it closes. Otherwise it has no key; mouse capture is on, for the clicks and the
@@ -16,19 +16,26 @@
 //! - the colours and icons are [`crate::palette`]'s.
 
 pub(crate) mod column;
+#[cfg(test)]
+mod kinds_tests;
+#[cfg(test)]
+mod needs_tests;
 mod host;
 pub mod legend;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
-use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
+use super::pace::{self, Reads};
 use super::palette;
+use super::pump::{self, Pump, Schedule, Signal};
 use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
@@ -50,12 +57,6 @@ pub use host::Usage;
 use host::Sampler;
 pub(crate) use column::{Window, max_scroll, window};
 
-/// How often the view looks at the Events and at keys.
-const TICK: Duration = Duration::from_millis(200);
-/// How often the view redraws while a shown PR's Lead is working: one frame of the spinner (`palette::frame`, 100 ms).
-const FRAME: Duration = Duration::from_millis(100);
-/// At most one snapshot per this long, whatever the Event rate (§17).
-const COALESCE: Duration = Duration::from_millis(500);
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
@@ -69,21 +70,26 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let mut sampler = Sampler::default();
             let machine = Machine { name: hostname(), usage: sampler.sample() };
-            let (prs, cursor) = read::open_prs(&mut store)?;
+            let (mut prs, cursor) = read::open_prs(&mut store)?;
+            // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
+            let open = read::open_pulls(&mut store)?;
+            mark_merging(&mut prs, &crate::merge::marker::live(&home, &open));
             let follow = read::Follow::new(&mut store, KINDS, cursor)?;
-            Ok((store, home, config, prs, machine, sampler, follow))
+            // the reads after them run on the reader thread, with a store of its own
+            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+            Ok((reader, home, config, prs, machine, sampler))
         },
-        |terminal, (mut store, home, config, prs, machine, sampler, follow)| {
+        |terminal, (reader, home, config, prs, machine, sampler)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
             let log = ViewLog::of(&home, "widgets");
             let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
-            show(terminal, &mut store, follow, prs, machine, sampler, &lead)
+            show(terminal, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
         },
     )
 }
 
 /// The Events that change what the column draws besides the pull request rows (whose changes have no Event): a pull
-/// request gets its PR (`pr-opened`), a Plan its Lead (`plan-created`, `session-registered`), the chat slot moves.
+/// request gets its PR (`pr-opened`), a Plan its Lead (`plan-created`, `session-registered`), the chat slot moves, a Lead's dot is a fact the column draws (`session-state`).
 /// The update Job's status moves its PR's `conflict` to `updating` and back (hs-d532): a Job is added, started (its
 /// `attempt-started`; there is no `job-started` Event), retried, merged, failed or cancelled.
 const KINDS: &[Kind] = &[
@@ -91,6 +97,7 @@ const KINDS: &[Kind] = &[
     Kind::PlanCreated,
     Kind::SessionRegistered,
     Kind::SessionMoved,
+    Kind::SessionState,
     Kind::JobAdded,
     Kind::AttemptStarted,
     Kind::JobRetried,
@@ -98,6 +105,27 @@ const KINDS: &[Kind] = &[
     Kind::JobFailed,
     Kind::JobCancelled,
 ];
+
+/// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
+/// each side.
+pub(crate) fn menu_pane(pane: Rect) -> Rect {
+    pane.inner(Margin::new(1, 0))
+}
+
+/// The layout test's sample (`layout_tests`): a menu of a PR row opened by a right click at `case`'s cell in a `width` x
+/// `height` pane, drawn as the view draws it, in [`menu_pane`].
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::Case) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Case, Kind, Placed, Sample};
+    let Case::Menu(click) = case else { panic!("the Deploy column samples a menu") };
+    let (column, row) = click.at(width, height);
+    let menu = Menu::new(vec![column::PrItem::Merge, column::PrItem::CopyLink, column::PrItem::GoToLead], Position::new(column, row));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| menu.draw_at(f, menu_pane(f.area()), 0)).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let boxes = vec![Placed { name: "deploy menu", kind: Kind::Full, rect: menu.rect(menu_pane(pane)), exempt: Vec::new() }];
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
 
 /// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
 /// `log` is `run/tui/widgets.log`.
@@ -138,14 +166,25 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 /// opens its menu, which takes every key and click until it closes.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
-    store: &mut Store,
-    mut follow: read::Follow,
+    reader: &Arc<Mutex<pace::Owned<read::Follow>>>,
     mut prs: Vec<OpenPr>,
     mut machine: Machine,
     mut sampler: Sampler,
     opener: &Opener,
+    poll_ms: u32,
 ) -> Result<(), ViewError> {
-    let (mut read_at, mut sampled_at) = (Instant::now(), Instant::now());
+    let pump = Pump::new(ratatui::crossterm::event::read);
+    let mut reads = Reads::<Read>::with_waker(pump.waker());
+    let watch = read::watch::Watch::start(opener.home.root(), pump.waker());
+    let (every, watch_failure) = match &watch {
+        Ok(_) => (pump::SAFETY, None),
+        Err(e) => (
+            Duration::from_millis(u64::from(poll_ms)),
+            Some(format!("no commit watcher: {}; polling every {poll_ms} ms", e.message())),
+        ),
+    };
+    let mut schedule = Schedule::new(Instant::now(), every);
+    let mut sampled_at = Instant::now();
     let mut last = None::<Drawn>;
     let mut error = None::<String>;
     let mut redraw = true;
@@ -154,8 +193,6 @@ fn show(
     let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
-    let open = read::open_pulls(store)?;
-    mark_merging(&mut prs, &crate::merge::marker::live(opener.home, &open));
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let frame = palette::frame(SystemTime::now());
@@ -163,25 +200,28 @@ fn show(
             terminal.draw(|f| {
                 pane = f.area();
                 last = Some(draw(f, pane, &prs, &machine, scroll, frame));
-                if let Some(error) = &error {
+                if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
-                    open.menu.draw_at(f, pane.inner(Margin::new(1, 0)), frame);
+                    open.menu.draw_at(f, menu_pane(pane), frame);
                 }
             })?;
             (redraw, drawn_frame) = (false, Some(frame));
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
-        if event::poll(tick(&prs))? {
+        let now = Instant::now();
+        let wall_ms = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.as_millis() as u64);
+        let until = pump::wake(now, wall_ms, &needs(&prs, sampled_at), schedule.deadline(now));
+        match pump.wait(until) {
+            Signal::Input(event) => {
             redraw = true; // a click, the wheel, a key or a resize
-            let event = event::read()?;
             if let Some(open) = menu.as_mut() {
                 // an open menu takes every key and click
                 let outcome = match &event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => open.menu.key(*key),
-                    Event::Mouse(m) => open.menu.mouse(pane.inner(Margin::new(1, 0)), *m),
+                    Event::Mouse(m) => open.menu.mouse(menu_pane(pane), *m),
                     _ => Outcome::Stay,
                 };
                 match outcome {
@@ -192,6 +232,7 @@ fn show(
                         if let (what, Err(e)) = pick(item, &row, opener) {
                             dialog::report(opener.tmux, opener.log, what, &e);
                         }
+                        schedule.force(); // a merge starts with no Event
                     }
                 }
             } else {
@@ -212,6 +253,7 @@ fn show(
                         if let Some((what, Err(e))) = result {
                             dialog::report(opener.tmux, opener.log, what, &e);
                         }
+                        schedule.force();
                     }
                     Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {
                         MouseEventKind::ScrollDown => scroll = (scroll + 1).min(drawn.max_scroll),
@@ -221,50 +263,64 @@ fn show(
                     _ => {}
                 }
             }
-        }
-        if read_at.elapsed() >= COALESCE {
-            let (retry, shown) = (error.is_some(), error.clone());
-            let read = (|| {
-                let moved = follow.poll_changes(store)?.any();
-                let prs = if moved || retry { Some(read::open_prs(store)?.0) } else { None };
-                Ok((prs, read::open_pulls(store)?))
-            })();
-            match kept(read, &mut error) {
-                Some((next, open)) => {
-                    // A merge starts and ends with no Event of the store: the markers are read on each snapshot.
-                    let mut next = next.unwrap_or_else(|| prs.clone());
-                    mark_merging(&mut next, &crate::merge::marker::live(opener.home, &open));
-                    if next != prs {
-                        prs = next;
-                        redraw = true;
-                    }
-                    read_at = Instant::now();
-                }
-                None => read_at = Instant::now(), // retried after the next COALESCE
             }
-            redraw |= error != shown;
+            Signal::Commit => schedule.commit(),
+            Signal::Read => {
+                while let Some(result) = reads.take() {
+                    schedule.done();
+                    let shown = error.clone();
+                    if let Some((next, live)) = kept(result, &mut error) {
+                        // A merge starts and ends with no Event of the store: the markers are read on each snapshot.
+                        let mut next = next.unwrap_or_else(|| prs.clone());
+                        mark_merging(&mut next, &live);
+                        if next != prs {
+                            prs = next;
+                            redraw = true;
+                        }
+                    }
+                    redraw |= error != shown;
+                }
+            }
+            Signal::InputFailed(e) => return Err(e.into()),
+            Signal::Due => {}
         }
+        let now = Instant::now();
         // The CPU share is over the time since the last sample, so it is taken on its own timer, not at each Event.
-        if sampled_at.elapsed() >= SAMPLE_EVERY {
+        if now >= sampled_at + SAMPLE_EVERY {
             let usage = sampler.sample();
-            sampled_at = Instant::now();
+            sampled_at = now;
             if usage != machine.usage {
                 machine.usage = usage;
                 redraw = true;
             }
         }
+        if let Some(kind) = schedule.take(now) {
+            let (shared, home, retry) = (Arc::clone(reader), opener.home.clone(), error.is_some());
+            reads.request(move || {
+                pace::Owned::read(&shared, |store, follow| {
+                    let moved = follow.poll_changes(store)?.any();
+                    let prs = if moved || kind.force || retry { Some(read::open_prs(store)?.0) } else { None };
+                    let open = read::open_pulls(store)?;
+                    Ok((prs, crate::merge::marker::live(&home, &open)))
+                })
+            });
+        }
     }
 }
 
-/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works or its merge runs, else [`TICK`].
-fn tick(prs: &[OpenPr]) -> Duration {
-    if spins(prs) { FRAME } else { TICK }
-}
+/// What a read of the reader thread returns: the snapshot when it was taken, and the pull requests with a live merge marker.
+type Read = Result<(Option<Vec<OpenPr>>, BTreeSet<String>), CpdError>;
 
 /// A shown PR's Lead is working, or its merge runs (a clean one, which shows the spinner in place of the merge icon): its
 /// spinner turns.
 fn spins(prs: &[OpenPr]) -> bool {
     prs.iter().any(|p| p.lead_working || (p.merging && p.clean))
+}
+
+/// The clocks the Dispatch column's screen needs: `frame` is `spins(prs)` (a shown PR's Lead works, or a clean PR's
+/// merge runs); `second` is false; `at` is always `Some(sampled_at + SAMPLE_EVERY)`.
+fn needs(prs: &[OpenPr], sampled_at: Instant) -> pump::Needs {
+    pump::Needs { frame: spins(prs), second: false, at: Some(sampled_at + SAMPLE_EVERY) }
 }
 
 /// Sets `merging` of each PR whose merge runs: `live` is the pull requests with a live merge marker (hs-d495).
@@ -454,24 +510,9 @@ mod tests {
             active: false,
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
+            plan_failed: false,
             merging: false,
         }
-    }
-
-    #[test]
-    fn the_view_redraws_every_spinner_frame_while_a_shown_pr_merges_too() {
-        let merging = read::OpenPr { clean: true, merging: true, ..pr(false) };
-        assert_eq!(tick(&[pr(false), merging.clone()]), FRAME, "the merge spinner turns");
-        assert!(spins(&[merging]));
-        assert_eq!(tick(&[pr(false)]), TICK);
-    }
-
-    #[test]
-    fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
-        assert_eq!(tick(&[]), TICK);
-        assert_eq!(tick(&[pr(false), pr(false)]), TICK);
-        assert_eq!(tick(&[pr(false), pr(true)]), FRAME);
-        assert_eq!(FRAME, Duration::from_millis(100), "one frame of `palette::frame`");
     }
 
     #[test]

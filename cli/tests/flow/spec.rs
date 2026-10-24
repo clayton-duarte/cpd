@@ -170,31 +170,28 @@ fn write_puts_the_spec_where_the_home_says_and_rewrites_it() {
     assert_eq!(fs::read_to_string(&path).unwrap(), FIRST);
 }
 
-fn worktree_with(wt_toml: Option<&str>) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    if let Some(text) = wt_toml {
-        fs::create_dir_all(dir.path().join(".config")).unwrap();
-        fs::write(dir.path().join(".config/wt.toml"), text).unwrap();
-    }
-    dir
+/// The `hooks.pre-commit` pipeline of the repo policy file text `file`.
+fn pre_commit_of(file: &str) -> Result<cpd_core::git::Pipeline, cpd_core::error::CpdError> {
+    let scope = cpd_core::policy::parse_scope(std::path::Path::new("pay.toml"), file)?;
+    Ok(scope.hooks.and_then(|h| h.pre_commit).unwrap_or_default())
 }
 
 #[test]
 fn the_quick_check_is_the_pre_commit_commands_verbatim_in_file_order() {
-    let dir = worktree_with(Some("pre-merge = \"make gate\"\n[pre-commit]\nlint = \"cargo clippy -- {{ branch }}\"\nbuild = \"cargo build\"\n"));
-    assert_eq!(spec::quick_check(dir.path()).unwrap(), ["cargo clippy -- {{ branch }}", "cargo build"]);
+    let pipeline = pre_commit_of("[hooks]\npre-merge = \"make gate\"\n[hooks.pre-commit]\nlint = \"cargo clippy -- {{ branch }}\"\nbuild = \"cargo build\"\n").unwrap();
+    assert_eq!(spec::quick_check(&pipeline), ["cargo clippy -- {{ branch }}", "cargo build"]);
 }
 
 #[test]
 fn no_pre_commit_table_means_no_quick_check_and_no_fallback_to_pre_merge() {
-    assert!(spec::quick_check(worktree_with(Some("pre-merge = \"make gate\"\n")).path()).unwrap().is_empty());
-    assert!(spec::quick_check(worktree_with(None).path()).unwrap().is_empty());
+    assert!(spec::quick_check(&pre_commit_of("[hooks]\npre-merge = \"make gate\"\n").unwrap()).is_empty());
+    assert!(spec::quick_check(&pre_commit_of("").unwrap()).is_empty());
 }
 
 #[test]
-fn a_malformed_wt_toml_is_hook_invalid() {
-    let err = spec::quick_check(worktree_with(Some("pre-commit = [1]\n")).path()).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::HookInvalid);
+fn a_malformed_pre_commit_is_policy_invalid() {
+    let err = pre_commit_of("[hooks]\npre-commit = [1]\n").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::PolicyInvalid);
 }
 
 #[test]
@@ -217,13 +214,11 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
 
 - Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
 - Commit your work. Uncommitted changes are refused at submit.
-- Before submitting, run the quick check yourself, from this worktree. It is the `pre-commit` hook of `.config/wt.toml`; its commands, verbatim:
+- Before submitting, run the quick check yourself, from this worktree. It is `hooks.pre-commit` of the repo's policy file; its commands, verbatim:
 
       cargo check --all-targets
 
 - Never edit the protected paths. A diff that touches one is refused. They are:
-  - `.config/wt.toml`
-  - `.config/cpd.toml`
   - `.cpd/`
 - Never ask the User anything. You have no conversation with them.
 - If continuing would require guessing, ask the Lead and wait for the answer. The command blocks until the Lead answers:
@@ -297,8 +292,6 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself. This repo defines no quick check.
 - Never edit the protected paths. A diff that touches one is refused. They are:
-  - `.config/wt.toml`
-  - `.config/cpd.toml`
   - `.cpd/`
   - `verify.sh`
   - `scripts/ci/`
@@ -488,7 +481,7 @@ fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_res
                 "- `gate_failed`:",
                 "- `gate_error`:",
                 "- `base_not_found`:",
-                "- `owner_unset`, `owner_unknown`, `policy_invalid`:",
+                "- `owner_unset`, `owner_unconfirmed`, `policy_invalid`:",
                 own,
             ],
         );

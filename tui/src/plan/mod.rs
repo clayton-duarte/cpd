@@ -6,8 +6,8 @@
 //! there is no top row and there are no tabs (switching Leads is the tree's).
 //!
 //! Data: one snapshot of the store ([`snapshot`]), then the Events, followed in this process from the snapshot's
-//! cursor (one `events` query every `events.poll_ms`, no subprocess); a snapshot is retaken at most every
-//! [`COALESCE`] after an Event that concerns the view.
+//! cursor (one `events` query per read, no subprocess); a snapshot is retaken at most every frame
+//! one read per frame after a commit signal (`crate::pump`) and an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
 //! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
@@ -37,12 +37,15 @@ use ratatui::widgets::Paragraph;
 use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
+use crate::box_widget::spacing;
 use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse};
 use super::pace::{self, Reads};
+use crate::pump::{Pump, Schedule, Signal, SAFETY};
+use crate::read::watch::Watch;
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
@@ -53,30 +56,16 @@ use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-/// A snapshot is retaken at most this often, whatever the Event rate (§17).
-const COALESCE: Duration = Duration::from_millis(500);
-
-/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it or a pull request row
-/// changed (`stale`: a conflict clears with no Event, `mergeable` changes silently, §17), never else.
-fn due(stale: bool, since: Duration) -> bool {
-    stale && since >= COALESCE
-}
-
 /// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
 /// and a running Attempt is not an Event.
 const PULSE_REFRESH: Duration = Duration::from_secs(60);
 
-/// Whether the Pulse snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (or the pane
-/// was resized), else after [`PULSE_REFRESH`].
-fn pulse_due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { PULSE_REFRESH }
-}
-
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
-/// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
-pub(crate) const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
+/// The blank space around the chart's canvas of boxes: the container's one column of box margin
+/// ([`spacing::MARGIN_X`]) each side and one row; Pulse and the message row keep `MARGIN`.
+pub(crate) const CHART_MARGIN: Margin = Margin::new(spacing::MARGIN_X, 1);
 
 /// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one while the Lead works,
 /// `needs_user.lead_working`).
@@ -129,6 +118,17 @@ impl Centre {
     }
 }
 
+/// The clocks the screen of `snap` needs, `taken` being when the snapshot was taken: `frame` is true when `snap.centre` is `Some`
+/// and its `spins()` holds, else false; `second` is false (the plan view shows no per-second clock: Pulse's ages are in minutes,
+/// refreshed by `at`); `at` is `Some(taken + PULSE_REFRESH)` when `snap.pulse` is `Some`, else `None`.
+fn needs(snap: &Snapshot, taken: Instant) -> crate::pump::Needs {
+    crate::pump::Needs {
+        frame: snap.centre.as_ref().is_some_and(Centre::spins),
+        second: false,
+        at: snap.pulse.as_ref().map(|_| taken + PULSE_REFRESH),
+    }
+}
+
 /// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
 /// Event id to follow from. At most one of `pulse` and `centre` is `Some`.
 struct Snapshot {
@@ -163,19 +163,44 @@ fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Re
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
 }
 
-/// What the reader thread brings back: the Events since the last poll, or a snapshot.
-enum Read {
-    Poll(Result<read::Changes, CpdError>),
-    Snapshot(Result<Snapshot, CpdError>),
+/// What the reader thread brings back from one read: the poll's outcome and, when the poll found a change that concerns the
+/// view (or the read was forced, or the last snapshot failed), the snapshot.
+struct Read {
+    poll: Result<(), CpdError>,
+    snapshot: Option<Result<Snapshot, CpdError>>,
+}
+
+/// The ids of what the pane shows, copied small for the reader thread ([`concerns`] without the `Snapshot`).
+#[derive(Clone, Default)]
+struct Watching {
+    plan: Option<String>,
+    context: Option<String>,
+    pulse: Option<String>,
+}
+
+impl Watching {
+    fn of(centre: Option<&Centre>, pulse: Option<&Pulse>) -> Watching {
+        Watching {
+            plan: centre.map(|c| c.plan.plan.as_str().to_owned()),
+            context: centre.map(|c| c.plan.context.as_str().to_owned()),
+            pulse: pulse.map(|p| p.context.as_str().to_owned()),
+        }
+    }
+
+    fn concerns(&self, event: &Event) -> bool {
+        let mine = |column: &Option<String>, id: &Option<String>| id.is_some() && column == id;
+        event.kind == "session-moved"
+            || mine(&event.plan, &self.plan)
+            || mine(&event.context, &self.context)
+            || mine(&event.context, &self.pulse)
+    }
 }
 
 /// Whether an Event changes what the pane shows: the Plan's or the Context's, or a move of a Lead (the chat slot may
 /// change); while Pulse shows, any Event of its Context.
+#[cfg(test)]
 fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bool {
-    let mine = |column: &Option<String>, id: &str| column.as_deref() == Some(id);
-    event.kind == "session-moved"
-        || centre.is_some_and(|c| mine(&event.plan, c.plan.plan.as_str()) || mine(&event.context, c.plan.context.as_str()))
-        || pulse.is_some_and(|p| mine(&event.context, p.context.as_str()))
+    Watching::of(centre, pulse).concerns(event)
 }
 
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
@@ -263,7 +288,7 @@ impl Ui {
         let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
         if let Some(text) = message(self.error.as_deref(), centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
-            // the pane's last row, indented like the chart's content at scroll (0, 0)
+            // the pane's last row, at column `MARGIN.horizontal` (2)
             f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
             window = chart_area;
         }
@@ -310,6 +335,11 @@ impl Offsets {
             serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
         self.saved = offsets.clone();
         Ok(offsets)
+    }
+
+    /// When a write that is due but held back by [`SAVE_EVERY`] can be made, if one is waiting.
+    fn due_at(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> Option<Instant> {
+        (*offsets != self.saved).then(|| self.written.map(|at| at + SAVE_EVERY)).flatten()
     }
 
     /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
@@ -418,71 +448,76 @@ fn show(
     for line in begin(&mut ui, &mut offsets, snap.centre.as_ref().map(|c| &c.plan.plan)) {
         write(&mut ui, &line);
     }
-    // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
-    // (runner::kept), the snapshot's error first
+    // a failed poll is made again at the next read, a failed snapshot likewise; both are shown (runner::kept), the
+    // snapshot's error first, then the watcher's (lasting)
     let (mut snapshot_error, mut follow_error) = (None, None);
-    let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
-    // the reads run on the reader thread (R4), one at a time: none is asked for while one is out
-    let mut reads = Reads::<Read>::new();
-    let mut reading = false;
+    let pump = Pump::new(event::read);
+    let (watch, watch_error) = match Watch::start(home.root(), pump.waker()) {
+        Ok(w) => (Some(w), None),
+        Err(e) => (None, Some(format!("no commit watcher: {}; polling every {} ms", e.message(), poll.as_millis()))),
+    };
+    let _watch = watch; // lives as long as the loop
+    let mut schedule = Schedule::new(Instant::now(), if watch_error.is_some() { poll } else { SAFETY });
+    if watch_error.is_some() {
+        ui.error = watch_error.clone();
+    }
+    let mut taken = Instant::now();
+    // the reads run on the reader thread (R4), one at a time: `schedule` asks for none while one is out
+    let mut reads = Reads::<Read>::with_waker(pump.waker());
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
     // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
     // from there ([`Actions::report`]), so the view only draws again
-    let mut worker = Background::<()>::new();
+    let mut worker = Background::<()>::with_waker(pump.waker());
     loop {
         while worker.finished().is_some() {
             redraw = true;
         }
         while let Some(done) = trace.read(|| reads.take()) {
-            reading = false;
+            schedule.done();
             let shown = ui.error.clone();
-            match done {
-                Read::Poll(polled) => {
-                    if let Some(changes) = kept(polled, &mut follow_error) {
-                        stale |= changes.pulls
-                            || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
+            kept(done.poll, &mut follow_error);
+            if let Some(result) = done.snapshot {
+                let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
+                let next = kept(result.map(|s| {
+                    trace.add_layout(s.layout);
+                    s
+                }), &mut snapshot_error);
+                if let Some(next) = next {
+                    redraw = true;
+                    *snap = next;
+                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
+                        ui.pulse_offset = 0;
                     }
-                    ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
-                    let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
-                    if due {
-                        let width = terminal.size().map_or(0, |s| s.width);
-                        let (timed, shared) = (trace.is_on(), Arc::clone(&reader));
-                        stale = false; // what comes while the snapshot is read (a resize) is seen by the next
-                        reading = true;
-                        reads.request(move || {
-                            Read::Snapshot(pace::Owned::read(&shared, |store, _| snapshot_timed(store, width, now_ms(), timed)))
-                        });
-                        taken = Instant::now();
-                    }
-                }
-                Read::Snapshot(taken_now) => {
-                    let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                    let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
-                    let next = kept(taken_now.map(|s| {
-                        trace.add_layout(s.layout);
-                        s
-                    }), &mut snapshot_error);
-                    stale |= snapshot_error.is_some();
-                    ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
-                    if let Some(next) = next {
-                        redraw = true;
-                        *snap = next;
-                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                        if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                            ui.pulse_offset = 0;
-                        }
-                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
-                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
-                            if let Err(e) = offsets.save(&ui.remembered, true) {
-                                ui.error = Some(e);
-                            }
+                    if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                        ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                            ui.error = Some(e);
                         }
                     }
-                    taken = Instant::now();
                 }
+                taken = Instant::now();
             }
+            ui.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| watch_error.clone());
             redraw |= ui.error != shown;
+        }
+        if let Some(kind) = schedule.take(Instant::now()) {
+            let width = terminal.size().map_or(0, |s| s.width);
+            let (timed, shared) = (trace.is_on(), Arc::clone(&reader));
+            let watching = Watching::of(snap.centre.as_ref(), snap.pulse.as_ref());
+            let retry = snapshot_error.is_some();
+            reads.request(move || {
+                let mut changed = false;
+                let polled = pace::Owned::read(&shared, |store, follow| follow.poll_changes(store));
+                let poll = polled.map(|changes| {
+                    changed = changes.pulls || changes.events.iter().any(|e| watching.concerns(e));
+                });
+                let snapshot = (changed || kind.force || retry)
+                    .then(|| pace::Owned::read(&shared, |store, _| snapshot_timed(store, width, now_ms(), timed)));
+                Read { poll, snapshot }
+            });
         }
         let frame = palette::frame(SystemTime::now());
         if let Some(c) = snap.centre.as_mut() {
@@ -511,23 +546,34 @@ fn show(
             }
             redraw = false;
         }
-        // wait for the next frame boundary of the clock (R3)
-        if !event::poll(pace::wait_now())? {
-            // idle: ask for Events, every `poll`
-            if fetched.elapsed() >= poll && !reading {
-                fetched = Instant::now();
-                let shared = Arc::clone(&reader);
-                reading = true;
-                reads.request(move || Read::Poll(pace::Owned::read(&shared, |store, follow| follow.poll_changes(store))));
+        // block until a signal, or the next clock the screen needs (R3)
+        let now = Instant::now();
+        let wall_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        // a scroll offset not yet saved (held back by SAVE_EVERY) wakes the loop when it may be written
+        let save_at = offsets.due_at(&ui.remembered);
+        let until = crate::pump::wake(now, wall_ms, &needs(snap, taken), [schedule.deadline(now), save_at].into_iter().flatten().min());
+        let input = match pump.wait(until) {
+            Signal::Input(input) => input,
+            Signal::InputFailed(e) => return Err(e.into()),
+            Signal::Commit => {
+                schedule.commit();
+                continue;
             }
-            continue;
-        }
+            Signal::Read => continue,
+            Signal::Due => {
+                if snap.pulse.is_some() && Instant::now() >= taken + PULSE_REFRESH {
+                    schedule.force(); // the window moves and the ages tick: not an Event
+                    taken = Instant::now();
+                }
+                continue;
+            }
+        };
         redraw = true; // a key, a click, a resize
         let mut open = None::<String>;
         let mut unselect = None::<String>; // the Job whose Worker pane closes
         let mut lead = None::<SessionId>; // the Lead a click on a Pulse row opens
-        match event::read()? {
-            Input::Resize(..) => stale = true, // the bucket count changes
+        match input {
+            Input::Resize(..) => schedule.force(), // the bucket count changes
             Input::Mouse(m) if snap.pulse.is_some() => {
                 let Some(pulse) = snap.pulse.as_ref() else { continue };
                 let height = usize::from(ui.body.height);
@@ -615,8 +661,119 @@ fn show(
     }
 }
 
+/// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
+#[cfg(test)]
+fn sample_pr(key: &str) -> read::PrNode {
+    read::PrNode {
+        key: cpd_core::ids::PrKey::parse(key).unwrap(),
+        repo_name: format!("{key}-repo"),
+        base: "main".into(),
+        status: read::PrStatus::Dispatch,
+        needs: Vec::new(),
+        pull: None,
+        waiting_on: Vec::new(),
+        superseded_by: None,
+    }
+}
+
+/// A queued Job `key` of PR `pr`, of Tier S1, with no needs.
+#[cfg(test)]
+fn sample_job(pr: &str, key: &str) -> read::JobNode {
+    read::JobNode {
+        key: cpd_core::ids::JobKey::parse(key).unwrap(),
+        pr: cpd_core::ids::PrKey::parse(pr).unwrap(),
+        seq: 0,
+        title: String::new(),
+        status: read::JobStatus::Queued,
+        tier: Some(cpd_core::config::Tier::parse("S1").unwrap()),
+        needs: Vec::new(),
+        appended: false,
+        retry_tier: None,
+        failed_cause: None,
+        cancel_reason: None,
+        merged_sha: None,
+        waiting_on: Vec::new(),
+        attempts: Vec::new(),
+    }
+}
+
+/// What the view reads for a Plan of `prs` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
+#[cfg(test)]
+fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
+    let needs_user = read::NeedsUser::default();
+    let boxes = boxes::layout(&prs, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
+    let plan = PlanBoxes {
+        plan: PlanId::parse("p1").unwrap(),
+        context: cpd_core::ids::ContextId::parse("ctx").unwrap(),
+        prs,
+        jobs,
+        needs_user,
+        events_cursor: 0,
+    };
+    let slot = ChatSlot { session: SessionId::parse("lead").unwrap(), name: "n".into(), plan: plan.plan.clone(), moved_event: 1 };
+    Centre { slot, plan, boxes, frame: 0 }
+}
+
+/// The layout test's sample (`layout_tests`): the Plan view drawn by [`Ui::draw`] into a `width` x `height` pane at a
+/// scroll offset. Placed is one box per PR, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
+/// offset the draw clamped to, kept to the chart's window: the canvas does not expose the boxes' rects, so each is read off
+/// the canvas by its corners (`╭` to the next `╮` on its row, `╭` to the next `╰` down its column). A box the window
+/// clips is `Rule::Clipped`.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::PlanCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Exempt, Kind, PlanCase, Placed, Rule, Sample, Scroll};
+    use ratatui::backend::TestBackend;
+    let (scroll, prs, jobs) = match case {
+        PlanCase::Empty(scroll) => (scroll, vec![sample_pr("api")], Vec::new()),
+        PlanCase::Three(scroll) => (
+            scroll,
+            vec![sample_pr("api"), sample_pr("web")],
+            vec![sample_job("api", "api-1"), sample_job("api", "api-2"), sample_job("web", "web-1")],
+        ),
+    };
+    let expected = prs.len();
+    let centre = sample_centre(prs, jobs);
+    let canvas = &centre.boxes.chart.buf;
+    let mut ui = Ui::default();
+    if scroll == Scroll::Middle {
+        ui.scroll = (canvas.area.width / 2, canvas.area.height / 2);
+    }
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui.draw(f, Some(&centre))).unwrap();
+    let window = ui.body;
+    let (ox, oy) = ui.scroll;
+    let mut boxes = Vec::new();
+    for y in 0..canvas.area.height {
+        for x in 0..canvas.area.width {
+            if canvas[(x, y)].symbol() != "╭" {
+                continue;
+            }
+            let right = (x + 1..canvas.area.width).find(|&x2| canvas[(x2, y)].symbol() == "╮");
+            let bottom = (y + 1..canvas.area.height).find(|&y2| canvas[(x, y2)].symbol() == "╰");
+            let (Some(right), Some(bottom)) = (right, bottom) else { continue };
+            let whole = Rect::new(x, y, right - x + 1, bottom - y + 1);
+            let view = Rect::new(ox, oy, window.width, window.height);
+            let seen = view.intersection(whole);
+            let rect = Rect::new(window.x + seen.x.saturating_sub(ox), window.y + seen.y.saturating_sub(oy), seen.width, seen.height);
+            let exempt = if seen == whole {
+                Vec::new()
+            } else {
+                vec![Exempt { name: "the pane clips the box: the canvas scrolls", row: rect.y, rule: Rule::Clipped }]
+            };
+            boxes.push(Placed { name: "pr box", kind: Kind::FullText, rect, exempt });
+        }
+    }
+    assert_eq!(boxes.len(), expected, "one box per PR on the canvas\n{}", crate::layout_tests::dump(canvas));
+    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+}
+
+#[cfg(test)]
+mod box_tests;
+
 #[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+mod needs_tests;
 
 #[cfg(test)]
 mod tests {
@@ -631,11 +788,36 @@ mod tests {
 
 
     #[test]
-    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_and_never_else() {
-        let ms = Duration::from_millis;
-        assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
-        assert!(!due(false, ms(2000)), "nothing changed: no snapshot (tui-F3)");
-        assert!(!due(false, Duration::from_secs(60)));
+    fn a_read_is_taken_for_a_commit_at_most_once_per_frame_and_for_no_change_only_on_the_safety_time() {
+        use crate::pump::{FRAME, SAFETY, Schedule};
+        let t0 = Instant::now();
+        let mut s = Schedule::new(t0, SAFETY);
+        assert!(s.take(t0 + FRAME).is_none(), "no change: no read");
+        s.commit();
+        assert!(s.take(t0 + FRAME).is_some(), "a commit: one read");
+        s.done();
+        s.commit();
+        assert!(s.take(t0 + FRAME + FRAME / 2).is_none(), "a second commit in the same frame waits");
+        assert!(s.take(t0 + FRAME * 2).is_some());
+    }
+
+    #[test]
+    fn the_watching_ids_say_which_events_concern_the_view() {
+        let w = Watching { plan: Some("p".into()), context: Some("c".into()), pulse: None };
+        let event = |kind: &str, plan: &str| Event {
+            id: 1,
+            at: String::new(),
+            kind: kind.into(),
+            context: None,
+            plan: Some(plan.into()),
+            job: None,
+            attempt: None,
+            session: None,
+            text: String::new(),
+            data: serde_json::Value::Null,
+        };
+        assert!(w.concerns(&event("job-merged", "p")) && !w.concerns(&event("job-merged", "q")));
+        assert!(w.concerns(&event("session-moved", "q")));
     }
 
     const PANE: (u16, u16) = (40, 10);
@@ -932,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pulse_re_reads_on_its_contexts_events_every_minute_and_on_resize() {
+    fn the_pulse_re_reads_on_its_contexts_events() {
         let event = |kind: &str, context: &str| Event {
             id: 1,
             at: "2026-01-01T00:00:00.000Z".into(),
@@ -949,9 +1131,6 @@ mod tests {
         assert!(concerns(&event("job-merged", "ctx"), None, Some(&pulse)));
         assert!(!concerns(&event("job-merged", "other"), None, Some(&pulse)));
         assert!(concerns(&event("session-moved", "other"), None, Some(&pulse)));
-        let ms = Duration::from_millis;
-        assert!(pulse_due(true, ms(500)) && !pulse_due(true, ms(499)));
-        assert!(!pulse_due(false, Duration::from_secs(59)) && pulse_due(false, Duration::from_secs(60)));
     }
 
     fn fixture(store: &mut Store, sql: &str) {

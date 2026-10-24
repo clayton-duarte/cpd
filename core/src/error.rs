@@ -100,8 +100,12 @@ error_codes! {
     TitleFailed = "title_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
-    OwnerUnknown = "owner_unknown" => Failure,
+    OwnerUnconfirmed = "owner_unconfirmed" => Failure,
+    FallbackMissing = "fallback_missing" => Failure,
     RepoUnkeyed = "repo_unkeyed" => Failure,
+    // Secrets (contract §8.4).
+    SecretOpMissing = "secret_op_missing" => Failure,
+    SecretOpFailed = "secret_op_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -201,7 +205,14 @@ error_codes! {
     MergeNotClean = "merge_not_clean" => Refused,
     OwnerMismatch = "owner_mismatch" => Refused,
     OwnerUnset = "owner_unset" => Refused,
-    OwnerSet = "owner_set" => Refused,
+    SecretSessionRequired = "secret_session_required" => Refused,
+    SecretRoleDenied = "secret_role_denied" => Refused,
+    SecretVaultDenied = "secret_vault_denied" => Refused,
+    SecretGrantRequired = "secret_grant_required" => Refused,
+    SecretAttemptEnded = "secret_attempt_ended" => Refused,
+    SecretExists = "secret_exists" => Refused,
+    SecretNotSignedIn = "secret_not_signed_in" => Refused,
+    OwnerInUse = "owner_in_use" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -212,6 +223,7 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     TopicNotFound = "topic_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
+    SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
 
@@ -242,6 +254,7 @@ error_codes! {
     ShapeViolation = "shape_violation" => Refused,
     ShapeIncomplete = "shape_incomplete" => Refused,
     TestsUnconfigured = "tests_unconfigured" => Refused,
+    RepoUnconfigured = "repo_unconfigured" => Refused,
     TestFilesMissing = "test_files_missing" => Refused,
     TestsBuildFailed = "tests_build_failed" => Refused,
     TestsNotRed = "tests_not_red" => Refused,
@@ -462,11 +475,13 @@ mod tests {
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
             (ErrorCode::PolicyInvalid, 1),
-            (ErrorCode::OwnerUnknown, 1),
+            (ErrorCode::OwnerUnconfirmed, 1),
+            (ErrorCode::FallbackMissing, 1),
             (ErrorCode::RepoUnkeyed, 1),
             (ErrorCode::OwnerMismatch, 3),
             (ErrorCode::OwnerUnset, 3),
-            (ErrorCode::OwnerSet, 3),
+            (ErrorCode::RepoUnconfigured, 3),
+            (ErrorCode::OwnerInUse, 3),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");
