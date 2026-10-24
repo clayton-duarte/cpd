@@ -453,10 +453,12 @@ fn add_keys_the_repo_before_anything_is_written() {
     fx.env.sql("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'");
     let writes = fx.writes();
 
-    // repo_unkeyed (exit 1): no origin (url null), a local path, another host, an SSH alias.
+    // No origin: the repo is clayton-duarte's, so another owner's Context is owner_mismatch.
     fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
-    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
-    assert_eq!(error["details"]["url"], Value::Null);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
+    assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("clayton-duarte")));
+
+    // repo_unkeyed (exit 1): a local path, another host, an SSH alias.
     for url in ["/tmp/somewhere/pay.git", "https://gitlab.com/acme/pay.git", "git@github-work:acme/pay.git"] {
         fx.env.git(&fx.pay, &["remote", "add", "origin", url]);
         let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
@@ -469,10 +471,10 @@ fn add_keys_the_repo_before_anything_is_written() {
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
     assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("other")));
 
-    // owner_unknown (exit 1): the Context's owner has no policy file.
+    // owner_unconfirmed (exit 1): the Context's owner has no policy file.
     fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
     fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
-    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unknown", 1, writes);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unconfirmed", 1, writes);
     assert_eq!(error["details"]["owner"], "acme");
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
 

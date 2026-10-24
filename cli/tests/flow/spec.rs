@@ -481,7 +481,7 @@ fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_res
                 "- `gate_failed`:",
                 "- `gate_error`:",
                 "- `base_not_found`:",
-                "- `owner_unset`, `owner_unknown`, `policy_invalid`:",
+                "- `owner_unset`, `owner_unconfirmed`, `policy_invalid`:",
                 own,
             ],
         );

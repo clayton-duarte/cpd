@@ -222,12 +222,13 @@ cpd context new <id> --title <text> --owner <login> [--jira <key>]
 | `<id>` | Context id (§2.1) |
 | `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--owner <login>` | required: the GitHub owner (user or organisation) of every repo the Context's Plans work on, its policy key (contract §8.3, hs-d288); a login of contract §2.1, else `usage`; stored lowercased |
+| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 | `--jira <key>` | Jira Epic key, stored only (`^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml` (contract §8.3; an empty file is the default policy); `details.owner` | `owner_unknown` | 1 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects:
@@ -549,6 +550,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | Flag | Meaning |
 |---|---|
 | `<login>` | the owner, a login of contract §2.1, else `usage`; stored lowercased |
+| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -556,7 +558,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | the Context exists | `context_not_found` | 4 |
 | the same owner again (no write, no Event) | `already` | 0 |
 | the Context has an owner other than this one and a PR row exists; details: `context`, `owner` (the current owner), `prs` (the PR rows as `<plan>/<key>`, sorted) | `owner_in_use` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`, else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 An archived Context is not refused: changing its owner changes no work.
@@ -1500,7 +1502,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kind `open`) the PR has a stored title; the newest pull request of the Lead Branch is not closed without a merge (`details.number`, `details.url`) | `pr_title_required`; `pr_closed` | 3 |
 | (kind `update`) the PR is `open` | `illegal_transition` | 3 |
 | (kinds `open`, `update`) the PR's policy resolves (contract §8.3): its Context has an owner | `owner_unset` | 3 |
-| its owner has a policy file; its policy files are valid | `owner_unknown`, `policy_invalid` | 1 |
+| its owner has a policy file; its policy files are valid | `owner_unconfirmed`, `policy_invalid` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
 | (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
@@ -1664,7 +1666,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`: a merged one was unstacked first, below): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
 | after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `pr.gate` `ci` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
-| its owner has a policy file | `owner_unknown` | 1 |
+| its owner has a policy file | `owner_unconfirmed` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | its policy files are valid | `policy_invalid` | 1 |
 | the gate worktree's `pre-start` passes (§7.6 "The Gate on a snapshot"); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
@@ -1780,7 +1782,7 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required fo
 | guard U: an Attempt of the PR whose compare-and-swap is in the snapshot and whose driver lives ends within 60 s; `details.attempt` names it; rerun | `cas_lost` | 3 |
 | the Lead Branch's compare-and-swap succeeds within 3 tries (merges kept moving it) | `cas_lost` | 3 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
-| its owner has a policy file | `owner_unknown` | 1 |
+| its owner has a policy file | `owner_unconfirmed` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | its policy files are valid | `policy_invalid` | 1 |
 | the gate worktree's `pre-start` passes; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
@@ -1813,7 +1815,7 @@ Finishes the stopped rebase, then the Gate and the lease push of `pr rebase`. Or
 |---|---|---|
 | `--continue` and `--abort` together | `usage` | 2 |
 | the PR is `open`, before the Gate and again after it | `illegal_transition` | 3 |
-| the PR's policy resolves (§8.3): `owner_unset` (3), `owner_unknown` (1), `repo_unconfigured` (3), `policy_invalid` (1), as above | as listed | |
+| the PR's policy resolves (§8.3): `owner_unset` (3), `owner_unconfirmed` (1), `repo_unconfigured` (3), `policy_invalid` (1), as above | as listed | |
 | a rebase is in progress in the Lead worktree | `no_rebase_in_progress` | 3 |
 | no conflict marker remains: no unmerged path, no `<<<<<<<` / `=======` / `>>>>>>>` line at column 0 in a changed file; `details.files` lists the paths, `details.next` the same command | `rebase_conflict` | 3 |
 | the Lead Branch is still at the tip the rebase started from (a merge landed during the stop otherwise); `details.reason` `lead_branch_moved`, `details.tip`; the Lead runs `--abort`, then `pr rebase` | `cas_lost` | 3 |
@@ -1855,7 +1857,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | the Plan's Context has an owner (contract §8.3); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the repo is keyed from its `origin` (below); `details.url` (null when there is no `origin`) | `repo_unkeyed` | 1 |
 | the repo's owner is the Context's; `details.owner` (the Context's), `details.repo_owner` | `owner_mismatch` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unknown` | 1 |
+| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unconfirmed` | 1 |
 | the repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | the owner's and the repo's policy files are valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 | `--base` is a branch: it exists, `refs/remotes/origin/<base>`, or `refs/heads/<base>` when the repo has no `origin` | `base_not_found` | 4 |
@@ -2055,7 +2057,7 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 | the PR is `open`, before the Gate and again after it (merged during the Gate: nothing pushed) | `illegal_transition` | 3 |
 | the gate worktree's `pre-start` passes; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
-| its owner has a policy file | `owner_unknown` | 1 |
+| its owner has a policy file | `owner_unconfirmed` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | its policy files are valid | `policy_invalid` | 1 |
 | the Gate passes (§7.3, as `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-merge.log` | `gate_failed` | 3 |
@@ -3772,7 +3774,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 **The kinds that have checks** (hs-d340, hs-d341; contract §2.2 "Job kinds", §7.7) differ from the table in these rows; a `docs` Job and a `work` Job have no row of their own.
 - **`test`**: *Who you are* says it writes red tests for the Job's named tests and that another Worker implements them later. *Rules* add: write the named tests, in the files of `test_files`, from the docs alone; add stubs (empty or panicking implementations) so that the branch builds; do not implement; the submit builds the branch and runs the tests, which must fail. *Job* gets a subsection **Tests** that lists `tests` and `test_files`. *Finish* adds the refusals `test_files_missing`, `tests_unconfigured` (the repo's policy has no `[test-commands]`: ask the Lead), `tests_build_failed` (the stubs do not make it build), `tests_not_found` (a named test does not exist: fix the name or write the test), `tests_not_red` (a named test passes: make it fail for the right reason, for example against the stub) and `tests_error` (the check could not run: ask the Lead).
 - **`impl`**: *Who you are* names the `test` Jobs it builds on. *Rules* add: make the listed tests pass (the union of those Jobs' `tests`, derived); never change a guarded file (the `test_files` of those Jobs, listed; the paths the Lead approved are listed apart, read when the Spec is rendered); a test that is wrong is a question (`cpd ask`), not an edit; the submit builds the branch and runs the tests, which must pass. *Job* gets the same **Tests** subsection: the derived tests and the guarded files. *Finish* adds `tests_unconfigured`, `tests_build_failed`, `tests_not_found` (ask the Lead), `tests_failed`, `tests_tampered` (revert the guarded paths, or ask) and `tests_error`.
-- **`open`** and **`update`**: *Who you are* says it brings the PR's Lead Branch up to date with `<base>`, and that cpd runs the Gate, pushes and opens the pull request itself. *Rules* replace "commit your work" with: `git fetch origin <base>`, then, **only if the Lead Branch conflicts with it** (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1; a base that merely moved is no reason, hs-d490), `git merge --no-edit origin/<base>` in the worktree; resolve every conflict keeping both sides' intent; commit the merge and the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration); run the quick check; submit, also when there was nothing to merge (an `update` Job queued by a feedback fix has the fix Jobs on the Lead Branch already and, with no conflict, merges nothing). It does not push, does not run `gh`, does not run the Gate and does not touch the pull request. *Job* is cpd's fixed text for the kind. *Finish* adds `base_conflict` (the head conflicts with the base: merge the base, resolve, commit), `lead_branch_moved` (merge the Lead Branch), `pr_title_required` and `pr_closed` (`open` only: ask the Lead), `illegal_transition` (`update` only: the PR is not open, ask the Lead), `base_not_found`, `gate_failed` (the tail is in `details`: fix it, commit, submit again), `gate_error` (ask the Lead) and the policy codes (`owner_unset`, `owner_unknown`, `policy_invalid`: ask the Lead), and drops `no_commits`. The *Rules* row also says the Worker does not push, run `gh`, run the Gate or touch the pull request. The rows of the Spec for a kind are rendered from the Job's kind and its stored facts (`tests`, `test_files`, the guard of an `impl` Job, `test_approved`), as the Spec is rendered (A3); a `work` or `docs` Job's Spec is unchanged except that *Rules* name the PR's `open` Job, not `pr open`, as the place of the full suite.
+- **`open`** and **`update`**: *Who you are* says it brings the PR's Lead Branch up to date with `<base>`, and that cpd runs the Gate, pushes and opens the pull request itself. *Rules* replace "commit your work" with: `git fetch origin <base>`, then, **only if the Lead Branch conflicts with it** (`git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1; a base that merely moved is no reason, hs-d490), `git merge --no-edit origin/<base>` in the worktree; resolve every conflict keeping both sides' intent; commit the merge and the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration); run the quick check; submit, also when there was nothing to merge (an `update` Job queued by a feedback fix has the fix Jobs on the Lead Branch already and, with no conflict, merges nothing). It does not push, does not run `gh`, does not run the Gate and does not touch the pull request. *Job* is cpd's fixed text for the kind. *Finish* adds `base_conflict` (the head conflicts with the base: merge the base, resolve, commit), `lead_branch_moved` (merge the Lead Branch), `pr_title_required` and `pr_closed` (`open` only: ask the Lead), `illegal_transition` (`update` only: the PR is not open, ask the Lead), `base_not_found`, `gate_failed` (the tail is in `details`: fix it, commit, submit again), `gate_error` (ask the Lead) and the policy codes (`owner_unset`, `owner_unconfirmed`, `policy_invalid`: ask the Lead), and drops `no_commits`. The *Rules* row also says the Worker does not push, run `gh`, run the Gate or touch the pull request. The rows of the Spec for a kind are rendered from the Job's kind and its stored facts (`tests`, `test_files`, the guard of an `impl` Job, `test_approved`), as the Spec is rendered (A3); a `work` or `docs` Job's Spec is unchanged except that *Rules* name the PR's `open` Job, not `pr open`, as the place of the full suite.
 
 The Worker is started as §6.5 says, with the first message `Read <spec path> and follow it exactly. Your attempt id is <attempt>.` and `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` in its environment, and `PATH` with `$CPD_HOME/bin` first, where the `git` wrapper refuses `git stash` (contract §6.5, hs-d310).
 
@@ -4174,7 +4176,7 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | with no flag, a Session was selected | `session_required` | 2 |
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
 | the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
-| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unknown` | 1 |
+| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
 | a `Repo` key's file `repos/<owner>/<name>.toml` exists (after the owner check; never for an `Owner` key); the message names the file to create and says an empty file means nothing to configure; `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 

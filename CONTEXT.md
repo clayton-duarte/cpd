@@ -272,3 +272,11 @@ _Avoid_: scope, selector, context
 **Resolved policy** (changed, hs-d9, hs-d12):
 The Policy of one Policy key: every Domain's value with its source (`default`, `machine:<path>`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
 _Avoid_: effective config, merged policy
+
+**Known owner** (new, hs-d288):
+An owner with an `owners/<owner>.toml` file in `$CPD_HOME/policy/` (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback` on `context new --owner <login>` or `context owner <login>`. Confirming creates `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml`. Deleting the link revokes the confirmation.
+_Avoid_: registered, available
+
+**Fallback** (new, hs-d288):
+The owner whose policy is used when an unknown owner is confirmed: `clayton-duarte` on this instance. When confirming an unknown owner, `--confirm-fallback` creates a symlink to the fallback owner's policy file; if the fallback file does not exist, the command fails with `fallback_missing`.
+_Avoid_: default owner, default policy

@@ -46,7 +46,7 @@ const RETRY: Duration = Duration::from_millis(100);
 /// A pull request an `open` PR of a Plan points to.
 type Owned = (PlanId, PrKey, pulls::PullRequest);
 
-/// An owned PR whose policy did not resolve (`owner_unset`, `owner_unknown`, `policy_invalid`).
+/// An owned PR whose policy did not resolve (`owner_unset`, `owner_unconfirmed`, `policy_invalid`).
 struct Unresolved {
     plan: PlanId,
     pr: PrKey,

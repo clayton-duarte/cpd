@@ -1804,7 +1804,7 @@ mod tests {
         assert!(matches!(ask, Ask::NewContext { taken, owners } if taken == &["alpha", "beta", "gamma"] && owners == &["clayton-duarte"]), "{ask:?}");
         assert_eq!(
             answered(question.clone(), Some("Building cpd!")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
         // a taken id (also of an archived Context) gets `-2`, then `-3`
@@ -1812,11 +1812,11 @@ mod tests {
         let question = popup_at(&mut view, 8, 18, 0);
         assert_eq!(
             answered(question.clone(), Some("Alpha")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         assert_eq!(
             answered(question.clone(), Some("zeta")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         // a title that no id is made of is refused, with its reason
         assert!(answered(question, Some("2024")).unwrap_err().starts_with("A title needs at least two letters"));

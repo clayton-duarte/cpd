@@ -45,6 +45,9 @@ mod fixing_tests;
 #[cfg(test)]
 mod new_context_tests;
 #[cfg(test)]
+#[path = "another_owner_tests.rs"]
+mod another_owner_tests;
+#[cfg(test)]
 mod counter_tests;
 mod menu;
 mod rows;

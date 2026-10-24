@@ -84,13 +84,55 @@ impl Resolved {
     }
 }
 
-/// `owner_unknown` (exit 1): the key's owner has no `owners/<owner>.toml`.
-pub fn owner_unknown(owner: &OwnerLogin) -> CpdError {
+/// The owner whose policy an unknown owner falls back to, once the User confirms (contract §8.3).
+pub const FALLBACK_OWNER: &str = "clayton-duarte";
+
+/// The flag that confirms the fallback.
+const CONFIRM_FLAG: &str = "--confirm-fallback";
+
+/// `owner_unconfirmed` (exit 1): the key's owner has no `owners/<owner>.toml` (a file or a link that resolves).
+pub fn owner_unconfirmed(home: &crate::home::CpdHome, owner: &OwnerLogin) -> CpdError {
+    let file = resolve::owner_file(home, owner);
     CpdError::new(
-        ErrorCode::OwnerUnknown,
-        format!("The owner {owner} has no policy file: create policy/owners/{owner}.toml (empty means cpd's default)."),
+        ErrorCode::OwnerUnconfirmed,
+        format!(
+            "The owner {owner} has no policy file ({}). Warn the User and ask: if they confirm, repeat with {CONFIRM_FLAG} to use {FALLBACK_OWNER}'s policy for {owner}.",
+            file.display()
+        ),
     )
     .with("owner", owner.as_str())
+    .with("file", file.display().to_string())
+    .with("fallback", FALLBACK_OWNER)
+    .with("flag", CONFIRM_FLAG)
+}
+
+/// Confirms the fallback for `owner`: links `owners/<owner>.toml` to `clayton-duarte.toml` (relative,
+/// atomic: made under a temporary name, then renamed over a dangling link). A known owner changes nothing;
+/// a missing `clayton-duarte.toml` is `fallback_missing`.
+pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Result<(), CpdError> {
+    let file = resolve::owner_file(home, owner);
+    if std::fs::metadata(&file).is_ok() {
+        return Ok(());
+    }
+    let dir = resolve::owners_dir(home);
+    let target = format!("{FALLBACK_OWNER}.toml");
+    if std::fs::metadata(dir.join(&target)).is_err() {
+        return Err(CpdError::new(
+            ErrorCode::FallbackMissing,
+            format!("The fallback owner's policy file {} does not exist: nothing was created.", dir.join(&target).display()),
+        )
+        .with("file", dir.join(&target).display().to_string()));
+    }
+    let tmp = dir.join(format!(".{owner}.toml.tmp"));
+    let io = |e: std::io::Error| {
+        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot link {}: {e}.", file.display())).with("file", file.display().to_string())
+    };
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(&target, &tmp).map_err(io)?;
+    std::fs::rename(&tmp, &file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(e)
+    })
 }
 
 /// `repo_unconfigured` (exit 3): the repo has no `repos/<owner>/<name>.toml` (`file`); an empty one is valid.
@@ -231,7 +273,7 @@ mod tests {
     fn a_repo_without_a_file_is_repo_unconfigured_after_the_owner_check() {
         let (_d, home) = home();
         let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnknown, "the owner is checked first");
+        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
         write(&home, "owners/acme.toml", "");
         let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
         assert_eq!((err.code(), err.exit().code()), (ErrorCode::RepoUnconfigured, 3));
@@ -248,9 +290,9 @@ mod tests {
         let r = resolve_lenient(&home, &host(), &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.pr.gate, Gate::Local);
         assert!(matches!(r.sources.get(Domain::Pr).source, Source::Owner(_)));
-        // A missing owner file is still `owner_unknown`.
+        // A missing owner file is still `owner_unconfirmed`.
         let err = resolve_lenient(&home, &host(), &repo_key("nobody", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnknown);
+        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
     }
 
     #[test]
@@ -353,15 +395,17 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_owner_file_is_owner_unknown_even_with_a_repo_file() {
+    fn a_missing_owner_file_is_owner_unconfirmed_even_with_a_repo_file() {
         let (_d, home) = home();
         write(&home, "repos/acme/cpd.toml", "");
         for key in [PolicyKey::Owner(owner("acme")), repo_key("acme", "cpd")] {
             let err = resolve(&home, &host(), &key).unwrap_err();
-            assert_eq!(err.code(), ErrorCode::OwnerUnknown);
+            assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
             assert_eq!(err.exit().code(), 1);
             assert_eq!(err.details()["owner"], "acme");
-            assert_eq!(err.details().len(), 1);
+            assert_eq!(err.details().len(), 4);
+            assert_eq!(err.details()["fallback"], "clayton-duarte");
+            assert_eq!(err.details()["flag"], "--confirm-fallback");
         }
     }
 
@@ -404,7 +448,7 @@ mod tests {
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(Path::new("/nonexistent/acme.toml"), &link).unwrap();
         let err = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnknown);
+        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
     }
 
     #[test]
