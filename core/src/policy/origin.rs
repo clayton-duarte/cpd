@@ -101,19 +101,23 @@ mod tests {
 
     #[test]
     fn repo_key_reads_origin_and_refuses_with_the_url() {
-        let dir = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("my-repo");
+        std::fs::create_dir(&dir).unwrap();
         let git = |args: &[&str]| {
-            let st = std::process::Command::new("git").arg("-C").arg(dir.path()).args(args).status().unwrap();
+            let st = std::process::Command::new("git").arg("-C").arg(&dir).args(args).status().unwrap();
             assert!(st.success());
         };
         git(&["init", "-q"]);
-        let none = repo_key(dir.path()).unwrap_err();
-        assert_eq!((none.code(), none.exit().code()), (ErrorCode::RepoUnkeyed, 1));
-        assert_eq!(none.details()["url"], serde_json::Value::Null);
+        // No origin: clayton-duarte's, named by the directory.
+        let (o, n) = repo_key(&dir).unwrap();
+        assert_eq!((o.as_str(), n.as_str()), ("clayton-duarte", "my-repo"));
         git(&["remote", "add", "origin", "git@github-work:acme/x.git"]);
-        assert_eq!(repo_key(dir.path()).unwrap_err().details()["url"], "git@github-work:acme/x.git");
+        let bad = repo_key(&dir).unwrap_err();
+        assert_eq!((bad.code(), bad.exit().code()), (ErrorCode::RepoUnkeyed, 1));
+        assert_eq!(bad.details()["url"], "git@github-work:acme/x.git");
         git(&["remote", "set-url", "origin", "git@github.com:Acme/X.git"]);
-        let (o, n) = repo_key(dir.path()).unwrap();
+        let (o, n) = repo_key(&dir).unwrap();
         assert_eq!((o.as_str(), n.as_str()), ("acme", "x"));
     }
 }

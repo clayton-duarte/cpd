@@ -349,7 +349,9 @@ mod tests {
             assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
             assert_eq!(err.exit().code(), 1);
             assert_eq!(err.details()["owner"], "acme");
-            assert_eq!(err.details().len(), 1);
+            assert_eq!(err.details().len(), 4);
+            assert_eq!(err.details()["fallback"], "clayton-duarte");
+            assert_eq!(err.details()["flag"], "--confirm-fallback");
         }
     }
 
