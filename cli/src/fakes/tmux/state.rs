@@ -22,6 +22,13 @@ CREATE TABLE IF NOT EXISTS options (
     scope TEXT NOT NULL, owner INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (scope, owner, key));
 CREATE TABLE IF NOT EXISTS env (
     scope TEXT NOT NULL, owner INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY (scope, owner, key));
+CREATE TABLE IF NOT EXISTS hooks (name TEXT PRIMARY KEY, cmd TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bindings (key TEXT PRIMARY KEY, tbl TEXT NOT NULL, cmd TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS buffers (name TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS keys (seq INTEGER PRIMARY KEY AUTOINCREMENT, pane INTEGER NOT NULL, keys TEXT NOT NULL, literal INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS screens (pane INTEGER PRIMARY KEY, text TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS calls (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, argv TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS clients (seq INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, session INTEGER NOT NULL);
 ";
 
 /// Next id of a kind (`session`, `window`, `pane`).
@@ -142,25 +149,35 @@ impl State {
             .map(|r| r.expect("row"))
             .collect()
     }
-    /// The hooks set with `set-hook -g`: (name, command), in the order set. Stub.
+    /// The hooks set with `set-hook -g`: (name, command), in the order set.
     pub fn hooks(&self) -> Vec<(String, String)> {
-        let _ = &self.db;
-        Vec::new()
+        pairs(&self.db, "SELECT name, cmd FROM hooks ORDER BY rowid", [])
     }
-    /// The `send-keys` log, in call order. Stub.
+    /// The `send-keys` log, in call order.
     pub fn keys(&self) -> Vec<KeyLog> {
-        Vec::new()
+        let mut st = self.db.prepare("SELECT pane, keys, literal FROM keys ORDER BY seq").expect("prepare");
+        let rows: Vec<(i64, String, bool)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("query").map(|r| r.expect("row")).collect();
+        rows.into_iter()
+            .map(|(pane, keys, literal)| KeyLog { pane: format!("%{pane}"), keys: serde_json::from_str(&keys).expect("keys json"), literal })
+            .collect()
     }
-    /// The names of the attached clients (`attach`). Stub.
+    /// The names of the attached clients (`attach`).
     pub fn clients(&self) -> Vec<String> {
-        Vec::new()
+        pairs(&self.db, "SELECT name, name FROM clients ORDER BY seq", []).into_iter().map(|p| p.0).collect()
     }
-    /// The argv (subcommand name first) of each `display-popup` call. Stub.
+    /// The argv (subcommand name first) of each `display-popup` call.
     pub fn popups(&self) -> Vec<Vec<String>> {
-        Vec::new()
+        self.calls("popup")
     }
-    /// The argv (subcommand name first) of each `display-menu` call. Stub.
+    /// The argv (subcommand name first) of each `display-menu` call.
     pub fn menus(&self) -> Vec<Vec<String>> {
-        Vec::new()
+        self.calls("menu")
+    }
+    fn calls(&self, kind: &str) -> Vec<Vec<String>> {
+        pairs(&self.db, "SELECT argv, argv FROM calls WHERE kind = ?1 ORDER BY seq", [kind])
+            .into_iter()
+            .map(|p| serde_json::from_str(&p.0).expect("argv json"))
+            .collect()
     }
 }

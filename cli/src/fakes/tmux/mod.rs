@@ -1,7 +1,8 @@
 //! The fake tmux (docs/implementing.md, Tests, "The fake tmux"): `run` parses the global flags, splits the
 //! argv on `;` and runs each command inside one `BEGIN IMMEDIATE` transaction. This Job: state, targets,
-//! options and formats; the other subcommands answer `unknown command: <name>`.
+//! options, formats, kill, hooks, `__ctl` and pane I/O; the other subcommands answer `unknown command: <name>`.
 
+pub mod cmds;
 pub mod ctl;
 pub mod format;
 pub mod hooks;
@@ -41,11 +42,14 @@ pub fn run(inv: &Invocation) -> Outcome {
     }
 }
 
-/// The commands of this Job. Others (kill-pane, send-keys, ...) belong to the next Jobs.
+/// The commands the fake knows.
 const KNOWN: &[&str] = &[
     "new-session", "has-session", "kill-server", "list-sessions", "new-window", "split-window", "list-windows",
     "list-panes", "rename-window", "swap-pane", "set", "show", "set-environment", "show-environment", "display",
-    "display-message", "select-pane", "kill-pane",
+    "display-message", "select-pane", "kill-pane", "kill-window", "kill-session", "respawn-pane", "set-hook",
+    "show-hooks", "bind", "list-keys", "run-shell", "if", "resize-pane", "resize-window", "select-layout",
+    "send-keys", "capture-pane", "set-buffer", "show-buffer", "display-popup", "display-menu", "attach",
+    "list-clients", "__ctl",
 ];
 
 struct Cx<'a> {
@@ -53,6 +57,13 @@ struct Cx<'a> {
     inv: &'a Invocation,
     out: String,
     kill: bool,
+    /// The target of the hook or binding being run (`hooks::run_string`), for commands that name none.
+    loc: Option<Loc>,
+    /// Format variables a hook or binding adds (`hook_window_name`, `mouse_status_range`, ...).
+    vars: Vec<(String, String)>,
+    /// Hooks fired and not yet run (`hooks::fire`).
+    queue: Vec<hooks::Pending>,
+    depth: u8,
 }
 
 fn run_commands(inv: &Invocation) -> R<String> {
@@ -73,6 +84,9 @@ fn run_commands(inv: &Invocation) -> R<String> {
     }
     let commands: Vec<Vec<String>> =
         inv.argv[i..].split(|a| a == ";").filter(|c| !c.is_empty()).map(<[String]>::to_vec).collect();
+    if commands.iter().skip(1).any(|c| c[0] == "__ctl") {
+        return Err("__ctl must be the first argument".into());
+    }
     if let Some(c) = commands.iter().find(|c| !KNOWN.contains(&c[0].as_str())) {
         return Err(format!("unknown command: {}", c[0]));
     }
@@ -91,20 +105,19 @@ fn run_commands(inv: &Invocation) -> R<String> {
         db.execute_batch(state::SCHEMA).map_err(fail)?;
     }
     db.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
-    let mut cx = Cx { db: &db, inv, out: String::new(), kill: false };
+    let mut cx = Cx { db: &db, inv, out: String::new(), kill: false, loc: None, vars: Vec::new(), queue: Vec::new(), depth: 0 };
     let result = commands.iter().try_for_each(|c| dispatch(&mut cx, c));
     let (out, kill) = (std::mem::take(&mut cx.out), cx.kill);
-    match result {
-        Ok(()) => db.execute_batch("COMMIT").map_err(fail)?,
-        Err(e) => {
-            drop(db);
-            if creating {
-                let _ = std::fs::remove_file(&path);
-            }
-            return Err(e);
-        }
-    }
+    // A failing command stops the chain, and what ran before it stays (as in tmux): commit either way.
+    let end = db.execute_batch("COMMIT").map_err(fail);
     drop(db);
+    if let Err(e) = result {
+        if creating {
+            let _ = std::fs::remove_file(&path);
+        }
+        return Err(e);
+    }
+    end?;
     if kill {
         std::fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
@@ -133,7 +146,27 @@ fn dispatch(cx: &mut Cx, c: &[String]) -> R<()> {
         "show-environment" => show_environment(cx, args),
         "display" | "display-message" => display_message(cx, args),
         "select-pane" => select_pane(cx, args),
-        "kill-pane" => kill_pane(cx, args),
+        "kill-pane" => cmds::kill_pane(cx, args),
+        "kill-window" => cmds::kill_window(cx, args),
+        "kill-session" => cmds::kill_session(cx, args),
+        "respawn-pane" => cmds::respawn_pane(cx, args),
+        "resize-pane" => cmds::resize_pane(cx, args),
+        "resize-window" => cmds::resize_window(cx, args),
+        "select-layout" => cmds::select_layout(cx, args),
+        "send-keys" => cmds::send_keys(cx, args),
+        "capture-pane" => cmds::capture_pane(cx, args),
+        "set-buffer" => cmds::set_buffer(cx, args),
+        "show-buffer" => cmds::show_buffer(cx, args),
+        "display-popup" | "display-menu" => cmds::record_call(cx, c),
+        "attach" => cmds::attach(cx, args),
+        "list-clients" => cmds::list_clients(cx, args),
+        "set-hook" => hooks::set_hook(cx, args),
+        "show-hooks" => hooks::show_hooks(cx, args),
+        "bind" => hooks::bind(cx, args),
+        "list-keys" => hooks::list_keys(cx, args),
+        "run-shell" => hooks::run_shell(cx, args),
+        "if" => hooks::if_cmd(cx, args),
+        "__ctl" => ctl::ctl(cx, args),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -201,6 +234,9 @@ fn option_in(db: &Connection, scope: &str, owner: i64, key: &str) -> Option<Stri
 /// The value of a format variable at `loc`; `None` when unknown.
 fn variable(cx: &Cx, loc: Loc, name: &str) -> Option<String> {
     let db = cx.db;
+    if let Some((_, v)) = cx.vars.iter().rev().find(|(k, _)| k == name) {
+        return Some(v.clone());
+    }
     if name.starts_with('@') {
         let pane = loc.pane.and_then(|p| option_in(db, "pane", p, name));
         let window = loc.window.and_then(|w| option_in(db, "window", w, name));
@@ -441,39 +477,12 @@ fn swap_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// Only what the tests of this Job need: make the pane current.
 fn select_pane(cx: &mut Cx, args: &[String]) -> R<()> {
-    let o = Opts::parse("select-pane", args, "DdeLlMmRUZPT:t:")?;
+    let o = Opts::parse("select-pane", args, "DdeLlMmRUZP:T:t:")?;
     let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
     cx.db
         .execute("UPDATE windows SET cur_pane = ?1 WHERE id = ?2", (loc.pane, loc.window))
         .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Only what the tests of this Job need: remove the pane (and its window, then its session, when it was
-/// the last). No hook fires; ids are not reused.
-fn kill_pane(cx: &mut Cx, args: &[String]) -> R<()> {
-    let o = Opts::parse("kill-pane", args, "at:")?;
-    let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
-    let (session, window, pane) = (loc.session, loc.window.expect("window"), loc.pane.expect("pane"));
-    let (db, fail) = (cx.db, |e: rusqlite::Error| e.to_string());
-    db.execute("DELETE FROM panes WHERE id = ?1", [pane]).map_err(fail)?;
-    db.execute("DELETE FROM env WHERE scope = 'pane' AND owner = ?1", [pane]).map_err(fail)?;
-    db.execute("DELETE FROM options WHERE scope = 'pane' AND owner = ?1", [pane]).map_err(fail)?;
-    let left: Option<i64> = s(db, "SELECT id FROM panes WHERE window = ?1 ORDER BY pos LIMIT 1", [window]);
-    if left.is_some() {
-        db.execute("UPDATE windows SET cur_pane = ?1 WHERE id = ?2 AND cur_pane = ?3", (left, window, pane)).map_err(fail)?;
-        return Ok(());
-    }
-    db.execute("DELETE FROM windows WHERE id = ?1", [window]).map_err(fail)?;
-    db.execute("DELETE FROM options WHERE scope = 'window' AND owner = ?1", [window]).map_err(fail)?;
-    let next: Option<i64> = s::<Option<i64>>(db, "SELECT max(id) FROM windows WHERE session = ?1", [session]).flatten();
-    if next.is_some() {
-        db.execute("UPDATE sessions SET cur_window = ?1 WHERE id = ?2 AND cur_window = ?3", (next, session, window)).map_err(fail)?;
-        return Ok(());
-    }
-    db.execute("DELETE FROM sessions WHERE id = ?1", [session]).map_err(fail)?;
     Ok(())
 }
 

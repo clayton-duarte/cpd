@@ -59,7 +59,7 @@ fn split_commas(s: &str) -> Vec<&str> {
     parts
 }
 
-fn truthy(s: &str) -> bool {
+pub fn truthy(s: &str) -> bool {
     !s.is_empty() && s != "0"
 }
 
