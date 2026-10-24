@@ -144,7 +144,7 @@ fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
     refused(env.cpd(&["context", "new", CTX, "--title", "T"]), 2, "usage");
     refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "-bad-"]), 2, "usage");
     // An owner without `policy/owners/<login>.toml`.
-    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unknown");
+    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]), "nothing written");
     // The login is lowercased before the file is looked up.
@@ -162,13 +162,13 @@ fn clear_owner(env: &TestEnv) {
 }
 
 #[test]
-fn owner_sets_the_owner_once_and_appends_context_owner() {
+fn owner_sets_a_missing_owner_and_appends_context_owner() {
     let env = hs();
     new_context(&env);
     clear_owner(&env);
     fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
 
-    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unknown");
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(events(&env, "context-owner").len(), 0);
     refused(env.cpd(&["context", "owner", "acme", "--context", "no-such"]), 4, "context_not_found");
@@ -181,14 +181,47 @@ fn owner_sets_the_owner_once_and_appends_context_owner() {
     assert_eq!(owner.len(), 1);
     assert_eq!((owner[0]["context"].clone(), owner[0]["data"].clone()), (json!(CTX), json!({"owner": "acme"})));
 
-    // The same owner again writes nothing; another owner is `owner_set`.
+    // The same owner again writes nothing.
     let again = env.cpd(&["context", "owner", "acme", "--context", CTX]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(events(&env, "context-owner").len(), 1);
-    let error = refused(env.cpd(&["context", "owner", "other", "--context", CTX]), 3, "owner_set");
-    assert_eq!(error["details"]["context"], CTX);
-    assert_eq!(error["details"]["owner"], "acme");
     assert_eq!(events(&env, "context-owner").len(), 1);
+}
+
+#[test]
+fn owner_changes_while_the_context_has_no_pr_row() {
+    let env = hs();
+    new_context(&env);
+    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    let listed = |env: &TestEnv| env.cpd(&["context", "list"]).ok()["contexts"][0]["owner"].clone();
+
+    let out = env.cpd(&["context", "owner", "other", "--context", CTX]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "owner": "other"}));
+    assert!(out.get("already").is_none());
+    let owner = events(&env, "context-owner");
+    assert_eq!(owner.len(), 1);
+    assert_eq!((owner[0]["context"].clone(), owner[0]["data"].clone()), (json!(CTX), json!({"owner": "other"})));
+    assert_eq!(listed(&env), "other");
+
+    let back = env.cpd(&["context", "owner", "acme", "--context", CTX]).ok();
+    assert_eq!(back["context"], json!({"id": CTX, "owner": "acme"}));
+    assert!(back.get("already").is_none());
+    assert_eq!(events(&env, "context-owner").len(), 2);
+    assert_eq!(listed(&env), "acme");
+
+    let again = env.cpd(&["context", "owner", "acme", "--context", CTX]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(events(&env, "context-owner").len(), 2);
+}
+
+#[test]
+fn owner_still_needs_the_new_owners_policy_file() {
+    let env = hs();
+    new_context(&env);
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unconfirmed");
+    assert_eq!(error["details"]["owner"], "nobody");
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["owner"], "acme");
+    assert_eq!(events(&env, "context-owner").len(), 0);
 }
 
 #[test]
@@ -547,16 +580,22 @@ fn list_summarises_every_context() {
     assert_eq!(contexts.len(), 2);
     assert_eq!(
         contexts[0],
-        json!({"id": CTX, "title": "Building cpd", "jira": null, "archived_at": null, "records": 4, "open_questions": 1,
+        json!({"id": CTX, "title": "Building cpd", "owner": "acme", "jira": null, "archived_at": null, "records": 4, "open_questions": 1,
                "plans": [{"id": "cpd2", "title": "The cpd2 plan", "phase": "grounding", "lead_session": "lead-cpd2", "archived_at": null}]})
     );
     assert_eq!(contexts[1]["id"], "home-lab");
+    assert_eq!(contexts[1]["owner"], "acme");
     assert_eq!(contexts[1]["jira"], "LAB-3");
     assert_eq!(contexts[1]["records"], 0);
     assert_eq!(contexts[1]["plans"], json!([]));
     let cursor = out["events_cursor"].as_i64().unwrap();
     let highest = env.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().last().unwrap()["id"].as_i64().unwrap();
     assert_eq!(cursor, highest);
+
+    clear_owner(&env);
+    let cleared = env.cpd(&["context", "list"]).ok();
+    assert!(cleared["contexts"][0]["owner"].is_null());
+    assert!(cleared["contexts"][0].as_object().unwrap().contains_key("owner"));
 }
 
 #[test]

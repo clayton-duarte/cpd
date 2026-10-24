@@ -18,7 +18,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context manager` | Start or resume the Context's Manager (§3.10) | Manager | yes |
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
-| `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
+| `cpd context owner` | Set or change the owner of a Context (§3.13) | Lead, Manager | |
 | `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
 | `cpd context curation` | List the pending retirements and documentation candidates (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
@@ -77,8 +77,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
-| `cpd mcp` | MCP servers (commands.md §24) | | |
-| `cpd mcp attach` | Attach a server of this machine's policy to this Session only (§24.1) | Manager, Lead, Worker | |
+| `cpd mcp` | MCP servers (commands.md §25) | | |
+| `cpd mcp attach` | Attach a server of this machine's policy to this Session only (§25.1) | Manager, Lead, Worker | |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
 | `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
 | `cpd session show` | Show a Session (§10.2) | Lead, Manager | |
@@ -129,3 +129,11 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
 | `cpd slot` | Run a command inside a test slot (commands.md §23) | Manager, Lead, Worker | |
+| `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
+| `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |
+| `cpd secret list` | List the items of a vault (§24.2) | Lead, Manager | |
+| `cpd secret create` | Create an item with one concealed field; the value is on stdin (§24.3) | Lead, Manager | |
+| `cpd secret edit` | Set one field of an item; the value is on stdin (§24.4) | Lead, Manager | |
+| `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
+| `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
+| `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |

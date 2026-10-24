@@ -30,6 +30,7 @@ fn node(update: Option<UpdateState>) -> PrNode {
             clean: false,
             lead_working: false,
             update,
+            draft: false,
         }),
         waiting_on: Vec::new(),
         superseded_by: None,
@@ -51,6 +52,7 @@ fn open_pr(update: Option<UpdateState>, lead: Option<&str>) -> OpenPr {
         active: false,
         lead: lead.map(|l| SessionId::parse(l).unwrap()),
         lead_working: false,
+        plan_failed: false,
         merging: false,
     }
 }

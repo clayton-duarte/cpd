@@ -13,8 +13,8 @@ use super::host::Usage;
 use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette::{self, Meaning};
-use crate::section;
-use crate::read::{Dot, OpenPr, ReviewDecision, UpdateState};
+use crate::box_widget::SectionTitle;
+use crate::read::{Dot, OpenPr, PrFacts, PrState, ReviewDecision, pr_look};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -154,7 +154,6 @@ fn truncate(text: &str, max: usize) -> String {
 pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
-    let state_text = if pr.draft { "draft" } else { "open" };
     let review = match pr.review_decision {
         ReviewDecision::Approved => "approved",
         ReviewDecision::ChangesRequested => "changes requested",
@@ -162,21 +161,24 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     };
     let owned = pr.lead.is_some();
     let (icon, checks) = palette::checks_of(pr.checks, owned);
-    let (word, conflict_meaning) = match (pr.update, owned) {
-        (Some(UpdateState::Running), _) => palette::PR_UPDATING_RUNNING,
-        (Some(UpdateState::Queued), _) => palette::PR_UPDATING_QUEUED,
-        (None, true) => palette::PR_CONFLICT_OWNED,
-        (None, false) => palette::PR_CONFLICT,
-    };
-    let conflict = format!(" {word}");
+    let look = pr_look(&PrFacts {
+        state: PrState::Open,
+        draft: pr.draft,
+        clean: pr.clean,
+        conflicting: pr.conflicting,
+        owned,
+        update: pr.update,
+        asked: false,
+    });
+    let (state_text, state_meaning) = look.state;
     // the colour of a mark that has a meaning, and the colourless text: bright and 15 when the PR is owned (clickable)
     let mark = |m| if owned { palette::fg_clickable(m) } else { palette::fg(m) };
     let text = if owned { palette::clickable_text() } else { palette::read_only_text() };
-    let dot = pr.lead_working.then(|| palette::dot_span(Dot::Working, frame, false));
-    let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed), frame, false));
+    let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + look.conflict.map_or(0, |(word, _)| 1 + word.chars().count());
     let mut spans = vec![
         "  ".into(),
-        Span::styled(state_text, mark(if pr.draft { Meaning::Planning } else { palette::pr_open(pr.clean) })),
+        Span::styled(state_text, mark(state_meaning)),
     ];
     if let Some(dot) = dot {
         spans.extend([" ".into(), dot]);
@@ -187,8 +189,8 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
         " ".into(),
         Span::styled(review, text),
     ]);
-    if pr.conflicting {
-        spans.push(Span::styled(conflict, mark(conflict_meaning)));
+    if let Some((word, meaning)) = look.conflict {
+        spans.push(Span::styled(format!(" {word}"), mark(meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -220,10 +222,6 @@ fn block(mut line: Line<'static>, width: usize) -> Line<'static> {
     line.spans.iter_mut().for_each(|s| s.style = s.style.patch(style));
     line.spans.push(Span::styled(" ".repeat(width.saturating_sub(line.width())), style));
     line
-}
-
-fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
-    f.render_widget(Paragraph::new(section::title(title, count, usize::from(area.width))), area);
 }
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
@@ -282,16 +280,14 @@ pub struct Drawn {
 /// (commands.md §17 "No notes"); the snapshot's error is [`draw_error`]'s. `frame` is the spinner's frame (`palette::frame`) for the rows whose
 /// Lead is working. Returns where a click reaches an owned PR or a merge icon.
 pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scroll: usize, frame: usize) -> Drawn {
-    let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
+    let [_top, home, prs_header, prs] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(SectionTitle::ROWS),
         Constraint::Min(1),
     ])
     .areas(area);
-    render_header(f, prs_header, "PRs", Some(open.len()));
+    f.render_widget(SectionTitle::new("PRs", Some(open.len())), prs_header);
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     let height = usize::from(prs.height);
     let win = window(open.len(), height, 2, scroll);
@@ -352,6 +348,27 @@ pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
     f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::error())), last);
 }
 
+/// The layout test's sample (`layout_tests`): the column drawn as the view draws it, with no pull request; the `PRs` title is
+/// its rows 3 to 5, which are the sample (the machine's rows above keep their own indent, they are not a section title's).
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    use ratatui::buffer::Buffer;
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &[], &machine, 0, 0))).unwrap();
+    let pane = Rect::new(0, 0, width, 3);
+    let mut buf = Buffer::empty(pane);
+    for (y, x) in (0..3).flat_map(|y| (0..width).map(move |x| (y, x))) {
+        buf[(x, y)] = terminal.backend().buffer()[(x, y + 3)].clone();
+    }
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "PRs title", kind: Kind::Rule, rect: pane, exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf, container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::read::PrState;
@@ -402,6 +419,7 @@ mod tests {
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
+            plan_failed: false,
             merging: false,
         }
     }
@@ -413,9 +431,9 @@ mod tests {
     #[test]
     fn the_prs_header_carries_the_count_of_the_open_pull_requests() {
         let header = |width: u16, count| {
-            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-            terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
-            row(terminal.backend().buffer(), 0)
+            let mut terminal = Terminal::new(TestBackend::new(width, SectionTitle::ROWS)).unwrap();
+            terminal.draw(|f| f.render_widget(SectionTitle::new("PRs", count), f.area())).unwrap();
+            row(terminal.backend().buffer(), 1)
         };
         assert_eq!(header(20, Some(3)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}3\u{E0B4}", "─".repeat(8)));
         assert_eq!(header(30, Some(12)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}12\u{E0B4}", "─".repeat(30 - 8 - 4 - 1)));

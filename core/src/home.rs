@@ -20,7 +20,7 @@ pub enum Hook {
 }
 
 impl Hook {
-    /// The table name in `.config/wt.toml`, also used in log file names.
+    /// The hook's name: its key in the policy `hooks` domain, also used in log file names.
     pub fn as_str(self) -> &'static str {
         match self {
             Hook::PreStart => "pre-start",
@@ -177,6 +177,21 @@ impl CpdHome {
     /// `run/`.
     pub fn run_dir(&self) -> PathBuf {
         self.root.join("run")
+    }
+
+    /// `run/secret/`: the grants of `cpd secret` (contract §8.4, §1.4).
+    pub fn secret_dir(&self) -> PathBuf {
+        self.run_dir().join("secret")
+    }
+
+    /// `run/secret/allow/`: one `<attempt>.json` per Attempt allowed to read secrets.
+    pub fn secret_allow_dir(&self) -> PathBuf {
+        self.secret_dir().join("allow")
+    }
+
+    /// `run/secret/approve/`: one `<uuid>.json` per approval the User gave.
+    pub fn secret_approve_dir(&self) -> PathBuf {
+        self.secret_dir().join("approve")
     }
 
     /// `run/test-<i>.lock`: the machine-wide test slot `i`, for `i` in `0..test_concurrency` (contract §1.4, §7.6).

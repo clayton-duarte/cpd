@@ -76,6 +76,8 @@ fn fx_with(config_extra: &str) -> Fx {
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
         assert!(env.tmux(args).status.success(), "tmux {args:?}");
     }
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required.
+    env.repo_policy("acme", "pay", "");
     let fx = Fx { env, repo, lead };
     fx.pi("exit 0");
     let catalog: String = EFFORTS
@@ -91,8 +93,8 @@ fn fx_with(config_extra: &str) -> Fx {
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{repo}', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
         repo = fx.repo.display(),
         lead = fx.lead.display()
     ));

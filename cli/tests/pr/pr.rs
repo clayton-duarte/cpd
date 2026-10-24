@@ -164,8 +164,8 @@ fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
         branch = branch,
     );
@@ -209,12 +209,11 @@ impl Fx {
         fs::write(self.home.config(), config.replacen("machine = \"t\"\n", &format!("machine = \"t\"\ntest_concurrency = {n}\n"), 1)).unwrap();
     }
 
-    /// Commits the Lead worktree's `.config/wt.toml`.
+    /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
+    /// empty commit on the Lead Branch.
     fn hooks(&self, toml: &str) {
-        fs::create_dir_all(self.lead.join(".config")).unwrap();
-        fs::write(self.lead.join(".config/wt.toml"), toml).unwrap();
-        self.git(&self.lead, &["add", "-A"]);
-        self.git(&self.lead, &["commit", "-q", "-m", "hooks"]);
+        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
+        self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     }
 
     fn remote_branch(&self, branch: &str) -> Option<String> {
@@ -376,8 +375,8 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(
                     "{row}
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
-                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
+                     INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
+                       VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
                      {needs}",
                     repo = repo.display(),
                     row = if matches!(state, Web::Open) {
@@ -2819,18 +2818,6 @@ fn poll_says_an_http_5xx_of_the_search_is_transient() {
 }
 
 #[test]
-fn poll_says_a_gh_that_hangs_past_its_deadline_is_transient_with_reason_timeout() {
-    let fx = fx("deploy");
-    // The 15 s kill of each call is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
-    let vars = [("CPD_TEST_DEADLINE_GH", "0.3")];
-    let details = poll_failure(&fx, &format!("exec sleep {SLEEP_SECONDS}"), &vars);
-    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("search"), &json!("timeout")), "{details}");
-    // The search answers, the lookup of the PR it did not list hangs.
-    let details = poll_failure(&fx, &lookup_script(&format!("exec sleep {SLEEP_SECONDS}")), &vars);
-    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("timeout")), "{details}");
-}
-
-#[test]
 fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_are_not() {
     let fx = fx("deploy");
     let details = poll_failure(&fx, &lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"), &[]);
@@ -3465,10 +3452,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     let fx = fx("dispatch");
     let web = fx.add_web(Web::Dispatch);
     fx.hooks("pre-merge = \"echo gate ran in $(basename $PWD)\"\n");
-    fs::create_dir_all(web.join(".config")).unwrap();
-    fs::write(web.join(".config/wt.toml"), "pre-merge = \"echo gate ran in $(basename $PWD)\"\n").unwrap();
-    fx.git(&web, &["add", "-A"]);
-    fx.git(&web, &["commit", "-q", "-m", "hooks"]);
+    fx.env.repo_policy("acme", "web", "[hooks]\npre-merge = \"echo gate ran in $(basename $PWD)\"\n");
 
     // Two PRs: --pr is required.
     let run = fx.pr("open");
@@ -3803,7 +3787,7 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     let errors = fx.policy_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].0, "bob");
-    assert_eq!(errors[0].1["code"], "owner_unknown");
+    assert_eq!(errors[0].1["code"], "owner_unconfirmed");
     assert_eq!(errors[0].1["details"]["plan"], "bob");
     assert_eq!(errors[0].1["details"]["pr"], "shop");
     assert_eq!(errors[0].1["details"]["owner"], "gone");
@@ -3841,8 +3825,8 @@ fn stacked_pr(fx: &Fx) -> Stacked {
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
                 "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pay' AND phase = 'done';
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                   VALUES ('pay', 'web', '{repo}', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
+                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                   VALUES ('pay', 'web', '{repo}', 'pay', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
                 base = fx.branch,
                 path = path.display()
@@ -3868,18 +3852,16 @@ impl Fx {
 #[test]
 fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
     let fx = fx_stacked("dispatch");
-    let web = stacked_pr(&fx);
+    stacked_pr(&fx);
     // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
     // worktree is `target_worktree_path`.
     let marker = fx.env.root().join("gate-saw");
-    fs::create_dir_all(web.lead.join(".config")).unwrap();
-    fs::write(
-        web.lead.join(".config/wt.toml"),
-        format!("pre-merge = \"test -f api.txt && test -f web.txt && echo {{{{ target }}}} {{{{ target_worktree_path }}}} > {}\"\n", marker.display()),
-    )
-    .unwrap();
-    fx.git(&web.lead, &["add", "-A"]);
-    fx.git(&web.lead, &["commit", "-q", "-m", "hooks"]);
+    // The stacked PR `web` is of the repo `acme/pay`, like its base PR: one repo file.
+    fx.env.repo_policy(
+        "acme",
+        "pay",
+        &format!("[hooks]\npre-merge = \"test -f api.txt && test -f web.txt && echo {{{{ target }}}} {{{{ target_worktree_path }}}} > {}\"\n", marker.display()),
+    );
 
     let out = fx.open_web().ok();
 

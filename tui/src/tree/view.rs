@@ -256,6 +256,10 @@ impl View {
     /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
     /// cell and a click on them does nothing.
     /// Whether the set changed (the pane is then redrawn).
+    pub fn merging(&self) -> &BTreeSet<String> {
+        &self.merging
+    }
+
     pub fn set_merging(&mut self, pulls: BTreeSet<String>) -> bool {
         std::mem::replace(&mut self.merging, pulls) != self.merging
     }
@@ -764,6 +768,64 @@ impl View {
             menu.draw(f, self.pane);
         }
     }
+}
+
+/// The layout test's sample (`layout_tests`): a right click at `click` in a `width` x `height` pane of an empty tree,
+/// drawn by [`View::draw`] as in production; the menu's rect is the one the view hit-tests.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::Case) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Case, Kind, Placed, Sample};
+    use ratatui::backend::TestBackend;
+    let Case::Menu(click) = case else { panic!("the tree samples a menu") };
+    let (column, row) = click.at(width, height);
+    let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    // a right click inside the Inbox opens only an item's menu: an empty Inbox has none, so click just above it
+    let row = if view.inbox_area.contains(Position::new(column, row)) { view.inbox_area.y.saturating_sub(1) } else { row };
+    view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE });
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    let rect = view.menu.as_ref().expect("the right click opens a menu").rect(view.pane);
+    let boxes = vec![Placed { name: "tree menu", kind: Kind::Full, rect, exempt: Vec::new() }];
+    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+}
+
+/// The layout test's sample (`layout_tests`): the tree's Contexts (the fixture's live ones and an archived one) in a
+/// `width` x `height` pane, drawn by [`View::draw`] as in production. Placed is one Rail per Context, its rect from the
+/// rows the view saved for hit-testing: the blank row above, the Context's rows, the blank row below. The rows whose
+/// glyph sits against the rail by recorded design (`├─glyph`: hs-d337, hs-d339, hs-d484) are exempt by name; the fold is
+/// not the widget, so it is exempt from B3 (`Rule::Minimum`).
+#[cfg(test)]
+pub(crate) fn layout_fold_sample(width: u16, height: u16, case: crate::layout_tests::TreeCase) -> crate::layout_tests::Sample {
+    use crate::box_widget::spacing;
+    use crate::layout_tests::{Exempt, Kind, Placed, Rule, Sample, TreeCase};
+    use ratatui::backend::TestBackend;
+    assert_eq!(case, TreeCase::ContextFold, "the fold samples the Context fold");
+    let mut view = View::new(super::fixture::archived(), true);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    let pane = Rect::new(0, 0, width, height); // what the tree column passed: the margin is the container's to leave
+    let hits = view.tree_scroll.hits();
+    // the rows of one Context run until the empty row between two Contexts (which is no row)
+    let drawn: Vec<bool> = hits.paths.iter().map(|p| rows::row(&view.tree, p).is_some()).collect();
+    let mut boxes = Vec::new();
+    let mut start = 0;
+    while start < drawn.len() {
+        if !drawn[start] {
+            start += 1;
+            continue;
+        }
+        let end = (start..drawn.len()).find(|&i| !drawn[i]).unwrap_or(drawn.len());
+        let top = hits.rows.y + start as u16 - 1; // the blank row above
+        let rect = Rect { y: top, height: (end - start) as u16 + 2, ..spacing::contain(pane) };
+        let exempt = (start + 1..end - 1)
+            .map(|i| Exempt { name: "hs-d337 hs-d339 hs-d484: the branch ├─ sits against the rail", row: hits.rows.y + i as u16, rule: Rule::Padding })
+            .chain([Exempt { name: "hs-d484: the fold is not the widget (B3 does not apply)", row: top, rule: Rule::Minimum }])
+            .collect();
+        boxes.push(Placed { name: "context fold", kind: Kind::Rail, rect, exempt });
+        start = end;
+    }
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
 }
 
 #[cfg(test)]
@@ -1388,10 +1450,10 @@ mod tests {
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[5], format!(" ├─{IDLE} shi┌─────────┐"), "{rows:?}");
+        assert_eq!(rows[5], format!(" ├─{IDLE} shi╭─────────╮"), "{rows:?}");
         assert_eq!(rows[6], format!(" ╰─{NEEDS_YOU} shi│ Open    │"));
         assert_eq!(rows[7], "        │ Rename… │", "drawn over the tree, an empty row too: {rows:?}");
-        assert_eq!(rows[12], "        └─────────┘", "over the empty row below the tree");
+        assert_eq!(rows[12], "        ╰─────────╯", "over the empty row below the tree");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1404,7 +1466,7 @@ mod tests {
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
-        assert_eq!((rows[13].ends_with(&box_row('┌', &"─".repeat(14), '┐')[27..]), rows[15].clone()), (true, box_row('└', &"─".repeat(14), '┘')));
+        assert_eq!((rows[13].ends_with(&box_row('╭', &"─".repeat(14), '╮')[27..]), rows[15].clone()), (true, box_row('╰', &"─".repeat(14), '╯')));
         // the menu is drawn over the Inbox title and its closing row, which show to its left
         assert!(rows[13].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "{rows:?}");
         assert!(rows[14].starts_with(&format!(" ╰{} up to date", crate::fold::TERMINATOR)) && rows[14].ends_with("│ New Context… │"), "{rows:?}");
@@ -1742,7 +1804,7 @@ mod tests {
         assert!(matches!(ask, Ask::NewContext { taken, owners } if taken == &["alpha", "beta", "gamma"] && owners == &["clayton-duarte"]), "{ask:?}");
         assert_eq!(
             answered(question.clone(), Some("Building cpd!")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
         // a taken id (also of an archived Context) gets `-2`, then `-3`
@@ -1750,11 +1812,11 @@ mod tests {
         let question = popup_at(&mut view, 8, 18, 0);
         assert_eq!(
             answered(question.clone(), Some("Alpha")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         assert_eq!(
             answered(question.clone(), Some("zeta")),
-            Ok(Some(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into() }))
+            Ok(Some(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into(), confirm_fallback: false }))
         );
         // a title that no id is made of is refused, with its reason
         assert!(answered(question, Some("2024")).unwrap_err().starts_with("A title needs at least two letters"));

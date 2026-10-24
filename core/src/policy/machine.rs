@@ -26,7 +26,8 @@ use toml::{Table, Value};
 use super::load::{bad_key, policy_invalid};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::MachineName;
+use crate::ids::HostName;
+use super::resolve::machine_file;
 
 /// One of pi's four exposures, spelled `codemode`, `deferred`, `direct` or `hidden`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,9 +190,11 @@ pub struct Machine {
 
 /// Parses the text of the machine file `file` (see the module docs for the rules).
 pub fn parse_machine(file: &Path, text: &str) -> Result<BTreeMap<String, McpServer>, CpdError> {
-    let table: Table = text
+    let mut table: Table = text
         .parse()
         .map_err(|e: toml::de::Error| policy_invalid(file, None, format!("not valid TOML ({})", e.message())))?;
+    // The machine file is the machine scope (contract §8.3): its other domains are read by `load_scope_file`; this reads `[mcp]` only.
+    table.retain(|k, _| k == "mcp");
     let raw = Value::Table(table.clone()).try_into::<RawFile>().map_err(|e| {
         policy_invalid(file, Some(&bad_key::<RawFile>(&table).join(".")), e.message())
     })?;
@@ -219,35 +222,9 @@ pub fn parse_machine(file: &Path, text: &str) -> Result<BTreeMap<String, McpServ
     Ok(servers)
 }
 
-/// Every entry of `machines/` is `<machine name>.toml` (contract §8.3 "The machine scope").
-pub(super) fn check_machine_names(home: &CpdHome) -> Result<(), CpdError> {
-    let dir = home.root().join("policy").join("machines");
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(CpdError::new(
-                ErrorCode::FileUnreadable,
-                format!("Cannot read the policy directory {}: {e}.", dir.display()),
-            )
-            .with("file", dir.display().to_string()));
-        }
-    };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in paths {
-        let stem = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".toml"));
-        if !stem.is_some_and(|s| MachineName::parse(s).is_ok_and(|m| m.as_str() == s)) {
-            return Err(policy_invalid(&path, None, "expected machines/<machine>.toml with a valid machine name"));
-        }
-    }
-    Ok(())
-}
-
-/// The machine scope of `machine` in `home` (see the module docs for the rules).
-pub fn load_machine(home: &CpdHome, machine: &MachineName) -> Result<Machine, CpdError> {
-    check_machine_names(home)?;
-    let path = home.root().join("policy").join("machines").join(format!("{machine}.toml"));
+/// The `[mcp]` servers of the machine file of `host` in `home` (the machine scope, `policy/machines/<host>.toml`; contract §8.3).
+pub fn load_machine(home: &CpdHome, host: &HostName) -> Result<Machine, CpdError> {
+    let path = machine_file(home, host);
     let none = Machine { source: MachineSource::Default, servers: BTreeMap::new() };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
