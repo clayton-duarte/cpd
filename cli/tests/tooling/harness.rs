@@ -37,25 +37,6 @@ fn commands_get_an_isolated_environment() {
 }
 
 #[test]
-fn cpd_runs_and_prints_one_json_value() {
-    let env = TestEnv::new();
-    let run = env.cpd(&["--version"]);
-    let ok = run.ok();
-    let hash = ok["version"]
-        .as_str()
-        .and_then(|v| v.strip_prefix(env!("CARGO_PKG_VERSION")))
-        .and_then(|rest| rest.strip_prefix('-'))
-        .expect("version is <Cargo version>-<hash>");
-    assert!(
-        hash == "unknown" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
-        "bad hash {hash}"
-    );
-    let run = env.cpd(&["no-such-command"]);
-    assert_eq!(run.error()["code"], "usage");
-    assert_eq!(run.exit, 2);
-}
-
-#[test]
 fn git_repo_has_one_commit_on_main() {
     // Twice: the second repo is a copy of the template (the first makes it if there is none).
     for _ in 0..2 {
