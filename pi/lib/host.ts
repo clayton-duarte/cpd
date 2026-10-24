@@ -9,6 +9,8 @@ import { appendLog, reloadLogPath } from "./reload.ts";
 import { Rendering } from "./render.ts";
 import type { Run } from "./run.ts";
 
+export type Sleep = (ms: number, value: undefined, options: { signal?: AbortSignal; ref?: boolean }) => Promise<undefined>;
+
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
   env?: Record<string, string | undefined>;
@@ -19,7 +21,9 @@ export type Options = {
   /** The clock of the loop guard (commands.md §15.15 L3), in ms. Default: `Date.now`. */
   now?: () => number;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
-  reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
+  reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number; now?: () => number } & Validation;
+  /** Waits `ms` (aborted by `signal`), at start-up's retry of `session show` and at the shutdown wait. Default: `timers/promises` `setTimeout`, which `t.mock.timers` does not mock. */
+  sleep?: Sleep;
 };
 
 /** What the adapter's concerns share: pi, the options and the one mutable activation. Each module takes it and keeps no state of its own. */

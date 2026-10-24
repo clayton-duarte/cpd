@@ -875,7 +875,7 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 	};
 	const callLines = renderCall({ path: "file.ts" }, renderTheme, resultContext).render(80);
 	// A running call's dot is palette index 6, then the title as text 7.
-	assert.match(callLines[0]!, /\x1b\[36m⦁\x1b\[39m \x1b\[36m\uE0B6\x1b\[39m\x1b\[46m\x1b\[30mread\x1b\[39m\x1b\[49m\x1b\[36m\uE0B4\x1b\[39m \x1b\[37mfile\.ts/u);
+	assert.match(callLines[0]!, /\x1b\[36m⦁\x1b\[39m \x1b\[36m\uE0B6\x1b\[7mread\x1b\[27m\x1b\[36m\uE0B4\x1b\[39m \x1b\[37mfile\.ts/u);
 	assert.doesNotMatch(stripTerminalSequences(callLines[0]!), /⦁ {2}read/u);
 
 	const firstResult = renderResult({ content }, { expanded: true, isPartial: true }, renderTheme, resultContext);
@@ -1065,7 +1065,7 @@ test("keeps the progress controller inert until it is bound to a TUI", () => {
 		},
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
-	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30mThinking…\x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m"]);
+	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[36m\ue0b4\x1b[39m"]);
 
 	// Disposed again: later events must not reach the detached context.
 	controller.dispose();
@@ -1108,7 +1108,7 @@ test("the working label is palette index 6 whatever the thinking level", () => {
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
 	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "low" });
-	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30mThinking…\x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m");
+	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[36m\ue0b4\x1b[39m");
 	controller.dispose();
 });
 
@@ -1140,7 +1140,7 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 	handlers.get("agent_end")?.({});
 	assert.equal(messages.length, beforeAgentEnd, "a low-level run may still retry or continue");
 	handlers.get("agent_settled")?.({});
-	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m${label}\x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
+	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[7m${label}\x1b[27m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
 	controller.dispose();
 });
 
@@ -1215,9 +1215,9 @@ test("a one-paragraph thinking block is the Thinking pill 7 with its text inside
 		availableWidth: 80,
 	});
 
-	// hs-d557 item 1: the one title is the Thinking pill (bg 7, text 0); the paragraph is inside the fold.
+	// hs-d557 item 1: the one title is the Thinking pill (inverted 7); the paragraph is inside the fold.
 	const view = render();
-	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking…") && !view.includes("Planning"), JSON.stringify(view));
+	assert.ok(view?.includes("\x1b[37m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[37m\ue0b4\x1b[39m") && !view.includes("Planning"), JSON.stringify(view));
 	controller.dispose();
 });
 
@@ -1612,7 +1612,7 @@ test("marks a finished custom tool's row as done before its result is drawn", as
 	// Pi tells extensions a tool ended, then redraws the row call first, result second.
 	handlers.get("tool_execution_end")?.({ toolCallId: "custom-finished", toolName: "web_search", result: {}, isError: false });
 	const call = renderCall({ query: "pi" }, theme, context).render(80)[0]!;
-	assert.match(call, /\x1b\[42m\x1b\[30mweb_search\x1b\[39m\x1b\[49m/u, "the pill turns green without waiting for another redraw");
+	assert.match(call, /\x1b\[32m\uE0B6\x1b\[7mweb_search\x1b\[27m\x1b\[32m\uE0B4\x1b\[39m/u, "the pill turns green without waiting for another redraw");
 });
 
 test("lets auto_compact name a custom tool, overriding the custom_tools default for it", () => {

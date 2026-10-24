@@ -63,13 +63,13 @@ test("while working the top border is a corner, one line cell, the pill, then li
 	} finally { w.dispose(); }
 });
 
-test("the pill has caps 6, bg 6 and text 0 and no padding inside the caps", () => {
+test("the pill has caps 6, its text inverted and no padding inside the caps", () => {
 	const w = working();
 	try {
 		const row = w.row();
 		assert.match(row, /\x1b\[36m\ue0b6/u, "the left cap is 6");
 		assert.match(row, /\x1b\[36m\ue0b4/u, "the right cap is 6");
-		assert.ok(row.includes("\x1b[46m") && row.includes("\x1b[30m"), "bg 6 and text 0");
+		assert.ok(row.includes("\x1b[7m") && row.includes("\x1b[27m") && !row.includes("\x1b[30m"), "inverted text");
 		const plain = strip(row);
 		const inside = plain.slice(plain.indexOf(LEFT_CAP) + 1, plain.indexOf(RIGHT_CAP));
 		assert.equal(inside, inside.trim(), "no padding space inside the caps");

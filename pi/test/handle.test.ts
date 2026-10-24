@@ -20,10 +20,10 @@ test("store_too_new from a follower started before an install is not delivered a
   t.after(() => f.close());
   const delays: number[] = [];
   await started(f, delays);
-  f.file("id-less-once", "1"); // the new cpd no longer fails: the restarted follower does not print the line again
+  f.idLessOnce(); // the new cpd no longer fails: the restarted follower does not print the line again
   f.reinstall(); // the run started with identity A; the installed cpd is now B
   f.emit(failure);
-  f.file("exit-next", "3"); // the old cpd prints the line and exits
+  f.exitNext(3); // the old cpd prints the line and exits
   await waitFor("the restart", () => f.follows().length === 2);
   await f.quiet();
   assert.deepEqual(errorsOf(f), [], "nothing is reported");
@@ -37,11 +37,11 @@ test("store_too_new with the same installed cpd is still reported once", async (
   const delays: number[] = [];
   await started(f, delays);
   f.emit(failure);
-  f.file("exit-next", "3");
+  f.exitNext(3);
   await waitFor("the restart", () => f.follows().length === 2);
   await waitFor("the error", () => errorsOf(f).length === 1);
   f.emit(failure);
-  f.file("exit-next", "3");
+  f.exitNext(3);
   await waitFor("a third start", () => f.follows().length === 3);
   await f.quiet();
   assert.equal(errorsOf(f).length, 1, "once per code");

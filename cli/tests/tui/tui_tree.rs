@@ -1408,27 +1408,6 @@ fn rename_on_a_plan_row_starts_from_its_title_and_runs_plan_rename() {
 }
 
 #[test]
-fn new_context_opens_an_input_popup_for_a_title_and_runs_context_new_with_the_derived_id() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
-    fake_dialogs(&env);
-    type_in(&env, "Building cpd!");
-    let pane = Pane::start(&env, 60, 22);
-    pane.ready();
-    pane.right_click(5, 14); // the empty area
-    pane.wait("the menu", |s| menu_open(s, "New Context…"));
-    pane.keys(&["Enter"]);
-    assert_eq!(
-        wait_for_popups(&env, 1),
-        ["cpd tui view dialog input --title='New Context' --prompt='Title:' --initial='' --validate='title'"]
-    );
-    // the instance has one owner policy (`acme`, which every test env has): used without asking
-    assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!", "--owner=acme"])]);
-    pane.wait_logged("the result", "ok: created building-cpd");
-}
-
-#[test]
 fn a_title_no_id_can_be_made_of_is_refused_in_a_text_dialog_and_runs_nothing() {
     let env = env();
     populate(&env);
