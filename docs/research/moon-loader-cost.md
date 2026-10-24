@@ -2,7 +2,7 @@
 
 ## Summary
 
-Before only: the cockpit (moon-before-ui) and pi (moon-before-pi) 'before' are in. The after and the comparison are added by moon-after-ui and moon-after-pi.
+The cockpit before (moon-before-ui) and after (moon-after-ui) and their comparison are in; the pi before (moon-before-pi) is in; the pi after is added by moon-after-pi.
 
 ## Method
 
@@ -366,9 +366,104 @@ Real pi pane, unchanged code (8 nf-md moons at 100 ms), nice and load as in the 
 Per run, work: 3.94 %, 4.08 %, 4.11 % (load 2.92, 2.72, 2.52); idle: 0.43 %.
 
 
+## After
+
+Job moon-after-ui, attempt 1. The changed code: the cockpit with the 28 moon_alt frames at 50 ms (one clock constant for the palette frame, the pump's FRAME read pacing and the pump wake). The method is that of `## Method` / `### Cockpit`, the same scripts run unchanged but for: the binary (`target/release/cpd` and `target/debug/cpd` of this worktree, built with `scripts/cargo.sh build --release -p cpd` (42 s) and `scripts/cargo.sh build -p cpd` (22 s)), the private tmux server name (`moon-anim-after`, in `run.sh`) and the skipped-frames modulus in `parse.py` (`% 28`, the trace's `frame=` runs 0..27). The scripts were re-created from the `### Cockpit` text of this doc (the Before Job's copies in `/tmp/cpd-moon-anim/` were gone; only `base/` was left). Same scenarios, windows (35 s; plan D 30 s), run counts (3 runs of the A-type scenarios, 1 of D), `nice` (19, inherited) and one process at a time.
+
+Checks before the runs:
+
+- Baseline moved: `git diff --stat $(git merge-base HEAD origin/main)..HEAD -- tui pi` lists 19 files (192 insertions, 135 deletions), among them `tui/src/palette.rs`, `tui/src/palette/colours.rs`, `tui/src/pump.rs`, `tui/src/menu.rs`, `tui/src/plan/flow.rs`, `tui/src/widgets/legend.rs`, the tui and pi tests and `pi/compact-tools/extensions/compact-tools-loader.ts`.
+- Glyphs: the release binary on a plan view of scenario A2 (private tmux, `tmux capture-pane`, 6 captures 0.37 s apart) showed moon_alt glyphs in the PR title dots (8 cells per capture, all of the same glyph in a capture) and a different glyph in each capture: U+E3DB, U+E3E2, U+E3CE, U+E3D6, U+E3DE, U+E3C9 (all in U+E3C8-U+E3E3); no nf-md moon (U+F0F61-U+F0F68) was on the screen. The pill icon of the running Job was not told apart from the title dots in this check (unverified separately).
+
+Base: `/tmp/cpd-moon-anim/base/`, the SAME base as the Before (its `cpd.db` is dated 2026-10-24 16:30 local, as recorded in `## Method`; not re-made). Every run was on a fresh copy of it.
+
+Columns as in `## Before`. Skipped frames are `(b - a) mod 28 - 1` over consecutive `frame=` values that differ.
+
+Release build (`target/release/cpd`):
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| plan A1 | 3 | 700 (700-700) | 49.8 / 51.0 / 52.1 | 0 (0.0 %) | 0 of 699 | 4.88 (4.88-4.94) | 0.52 / 0.62 | 19 | 6.00 |
+| plan A2 | 3 | 700 (700-701) | 49.9 / 51.1 / 52.1 | 0 (0.0 %) | 0 of 699 | 5.08 (4.74-5.08) | 0.53 / 0.69 | 19 | 4.92 |
+| plan B | 3 | 700 (700-701) | 49.9 / 51.3 / 52.6 | 0 (0.0 %) | 0 of 699 | 5.06 (4.80-5.17) | 0.53 / 0.75 | 19 | 3.11 |
+| plan D | 1 | 0 | - / - / - | 0 (- %) | 0 of 0 | 0.03 (0.03-0.03) | - / - | 19 | 3.21 |
+
+Tree view, release build:
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| tree A | 3 | 700 (700-700) | 49.9 / 50.9 / 51.0 | 0 (0.0 %) | 0 of 699 | 1.69 (1.63-1.74) | 0.75 / 0.95 | 19 | 2.69 |
+| tree B | 3 | 701 (700-701) | 49.9 / 50.9 / 51.0 | 0 (0.0 %) | 0 of 700 | 1.71 (1.60-1.74) | 0.75 / 0.96 | 19 | 2.75 |
+| tree D | 1 | 35 | 1000.0 / 1000.9 / 1001.0 | 35 (100.0 %) | 646 of 34 | 0.11 (0.11-0.11) | 0.76 / 1.16 | 19 | 2.36 |
+
+Load averages at the end of the runs, release: 1 min 2.12-6.65, 5 min 3.66-8.92, 15 min 4.81-6.34 (min-max over the 17 runs).
+
+Debug build (`target/debug/cpd`):
+
+Plan view, debug build:
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| plan A1 | 3 | 700 (700-700) | 49.9 / 51.7 / 55.0 | 0 (0.0 %) | 0 of 699 | 9.77 (9.17-10.17) | 1.12 / 1.36 | 19 | 3.20 |
+| plan A2 | 3 | 701 (700-701) | 50.0 / 52.0 / 61.6 | 0 (0.0 %) | 0 of 700 | 9.91 (9.88-10.11) | 1.15 / 1.59 | 19 | 3.22 |
+| plan B | 3 | 701 (700-701) | 49.9 / 52.0 / 56.6 | 0 (0.0 %) | 0 of 700 | 9.74 (9.34-10.03) | 1.11 / 1.58 | 19 | 2.47 |
+| plan D | 1 | 0 | - / - / - | 0 (- %) | 0 of 0 | 0.03 (0.03-0.03) | - / - | 19 | 2.81 |
+
+Tree view, debug build:
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| tree A | 3 | 700 (700-700) | 50.2 / 50.5 / 51.9 | 0 (0.0 %) | 0 of 699 | 4.31 (4.17-4.34) | 1.93 / 2.69 | 19 | 3.36 |
+| tree B | 3 | 701 (700-701) | 50.1 / 50.5 / 52.7 | 0 (0.0 %) | 0 of 700 | 4.14 (4.06-4.14) | 1.90 / 2.56 | 19 | 2.75 |
+| tree D | 1 | 35 | 1000.0 / 1000.7 / 1000.8 | 35 (100.0 %) | 646 of 34 | 0.26 (0.26-0.26) | 1.99 / 2.09 | 19 | 3.18 |
+
+Load averages at the end of the runs, debug: 1 min 2.24-4.02, 5 min 2.98-3.75, 15 min 3.85-4.70 (min-max over the 17 runs).
+
+Notes: `layout_nonzero` was 0 in all 34 runs, as before. Tree D "skipped" is `(b - a) mod 28 - 1` over a draw every 1000 ms (20 frames of 50 ms, so 19 skipped per change, 646 of 34): it is the 1 s redraw by design (see the notes under `## Before`), not a stutter. In every run of the A-type scenarios there was no gap over 150 ms and no skipped frame (checked per run), as in the Before. The JSON line of each run is in `/tmp/cpd-moon-anim/results/<profile>.jsonl` (not kept after this Job).
+
+## Comparison
+
+Before = the `## Before` tables (median of the runs); after = `## After` (median of the runs). Ratio = after / before CPU %; change in points = after - before CPU %. gap and draw_us are the p50 of the run, median over runs. The plan D and tree D rows are the controls (no spinner on screen).
+
+Plan view, release build:
+
+| scenario | CPU % before -> after | ratio | change, points | gap p50 ms before -> after | skipped frames before -> after | draw_us p50 ms before -> after |
+|---|---|---|---|---|---|---|
+| plan A1 | 2.54 -> 4.88 | 1.92 | +2.34 | 99.9 -> 49.8 | 0 of 349 -> 0 of 699 | 0.55 -> 0.52 |
+| plan A2 | 2.46 -> 5.08 | 2.07 | +2.62 | 99.9 -> 49.9 | 0 of 349 -> 0 of 699 | 0.53 -> 0.53 |
+| plan B | 2.57 -> 5.06 | 1.97 | +2.49 | 99.9 -> 49.9 | 0 of 349 -> 0 of 699 | 0.53 -> 0.53 |
+| plan D | 0.00 -> 0.03 | - | +0.03 | - -> - | 0 of 0 -> 0 of 0 | - -> - |
+
+Tree view, release build:
+
+| scenario | CPU % before -> after | ratio | change, points | gap p50 ms before -> after | skipped frames before -> after | draw_us p50 ms before -> after |
+|---|---|---|---|---|---|---|
+| tree A | 0.91 -> 1.69 | 1.85 | +0.78 | 99.9 -> 49.9 | 0 of 349 -> 0 of 699 | 0.76 -> 0.75 |
+| tree B | 0.89 -> 1.71 | 1.93 | +0.82 | 99.9 -> 49.9 | 0 of 349 -> 0 of 700 | 0.75 -> 0.75 |
+| tree D | 0.11 -> 0.11 | 1.04 | +0.00 | 1000.0 -> 1000.0 | 34 of 34 -> 646 of 34 | 0.76 -> 0.76 |
+
+Plan view, debug build:
+
+| scenario | CPU % before -> after | ratio | change, points | gap p50 ms before -> after | skipped frames before -> after | draw_us p50 ms before -> after |
+|---|---|---|---|---|---|---|
+| plan A1 | 4.83 -> 9.77 | 2.02 | +4.94 | 100.0 -> 49.9 | 0 of 349 -> 0 of 699 | 1.18 -> 1.12 |
+| plan A2 | 4.83 -> 9.91 | 2.05 | +5.08 | 99.9 -> 50.0 | 0 of 349 -> 0 of 700 | 1.12 -> 1.15 |
+| plan B | 4.80 -> 9.74 | 2.03 | +4.94 | 100.0 -> 49.9 | 0 of 349 -> 0 of 700 | 1.15 -> 1.11 |
+| plan D | 0.03 -> 0.03 | 1.11 | +0.00 | - -> - | 0 of 0 -> 0 of 0 | - -> - |
+
+Tree view, debug build:
+
+| scenario | CPU % before -> after | ratio | change, points | gap p50 ms before -> after | skipped frames before -> after | draw_us p50 ms before -> after |
+|---|---|---|---|---|---|---|
+| tree A | 2.14 -> 4.31 | 2.02 | +2.17 | 100.2 -> 50.2 | 0 of 349 -> 0 of 699 | 1.93 -> 1.93 |
+| tree B | 2.17 -> 4.14 | 1.91 | +1.97 | 100.2 -> 50.1 | 0 of 349 -> 0 of 700 | 1.91 -> 1.90 |
+| tree D | 0.26 -> 0.26 | 0.99 | -0.00 | 1000.0 -> 1000.0 | 35 of 35 -> 646 of 34 | 1.95 -> 1.99 |
+
+How comparable the two sets are: same base (the same `cpd.db`), same scenario scripts, same windows and run counts, same `nice` 19 in all 34 after runs (and the 34 before runs), one run at a time, tmux server private to the run. The load differed: the load average (1 min, end of run, median of the runs of a scenario) is in the tables; across all runs it was 2.16-5.39 before and 2.12-6.65 after (release), 2.13-3.83 before and 2.24-4.02 after (debug). The machine (16 CPUs) was shared with other Jobs' processes in both sets (the doc records only the load average, not which processes): unverified which Jobs ran in either set. The release after runs of plan A1 had the highest load of the set (median 6.00, vs 4.46 before); the CPU of a scenario did not follow the load order within the after set (plan A1 at the highest load had the lowest plan CPU), which is as far as this doc reads it.
+
 ## Left
 
-- Not measured: the changed code (moon-after-ui), nice 0 (the real views), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
+- Not measured: pi on the changed code (moon-after-pi), nice 0 (the real views), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
 - A single machine and a single base: unverified that other hardware gives the same CPU %.
 - The snapshot count per run (the trace has no snapshot field): unverified.
 - `strace`: not tried (ptrace was denied in the earlier docs): no syscall counts.
@@ -377,3 +472,7 @@ Per run, work: 3.94 %, 4.08 %, 4.11 % (load 2.92, 2.72, 2.52); idle: 0.43 %.
 - pi: one machine, one model (`claude-haiku-4.5`), one tmux size (200x50); the model's wait for the tool call differs per run (the window starts 5 s after the tool row appears), unverified that the model never streams text inside the window. The nice of the pi pane is 19 (inherited from the Worker session), unverified at nice 0 (the real pane); the load (2-3) is far below the User's usual, so the CPU is optimistic.
 - pi: the idle control is 1 run, so its 0.43 % has no range; a node process has no idle cost of zero (timers, the editor's cursor), unverified what it is made of.
 - pi: the frame rate of the two loaders is not read from the pane (only two captures per run, a different moon glyph in each); unverified that both really redrew at 100 ms in every run. The CPU is of the node process only, not of the terminal or tmux.
+- After (moon-after-ui): the scripts of the Before Job were re-created from this doc, not the original files: unverified that they are byte-identical to the originals; the Before numbers in the Comparison are read from the Before tables of this doc.
+- After: whether the loader glyph of the running Job's pill (not only the title dots) changed with the 28 frames is not told apart on the capture (the capture shows the glyph of every spinner cell, all the same); unverified separately. The screen of each run was captured to `results/` and not read; the trace (draws every about 50 ms, `frame=` 0..27) is the evidence that the views animated.
+- After: one machine, one base, one run at a time; the load of the after set is not the load of the before set (see `## Comparison`), so a difference of a few tenths of a point between the sets is not separable from load; unverified how the CPU of the changed code moves at the User's usual load (7-38 in the earlier docs) or at nice 0.
+- After: the 5 min load reached 8.92 in the release set; unverified which process caused it.
