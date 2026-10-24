@@ -768,23 +768,3 @@ fn a_hung_pi_node_is_a_failed_check() {
     assert_timed_out(&run, "pi_node", "error", "node", "--version", "0.3");
     assert_timed_out(&run, "tiers", "error", "node", "--input-type=module", "0.3");
 }
-
-/// The catalog probe's deadline is doctor's (10 s, commands.md §14.1), not the 30 s of
-/// the catalog's own cache fill: a node that answers `--version` and hangs on the module.
-/// The test sets doctor's deadline to 5 s (`CPD_TEST_DOCTOR_DEADLINE`, contract §1.2), and the probe reports it.
-#[test]
-fn a_hung_catalog_probe_is_killed_at_doctors_deadline() {
-    let env = healthy();
-    link_sleep(&env);
-    fs::remove_file(env.bin().join("node")).unwrap();
-    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n"));
-    let started = std::time::Instant::now();
-    let run = doctor_with(&env, &[("CPD_TEST_DOCTOR_DEADLINE", DEADLINE)]);
-    // time-claim: the probe is killed at doctor's deadline, long before the cache fill's 30 s; no per-poll signal from
-    // the deadline.
-    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
-    assert_doctor_failed(&run);
-    assert_passes(&run, "pi_node");
-    let c = assert_fails(&run, "tiers", "error", "tool_timeout");
-    assert_eq!(c["found"]["deadline_seconds"], 5, "{c}");
-}

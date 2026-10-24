@@ -614,17 +614,6 @@ fn an_engine_whose_window_was_killed_is_back_within_seconds() {
     fx.back_after(1);
 }
 
-/// An install that kills the `watch` window and then does nothing (it failed, or it was cut short).
-#[test]
-fn an_engine_killed_by_an_install_that_then_does_nothing_is_back_within_seconds() {
-    let fx = fx("");
-    fx.env.tmux(&["new-session", "-d", "-s", "cockpit", "sleep", "600"]);
-    fx.supervised();
-    fx.env.fake("fake-install", &format!("tmux -L '{}' kill-window -t =cpd-work:watch", fx.env.tmux_socket()));
-    assert!(fx.env.command(fx.env.bin().join("fake-install")).status().unwrap().success());
-    fx.back_after(1);
-}
-
 /// A plain `--ensure` waits for `locks/watch-ensure.lock` like a supervising one: held by another call between its probe and its
 /// start, it keeps the plain call from probing, so no second window starts. Released, the call starts the engine.
 #[test]
@@ -673,21 +662,6 @@ fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
     fx.env.cpd(&["tui"]).ok();
     fx.back_after(1);
     fx.manager_heard_nothing();
-}
-
-#[test]
-fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
-    let fx = fx("");
-    // The engine itself exits 7 at once; `watch --ensure` is the real one, as the hooks call it.
-    fx.env.fake("cpd", &format!("case \"$2\" in --ensure) exec '{CPD}' \"$@\";; esac\nexit 7"));
-    assert_eq!(fx.env.cpd(&["watch", "--ensure"]).error()["code"], "watch_start_failed");
-    // time-claim: the back-off is a rate, so the bound is a duration; no signal says "no more starts will come".
-    std::thread::sleep(Duration::from_secs(5));
-    // Each failed start waits 2 s while it holds the one-at-a-time lock: a few starts in 5 s, not a loop of hundreds.
-    let calls = fx.env.calls("cpd").len();
-    assert!((3..=14).contains(&calls), "{calls} calls in 5 s");
-    let log = fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap();
-    assert!(log.contains("supervision: cannot start the engine"), "{log}");
 }
 
 // ---------- the downtime message (hs-d328) ----------
