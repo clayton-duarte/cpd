@@ -41,9 +41,20 @@ pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Lin
     row(LEAD, palette::muted_text(), title, count, palette::pill_static(), width)
 }
 
+/// The title of a box drawn with `Walls::Rail` (`crate::box_widget`): what the widget does not draw, the line after the corner
+/// and the title's pill to the last cell, no corner and no padding (the widget owns both): `─<pill>───…<count>`, `width` cells.
+/// `collapsible_title` is the Plan's other callers'.
+pub fn rail_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    row_padded(RULE, 0, palette::muted_text(), title, count, palette::pill_static(), width)
+}
+
 /// The row the forms share: `lead` (two cells) and `muted`, the style of the lead and the lines, and `pill_style` are what differ.
 fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
-    let pad = usize::from(width >= 2);
+    row_padded(lead, usize::from(width >= 2), muted, title, count, pill_style, width)
+}
+
+/// [`row`] with its padding, `pad` blank cells on each side, given.
+fn row_padded(lead: &str, pad: usize, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
     let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
     let left = width - lead.chars().count();

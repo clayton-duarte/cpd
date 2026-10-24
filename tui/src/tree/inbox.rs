@@ -12,14 +12,16 @@
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
-use ratatui::layout::{Margin, Rect};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::actions::Action;
 use super::rows::truncate;
+use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::fold;
 use crate::link::link;
 use crate::merge::Pull;
@@ -34,8 +36,8 @@ use cpd_core::inbox::model::{Item, Kind};
 /// How many item rows the section shows before the `╰󰬦 expand` row.
 pub const SHOWN: usize = 3;
 
-/// The columns before the label: the fold's `│`, one space, the item's tier glyph and a space.
-const LEAD_WIDTH: usize = 4;
+/// The columns before the label: the item's tier glyph and a space.
+const LEAD_WIDTH: usize = 2;
 
 /// The rows above the items: the empty row (hs-d346) and the title.
 const TOP: usize = 2;
@@ -305,8 +307,8 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row: the fold's muted `│`, one space, the item's tier glyph in its urgency's colour, a space, the label cut with
-/// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
+/// An item's row, in the box's body: the item's tier glyph in its urgency's colour, a space, the label cut with
+/// `…` so that it never reaches the age, and the age (`width` cells: the body's). Returns the line and the number of cells of the label.
 /// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
 fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
@@ -318,65 +320,95 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
     }
-    let line = fold::content(fold::BRANCH, Line::from(vec![
-        " ".into(),
+    let line = Line::from(vec![
         glyph,
         " ".into(),
         Span::styled(label, palette::clickable_text()),
         " ".repeat(gap).into(),
         Span::styled(age.to_owned(), palette::muted_text()),
-    ]));
+    ]);
     (line, label_width)
 }
 
-/// A scroll cue row: the fold's muted `│` on the left, the cue right-aligned after it.
-fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
-    fold::content(fold::BRANCH, cue(which, n, width.saturating_sub(1)))
+/// The box's body: the rows of the list (items and cues), each a line, and the links of the labels of the link kinds.
+struct Body {
+    rows: Vec<Line<'static>>,
+    /// (row, label's width, url)
+    links: Vec<(u16, u16, String)>,
 }
 
-/// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
-/// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
+impl Widget for Body {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        for (y, line) in (area.y..area.bottom()).zip(self.rows) {
+            line.render(Rect::new(area.x, y, area.width, 1), buf);
+        }
+        for (row, width, url) in self.links {
+            if row < area.height {
+                link(buf, Rect::new(area.x + LEAD_WIDTH as u16, area.y + row, width, 1), &url);
+            }
+        }
+    }
+}
+
+/// Draws the section into `area`, the panel's full width: a `BoxWidget<Rail>` over `spacing::contain(area)` (its first row is the
+/// empty one; rows that do not fit are cut): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
 /// is on (its row is the blue block across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
 /// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
 pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
+    // the section is drawn whole; rows below the area are cut
+    let wall = Rect { height: shape.height(), ..spacing::contain(area) };
+    let closing = if items.is_empty() {
+        fold::done("up to date, drink some water")
+    } else if shape.has_toggle() {
+        fold::toggle(shape.expanded)
+    } else {
+        fold::plain()
+    };
+    let closing = fold::after_corner(closing, usize::from(wall.width).saturating_sub(1 + spacing::RIGHT_PAD as usize));
+    let walls = Walls::Rail { closing };
+    let inner = geometry(&walls, wall).inner;
+    let width = usize::from(inner.width);
     let win = shape.window();
     let list = shape.list_rows();
-    for dy in 0..area.height.min(shape.height()) {
-        let full = Rect::new(area.x, area.y + dy, area.width, 1);
-        let row = full.inner(Margin::new(1, 0));
-        let width = usize::from(row.width).saturating_sub(2); // the content ends at column W-4 (the rail's right padding)
-        let at = usize::from(dy);
-        match shape.hit(dy) {
-            Some(Hit::Header) => {
-                f.render_widget(Paragraph::new(section::collapsible_title("Inbox", Some(items.len()), usize::from(full.width))), full);
-            }
+    let mut rows = Vec::new();
+    let mut links = Vec::new();
+    let mut highlight = None;
+    for at in 0..list {
+        let row = at as u16;
+        match shape.hit(row + TOP as u16) {
             Some(Hit::Item(i)) => {
                 let item = &items[i];
                 let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
-                f.render_widget(Paragraph::new(line), row);
+                rows.push(line);
                 if cursor == Some(i) {
-                    f.buffer_mut().set_style(row, palette::selected());
+                    highlight = Some(row..row + 1);
                 }
                 if let (true, Some(url)) = (is_link(item.kind), &item.url) {
-                    let label = Rect::new(row.x + LEAD_WIDTH as u16, row.y, label_width as u16, 1);
-                    link(f.buffer_mut(), label, url);
+                    links.push((row, label_width as u16, url.clone()));
                 }
             }
-            Some(Hit::Toggle) => {
-                f.render_widget(Paragraph::new(fold::toggle(shape.expanded)), row);
-            }
-            None if win.cue_above && at == TOP => {
-                f.render_widget(Paragraph::new(cue_line(Cue::Above, win.first, width)), row);
-            }
-            None if win.below > 0 && at == TOP + list - 1 => {
-                f.render_widget(Paragraph::new(cue_line(Cue::Below, win.below, width)), row);
-            }
-            None if at == TOP + list => {
-                let close = if items.is_empty() { fold::done("up to date, drink some water") } else { fold::plain() };
-                f.render_widget(Paragraph::new(close), row);
-            }
-            None => {}
+            _ if win.cue_above && at == 0 => rows.push(cue(Cue::Above, win.first, width)),
+            _ if win.below > 0 && at == list - 1 => rows.push(cue(Cue::Below, win.below, width)),
+            _ => rows.push(Line::default()),
+        }
+    }
+    let title = section::rail_title("Inbox", Some(items.len()), usize::from(wall.width).saturating_sub(1));
+    let mut widget = BoxWidget::new(walls, palette::muted_text(), Body { rows, links }).title(title);
+    if let Some(rows) = highlight {
+        widget = widget.highlight(rows);
+    }
+    let shown = area.height.min(wall.height);
+    if shown == wall.height {
+        f.render_widget(widget, wall);
+        return;
+    }
+    let mut whole = Buffer::empty(wall);
+    widget.render(wall, &mut whole);
+    let buf = f.buffer_mut();
+    for y in wall.y..wall.y + shown {
+        for x in wall.x..wall.right() {
+            buf[(x, y)] = whole[(x, y)].clone();
         }
     }
 }
