@@ -24,6 +24,26 @@ pub(crate) enum Kind {
     Full,
     /// A left rail with a closing row, a blank row above and one below inside the rect.
     Rail,
+    /// Rounded walls all round, the title is text (a PR's `api · repo 󱦰 main · dispatch`), not a pill: (8) does not apply.
+    FullText,
+}
+
+/// Where the pane's window sits on a scrolling canvas (the Plan view).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scroll {
+    /// At (0, 0): the canvas keeps its margin columns, so they are asserted.
+    Corner,
+    /// Elsewhere: a scrolled canvas reaches the pane's edges by design, so the margin columns are not asserted.
+    Middle,
+}
+
+/// The fixture the Plan pane's sample draws, at a scroll offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanCase {
+    /// One PR with no Jobs.
+    Empty(Scroll),
+    /// Three Jobs in two PRs: a PR box next to another.
+    Three(Scroll),
 }
 
 /// Which assertion a named exemption lifts on its row.
@@ -36,6 +56,8 @@ pub(crate) enum Rule {
     /// The box is below `MIN_WIDTH` and still draws (B3 does not apply): the Context fold is not the widget, it stays
     /// on the `fold::*` line builders (research section 2); only the margin and "nothing outside" are asserted.
     Minimum,
+    /// The pane clips the box (the canvas scrolls): only (7), nothing outside the container, is asserted of it.
+    Clipped,
 }
 
 /// A row that keeps a recorded design, by name: the name carries the record id.
@@ -155,14 +177,26 @@ fn exempted(placed: &Placed, row: u16, rule: Rule) -> bool {
 /// (1) margin, (2) walls, (3) padding, (4) content, (5) vertical, (6) hs-d476, (7) nothing outside the container,
 /// (8) title, (9) B3 (no half boxes). Panics with `subject`, `width` and the cell.
 pub(crate) fn check(subject: &str, width: u16, sample: &Sample) {
+    check_at(subject, width, sample, Scroll::Corner);
+}
+
+/// [`check`] for a pane whose canvas is at `scroll`.
+pub(crate) fn check_at(subject: &str, width: u16, sample: &Sample, scroll: Scroll) {
     let Sample { buf, container, boxes } = sample;
     let fail = |x: u16, y: u16, what: &str| {
         panic!("{subject} at width {width}: {what} at cell ({x}, {y}) = {:?}\n{}", sym(buf, x, y), dump(buf))
     };
-    // (1) the margin columns of the container are blank and unstyled on every row, boxes or not
+    // (1) the margin columns of the container are blank and unstyled on every row, boxes or not. At the canvas's corner
+    // only: a scrolled canvas reaches the pane's edges by design, and so does a box the pane clips on the right.
+    let clipped = |p: &Placed| p.exempt.iter().any(|e| e.rule == Rule::Clipped);
+    let clips = boxes.iter().any(clipped);
     for y in container.y..container.bottom() {
         for dx in 0..spacing::MARGIN_X {
             for x in [container.x + dx, container.right() - 1 - dx] {
+                let right = x != container.x + dx;
+                if scroll == Scroll::Middle || (right && clips) {
+                    continue;
+                }
                 if !plain(&buf[(x, y)]) {
                     fail(x, y, "(1) the margin column is not blank and unstyled");
                 }
@@ -183,10 +217,13 @@ pub(crate) fn check(subject: &str, width: u16, sample: &Sample) {
             continue;
         }
         let name = placed.name;
-        if r.x < container.x + spacing::MARGIN_X || r.right() + spacing::MARGIN_X > container.right() {
+        if clipped(placed) {
+            continue;
+        }
+        if scroll == Scroll::Corner && r.x < container.x + spacing::MARGIN_X || r.right() + spacing::MARGIN_X > container.right() {
             fail(r.x, r.y, &format!("(1) box {name} {r:?} keeps less than the margin from the container {container:?}"));
         }
-        let min_rows = if placed.kind == Kind::Full { 2 } else { 4 };
+        let min_rows = if placed.kind == Kind::Rail { 4 } else { 2 };
         if r.width < spacing::MIN_WIDTH && placed.exempt.iter().any(|e| e.rule == Rule::Minimum) {
             continue;
         }
@@ -268,7 +305,7 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
     }
     // (8) the title: `╭─` then the pill's left cap
     let pill = (r.x..r.right()).find(|&x| sym(buf, x, top) == PILL_LEFT);
-    if let Some(x) = pill {
+    if let Some(x) = pill.filter(|_| placed.kind != Kind::FullText) {
         if x != r.x + 2 || sym(buf, r.x, top) != "╭" || sym(buf, r.x + 1, top) != "─" {
             fail(x, top, &format!("(8) box {name}: the title does not start `╭─` then the pill's left cap"));
         }

@@ -29,6 +29,8 @@ mod input_box;
 #[cfg(test)]
 mod layout_dialog_tests;
 #[cfg(test)]
+mod layout_plan_tests;
+#[cfg(test)]
 mod layout_popup_tests;
 #[cfg(test)]
 mod layout_tests;

@@ -615,6 +615,115 @@ fn show(
     }
 }
 
+/// The Plan view's fixtures for the tests of its boxes: a PR `key` (repo `<key>-repo`, base `main`, `dispatch`, no needs).
+#[cfg(test)]
+fn sample_pr(key: &str) -> read::PrNode {
+    read::PrNode {
+        key: cpd_core::ids::PrKey::parse(key).unwrap(),
+        repo_name: format!("{key}-repo"),
+        base: "main".into(),
+        status: read::PrStatus::Dispatch,
+        needs: Vec::new(),
+        pull: None,
+        waiting_on: Vec::new(),
+        superseded_by: None,
+    }
+}
+
+/// A queued Job `key` of PR `pr`, of Tier S1, with no needs.
+#[cfg(test)]
+fn sample_job(pr: &str, key: &str) -> read::JobNode {
+    read::JobNode {
+        key: cpd_core::ids::JobKey::parse(key).unwrap(),
+        pr: cpd_core::ids::PrKey::parse(pr).unwrap(),
+        seq: 0,
+        title: String::new(),
+        status: read::JobStatus::Queued,
+        tier: Some(cpd_core::config::Tier::parse("S1").unwrap()),
+        needs: Vec::new(),
+        appended: false,
+        retry_tier: None,
+        failed_cause: None,
+        cancel_reason: None,
+        merged_sha: None,
+        waiting_on: Vec::new(),
+        attempts: Vec::new(),
+    }
+}
+
+/// What the view reads for a Plan of `prs` and `jobs`, laid out as [`snapshot`] does (spinner frame 0).
+#[cfg(test)]
+fn sample_centre(prs: Vec<read::PrNode>, jobs: Vec<read::JobNode>) -> Centre {
+    let needs_user = read::NeedsUser::default();
+    let boxes = boxes::layout(&prs, &jobs, &needs_user, 0).with_margin(CHART_MARGIN);
+    let plan = PlanBoxes {
+        plan: PlanId::parse("p1").unwrap(),
+        context: cpd_core::ids::ContextId::parse("ctx").unwrap(),
+        prs,
+        jobs,
+        needs_user,
+        events_cursor: 0,
+    };
+    let slot = ChatSlot { session: SessionId::parse("lead").unwrap(), name: "n".into(), plan: plan.plan.clone(), moved_event: 1 };
+    Centre { slot, plan, boxes, frame: 0 }
+}
+
+/// The layout test's sample (`layout_tests`): the Plan view drawn by [`Ui::draw`] into a `width` x `height` pane at a
+/// scroll offset. Placed is one box per PR, its rect on the canvas (`boxes::layout`'s buffer, with the canvas margin) less the
+/// offset the draw clamped to, kept to the chart's window: the canvas does not expose the boxes' rects, so each is read off
+/// the canvas by its corners (`╭` to the next `╮` on its row, `╭` to the next `╰` down its column). A box the window
+/// clips is `Rule::Clipped`.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::PlanCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Exempt, Kind, PlanCase, Placed, Rule, Sample, Scroll};
+    use ratatui::backend::TestBackend;
+    let (scroll, prs, jobs) = match case {
+        PlanCase::Empty(scroll) => (scroll, vec![sample_pr("api")], Vec::new()),
+        PlanCase::Three(scroll) => (
+            scroll,
+            vec![sample_pr("api"), sample_pr("web")],
+            vec![sample_job("api", "api-1"), sample_job("api", "api-2"), sample_job("web", "web-1")],
+        ),
+    };
+    let expected = prs.len();
+    let centre = sample_centre(prs, jobs);
+    let canvas = &centre.boxes.chart.buf;
+    let mut ui = Ui::default();
+    if scroll == Scroll::Middle {
+        ui.scroll = (canvas.area.width / 2, canvas.area.height / 2);
+    }
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui.draw(f, Some(&centre))).unwrap();
+    let window = ui.body;
+    let (ox, oy) = ui.scroll;
+    let mut boxes = Vec::new();
+    for y in 0..canvas.area.height {
+        for x in 0..canvas.area.width {
+            if canvas[(x, y)].symbol() != "╭" {
+                continue;
+            }
+            let right = (x + 1..canvas.area.width).find(|&x2| canvas[(x2, y)].symbol() == "╮");
+            let bottom = (y + 1..canvas.area.height).find(|&y2| canvas[(x, y2)].symbol() == "╰");
+            let (Some(right), Some(bottom)) = (right, bottom) else { continue };
+            let whole = Rect::new(x, y, right - x + 1, bottom - y + 1);
+            let view = Rect::new(ox, oy, window.width, window.height);
+            let seen = view.intersection(whole);
+            let rect = Rect::new(window.x + seen.x.saturating_sub(ox), window.y + seen.y.saturating_sub(oy), seen.width, seen.height);
+            let exempt = if seen == whole {
+                Vec::new()
+            } else {
+                vec![Exempt { name: "the pane clips the box: the canvas scrolls", row: rect.y, rule: Rule::Clipped }]
+            };
+            boxes.push(Placed { name: "pr box", kind: Kind::FullText, rect, exempt });
+        }
+    }
+    assert_eq!(boxes.len(), expected, "one box per PR on the canvas\n{}", crate::layout_tests::dump(canvas));
+    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+}
+
+#[cfg(test)]
+mod box_tests;
+
 #[cfg(test)]
 mod margin_tests;
 
