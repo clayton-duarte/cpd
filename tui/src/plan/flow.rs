@@ -341,8 +341,11 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let col_w: Vec<u16> = cols.iter().enumerate().map(|(l, cs)| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| rect_w(i, l)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
-    let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
-    let width = if ncols == 0 { 0 } else { inner_w + 2 };
+    let xs: Vec<u16> = starts(0, col_w.iter().copied(), spacing);
+    // the chart pads nothing: its container does (`BoxWidget`). Only the right bracket of a card of several Jobs in the last
+    // column lies past the pills, one column on
+    let bracketed = ncols > 0 && cols[ncols - 1].iter().any(|&c| cards[c].jobs.len() > 1);
+    let width = if ncols == 0 { 0 } else { inner_w + u16::from(bracketed) };
 
     // y: each column's cards stacked (one empty row between cards), centred in the tallest column, ordered by the mean
     // row of the cards they need (ties: the Plan's order)
@@ -404,7 +407,8 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // Job's are plain line ends
     for c in 0..cards.len() {
         let (first, last) = (top[c], top[c] + height_of(c) - 1);
-        let (lx, rx) = (xs[col_of[c]] - 1, right(c));
+        // column 0 has no entry (no needs), so its `lx` is never drawn at
+        let (lx, rx) = (xs[col_of[c]].saturating_sub(1), right(c));
         if first == last {
             if edges.iter().any(|e| e.1 == c) {
                 mask.add(lx, first, R);
@@ -724,7 +728,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
- 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
+󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -733,7 +737,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
- 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
+󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
@@ -742,9 +746,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
-             ╭󰝦 b│S1╮
- 󰝦 a│S1────┤󰝦 c│S1│
-             ╰󰝦 d│S1╯");
+            ╭󰝦 b│S1╮
+󰝦 a│S1────┤󰝦 c│S1│
+            ╰󰝦 d│S1╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -753,23 +757,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
-             ╭󰝦 b│S1╮
- 󰝦 a│S1────┤󰝦 c│S1├────󰝦 d│S1
-             ╰󰝦 e│S1╯");
+            ╭󰝦 b│S1╮
+󰝦 a│S1────┤󰝦 c│S1├────󰝦 d│S1
+            ╰󰝦 e│S1╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
- 󰝦 a│S1────┬󰝦 b│S1╮
-             ╰󰝦 c│S1╯");
+󰝦 a│S1────┬󰝦 b│S1╮
+            ╰󰝦 c│S1╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
- 󰝦 a│S1──┬──󰝦 c│S1
-           │
- 󰝦 b│S1──┴──󰝦 d│S1");
+󰝦 a│S1──┬──󰝦 c│S1
+          │
+󰝦 b│S1──┴──󰝦 d│S1");
     }
 
     #[test]
@@ -778,16 +782,16 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
- 󰝦 a              │S1
+󰝦 a              │S1
 
- 󰝦 a-longer-key│S1│a2
+󰝦 a-longer-key│S1│a2
 
- 󰝦 b              │S1");
+󰝦 b              │S1");
         // the last cell of the widest pill is a hit, the one after it is not
         let r = c.pills[1].rect;
         assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
-        // so is the left cap, the pill's first cell; the cell before it is not
-        assert_eq!((c.pill_at(r.x, r.y), c.pill_at(r.x - 1, r.y)), (Some(1), None));
+        // so is the left cap, the pill's first cell, the chart's first column (the chart has no padding: nothing before it)
+        assert_eq!((c.pill_at(r.x, r.y), r.x), (Some(1), 0));
     }
 
     #[test]
@@ -799,18 +803,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
- 󰝦 a│S1──╮
-           ├──󰝦 c│S1
- 󰝦 b│S1──╯");
+󰝦 a│S1──╮
+          ├──󰝦 c│S1
+󰝦 b│S1──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
- 󰝦 a│S1──╮
-           ├──󰝦 b│S1──┬──󰝦 c│S1
- 󰝦 x│S1──┴────────────╯");
+󰝦 a│S1──╮
+          ├──󰝦 b│S1──┬──󰝦 c│S1
+󰝦 x│S1──┴────────────╯");
     }
 
     #[test]

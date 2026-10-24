@@ -37,6 +37,7 @@ use ratatui::widgets::Paragraph;
 use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
+use crate::box_widget::spacing;
 use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
@@ -72,11 +73,12 @@ fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
 
-/// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
-/// chart touches the pane's edges, and scrolled the chart reaches them.
+/// The blank space around Pulse and the message row, inside the canvas the view scrolls over: at scroll (0, 0) nothing of
+/// them touches the pane's edges. It is not a box's margin: the boxes' is [`CHART_MARGIN`].
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
-/// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
-pub(crate) const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
+/// The blank space around the chart's canvas of boxes: the container's one column of box margin
+/// ([`spacing::MARGIN_X`]) each side and one row; Pulse and the message row keep `MARGIN`.
+pub(crate) const CHART_MARGIN: Margin = Margin::new(spacing::MARGIN_X, 1);
 
 /// Whether a spinner is on screen for `jobs` of a Plan: a running Job's pill (hs-d586: also a failed one while the Lead works,
 /// `needs_user.lead_working`).
@@ -263,7 +265,7 @@ impl Ui {
         let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
         if let Some(text) = message(self.error.as_deref(), centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
-            // the pane's last row, indented like the chart's content at scroll (0, 0)
+            // the pane's last row, at column `MARGIN.horizontal` (2)
             f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
             window = chart_area;
         }
