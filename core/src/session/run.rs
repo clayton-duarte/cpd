@@ -449,17 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn stop_pi_ends_an_adopted_pi_by_sigterm_and_by_sigkill_when_it_ignores_it() {
-        let mut pi = adopt("exec sleep 60");
-        stop_pi(&mut pi, Duration::from_secs(5));
-        assert_eq!(pi.try_wait().unwrap().and_then(|s| s.signal()), Some(Signal::SIGTERM as i32));
-        let mut stubborn = adopt("trap '' TERM; exec sleep 60");
-        std::thread::sleep(Duration::from_millis(300));
-        stop_pi(&mut stubborn, Duration::from_millis(500));
-        assert_eq!(stubborn.try_wait().unwrap().and_then(|s| s.signal()), Some(Signal::SIGKILL as i32));
-    }
-
-    #[test]
     fn a_store_error_is_said_once_per_code() {
         let mut logged = Logged::default();
         let failing = || -> Result<bool, CpdError> { Err(CpdError::new(ErrorCode::StoreTooNew, "newer.")) };

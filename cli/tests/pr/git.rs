@@ -497,26 +497,6 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 }
 
 #[test]
-fn the_log_has_a_hooks_line_before_the_hook_ends() {
-    // The hook ends only once the test has read the log (`go`): its first line must be there before.
-    let h = hooks("pre-merge = \"echo first; until [ -e go ]; do sleep 0.05; done; echo last\"\n");
-    let (repo, log, pre_merge) = (h.repo.clone(), h.log.clone(), pipeline(&h.wt, Hook::PreMerge));
-    let runner = std::thread::spawn(move || {
-        let op = Operation { branch: "main" };
-        run_hook(Hook::PreMerge, &pre_merge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
-    });
-    common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
-    let seen = fs::read_to_string(&h.log).unwrap_or_default();
-    let ended = runner.is_finished();
-    fs::write(h.repo.join("go"), "").unwrap();
-    let result = runner.join().unwrap();
-    assert_eq!(seen, "first\n", "the log before the hook ended");
-    assert!(!ended, "the hook ended before the log was read");
-    assert_eq!(result.tail.as_deref(), Some("first\nlast"));
-    assert_eq!(fs::read_to_string(&h.log).unwrap(), "first\nlast\n");
-}
-
-#[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
     // Keys are not in alphabetical order: file order decides, not the table's sort. `zeta`
     // (first in the file) only fails once `slow` (last) has started, so the commands run

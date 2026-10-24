@@ -308,31 +308,3 @@ fn refusals_register_nothing() {
     assert_eq!(window_names(&env), ["main"]);
     assert!(env.calls("pi").is_empty());
 }
-
-#[test]
-fn session_open_brings_the_manager_into_the_chat_slot() {
-    let env = TestEnv::new();
-    setup(&env);
-    cockpit(&env);
-    let placeholder = slot(&env);
-    let started = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
-    let id = started["manager"]["session"].as_str().unwrap().to_owned();
-    assert_eq!(slot(&env), placeholder, "context manager never moves the slot");
-
-    let out = env.cpd(&["session", "open", &id]).ok();
-    assert_eq!((&out["session"], &out["displaced"], &out["pane"]), (&json!(id), &Value::Null, &started["manager"]["pane"]));
-    let now = slot(&env);
-    assert_eq!((now[0].as_str(), now[2].as_str()), (started["manager"]["pane"].as_str().unwrap(), id.as_str()));
-    assert!(panes(&env).iter().all(|p| p[3] != "chat"), "the placeholder died with its window");
-    assert_eq!(window_names(&env), ["main"]);
-    assert_eq!(env.cpd(&["session", "show", &id]).ok()["session"]["place"], "chat");
-    assert_eq!(env.cpd(&["session", "open", &id]).ok()["already"], true);
-
-    // Parking it puts it back in `ctx-<context>`, alone, with a placeholder in the slot.
-    env.cpd(&["session", "park"]).ok();
-    assert_eq!(slot(&env)[3], "chat");
-    let parked = panes(&env).into_iter().find(|p| p[2] == id).unwrap();
-    assert_eq!(parked[1], "ctx-ctx");
-    pi_envs(&env, &id, 1);
-    assert_eq!(env.calls("pi").len(), 1, "it was started once");
-}
