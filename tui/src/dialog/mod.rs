@@ -33,6 +33,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
 use cpd_core::session::PROGRAM;
+use crate::box_widget::spacing;
 use validate::Validator;
 use view::{CANCEL, Dialog, Field, Mode, REFUSAL_ROWS, Row, wrap};
 
@@ -317,7 +318,7 @@ fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl F
     let inner = (natural + 2).max(title.chars().count() + 6).clamp(MIN_INNER, MAX_INNER);
     let rows = body_rows(inner - 2) + 5;
     let to_u16 = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
-    (to_u16(inner + 2).min(client.0.saturating_sub(2)).max(1), to_u16(rows).min(client.1))
+    (to_u16(inner + 2).min(client.0.saturating_sub(2 * spacing::MARGIN_X)).max(1), to_u16(rows).min(client.1))
 }
 
 /// The popup's size `(columns, rows)` for an `input`: wide enough for the label and the initial text, tall enough for the
@@ -326,7 +327,7 @@ fn input_popup_size(client: (u16, u16), title: &str, prompt: &str, initial: &str
     let initial = initial.chars().count();
     let natural = view::label(prompt).chars().count().max(initial) + 5;
     popup_size(client, title, natural, |text_width| {
-        let tw = text_width - 4;
+        let tw = text_width - 4 * spacing::PAD_X as usize;
         validator.max_len().max(initial) / tw + 1 + 2 + REFUSAL_ROWS
     })
 }
