@@ -473,10 +473,10 @@ fn add_keys_the_repo_before_anything_is_written() {
 
     // owner_unconfirmed (exit 1): the Context's owner has no policy file.
     fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
-    fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+    fs::remove_file(fx.env.cpd_home().join("policy/acme/owner.toml")).unwrap();
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unconfirmed", 1, writes);
     assert_eq!(error["details"]["owner"], "acme");
-    fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
+    fs::write(fx.env.cpd_home().join("policy/acme/owner.toml"), "").unwrap();
 
     // With every refusal cleared (`remote remove` dropped the tracking ref), the same add succeeds.
     fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
@@ -1794,7 +1794,7 @@ fn after_a_pr_cancel_the_plan_can_be_archived() {
 #[test]
 fn owner_is_in_use_while_a_plan_has_a_pr_row() {
     let fx = fx("plan");
-    fs::write(fx.env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    fx.env.owner_policy("other", "");
     fx.add("api", &fx.pay, &[]).ok();
     let owner = |fx: &Fx| fx.env.cpd(&["context", "owner", "other", "--context", "ctx"]);
 

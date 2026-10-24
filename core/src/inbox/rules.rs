@@ -1215,9 +1215,9 @@ mod tests {
     #[test]
     fn checks_no_longer_matter_to_pr_ready_hs_d481() {
         let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
+        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
         for (n, checks) in [(1, "failed"), (2, "pending")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
@@ -1242,9 +1242,9 @@ mod tests {
     #[test]
     fn with_feedback_checks_none_a_mergeable_pr_is_ready_whatever_its_checks() {
         let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
+        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
         for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
@@ -1291,9 +1291,9 @@ mod tests {
     fn own(f: &mut Fixture, n: i64) {
         f.job("a", "queued");
         f.sql("UPDATE contexts SET owner = 'acme'");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "").unwrap();
+        std::fs::write(owners.join("owner.toml"), "").unwrap();
         f.sql(&format!(
             "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
                             pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"

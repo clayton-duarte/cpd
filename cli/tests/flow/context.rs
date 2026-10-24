@@ -143,7 +143,7 @@ fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
     // No `--owner`: a clap usage error.
     refused(env.cpd(&["context", "new", CTX, "--title", "T"]), 2, "usage");
     refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "-bad-"]), 2, "usage");
-    // An owner without `policy/owners/<login>.toml`.
+    // An owner without `policy/<login>/owner.toml`.
     let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]), "nothing written");
@@ -151,7 +151,7 @@ fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
     let out = env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "ACME"]).ok();
     assert_eq!(out["context"]["owner"], "acme");
     // The same Context with another owner is `context_exists`.
-    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    env.owner_policy("other", "");
     refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "other"]), 3, "context_exists");
 }
 
@@ -166,7 +166,7 @@ fn owner_sets_a_missing_owner_and_appends_context_owner() {
     let env = hs();
     new_context(&env);
     clear_owner(&env);
-    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    env.owner_policy("other", "");
 
     let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unconfirmed");
     assert_eq!(error["details"]["owner"], "nobody");
@@ -192,7 +192,7 @@ fn owner_sets_a_missing_owner_and_appends_context_owner() {
 fn owner_changes_while_the_context_has_no_pr_row() {
     let env = hs();
     new_context(&env);
-    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    env.owner_policy("other", "");
     let listed = |env: &TestEnv| env.cpd(&["context", "list"]).ok()["contexts"][0]["owner"].clone();
 
     let out = env.cpd(&["context", "owner", "other", "--context", CTX]).ok();

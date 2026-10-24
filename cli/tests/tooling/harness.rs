@@ -838,7 +838,7 @@ fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
     assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
 
     let empty = TestEnv::empty();
-    // main's harness gives every env the owner policy `acme` (policy/owners/acme.toml): no store is what makes it empty.
+    // main's harness gives every env the owner policy `acme` (policy/acme/owner.toml): no store is what makes it empty.
     assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
 }
 

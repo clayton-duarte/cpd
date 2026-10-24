@@ -137,7 +137,7 @@ fn l3_the_repo_wins_over_the_owner_and_the_machine() {
 fn l3_a_missing_repo_file_is_repo_unconfigured_naming_the_file() {
     let fx = Fx::new();
     fs::remove_file(fx.path("acme/r.toml")).unwrap();
-    let error = refused(&fx.show(&["--owner", "acme", "--repo", "r"]), "repo_unconfigured", 1);
+    let error = refused(&fx.show(&["--owner", "acme", "--repo", "r"]), "repo_unconfigured", 3);
     assert_eq!(error["details"]["file"], fx.path("acme/r.toml").display().to_string(), "{error}");
 }
 
@@ -313,7 +313,7 @@ fn l8_a_stray_file_at_the_root_is_policy_invalid() {
 
 #[test]
 fn l8_an_invalid_owner_directory_name_is_policy_invalid() {
-    for name in ["Acme", "-x"] {
+    for name in ["a_b", "-x"] {
         let fx = Fx::new();
         fx.write(&format!("{name}/owner.toml"), "");
         invalid(&fx, name);

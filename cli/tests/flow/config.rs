@@ -39,7 +39,6 @@ fn config_defaults_context_distill_tier_to_gx() {
         json!({
             "version": 1,
             "machine": "hs",
-            "host": "hs",
             "concurrency": 3,
             "test_concurrency": 2,
             "retry_cap": 2,
@@ -192,7 +191,6 @@ fn config_accepts_every_key_with_a_value_at_its_boundary() {
         r#"# comments are allowed
 version = 1
 machine = "a1234567"
-host = "a-123456789012345678901234567890"
 concurrency = 1
 test_concurrency = 64
 context_recent_days = 3650
@@ -245,7 +243,6 @@ work_session = "w"
     );
     let out = config_with(&env, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
-    assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
     assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");

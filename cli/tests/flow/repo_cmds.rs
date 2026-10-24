@@ -54,7 +54,7 @@ fn a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands() {
     env.repo_policy("acme", "shop", "");
     let run = add_tdd(&env, &repo);
     let error = refused(&run, "tests_unconfigured", 3);
-    assert!(error["message"].as_str().unwrap().contains("policy/repos/acme/shop.toml"), "{run:?}");
+    assert!(error["message"].as_str().unwrap().contains("policy/acme/shop.toml"), "{run:?}");
 }
 
 // ---------- attempt submit ----------

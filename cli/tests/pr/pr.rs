@@ -3727,7 +3727,7 @@ impl Fx {
     /// The owner file of `gone` is written, then deleted: the one owner this machine has no file for.
     fn add_bob_without_an_owner_file(&self) {
         self.env.owner_policy("gone", "");
-        fs::remove_file(self.env.cpd_home().join("policy/owners/gone.toml")).unwrap();
+        fs::remove_file(self.env.cpd_home().join("policy/gone/owner.toml")).unwrap();
         self.store()
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(

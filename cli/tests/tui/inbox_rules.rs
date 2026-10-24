@@ -193,7 +193,7 @@ fn an_unowned_row_with_failed_checks_opens_no_item_whatever_its_policy() {
     setup(&env);
     // `acme` says none; its repo `shop` says any again; `nofile` has no owner file (cpd's default, any).
     env.owner_policy("acme", NO_CHECKS);
-    policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
+    policy_file(&env, "acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
     // Failed required checks on a mergeable PR: GitHub reports `blocked`.
     pull_request(&env, 1, "checks = 'failed', merge_state = 'blocked'");
     pull_request(&env, 2, "checks = 'failed', merge_state = 'blocked', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
@@ -242,7 +242,7 @@ fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
     assert!(failing(&env).is_empty(), "an owned row opens no pr-failing (hs-d302)");
     assert_eq!(ready(&env), ["pr:acme/shop#5"], "ready by merge state and review, whatever its checks (hs-d481)");
 
-    policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
+    policy_file(&env, "acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
     assert_eq!(ready(&env), ["pr:acme/shop#5"], "its repo says any: failed checks no longer keep it from ready (hs-d481)");
     assert!(failing(&env).is_empty(), "and still no pr-failing for an owned row (hs-d302)");
 }
@@ -277,7 +277,7 @@ fn a_row_whose_owner_policy_does_not_resolve_opens_no_engine_error_and_pr_ready_
     own_pull_request(&env, 5);
     pull_request(&env, 6, "review_decision = 'changes_requested'");
     pull_request(&env, 7, "checks = 'failed', merge_state = 'blocked', repo = 'other/x', url = 'https://github.com/other/x/pull/7'");
-    fs::remove_file(env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+    fs::remove_file(env.cpd_home().join("policy/acme/owner.toml")).unwrap();
 
     let items = found(&env);
 
