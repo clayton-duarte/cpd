@@ -665,6 +665,7 @@ export class FakePi implements PiApi {
   mcpThrows?: Error;
   registerMcpServer(name: string, config: unknown): void {
     this.registeredMcp.push({ name, config });
+    notify();
     if (this.mcpThrows) throw this.mcpThrows;
   }
   /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
