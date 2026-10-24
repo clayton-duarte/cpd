@@ -1,5 +1,5 @@
 //! The machine policy scope (contract §8.3 "The machine scope" and "Machine domains";
-//! commands.md §22.1 "The machine object"): `$CPD_HOME/policy/machines/<machine>.toml`,
+//! commands.md §22.1 "The machine object"): `$CPD_HOME/policy/machines/<host>.toml`,
 //! which sets only `[mcp.servers.<name>]`.
 //!
 //! API the tests pin (the implementer follows this and the contract):
@@ -11,7 +11,7 @@
 //!   `toolExposure`, when present, has at least one entry and non-empty keys. Every refusal is
 //!   `policy_invalid` (`policy::policy_invalid`) with `details.file` the `file` argument and
 //!   `details.key` the dotted path of the offending key (null when the file does not parse).
-//! - [`load_machine`]: reads only `machines/<machine>.toml` of the home (no file: no servers,
+//! - [`load_machine`]: reads only `machines/<host>.toml` of the home (no file: no servers,
 //!   [`MachineSource::Default`]; else [`MachineSource::File`] with its realpath). Other machines'
 //!   files are not read, but every entry of `machines/` has its name checked: a name that is not
 //!   a valid machine name, or an entry that is not `<name>.toml`, is `policy_invalid`.

@@ -268,6 +268,21 @@ fn mcp_attach_with_no_machine_file_lists_nothing() {
     assert_eq!(all_events(&env), before);
 }
 
+// ---------- the machine file is keyed by the host ----------
+
+/// With `machine = "pro"` and `host = "mac-pro"` the file read is `machines/mac-pro.toml`, never `machines/pro.toml`.
+#[test]
+fn mcp_attach_reads_the_file_of_the_host_not_of_the_machine_name() {
+    let env = TestEnv::new();
+    with_file(&env, "[mcp.servers.by-name]\nurl = \"https://by-name.example.com/mcp\"\n");
+    fs::write(machines_dir(&env).join("mac-pro.toml"), "[mcp.servers.by-host]\nurl = \"https://by-host.example.com/mcp\"\n").unwrap();
+    env.write_config(&format!("version = 1\nmachine = \"pro\"\nhost = \"mac-pro\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
+    attach(&env, LEAD, "by-host").ok();
+    assert_eq!(attached(&env)[0]["data"]["server"], json!({"url": "https://by-host.example.com/mcp"}));
+    let error = refused(&attach(&env, LEAD, "by-name"), "mcp_unknown", 4);
+    assert_eq!(error["details"]["available"], json!(["by-host"]));
+}
+
 // ---------- f: an invalid machine file ----------
 
 /// An unknown key in the machine file: `policy_invalid`, exit 1, and no Event. Fails now: `usage`, exit 2.

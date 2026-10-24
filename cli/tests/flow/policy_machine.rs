@@ -48,13 +48,19 @@ impl Fx {
              INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
                VALUES ('mgr1', 'manager', 'ctx', 'M', '/', 'O3', 'idle', 't', 't');",
         );
+        // A Repo key needs its repo file (`repo_unconfigured`); an empty one is valid.
+        env.repo_policy("acme", "web", "");
         Fx { env }
     }
 
     fn machine_file(&self, text: &str) {
+        self.machine_file_of("pro", text);
+    }
+
+    fn machine_file_of(&self, host: &str, text: &str) {
         let dir = self.env.cpd_home().join("policy/machines");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("pro.toml"), text).unwrap();
+        fs::write(dir.join(format!("{host}.toml")), text).unwrap();
     }
 
     fn real(&self, rel: &str) -> String {
@@ -170,4 +176,67 @@ fn an_owner_file_with_an_mcp_key_is_policy_invalid() {
     let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
     assert_eq!(error["details"]["file"], fx.real("owners/acme.toml"));
     assert!(error["message"].as_str().unwrap().contains("machine"), "{error}");
+}
+
+// n. The machine file is keyed by the host (config key `host`), not by the machine name.
+#[test]
+fn policy_show_reads_the_file_of_the_host_not_of_the_machine_name() {
+    let fx = Fx::new();
+    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"pro\"\nhost = \"mac-pro\"\n").unwrap();
+    fx.machine_file_of("pro", "[mcp.servers.by-name]\nurl = \"https://by-name.example.com/mcp\"\n");
+    fx.machine_file_of("mac-pro", "[mcp.servers.by-host]\nurl = \"https://by-host.example.com/mcp\"\n");
+    let out = fx.show(&["--owner", "acme"]).ok();
+    assert_eq!(out["machine"]["name"], "pro");
+    assert_eq!(out["machine"]["mcp"]["source"], format!("machine:{}", fx.real("machines/mac-pro.toml")));
+    assert_eq!(out["machine"]["mcp"]["servers"], json!({"by-host": {"url": "https://by-host.example.com/mcp"}}));
+}
+
+// o. One machine file is both the machine scope and the `[mcp]` table.
+#[test]
+fn a_machine_file_with_pr_and_mcp_sets_the_pr_domain_and_the_servers() {
+    let fx = Fx::new();
+    fx.machine_file("[pr]\ngate = \"local\"\n\n[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
+    let out = fx.show(&["--owner", "acme"]).ok();
+    assert_eq!(out["policy"]["pr"]["source"], format!("machine:{}", fx.real("machines/pro.toml")));
+    assert_eq!(out["machine"]["mcp"]["servers"], json!({"x": {"url": "https://x.example.com/mcp"}}));
+}
+
+// p. `[mcp]` is the machine file's alone.
+#[test]
+fn an_mcp_table_in_an_owner_file_is_policy_invalid_with_key_mcp() {
+    let fx = Fx::new();
+    fx.env.owner_policy("acme", "[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
+    let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+    assert_eq!(error["details"]["file"], fx.real("owners/acme.toml"));
+    assert_eq!(error["details"]["key"], "mcp");
+    assert!(error["message"].as_str().unwrap().contains("is set in a machine file"), "{error}");
+}
+
+#[test]
+fn an_mcp_table_in_a_repo_file_is_policy_invalid_with_key_mcp() {
+    let fx = Fx::new();
+    fx.env.repo_policy("acme", "web", "[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
+    let error = refused(&fx.show(&["--owner", "acme", "--repo", "web"]), "policy_invalid", 1);
+    assert_eq!(error["details"]["file"], fx.real("repos/acme/web.toml"));
+    assert_eq!(error["details"]["key"], "mcp");
+    assert!(error["message"].as_str().unwrap().contains("is set in a machine file"), "{error}");
+}
+
+// q. A domain the machine scope does not expose stays refused there, with or without `[mcp]`.
+#[test]
+fn hooks_in_a_machine_file_are_policy_invalid_by_exposure() {
+    let fx = Fx::new();
+    fx.machine_file("[hooks]\npre-commit = \"true\"\n");
+    let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+    assert_eq!(error["details"]["file"], fx.real("machines/pro.toml"));
+    assert_eq!(error["details"]["key"], "hooks");
+}
+
+#[test]
+fn hooks_beside_mcp_in_a_machine_file_are_policy_invalid_by_exposure() {
+    let fx = Fx::new();
+    fx.machine_file("[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n\n[hooks]\npre-commit = \"true\"\n");
+    let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+    assert_eq!(error["details"]["file"], fx.real("machines/pro.toml"));
+    assert_eq!(error["details"]["key"], "hooks");
 }

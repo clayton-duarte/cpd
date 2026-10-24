@@ -1,8 +1,8 @@
-//! Red tests of the machine policy scope (contract §8.3 "The machine scope", "Machine domains").
+//! Tests of the `[mcp]` table of the machine file (contract §8.3 "MCP servers of the machine scope", "Machine domains").
 
 use super::*;
 use crate::error::ErrorCode;
-use crate::policy::{parse_scope, Domain};
+use crate::policy::{check_file_names, parse_scope, Domain};
 
 const SLACK: &str = r#"
 [mcp.servers.slack]
@@ -59,8 +59,8 @@ fn refused(text: &str, key: Option<&str>) {
     }
 }
 
-fn pro() -> MachineName {
-    MachineName::parse("pro").unwrap()
+fn pro() -> HostName {
+    HostName::parse("pro").unwrap()
 }
 
 fn home() -> (tempfile::TempDir, CpdHome) {
@@ -172,9 +172,12 @@ fn an_entry_with_no_url_is_refused() {
     refused("[mcp.servers.slack]\ndescription = \"d\"\n", None);
 }
 
+/// The other domains of a machine file are the machine scope's (read by the scope loader); `parse_machine` ignores them.
 #[test]
-fn a_top_level_table_other_than_mcp_is_refused() {
-    refused("[pr]\ngate = \"local\"\n", Some("pr"));
+fn a_top_level_table_other_than_mcp_is_accepted_and_ignored() {
+    let servers = parse(&format!("[pr]\ngate = \"local\"\n{}", named("a"))).unwrap();
+    assert_eq!(servers.keys().collect::<Vec<_>>(), ["a"]);
+    accepted("[pr]\ngate = \"local\"\n");
 }
 
 #[test]
@@ -356,8 +359,8 @@ fn an_owner_file_with_mcp_is_refused_and_points_to_the_machine_file() {
     let err = parse_scope(Path::new("/h/policy/owners/acme.toml"), "[mcp]\n").unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
     assert!(err.message().contains("machine"), "{}", err.message());
-    // `mcp` is no seventh domain of the policy.
-    assert_eq!(Domain::ALL.len(), 6);
+    // `mcp` is no domain of the policy.
+    assert!(Domain::from_name("mcp").is_none());
 }
 
 #[test]
@@ -383,7 +386,7 @@ fn an_entry_with_an_invalid_machine_name_is_refused() {
     let (_d, home) = home();
     write(&home, "machines/pro.toml", SLACK);
     write(&home, "machines/Bad_Name.toml", "");
-    let err = load_machine(&home, &pro()).unwrap_err();
+    let err = check_file_names(&home).unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
 }
 
@@ -392,6 +395,6 @@ fn an_entry_that_is_not_toml_is_refused() {
     let (_d, home) = home();
     write(&home, "machines/pro.toml", SLACK);
     write(&home, "machines/other.json", "{}");
-    let err = load_machine(&home, &pro()).unwrap_err();
+    let err = check_file_names(&home).unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
 }
