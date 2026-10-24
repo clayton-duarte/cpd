@@ -988,15 +988,15 @@ fn right_click(env: &TestEnv, pane: &str, column: u16, row: u16) {
     }
 }
 
-/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `┌` and the `┘` rows.
+/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows.
 fn menu_labels(screen: &[String]) -> Vec<String> {
-    let top = screen.iter().position(|r| r.contains('┌'));
+    let top = screen.iter().position(|r| r.contains('╮'));
     let Some(top) = top else { return vec![] };
-    screen[top + 1..].iter().take_while(|r| !r.contains('└')).filter_map(|r| r.split('│').nth(1)).map(|l| l.trim().to_owned()).collect()
+    screen[top + 1..].iter().take_while(|r| !r.contains('╯')).filter_map(|r| r.split('│').nth(1)).map(|l| l.trim().to_owned()).collect()
 }
 
 fn the_menu_is_closed(screen: &[String]) -> bool {
-    screen.iter().all(|r| !r.contains('┌') && !r.contains('└'))
+    screen.iter().all(|r| !r.contains('╮') && !r.contains('╯'))
 }
 
 /// The row of the first line of the PR named `name` (` acme/repo#9`) on `screen`.
@@ -1354,11 +1354,12 @@ fn the_views_need_a_terminal() {
     }
 }
 
-/// The columns (by character) of the menu box's `┌` and `┐` on `screen`.
+/// The columns (by character) of the menu box's `╭` and `╮` on `screen`.
 fn menu_columns(screen: &[String]) -> (usize, usize) {
-    let top = screen.iter().find(|r| r.contains('┌')).unwrap_or_else(|| panic!("no menu: {screen:#?}"));
+    let top = screen.iter().find(|r| r.contains('╮')).unwrap_or_else(|| panic!("no menu: {screen:#?}"));
     let chars: Vec<char> = top.chars().collect();
-    (chars.iter().position(|&c| c == '┌').unwrap(), chars.iter().position(|&c| c == '┐').unwrap())
+    let right = chars.iter().position(|&c| c == '╮').unwrap();
+    (chars[..right].iter().rposition(|&c| c == '╭').unwrap(), right)
 }
 
 #[test]

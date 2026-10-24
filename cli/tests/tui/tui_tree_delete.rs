@@ -154,12 +154,12 @@ impl<'a> Pane<'a> {
     fn menu_of(&self, id: &str) -> Vec<String> {
         let row = self.row_of(id);
         self.right_click(8, row);
-        self.wait("the menu", |s| s.iter().any(|r| r.contains('┌')) && s.iter().any(|r| r.contains("│ Copy id ")))
+        self.wait("the menu", |s| s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id ")))
     }
 
     fn close_menu(&self) {
         self.keys(&["Escape"]);
-        self.wait("the menu closed", |s| s.iter().all(|r| !r.contains('┌')));
+        self.wait("the menu closed", |s| s.iter().all(|r| !r.contains('╮')));
     }
 }
 

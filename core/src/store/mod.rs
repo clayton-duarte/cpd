@@ -9,6 +9,8 @@ mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
 mod verdict;
+#[cfg(test)]
+mod version_tests;
 
 use std::fs::{self, OpenOptions};
 use std::ops::Deref;
@@ -481,6 +483,13 @@ impl Store {
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
+    }
+
+    /// `PRAGMA data_version` on this connection: changes only when another connection commits.
+    /// SQLite leaves it alone for this connection's own commits, so a caller that compares two reads learns that
+    /// another process wrote, at the cost of one pragma and no query.
+    pub fn data_version(&mut self) -> Result<i64, CpdError> {
+        Ok(self.conn.pragma_query_value(None, "data_version", |r| r.get(0))?)
     }
 
     /// Runs `f` in one write transaction (§4.2, §4.3): `BEGIN IMMEDIATE`

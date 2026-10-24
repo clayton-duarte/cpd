@@ -148,7 +148,7 @@ fn pr_node(pull: Option<Pull>) -> PrNode {
 }
 
 fn pull(lead_working: bool) -> Pull {
-    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, lead_working, update: None }
+    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, lead_working, update: None, draft: false }
 }
 
 fn job_node(key: &str, status: JobStatus) -> JobNode {

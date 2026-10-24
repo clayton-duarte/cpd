@@ -72,7 +72,7 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
-    /// Set the owner of a Context that has none (§3.13)
+    /// Set or change the owner of a Context (§3.13)
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
     Delete(DeleteArgs),
