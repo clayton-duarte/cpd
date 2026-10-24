@@ -188,6 +188,38 @@ impl Fx {
     }
 }
 
+const CHILD_ATTEMPT: &str = "CPD_ADOPT_LIFE_ATTEMPT";
+
+/// Step A8 for the Attempt named by `CPD_ADOPT_LIFE_ATTEMPT`, run by [`merge_in_child`] with the env's `PATH` (the fake `gh` first)
+/// and `CPD_HOME`: the test process's own environment is not changed (`set_var` races the other tests). Prints `END <debug of the end>`.
+#[test]
+#[ignore = "run by merge_in_child, in a child process"]
+fn child_merges_the_attempt() {
+    let home = CpdHome::resolve(Some(std::env::var_os("CPD_HOME").expect("CPD_HOME").into()), None).unwrap();
+    let attempt = AttemptId::parse(&std::env::var(CHILD_ATTEMPT).expect(CHILD_ATTEMPT)).unwrap();
+    let config = Config::load(&home).unwrap();
+    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+    let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
+    let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
+    let end = merge::merge(&mut Store::open(&home, 5000).unwrap(), &ctx, &plan(), &attempt).map(|m| m.end);
+    println!("END {end:?}");
+}
+
+/// Step A8 for `attempt`, run by this test binary again as a child: the `Debug` of its end.
+fn merge_in_child(fx: &Fx, attempt: &AttemptId) -> String {
+    let exe = std::env::current_exe().unwrap();
+    let out = fx
+        .env
+        .command(exe)
+        .args(["pr_adopt_life::child_merges_the_attempt", "--exact", "--ignored", "--nocapture", "--test-threads", "1"])
+        .env(CHILD_ATTEMPT, attempt.to_string())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "the child merge failed: {stdout}{}", String::from_utf8_lossy(&out.stderr));
+    stdout.split_once("END ").unwrap_or_else(|| panic!("no END: {stdout}")).1.lines().next().unwrap().to_owned()
+}
+
 #[test]
 fn start_cuts_the_lead_branch_from_the_remote_head_and_pushes_nothing() {
     let fx = fx(false);
@@ -256,16 +288,10 @@ fn a_pull_request_merged_on_github_is_found_by_the_head_branch() {
         "viewerDidAuthor": true, "viewerLatestReviewRequest": null, "commits": {"nodes": [{"commit": {"statusCheckRollup": null}}]}});
     fs::write(fx.env.root().join("lookup.json"), json!({"data": {"p0": {"pullRequest": node}}}).to_string()).unwrap();
     let attempt = fx.submitted("open");
-    // The merge runs in this process, whose `gh` must be the fake: the test binary is run one process per test (nextest),
-    // and this is its only thread touching the environment.
-    let path = std::env::join_paths(std::iter::once(fx.env.bin()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
-    unsafe { std::env::set_var("PATH", path) };
-
-    let end = fx.merge(&attempt);
+    let end = merge_in_child(&fx, &attempt);
 
     let lists: Vec<Vec<String>> = fx.env.calls("gh").into_iter().filter(|c| c[..2] == ["pr", "list"]).collect();
     assert!(!lists.is_empty() && lists.iter().all(|c| c[3] == "feat/x"), "the lookup names the head branch: {lists:?}");
-    let Ok(End::Merged { sha }) = end else { panic!("{end:?}") };
-    assert_eq!(sha, fx.head, "adopted as merged, nothing pushed");
+    assert!(end.starts_with(&format!("Ok(Merged {{ sha: \"{}\"", fx.head)), "adopted as merged, nothing pushed: {end}");
     assert_eq!(fx.remote_cpd_branches(), "");
 }
