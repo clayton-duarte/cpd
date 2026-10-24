@@ -301,7 +301,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
     }
     let mut stmt = conn.prepare(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
-                COALESCE(q.merge_state = 'clean', 0),
+                COALESCE(q.merge_state = 'clean', 0), COALESCE(q.draft, 0),
                 (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
@@ -314,7 +314,8 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
             (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
         let clean: bool = r.get(8)?;
-        let update: Option<String> = r.get(9)?;
+        let draft: bool = r.get(9)?;
+        let update: Option<String> = r.get(10)?;
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -337,7 +338,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     clean,
                     lead_working,
                     update: update_state(&what, update.as_deref())?,
-                    draft: false,
+                    draft,
                 })
             })
             .transpose()?;

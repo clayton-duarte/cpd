@@ -40,8 +40,8 @@ impl Dot {
     }
 
     /// The dot of a working Lead: the red loader when its Plan has a failed Job.
-    pub fn working(_failed: bool) -> Dot {
-        todo!()
+    pub fn working(failed: bool) -> Dot {
+        if failed { Dot::Fixing } else { Dot::Working }
     }
 
     /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
@@ -62,9 +62,8 @@ impl Dot {
     pub fn of(state: State, item: Option<Urgency>, failed: bool) -> Dot {
         if state == State::Working {
             return match (failed, item) {
-                (false, _) => Dot::Working,
                 (true, Some(Urgency::Red)) => Dot::Red,
-                (true, _) => Dot::Fixing,
+                _ => Dot::working(failed),
             };
         }
         item.map_or_else(|| Dot::glyph(state), Dot::from)

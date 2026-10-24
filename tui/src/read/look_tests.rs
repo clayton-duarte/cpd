@@ -1,5 +1,6 @@
 //! Red tests: `pr_look`, `Dot::working` and the two surfaces that must call them.
 
+use ratatui::buffer::CellWidth;
 use cpd_core::config::Tier;
 use cpd_core::ids::{JobKey, PrKey, SessionId};
 use cpd_core::session::State;
@@ -143,8 +144,27 @@ fn box_top(pull: Pull, jobs: &[JobNode], frame: usize) -> Vec<ratatui::buffer::C
     (0..chart.buf.area.width).map(|x| chart.buf[(x, 0)].clone()).collect()
 }
 
+/// The row as plain text: the title is drawn as a link, so a link piece holds two cells in its first one and its
+/// second cell is covered by it; the OSC 8 sequences are stripped.
 fn text(cells: &[ratatui::buffer::Cell]) -> String {
-    cells.iter().map(|c| c.symbol()).collect()
+    let mut out = String::new();
+    let mut covered = 0;
+    for cell in cells {
+        if covered > 0 {
+            covered -= 1;
+            continue;
+        }
+        covered = cell.cell_width().saturating_sub(1);
+        let symbol = cell.symbol();
+        let mut rest = symbol;
+        while let Some(start) = rest.find("\x1b]8;;") {
+            out.push_str(&rest[..start]);
+            let end = rest[start..].find('\x07').expect("an OSC 8 sequence ends with BEL");
+            rest = &rest[start + end + 1..];
+        }
+        out.push_str(rest);
+    }
+    out
 }
 
 #[test]
