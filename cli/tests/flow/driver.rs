@@ -313,11 +313,19 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
     assert_eq!(
         fx.kinds(ATTEMPT),
-        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "job-merged"]
+        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "attempt-status", "attempt-status", "job-merged"]
     );
     let statuses: Vec<Value> =
         fx.events(ATTEMPT).into_iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
-    assert_eq!(statuses, [json!({"from": "starting", "to": "running"}), json!({"from": "running", "to": "merging"})]);
+    assert_eq!(
+        statuses,
+        [
+            json!({"from": "starting", "to": "running"}),
+            json!({"check": "start", "from": "running", "to": "running", "what": "checks"}),
+            json!({"check": "end", "from": "running", "to": "running", "what": "checks"}),
+            json!({"from": "running", "to": "merging"}),
+        ]
+    );
     assert_eq!(fx.event(ATTEMPT, "session-moved")["data"]["place"], "work");
 
     // The Worker: its Session, its argv (§6.5) and its Spec (§16.1).
