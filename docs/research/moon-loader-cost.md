@@ -2,7 +2,15 @@
 
 ## Summary
 
-The cockpit before (moon-before-ui) and after (moon-after-ui) and their comparison are in; the pi before (moon-before-pi) is in; the pi after is added by moon-after-pi.
+- Tree, release, CPU % of one core before -> after (median of 3): tree A 0.91 -> 1.69 (x1.85), tree B 0.89 -> 1.71 (x1.93); debug: tree A 2.14 -> 4.31 (x2.02).
+- Plan view, release: plan A1 2.54 -> 4.88 (x1.92), plan A2 2.46 -> 5.08 (x2.07), plan B 2.57 -> 5.06 (x1.97); debug: plan A1 4.83 -> 9.77 (x2.02).
+- pi pane (real pane, node process, nice 19): working 4.08 -> 5.26 (x1.29, +1.18 points, 3 runs, range 5.17-6.23 after); idle control 0.43 -> 0.34 (1 run each).
+- The cockpit idle controls (plan D, tree D) did not change (0.00 -> 0.03 and 0.11 -> 0.11 release): only a view with a spinner on screen costs more.
+- In plain words: one cockpit tree with a spinner does about 0.8 % more of a core; one plan view about 2.3-2.6 % more; one working pi pane about 1.2 % more (release).
+- The 3 % line is that of [anim-perf-after.md](anim-perf-after.md) ("Left"), not this Plan's; the tree's debug build in that doc was already above it. Here: plan view release 4.88-5.08 is above it (before 2.46-2.57: below), tree release 1.69-1.71 is below it, tree debug 4.31 is above it (before 2.14: below), pi pane 5.26 is above it (before 4.08: above).
+- At 50 ms the draw gap p50 is 49.8-50.2 ms in every cockpit scenario with a spinner, no gap above 150 ms and no skipped frame in any A-type run (before: 99.9-100.2 ms, none).
+- The pi pane showed only the new glyphs (U+E3C8..U+E3E3) in the pill and the closing row; no old nf-md moon (see `## After`).
+- Limits: one machine, one base, one model, nice 19 and not 0 (unverified at nice 0); the load (2-6, mostly about 3) is far below the User's usual, so CPU is optimistic; before and after were not at the same load; pi frame rate not read from the pane (two captures a run), pi idle is 1 run; the 3-run ranges are in the tables.
 
 ## Method
 
@@ -421,6 +429,17 @@ Load averages at the end of the runs, debug: 1 min 2.24-4.02, 5 min 2.98-3.75, 1
 
 Notes: `layout_nonzero` was 0 in all 34 runs, as before. Tree D "skipped" is `(b - a) mod 28 - 1` over a draw every 1000 ms (20 frames of 50 ms, so 19 skipped per change, 646 of 34): it is the 1 s redraw by design (see the notes under `## Before`), not a stutter. In every run of the A-type scenarios there was no gap over 150 ms and no skipped frame (checked per run), as in the Before. The JSON line of each run is in `/tmp/cpd-moon-anim/results/<profile>.jsonl` (not kept after this Job).
 
+### pi
+
+Job moon-after-pi, attempt 1. The SAME `### pi` script of `## Method`, re-created from this doc (the Before Job's `/tmp/cpd-moon-pi/pi-run.sh` was gone), changed only in the private tmux name (`moon-pi-after`); run from this worktree against THIS worktree's changed `pi/compact-tools/extensions/compact-tools.ts` (28 moon_alt frames at 50 ms; `git diff --stat $(git merge-base HEAD origin/main)..HEAD -- pi/compact-tools` lists `compact-tools-loader.ts`, 32 insertions, 12 deletions). Same prompt, same window (35 s from 5 s after the tool row), same run counts (`work` 1..3, `idle` 1), same nice (19, inherited; the process also inherited an `idle` ionice class), same model, env and size. It is a REAL interactive pi pane (the `node` process under a private tmux server), not the extension's render path only. The server and the temp directories are gone (`tmux -L moon-pi-after ls`: no server).
+
+| scenario | runs | CPU % median (range) | nice | load 1 min | what the pane showed |
+|---|---|---|---|---|---|
+| work (agent working, one `sleep 45` tool row running) | 3 | 5.26 (5.17-6.23) | 19 | 2.81 (2.71-3.19) | start and end of every run: ` ╭─bash Run sleep` still running, no `Done in` line; the closing row ` ╰<moon>` and the border pill ` ╭─<moon> Running command…` each showed one new-family glyph: pill U+E3E1, U+E3E0 (run 1 start, end), U+E3E2, U+E3DF (run 2), U+E3E0, U+E3DF (run 3); closing row U+E3DB, U+E3DC (run 1), U+E3D7, U+E3D7 (run 2), U+E3D2, U+E3D3 (run 3). All are in U+E3C8..U+E3E3; no nf-md moon (U+F0F61..U+F0F68) in any of the 6 captures. Pill and row showed different glyphs in the same capture (a capture is not one frame of one clock): unverified why |
+| idle (no turn) | 1 | 0.34 (0.34-0.34) | 19 | 2.95 | an empty input box, no pill, no moon, no tool row (start and end) |
+
+Per run, work: 6.23 %, 5.26 %, 5.17 % (load 2.81, 3.19, 2.71); idle: 0.34 %.
+
 ## Comparison
 
 Before = the `## Before` tables (median of the runs); after = `## After` (median of the runs). Ratio = after / before CPU %; change in points = after - before CPU %. gap and draw_us are the p50 of the run, median over runs. The plan D and tree D rows are the controls (no spinner on screen).
@@ -461,9 +480,20 @@ Tree view, debug build:
 
 How comparable the two sets are: same base (the same `cpd.db`), same scenario scripts, same windows and run counts, same `nice` 19 in all 34 after runs (and the 34 before runs), one run at a time, tmux server private to the run. The load differed: the load average (1 min, end of run, median of the runs of a scenario) is in the tables; across all runs it was 2.16-5.39 before and 2.12-6.65 after (release), 2.13-3.83 before and 2.24-4.02 after (debug). The machine (16 CPUs) was shared with other Jobs' processes in both sets (the doc records only the load average, not which processes): unverified which Jobs ran in either set. The release after runs of plan A1 had the highest load of the set (median 6.00, vs 4.46 before); the CPU of a scenario did not follow the load order within the after set (plan A1 at the highest load had the lowest plan CPU), which is as far as this doc reads it.
 
+### pi
+
+Pi pane, real, 28 moon_alt frames at 50 ms against the 8 nf-md moons at 100 ms (work: median of 3 runs; idle: 1 run). Ratio = after / before; change in points = after - before CPU %.
+
+| scenario | CPU % before -> after | ratio | change, points | range before -> after | load 1 min before -> after |
+|---|---|---|---|---|---|
+| work | 4.08 -> 5.26 | 1.29 | +1.18 | 3.94-4.11 -> 5.17-6.23 | 2.72 -> 2.81 |
+| idle (control) | 0.43 -> 0.34 | 0.80 | -0.09 | - -> - | 2.11 -> 2.95 |
+
+The 3 work runs after (6.23, 5.26, 5.17) are all above the 3 work runs before (3.94, 4.08, 4.11); run 1 is 1 point above the other two (unverified why). The idle control moved by 0.09 points on 1 run each, which this doc does not separate from noise (one tick over 35 s is 0.03 points). The load was close in the work runs (2.5-2.9 before, 2.7-3.2 after) and not in the idle run.
+
 ## Left
 
-- Not measured: pi on the changed code (moon-after-pi), nice 0 (the real views), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
+- Not measured: nice 0 (the real views and pane), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
 - A single machine and a single base: unverified that other hardware gives the same CPU %.
 - The snapshot count per run (the trace has no snapshot field): unverified.
 - `strace`: not tried (ptrace was denied in the earlier docs): no syscall counts.
@@ -476,3 +506,4 @@ How comparable the two sets are: same base (the same `cpd.db`), same scenario sc
 - After: whether the loader glyph of the running Job's pill (not only the title dots) changed with the 28 frames is not told apart on the capture (the capture shows the glyph of every spinner cell, all the same); unverified separately. The screen of each run was captured to `results/` and not read; the trace (draws every about 50 ms, `frame=` 0..27) is the evidence that the views animated.
 - After: one machine, one base, one run at a time; the load of the after set is not the load of the before set (see `## Comparison`), so a difference of a few tenths of a point between the sets is not separable from load; unverified how the CPU of the changed code moves at the User's usual load (7-38 in the earlier docs) or at nice 0.
 - After: the 5 min load reached 8.92 in the release set; unverified which process caused it.
+- After (moon-after-pi): the script was re-created from `### pi`, not the original file: unverified that it is byte-identical. The pane's two loaders were seen on 6 captures (2 a run), all new glyphs; their frame rate (50 ms) is not read from the pane, so unverified that both really redrew every 50 ms in every run. The CPU is of the node process only. The `idle` ionice class and nice 19 were inherited from the Worker session in both sets; the idle control is 1 run each.
