@@ -4265,7 +4265,7 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
    "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""}}}
 ```
 
-**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads this machine's file: `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is the config key `machine`; `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
+**The machine object.** Every form of the command (`--pr`, `--context`, `--owner`, `--owner --repo` and no flag) also carries a top-level `machine` object, because every form reads this host's machine file (`machines/<host>.toml`, `<host>` the config key `host`, contract §8.2; it is also a full policy scope, read as the "Effects" above say, and the `mcp` table is the only part this object reports): `{"name": "<machine>", "mcp": {"source", "servers"}}`. `name` is still the config key `machine` (not `host`); `source` is `default` or `machine:<realpath>` (contract §8.3 "MCP servers of the machine scope"); `servers` maps each server name to its entry with the keys as written in the file (a key left out is absent). An invalid machine file is `policy_invalid`, with the same exit and `details` (`file`, `key`) as an invalid owner file, and fails every form. `markdown` gains a section `## Machine <name>` listing each server's name, `url` and `exposure`, or `No MCP servers.`. Example, on machine `pro`, `machine` only:
 
 ```json
 {"machine": {"name": "pro", "mcp": {
@@ -4633,7 +4633,7 @@ Idempotent: no; every call writes a new file.
 
 ## 25. `mcp`
 
-Attaches an MCP server to a Session (contract §6.11; pro-d2, pro-d8). The servers a machine may use are listed in its machine policy (contract §8.3 "MCP servers of the machine scope"; `cpd policy show`, §22.1). Area `core/` and `cli/`.
+Attaches an MCP server to a Session (contract §6.11; pro-d2, pro-d8). The servers a machine may use are listed in the `[mcp]` table of its machine file, `machines/<host>.toml` (the config key `host`; contract §8.3 "MCP servers of the machine scope"; `cpd policy show`, §22.1). Area `core/` and `cli/`.
 
 ### 25.1 `mcp attach`
 
@@ -4652,8 +4652,8 @@ The caller's Session is selected as §1.3 says (`--session <id>`, else `CPD_SESS
 | `<name>` is given and matches the server-name rule (contract §8.3) | `usage` | 2 |
 | a Session is selected | `session_required` | 2 |
 | the Session exists | `session_not_found` | 4 |
-| this machine's file is valid TOML with known keys and types (contract §8.3 "MCP servers of the machine scope"); `details.file`, `details.key`; nothing is appended | `policy_invalid` | 1 |
-| the machine policy lists `<name>`; `details` `{name, machine, available}`, `available` the sorted server names (an empty array when none); the message names the machine and lists what is available, or says none | `mcp_unknown` | 4 |
+| this host's machine file, `machines/<host>.toml` (the config key `host`), is valid TOML and its `[mcp]` table has known keys and types (contract §8.3 "MCP servers of the machine scope"; the file's other domains are the policy scope's, and an invalid one is `policy_invalid` too); `details.file`, `details.key`; nothing is appended | `policy_invalid` | 1 |
+| the machine file's `[mcp]` lists `<name>`; `details` `{name, machine, available}` (`machine` is the config key `machine`), `available` the sorted server names (an empty array when none); the message names the machine and lists what is available, or says none | `mcp_unknown` | 4 |
 
 **Effects**, one transaction:
 - **Event** `mcp-attached` (contract §5.2) addressed to the caller's Session (`session` set, with its `context` and `plan` when it has one), `data` `{name, server}`: `server` is the entry exactly as the machine policy gives it (pi's key names; a key left out is absent). `text`: `Server <name> attached to Session <id>.`
