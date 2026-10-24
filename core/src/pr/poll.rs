@@ -92,7 +92,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let mut checks = Vec::new();
     let mut unresolved = Vec::new();
     for (plan, key, row) in &owned {
-        match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve_lenient)? {
+        match super::pr_policy_resolved(&mut env, plan, key, crate::policy::resolve)? {
             Ok(policy) => checks.push((plan.clone(), key.clone(), policy.pr.feedback.checks)),
             Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
         }
