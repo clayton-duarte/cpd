@@ -16,8 +16,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const BOX = { head: "\u256D", close: "\u2570", rail: "\u2502", plainClose: "\u2514" }; // ╭ ╰ │ └
 const PLAIN = { expand: "\u25B8", collapse: "\u25BE" }; // ▸ ▾
-const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
-const NERD_JSON = { expand: "\uDB80\uDC4B", collapse: "\uDB80\uDC63" }; // surrogate pairs, as a config file spells them
+const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
+const NERD_JSON = { expand: "\uDB82\uDF26", collapse: "\uDB82\uDF2C" }; // surrogate pairs, as a config file spells them
 
 type Folded = { fold?: unknown; toggle?: unknown };
 const foldOf = (config: object) => config as unknown as Folded;
@@ -65,10 +65,10 @@ test("toggle overrides the glyphs field by field, code points and JSON escapes a
 	assert.deepEqual(foldOf(merged({ toggle: { expand: "+" } }).config).toggle, { expand: "+", collapse: PLAIN.collapse });
 	assert.deepEqual(foldOf(merged({ toggle: { collapse: "-" } }).config).toggle, { expand: PLAIN.expand, collapse: "-" });
 	// A config file is JSON.parse'd, which turns the escapes into the code points.
-	const parsed = JSON.parse(`{"toggle":{"expand":"\\uDB80\\uDC4B","collapse":"\\uDB80\\uDC63"}}`);
+	const parsed = JSON.parse(`{"toggle":{"expand":"\\uDB82\\uDF26","collapse":"\\uDB82\\uDF2C"}}`);
 	assert.deepEqual(parsed.toggle, NERD_JSON);
 	assert.deepEqual(foldOf(merged(parsed).config).toggle, NERD);
-	assert.equal([...NERD.expand][0]!.codePointAt(0), 0xF004B);
+	assert.equal([...NERD.expand][0]!.codePointAt(0), 0xF0B26);
 });
 
 test("an invalid glyph warns and keeps the previous glyph", () => {
@@ -175,7 +175,7 @@ test("an expanded row closes with ╰<glyph> collapse · <metadata> under its ' 
 	}
 });
 
-test("the default glyphs are U+F004B and U+F0063", async () => {
+test("the default glyphs are U+F0B26 and U+F0B2C", async () => {
 	const folded = await drawRow(TOGGLE, "read");
 	assert.match(lastLine(folded.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in `, "u"));
 	const expanded = await drawRow(TOGGLE, "read", { expanded: true });
@@ -305,7 +305,6 @@ test("thinking, expanded (detail): the whole text on │ lines, then ╰<glyph> 
 		block.press();
 		assert.deepEqual(block.draw().map((line) => line.trim()), [
 			THINKING_TITLE,
-			BOX.rail,
 			`${BOX.rail} ## **Check the implementation**`,
 			BOX.rail,
 			`${BOX.rail} Inspect the renderer.`,
@@ -345,7 +344,6 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
 				"\uE0B6Thinking…\uE0B4",
-				BOX.rail,
 				`${BOX.rail} ## **Check the implementation**`,
 				BOX.rail,
 				`${BOX.rail} Inspect the renderer.`,

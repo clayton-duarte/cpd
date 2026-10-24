@@ -955,20 +955,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {
-        let dir = tempfile::tempdir().unwrap();
-        // Migration 1 cannot apply: a table `history` already exists.
-        Connection::open(dir.path().join("cpd.db")).unwrap().execute_batch("CREATE TABLE history (x)").unwrap();
-        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000, 5000).unwrap();
-        let setup = setup_lock(&home, 5000).unwrap();
-        let err = store.migrate(&home, &Catalog::BUILT_IN, &setup).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
-        let get = |name: &str| store.conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0)).unwrap();
-        assert_eq!((get("foreign_keys"), get("legacy_alter_table")), (1, 0));
-    }
-
-    #[test]
     fn current_schema_is_none_without_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();

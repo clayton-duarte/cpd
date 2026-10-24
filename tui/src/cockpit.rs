@@ -623,9 +623,10 @@ fn respawn_old_views(tmux: &Tmux, home: &CpdHome, cockpit: &str, skip: Option<&s
     })?;
     let main: Vec<Pane> = main_panes(tmux, cockpit)?.into_iter().filter(|p| Some(p.pane.as_str()) != skip).collect();
     let old = main.iter().filter(|p| !p.dead && p.cpd_view.is_some()).any(|p| {
-        // A pane whose binary cannot be read (not Linux, gone) is not known to be old.
+        // A pane whose binary cannot be read (gone) is not known to be old.
         p.pid
-            .and_then(|pid| std::fs::metadata(format!("/proc/{pid}/exe")).ok())
+            .and_then(Tmux::pid_exe)
+            .and_then(|path| std::fs::metadata(path).ok())
             .is_some_and(|exe| (exe.dev(), exe.ino()) != (installed.dev(), installed.ino()))
     });
     if old {

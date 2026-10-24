@@ -37,8 +37,8 @@ slow-timeout = { period = "30s", terminate-after = 3 }
 # order runs alone at the end (docs/research/test-speed.md §3: wall - sum / 16
 # was 22.5-32.6 s with the 67-69 s session_watchdog tests last, 1.8 s with them
 # first). The list is what is still the longest after the speed Jobs
-# (sp-fixed ... sp-poll), 3.5-27 s at load 82-144: a whole plan (two
-# tests: e2e, and e2e_cross across two repos), the engine's quiet period, the
+# (sp-fixed ... sp-poll), 3.5-27 s at load 82-144: a whole plan (one
+# test: e2e), the engine's quiet period, the
 # adapter watchdog's stall limit, the pi stop, the spawn back-off, the
 # stuck-Job minutes. `/::name$/` matches the test's last path segment in its binary
 # (`cli/tests/<area>/`): a renamed test drops out of the list silently, so check the list with
@@ -48,7 +48,6 @@ filter = '''
   test(/::a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event$/)
   | test(/::a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone$/)
   | test(/::a_whole_plan_runs_from_context_new_to_pr_poll$/)
-  | test(/::a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job$/)
   | test(/::the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once$/)
   | test(/::a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi$/)
   | test(/::e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off$/)
@@ -61,3 +60,20 @@ priority = 20
 # A custom profile inherits every setting and override of `default`.
 [profile.timing.junit]
 path = "junit.xml"
+
+# The tests that restart a real tmux server (`cpd::tui bare::` and the install
+# script's real-cockpit restart) each start a server, a cockpit and an engine. Run
+# 16 `bare::` tests at once they took 11-41 s, and `install_script::` alone 28 s for
+# its restart test (14 cores); run among the 3,237 tests of the Gate they took
+# 66-77 s and failed or hit the 90 s limit. At most 4 run together, and their limit
+# is 3 x 60 s (77 s at most in the Gate). Only these tests.
+[test-groups]
+tmux-restart = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = '''
+  binary_id(cpd::tui) and test(/^bare::/)
+  | binary_id(cpd::tooling) and test(/^install_script::the_install_restarts_the_engine_of_a_real_cockpit/)
+'''
+test-group = "tmux-restart"
+slow-timeout = { period = "60s", terminate-after = 3 }

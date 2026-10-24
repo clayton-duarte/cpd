@@ -46,14 +46,12 @@ fn config_defaults_context_distill_tier_to_gx() {
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_recent_days": 1,
+            "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "S2",
-            "lead_pi_packages": [
-                "npm:@plannotator/pi-extension@0.28.17",
-                "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
-            ],
+            "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
-            "plannotator_ports": "19432-19441",
+            "plannotator_ports": "19432-19456",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
                 "S": "github-copilot/claude-sonnet-5.5",
@@ -196,6 +194,7 @@ machine = "a1234567"
 concurrency = 1
 test_concurrency = 64
 context_recent_days = 3650
+context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
 lead_tier = "H0"
@@ -634,6 +633,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0, 1, 2, 3]));
     assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
 
+    // The product reports canonical paths: /var is a symlink into /private on a Mac.
     let calls = env.calls("node");
     assert_eq!(calls.len(), 1);
     let argv = &calls[0];
@@ -644,8 +644,8 @@ fn tiers_runs_the_catalog_module_from_argv() {
         argv[3..],
         [
             "--".to_owned(),
-            coding_agent.to_str().unwrap().to_owned(),
-            pi_ai.to_str().unwrap().to_owned(),
+            coding_agent.canonicalize().unwrap().to_str().unwrap().to_owned(),
+            pi_ai.canonicalize().unwrap().to_str().unwrap().to_owned(),
             "O=p/m-opus".to_owned(),
             "S=p/m-sonnet".to_owned(),
             "H=p/m-low".to_owned(),
@@ -1093,6 +1093,27 @@ fn context_recent_days_defaults_to_1_and_refuses_0() {
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
         assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
+    }
+}
+
+/// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
+#[test]
+fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
+    let env = TestEnv::new();
+    let out = config_with(&env, MINIMAL).ok();
+    assert_eq!(out["config"]["context_curation_min_records"], 25, "{out}");
+    assert_eq!(out["sources"]["context_curation_min_records"], "default", "{out}");
+
+    let out = config_with(&env, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
+    assert_eq!(out["config"]["context_curation_min_records"], 7, "{out}");
+    assert_eq!(out["sources"]["context_curation_min_records"], "file", "{out}");
+
+    for bad in ["0", "-3", "2.5", "\"ten\"", "true"] {
+        let run = config_with(&env, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{bad}");
+        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
+        assert_eq!(err["details"]["key"], "context_curation_min_records", "{bad}: {err}");
     }
 }
 

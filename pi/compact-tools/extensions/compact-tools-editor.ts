@@ -1,5 +1,5 @@
 /**
- * The input widget: pi-tui's Editor drawn as a rounded box in the cockpit palette (docs/contract.md 6.1.1, 6.9
+ * The input widget: pi-tui's Editor drawn as a rounded box in the Dango palette (docs/contract.md 6.1.1, 6.9
  * "The input widget"). Every row is a margin space, the wall or corner, one padding space, the text, one padding
  * space, the wall or corner, a margin space; the text starts at column 3. The border is one colour by state: cyan 6
  * while the agent works, else bright blue 12 while the terminal pane has focus, else 15. Pi's own `borderColor`

@@ -1,4 +1,7 @@
-//! The palette: the one place with colours and status icons, ported from the
+//! The code of the Dango palette (the 16 terminal colour indices of contract §6.1.1, hs-d591): the one place with
+//! colours and status icons. The module is still called `palette` because that is the module path of every
+//! `palette::...` call under `tui/` and it holds more than the colours (the status icons too); renaming it would touch
+//! every view for no behaviour. Ported from the
 //! spike's `palette.rs` (branch `cpd/cpd-ui`) on cpd 2's typed statuses. Every
 //! view takes them from here, so changing one meaning (or one icon) changes it
 //! in the tree, the Plan chart, the Dispatch column and the legend alike.
@@ -11,12 +14,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::Span,
 };
 
 use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
 use cpd_core::inbox::model::Urgency;
+use cpd_core::pill::spec;
 use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
@@ -74,22 +78,52 @@ impl Meaning {
     }
 }
 
-/// The base colour of a meaning, on what cannot be clicked (hs-d534, §6.1.1 rule (1)); [`color_clickable`] is its bright pair.
-/// Grounding has no colour of its own: grey, the default when no meaning applies, like not started.
-pub fn color(m: Meaning) -> Color {
-    match m {
-        Meaning::NotStarted => Color::Gray,
-        Meaning::InProgress => Color::Cyan,
-        Meaning::Review => Color::Yellow,
-        Meaning::Done => Color::Green,
-        Meaning::Failed => Color::Red,
-        Meaning::Planning => Color::Magenta,
-        Meaning::Grounding => Color::Gray,
-        Meaning::Nothing => Color::DarkGray,
-        // Cyan, not blue: blue is focus and selection only; agent activity is cyan.
-        Meaning::Waiting => Color::Cyan,
-        Meaning::Notice => Color::Blue,
+/// The one place a colour is named: the terminal colour of an index 1..=15 (`Color::Red`..`Color::White` are 1..=15 in order).
+fn index_color(i: u8) -> Color {
+    match i {
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        7 => Color::Gray,
+        8 => Color::DarkGray,
+        9 => Color::LightRed,
+        10 => Color::LightGreen,
+        11 => Color::LightYellow,
+        12 => Color::LightBlue,
+        13 => Color::LightMagenta,
+        14 => Color::LightCyan,
+        15 => Color::White,
+        _ => unreachable!("a colour index is 1..=15 (0 is never drawn), the spec parser checks it"),
     }
+}
+
+/// The index 0..=15 of a colour made by [`index_color`].
+fn color_index(c: Color) -> u8 {
+    (1..=15).find(|&i| index_color(i) == c).expect("a palette colour has an index")
+}
+
+/// The spec's index of a meaning (`pi/lib/pill-spec.json`, `meanings`).
+fn meaning_index(m: Meaning) -> u8 {
+    let s = &spec().meanings;
+    match m {
+        Meaning::NotStarted | Meaning::Grounding => s.plain,
+        Meaning::InProgress | Meaning::Waiting => s.in_progress,
+        Meaning::Review => s.review,
+        Meaning::Done => s.done,
+        Meaning::Failed => s.failed,
+        Meaning::Planning => s.planning,
+        Meaning::Nothing => s.nothing,
+        Meaning::Notice => s.focus,
+    }
+}
+
+/// The base colour of a meaning, on what cannot be clicked (hs-d534, §6.1.1 rule (1)), read from the pill spec; [`color_clickable`] is its bright pair.
+/// Grounding has no colour of its own: grey, the default when no meaning applies, like not started. Waiting is cyan, not blue: blue is focus and selection only.
+pub fn color(m: Meaning) -> Color {
+    index_color(meaning_index(m))
 }
 
 /// Foreground in the base colour of a meaning: for what cannot be clicked.
@@ -127,56 +161,54 @@ pub enum Ui {
 
 pub fn ui(u: Ui) -> Color {
     match u {
-        Ui::Note => Color::Yellow,
-        Ui::Tool => Color::Cyan,
-        Ui::You => Color::Gray,
-        Ui::Agent => Color::Cyan,
+        Ui::Note => index_color(3),
+        Ui::Tool => index_color(6),
+        Ui::You => index_color(7),
+        Ui::Agent => index_color(6),
     }
 }
 
 /// The one colour for in focus and selection: blue, as the cockpit's `pane-active-border-style fg=blue`.
-const FOCUS: Color = Color::Blue;
+fn focus() -> Color {
+    index_color(spec().meanings.focus)
+}
 
-/// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text 0, in place of reverse video.
+/// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text inverted, in place of reverse video.
 pub fn selected() -> Style {
-    Style::new().bg(FOCUS).fg(Color::Black)
+    block(focus())
+}
+
+/// A block (a pill, a selection): reverse video, the colour as foreground over the terminal's own background.
+fn block(c: Color) -> Style {
+    Style::new().fg(c).bg(Color::Reset).add_modifier(Modifier::REVERSED)
 }
 
 /// The selected tree row's name: blue text (hs-d351, hs-d534), where [`selected`] is the block of a cursor.
 pub fn selected_name() -> Style {
-    Style::new().fg(FOCUS)
+    Style::new().fg(focus())
 }
 
-/// The bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4 (the focus colour, hs-d351) and 8 has no pair.
+/// The bright pair of a base colour, as the spec's `clickable` says (n+8 on 1..=7, so `Red` -> `LightRed`, `Gray` -> `White`); the focus blue stays 4 (hs-d351) and 8 has no pair.
 pub fn bright(c: Color) -> Color {
-    match c {
-        Color::Red => Color::LightRed,
-        Color::Green => Color::LightGreen,
-        Color::Yellow => Color::LightYellow,
-        Color::Magenta => Color::LightMagenta,
-        Color::Cyan => Color::LightCyan,
-        Color::Gray => Color::White,
-        other => other,
+    if c == focus() {
+        return c;
     }
+    index_color(spec().clickable(color_index(c)))
 }
 
-/// The colour of a meaning on a clickable mark: its bright pair.
+/// The colour of a meaning on a clickable mark: its bright pair. The notice blue is 12 on a clickable mark (hs-d570 BL3), the spec's `clickable` applied to the focus index.
 pub fn color_clickable(m: Meaning) -> Color {
-    match m {
-        // the notice blue is 12 on a clickable mark (hs-d570 BL3); `bright` keeps the focus blue at 4
-        Meaning::Notice => Color::LightBlue,
-        _ => bright(color(m)),
-    }
+    index_color(spec().clickable(meaning_index(m)))
 }
 
 /// Clickable text, colour 15.
 pub fn clickable_text() -> Style {
-    Style::new().fg(Color::White)
+    Style::new().fg(index_color(15))
 }
 
 /// Read-only text, colour 7.
 pub fn read_only_text() -> Style {
-    Style::new().fg(Color::Gray)
+    Style::new().fg(index_color(7))
 }
 
 /// An asleep Session's row, colour 7.
@@ -184,19 +216,19 @@ pub fn asleep_text() -> Style {
     read_only_text()
 }
 
-/// The fold toggles `╰󰁋 expand` / `╰󰁣 collapse`, colour 7.
+/// The fold toggles `╰󰬦 expand` / `╰󰬬 collapse`, colour 7.
 pub fn toggle_text() -> Style {
     read_only_text()
 }
 
 /// The input box's border (hs-d575, hs-d576): colour 15 unfocused, bright blue 12 focused.
 pub fn input_border(focused: bool) -> Style {
-    Style::new().fg(if focused { Color::LightBlue } else { Color::White })
+    Style::new().fg(if focused { index_color(12) } else { index_color(15) })
 }
 
 /// Muted text and lines (separators, ages, times, scroll cues, placeholders, rails), colour 8; it replaces `DIM`.
 pub fn muted_text() -> Style {
-    Style::new().fg(Color::DarkGray)
+    Style::new().fg(index_color(8))
 }
 
 /// An archived row, colour 8.
@@ -204,11 +236,10 @@ pub fn archived_text() -> Style {
     muted_text()
 }
 
-/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text 0. A draft is
-/// magenta. `merging` is a running Job whose Attempt is merging; `stuck` a failed Job whose `job-stuck` item is open.
-pub fn job_pill(status: JobStatus, merging: bool, stuck: bool) -> Style {
-    let meaning = if stuck && status == JobStatus::Failed { JOB_STUCK.1 } else { job_status(status, merging).1 };
-    pill_clickable(meaning)
+/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text inverted. A draft is
+/// magenta. `merging` is a running Job whose Attempt is merging; A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
+pub fn job_pill(status: JobStatus, merging: bool, _stuck: bool) -> Style {
+    pill_clickable(job_status(status, merging).1)
 }
 
 /// The error line of a view that cannot load or read its data (hs-d534: red, blocking, not clickable).
@@ -221,24 +252,35 @@ pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
 }
 
-/// A pill: text 0 on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
+/// A pill: text inverted on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
 pub fn pill(m: Meaning) -> Style {
-    Style::new().fg(Color::Black).bg(color(m))
+    block(color(m))
 }
 
-/// A clickable pill: text 0 on the bright pair of a meaning.
+/// A clickable pill: text inverted on the bright pair of a meaning.
 pub fn pill_clickable(m: Meaning) -> Style {
-    Style::new().fg(Color::Black).bg(color_clickable(m))
+    block(color_clickable(m))
 }
 
-/// A read-only pill (hs-d534 rule (3)): background 7 (`Gray`), text 0 (`Black`); its caps are drawn in its background colour.
+/// A read-only pill (hs-d534 rule (3)): colour 7 (`Gray`), text inverted; its caps are drawn in its background colour.
 pub fn pill_static() -> Style {
-    Style::new().bg(Color::Gray).fg(Color::Black)
+    block(index_color(7))
 }
 
-/// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text 0 (`Black`); its caps are drawn in its background colour.
+/// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text inverted; its caps are drawn in its background colour.
 pub fn pill_interactive() -> Style {
-    Style::new().bg(Color::White).fg(Color::Black)
+    block(index_color(15))
+}
+
+/// The selected button's pill (hs-d578, hs-d534): text inverted on bright blue 12, its caps drawn in its background colour.
+pub fn pill_selected() -> Style {
+    block(index_color(12))
+}
+
+/// The input box's label pill (hs-d578 F9): text inverted on the colour of the box's border (15 unfocused, 12 focused), its caps
+/// drawn in that colour.
+pub fn label_pill(focused: bool) -> Style {
+    block(input_border(focused).fg.expect("a border has a colour"))
 }
 
 /// The focused pane's title pill: the blue block, as [`selected`].
@@ -250,7 +292,6 @@ pub fn pill_focus() -> Style {
 #[cfg(test)]
 pub(crate) mod numbered {
     use ratatui::style::Color;
-    pub(crate) const C0: Color = Color::Black;
     pub(crate) const C1: Color = Color::Red;
     pub(crate) const C2: Color = Color::Green;
     pub(crate) const C3: Color = Color::Yellow;
@@ -273,10 +314,10 @@ pub(crate) mod numbered {
 pub(crate) mod check {
     use ratatui::buffer::Cell;
 
-    /// The cell is part of a blue block: background 4, text 0 (a cursor or a selection).
+    /// The cell is part of a blue block: colour 4, reversed (a cursor or a selection).
     pub(crate) fn is_selected(cell: &Cell) -> bool {
         let block = super::selected();
-        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg)
+        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg) && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
     }
 
     /// The cell's text is muted, colour 8.
@@ -288,24 +329,24 @@ pub(crate) mod check {
 // Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
 /// A queued Job: `nf-md-circle_outline` (U+F0766).
 pub const QUEUED: &str = "\u{F0766}";
-/// A merging Job: `nf-md-eye_circle_outline` (U+F0B95).
-pub const MERGING: &str = "\u{F0B95}";
+/// A merging Job: `nf-md-download_circle` (U+F1464).
+pub const MERGING: &str = "\u{F1464}";
 /// A merged Job: `nf-md-check_circle` (U+F05E0).
 pub const MERGED: &str = "\u{F05E0}";
 /// A failed Job: `nf-md-close_circle` (U+F0159).
 pub const FAILED: &str = "\u{F0159}";
-/// A draft Job: `nf-md-progress_pencil` (U+F1787).
-pub const DRAFT: &str = "\u{F1787}";
-/// A cancelled Job: `nf-md-cancel` (U+F073A).
-pub const CANCELLED: &str = "\u{F073A}";
+/// A draft Job: `nf-fa-circle_question` (U+F059).
+pub const DRAFT: &str = "\u{F059}";
+/// A cancelled Job: `nf-md-close_circle` (U+F0159).
+pub const CANCELLED: &str = "\u{F0159}";
 
 // PR check icons (hs-d235). Passed and failed share the glyphs of merged and failed Jobs.
 /// Checks passed: `nf-md-check_circle` (U+F05E0).
 pub const CHECKS_PASSED: &str = MERGED;
 /// Checks failed: `nf-md-close_circle` (U+F0159).
 pub const CHECKS_FAILED: &str = FAILED;
-/// Checks pending: `nf-md-progress_clock` (U+F0996).
-pub const CHECKS_PENDING: &str = "\u{F0996}";
+/// Checks pending: `nf-md-eye_circle` (U+F0B94).
+pub const CHECKS_PENDING: &str = "\u{F0B94}";
 /// No checks: `nf-md-minus` (U+F0374).
 pub const CHECKS_NONE: &str = "\u{F0374}";
 
@@ -317,16 +358,11 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
         (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
         (JobStatus::Running, true) => (MERGING, Meaning::Review),
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
-        // an agent handles a failed Job (its Lead retries or cancels it): waiting; it is red only once `job-stuck` is open
-        (JobStatus::Failed, _) => (FAILED, Meaning::Waiting),
+        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
         (JobStatus::Draft, _) => (DRAFT, Meaning::Planning),
         (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
-
-/// A failed Job that needs the User: its `job-stuck` item is open (audit Q3). Red, where [`job_status`] gives `failed` the
-/// waiting colour.
-pub const JOB_STUCK: (&str, Meaning) = (FAILED, Meaning::Failed);
 
 /// The Job statuses the legend lists: the name shown, the status and whether it is `merging`.
 pub const JOB_LEGEND: [(&str, JobStatus, bool); 6] = [
@@ -360,20 +396,20 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
     }
 }
 
-/// Nerd Font `nf-md-circle_outline` (U+F0766), then `nf-md-circle_slice_1` … `8` (U+F0A9E..U+F0AA5): the 9 frames of one
-/// animation. The working dot and a running Job's pill show one per [`frame`]; the other dots are its first and last.
-/// https://www.nerdfonts.com/cheat-sheet
-pub const SPINNER: [&str; 9] =
-    ["\u{F0766}", "\u{F0A9E}", "\u{F0A9F}", "\u{F0AA0}", "\u{F0AA1}", "\u{F0AA2}", "\u{F0AA3}", "\u{F0AA4}", "\u{F0AA5}"];
+/// The eight moon phases, `nf-md-moon_new` (U+F0F64), `moon_waxing_crescent` (F0F67), `moon_first_quarter` (F0F61),
+/// `moon_waxing_gibbous` (F0F68), `moon_full` (F0F62), `moon_waning_gibbous` (F0F66), `moon_last_quarter` (F0F63),
+/// `moon_waning_crescent` (F0F65): the one loader of pi and the cockpit (hs-d579). The working dot and a running Job's pill
+/// show one per [`frame`]; the idle dot is the first, the needs-you dot the full moon. https://www.nerdfonts.com/cheat-sheet
+pub const SPINNER: [&str; 8] = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
 
-/// An idle Session: the first frame.
+/// An idle Session: `nf-md-moon_new`, the first frame.
 pub const IDLE: &str = SPINNER[0];
-/// A stopped Session: the first frame, drawn dim.
+/// A stopped Session: the new moon, drawn dim.
 pub const STOPPED: &str = IDLE;
-/// A Session that waits for another agent (hs-d303): `nf-md-circle_slice_4`, the half circle, in `Meaning::Waiting`.
-pub const WAITING: &str = SPINNER[4];
-/// A Session that needs the User (coloured by case): the last frame.
-pub const NEEDS_YOU: &str = SPINNER[8];
+/// A Session that waits for another agent (hs-d303): `nf-md-circle_opacity` (U+F1853), in `Meaning::Waiting`.
+pub const WAITING: &str = "\u{F1853}";
+/// A Session that needs the User (coloured by case): `nf-md-moon_full`.
+pub const NEEDS_YOU: &str = "\u{F0F62}";
 
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
@@ -417,14 +453,14 @@ pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'
 /// How long one frame of the spinner lasts, in milliseconds.
 const FRAME_MS: u128 = 100;
 
-/// The spinner frame at `now`: `(unix ms / 100) % 9`, one clock for every spinner, so they all turn together.
+/// The spinner frame at `now`: `(unix ms / 100) % 8`, one clock for every spinner, so they all turn together.
 pub fn frame(now: SystemTime) -> usize {
     let ms = now.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
 }
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
-/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working; [`WAITING`] in the colour of
+/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working, red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan with a failed Job); [`WAITING`] in the colour of
 /// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the first
 /// frame when working), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
@@ -435,6 +471,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Fixing => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
         Dot::Stopped => (STOPPED, muted_text()),
@@ -447,15 +484,14 @@ pub fn separator() -> Span<'static> {
     Span::styled("⋅", muted_text())
 }
 
-/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero.
+/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero. A
+/// failed count is red (hs-d580).
 pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
-    if n == 0 { muted_text() } else { fg_clickable(job_status(status, merging).1) }
-}
-
-/// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
-/// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
-pub fn failed_count_style(n: usize, stuck: bool) -> Style {
-    if stuck && n > 0 { fg_clickable(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+    match (n, status) {
+        (0, _) => muted_text(),
+        (_, JobStatus::Failed) => fg_clickable(Meaning::Failed),
+        _ => fg_clickable(job_status(status, merging).1),
+    }
 }
 
 /// Meaning of a PR's state.
@@ -548,8 +584,8 @@ mod tests {
     fn the_notice_meaning_is_blue_4_and_bright_12_on_a_clickable_row() {
         assert_eq!(color(Meaning::Notice), numbered::C4);
         assert_eq!(color_clickable(Meaning::Notice), Color::LightBlue, "12");
-        assert_eq!(selected().bg, Some(numbered::C4), "the focus block is still 4");
-        assert_eq!(selected().fg, Some(numbered::C0), "a mark on the cursor's blue block draws text 0");
+        assert_eq!(selected().fg, Some(numbered::C4), "the focus block is still 4");
+        assert_eq!(selected().bg, Some(Color::Reset), "a block is reversed over the terminal's background");
         assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::Notice)));
         assert_eq!(dot_span(Dot::Blue, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
         assert_eq!(dot_span(Dot::Blue, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
@@ -562,7 +598,7 @@ mod tests {
             (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
-            (JobStatus::Failed, false, FAILED, Meaning::Waiting),
+            (JobStatus::Failed, false, FAILED, Meaning::Failed),
             (JobStatus::Draft, false, DRAFT, Meaning::Planning),
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
@@ -620,12 +656,12 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
-        let glyphs: Vec<_> = (0..10).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
-        assert_eq!(SPINNER.len(), 9);
-        assert_eq!((SPINNER[0], SPINNER[8]), ("\u{F0766}", "\u{F0AA5}"));
-        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[8]));
+        assert_eq!(SPINNER.len(), 8);
+        assert_eq!((SPINNER[0], SPINNER[4]), ("\u{F0F64}", "\u{F0F62}"));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[4]));
     }
 
     #[test]
@@ -640,14 +676,14 @@ mod tests {
     fn every_pill_and_check_glyph_is_one_cell_wide_and_the_one_hs_d235_picked() {
         let glyphs = [
             (QUEUED, 0xF0766),
-            (MERGING, 0xF0B95),
+            (MERGING, 0xF1464),
             (MERGED, 0xF05E0),
             (FAILED, 0xF0159),
-            (DRAFT, 0xF1787),
-            (CANCELLED, 0xF073A),
+            (DRAFT, 0xF059),
+            (CANCELLED, 0xF0159),
             (CHECKS_PASSED, 0xF05E0),
             (CHECKS_FAILED, 0xF0159),
-            (CHECKS_PENDING, 0xF0996),
+            (CHECKS_PENDING, 0xF0B94),
             (CHECKS_NONE, 0xF0374),
         ];
         for (glyph, code) in glyphs {
@@ -677,9 +713,9 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_nine() {
+    fn the_frame_is_the_unix_time_in_tenths_of_a_second_modulo_eight() {
         let at = |ms: u64| frame(UNIX_EPOCH + std::time::Duration::from_millis(ms));
-        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 8, 8, 0, 1]);
+        assert_eq!([0, 99, 100, 199, 200, 800, 899, 900, 1000].map(at), [0, 0, 1, 1, 2, 0, 0, 1, 2]);
         assert_eq!(frame(UNIX_EPOCH - std::time::Duration::from_secs(1)), 0, "before the epoch: the first frame");
     }
 
@@ -690,16 +726,6 @@ mod tests {
         assert_eq!(count_style(JobStatus::Cancelled, false, 3), Style::new().fg(Color::DarkGray));
         assert_eq!(count_style(JobStatus::Failed, false, 0), Style::new().fg(Color::DarkGray));
         assert_eq!(separator(), Span::styled("⋅", Style::new().fg(Color::DarkGray)));
-    }
-
-    #[test]
-    fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
-        assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
-        assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::LightCyan));
-        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::LightRed));
-        assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
-        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::LightCyan));
     }
 
     #[test]
@@ -747,7 +773,7 @@ mod tests {
         assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
     }
 
-    /// No other file of the cockpit's views names a colour.
+    /// No other file of the cockpit's views names a colour. `moon_tests.rs` is exempt: it pins the dots' colours (hs-d579) and draws nothing; so are `pill_colours.rs` and `palette/`, which pin the palette's own styles.
     #[test]
     fn no_colour_outside_the_palette() {
         fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
@@ -759,7 +785,7 @@ mod tests {
                 let path = entry.unwrap().path();
                 if path.is_dir() {
                     walk(&path, offenders);
-                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs") {
+                } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "palette.rs" && n != "moon_tests.rs" && n != "pill_colours.rs") && !path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette")) {
                     let text = std::fs::read_to_string(&path).unwrap();
                     for (n, line) in text.lines().enumerate() {
                         if line.contains("Color::") || shorthand.iter().any(|s| line.contains(s)) {
@@ -775,9 +801,9 @@ mod tests {
     }
 
     #[test]
-    fn a_pill_is_black_on_the_colour() {
-        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
-        assert_eq!(pill_clickable(Meaning::Review), Style::new().fg(Color::Black).bg(Color::LightYellow));
+    fn a_pill_is_the_colour_inverted() {
+        assert_eq!(pill(Meaning::Review), block(Color::Yellow));
+        assert_eq!(pill_clickable(Meaning::Review), block(Color::LightYellow));
     }
 
     #[test]

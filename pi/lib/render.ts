@@ -1,14 +1,15 @@
 import { type Component, MouseRegion, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts";
 import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
+import { meaning, pill as drawPill } from "./pill.ts";
 import { isObject } from "./cpd.ts";
 import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
- * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: the left cap, the title, the right cap, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
+ * content line led by a muted `│ ` and a muted `╰󰬬 collapse` line; folded, a muted `╰󰬦 expand` line (U+F0B2C and U+F0B26, the
  * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
  * renderer one mouse region per message, so the click cannot be limited to the toggle line. Display only: the message's `content` and
@@ -133,8 +134,6 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 // ---- the fold ----
 
-const CAP_LEFT = "\u{E0B6}";
-const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
 const GREY8 = (text: string): string => `\x1b[90m${text}\x1b[39m`;
 
@@ -148,10 +147,10 @@ function firstSentence(summary: string): string {
 const TOP = "╭─";
 const RAIL = "│ ";
 const CLOSE = "╰";
-/** U+F005A, the 'nothing to fold' glyph; the same code point as compact-tools' own constant in `compact-tools/extensions/compact-tools-layout.ts` (not imported across the two trees). */
-const NOTHING_TO_FOLD = "\u{F005A}";
-const DOWN = "\u{F004B}";
-const UP = "\u{F0063}";
+/** U+F0B2A, the 'nothing to fold' glyph; the same code point as compact-tools' own constant in `compact-tools/extensions/compact-tools-layout.ts` (not imported across the two trees). */
+const NOTHING_TO_FOLD = "\u{F0B2A}";
+const DOWN = "\u{F0B26}";
+const UP = "\u{F0B2C}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
@@ -162,8 +161,8 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
   const lead = `${MARGIN}${GREY8(TOP)}`;
-  // contract §6.1.1: the pill is magenta 5 with text 0, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
-  const pill = `\x1b[35m${CAP_LEFT}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_RIGHT}\x1b[39m`;
+  // contract §6.1.1: the pill is magenta 5 inverted, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
+  const pill = drawPill(meaning("planning"), "cpd");
   const sentence = firstSentence(summary);
   const rail = `${MARGIN}${GREY8(RAIL)}`;
   const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
@@ -214,7 +213,7 @@ export class Rendering {
     }
     const draw = (width: number): string[] => {
       const shown = open || state.expanded;
-      const lines = [...rows.head(width), ...(shown ? rows.body(width) : []), ...(closes ? rows.terminator() : rows.toggle(width, shown))];
+      const lines = [...rows.head(width), ...(shown ? rows.body(width - 3) : []), ...(closes ? rows.terminator() : rows.toggle(width, shown))];
       return withinWidth(lines, width);
     };
     const inner: Component = {

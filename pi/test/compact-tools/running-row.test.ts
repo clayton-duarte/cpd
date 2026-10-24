@@ -1,13 +1,14 @@
 /**
  * The closing row of a running tool row (contract 6.1.1): with fold "toggle" it is " ╰" in 8 and one loader frame
- * in 6 (U+F0766, U+F0A9E..U+F0AA5), no text (running-loader.test.ts). Fold "status" keeps " └ Running".
+ * in 6 (the moon phases, loader-frames.ts), no text (running-loader.test.ts). Fold "status" keeps " └ Running".
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown } from "./indicator-harness.ts";
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const GLYPH = "[\u{F0766}\u{F0A9E}-\u{F0AA5}]";
+const GLYPH = `[${MOON_FRAMES.join("")}]`;
 const HEAD = " \u256D\u2500";
 let sequence = 0;
 
@@ -70,7 +71,7 @@ test("a finished row closes with the toggle in 7 and the line in 8", async () =>
 		const lines = row.render(100).filter((line) => plain(line).trim() !== "");
 		const close = lines[lines.length - 1]!;
 		assert.ok(close.includes("\x1b[90m \u2570") || close.includes("\x1b[90m\u2570"), `line in 8: ${JSON.stringify(close)}`);
-		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F004B}\u{F0063}]/u, `toggle in 7: ${JSON.stringify(close)}`);
+		assert.match(close, /\x1b\[37m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u, `toggle in 7: ${JSON.stringify(close)}`);
 		assert.ok(!new RegExp(GLYPH, "u").test(close), "no loader frame once finished");
 		// The running row of the same tool is not a toggle: its closing row has no 7.
 		const live = await running("toggle");

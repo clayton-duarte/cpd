@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { Container, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { installHint } from "../lib/hint.ts";
 
-const THEME = new URL("../themes/cpd.json", import.meta.url);
+const THEME = new URL("../themes/dango.json", import.meta.url);
 type ThemeLike = { fg(c: string, t: string): string; bg(c: string, t: string): string };
 const pi = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
 const themeMod = (await import(pathToFileURL(join(dirname(pi), "modes/interactive/theme/theme.js")).href)) as {
@@ -22,7 +22,7 @@ const theme = themeMod.loadThemeFromPath(THEME.pathname, "256color");
 const E = "\x1b[";
 const SEP = `${E}90m─${E}39m`;
 const pill = (n: number, label: string): string =>
-	`${E}3${n}m\uE0B6${E}39m${E}4${n}m${E}30m${label}${E}49m${E}39m${E}3${n}m\uE0B4${E}39m`;
+	`${E}3${n}m\uE0B6${E}7m${label}${E}27m${E}3${n}m\uE0B4${E}39m`;
 const BLUE = 4;
 const GREEN = 2;
 const GREY = 7;
@@ -102,12 +102,12 @@ test("the tab line is pills joined by ─ with no arrows, boxes or check marks",
 	assert.doesNotMatch(line, /[←→■□✓]/);
 });
 
-test("a pill has caps, the colour as background, text 0 and no padding inside", () => {
+test("a pill has caps, the colour inverted onto its text and no padding inside", () => {
 	const line = hooked(() => D({ tabs: [tab("Scope", false, true)], submit: { active: false, allAnswered: false } })[0]!);
-	assert.ok(line.includes(`${E}34m\uE0B6${E}39m${E}44m${E}30mScope${E}49m${E}39m${E}34m\uE0B4${E}39m`), line);
-	assert.doesNotMatch(line, /\x1b\[(2|7|48;|38;)/);
-	assert.doesNotMatch(line, /\x1b\[30m /);
-	assert.doesNotMatch(line, / \x1b\[49m/);
+	assert.ok(line.includes(`${E}34m\uE0B6${E}7mScope${E}27m${E}34m\uE0B4${E}39m`), line);
+	assert.doesNotMatch(line, /\x1b\[(2m|48;|38;)/);
+	assert.doesNotMatch(line, /\x1b\[(30m|4)/);
+	assert.doesNotMatch(line, / \x1b\[27m/);
 });
 
 test("the current question is blue, an answered one green and an unanswered one grey", () => {

@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::curation::{Curation, Proposal, Reason, propose_rejecting};
+use super::curation::{Curation, NotCurable, not_curable, Proposal, Reason, propose_rejecting};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
 use crate::config::{Config, Letter, Tier};
@@ -109,6 +109,14 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     let Env { home, config, mut store } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
+    let floor = config.context_curation_min_records;
+    match store.read(|conn| not_curable(conn, &context, floor))? {
+        Some(NotCurable::Archived) => return Ok(Output::success(json!({"context": context.as_str(), "skipped": "archived"}))),
+        Some(NotCurable::Young { records }) => {
+            return Ok(Output::success(json!({"context": context.as_str(), "skipped": "young", "records": records, "floor": floor})));
+        }
+        Some(NotCurable::Deleted) | None => {}
+    }
     let _lock = Lock::take(&home, &context)?;
     let state = store.read(|conn| State::read(conn, &context))?;
     let run = Run { home: &home, config: &config, store: &mut store, context: &context };

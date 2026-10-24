@@ -30,9 +30,7 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[39m/g, "</>")
     .replace(/\x1b\[90m/g, "<c8>")
     .replace(/\x1b\[35m/g, "<c5>")
-    .replace(/\x1b\[45m/g, "<bg5>")
-    .replace(/\x1b\[30m/g, "<t0>")
-    .replace(/\x1b\[37m/g, "<t7>")
+        .replace(/\x1b\[37m/g, "<t7>")
     .replace(/\x1b\[7m/g, "<inv>")
     .replace(/\x1b\[27m/g, "</inv>")
     .replace(/\x1b\[1m/g, "<b>")
@@ -49,18 +47,18 @@ const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, background 5, text 0), `cpd` and the first sentence; no dot.
+// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), `cpd` and the first sentence; no dot.
 const first = (summary: string): string => {
   const at = summary.search(/[.:]/);
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<bg5><t0>cpd<c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
 const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
-const TERM = ` <c8>╰\u{F005A}</>`;
+const TERM = ` <c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
-const FOLDED = "\u{F004B}";
-const OPEN = "\u{F0063}";
+const FOLDED = "\u{F0B26}";
+const OPEN = "\u{F0B2C}";
 const closing = (word: string) => ` <c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
@@ -69,12 +67,12 @@ const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
 
-test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰁋 expand", () => {
+test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰬦 expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
   assert.deepEqual(show(m, false), [HEAD("Job api-1 merged."), closing("expand")]);
 });
 
-test("an Event, expanded: the title stays, the full content behind a muted │ , then a muted ╰󰁣 collapse", () => {
+test("an Event, expanded: the title stays, the full content behind a muted │ , then a muted ╰󰬬 collapse", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
   assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("collapse")]);
 });

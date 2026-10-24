@@ -25,8 +25,8 @@ async function loadHarness() {
 	return loaded;
 }
 
-const EXPAND = "\u{F004B}";
-const COLLAPSE = "\u{F0063}";
+const EXPAND = "\u{F0B26}";
+const COLLAPSE = "\u{F0B2C}";
 const HEAD = " \u256D\u2500"; // " ╭─"
 const CLOSE = "\u2570"; // ╰
 const SEVEN = ["read", "write", "edit", "bash", "grep", "find", "ls"];
@@ -42,13 +42,13 @@ function noConfigFile<T>(fn: (cwd: string) => T): T {
 	try { return fn(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
 }
 
-test("DEFAULT_CONFIG is the fold language: toggle, U+F004B, U+F0063, seven tools, style compact, the rest upstream's", () => {
+test("DEFAULT_CONFIG is the fold language: toggle, U+F0B26, U+F0B2C, seven tools, style compact, the rest upstream's", () => {
 	assert.equal(DEFAULT_CONFIG.style, "compact");
 	assert.equal(DEFAULT_CONFIG.fold, "toggle");
 	assert.deepEqual(DEFAULT_CONFIG.toggle, { expand: EXPAND, collapse: COLLAPSE });
 	assert.equal([...DEFAULT_CONFIG.toggle.expand].length, 1, "one code point");
-	assert.equal(DEFAULT_CONFIG.toggle.expand.codePointAt(0), 0xF004B);
-	assert.equal(DEFAULT_CONFIG.toggle.collapse.codePointAt(0), 0xF0063);
+	assert.equal(DEFAULT_CONFIG.toggle.expand.codePointAt(0), 0xF0B26);
+	assert.equal(DEFAULT_CONFIG.toggle.collapse.codePointAt(0), 0xF0B2C);
 	assert.deepEqual(DEFAULT_CONFIG.tools, SEVEN);
 	// The rest is upstream's.
 	assert.equal(DEFAULT_CONFIG.mode, "normal");
@@ -99,7 +99,7 @@ test("with no file the extension registers the seven tools and no other", async 
 	} finally { shutdown(harness); }
 });
 
-test("with no file a compact row opens with ╭ and closes with ╰ U+F004B expand · Done in …, for each of the seven tools", async () => {
+test("with no file a compact row opens with ╭ and closes with ╰ U+F0B26 expand · Done in …, for each of the seven tools", async () => {
 	for (const name of SEVEN) {
 		const { done } = await draw(name);
 		assert.ok(firstLine(done).startsWith(HEAD), `${name}: ${firstLine(done)}`);
@@ -108,7 +108,7 @@ test("with no file a compact row opens with ╭ and closes with ╰ U+F004B expa
 	}
 });
 
-test("with no file an expanded row closes with ╰ U+F0063 collapse · Done in … under its │ body", async () => {
+test("with no file an expanded row closes with ╰ U+F0B2C collapse · Done in … under its │ body", async () => {
 	for (const name of ["bash", "read", "edit"]) {
 		const { done } = await draw(name, true);
 		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${COLLAPSE} collapse · Done in 0\\.300s`, "u"), name);
@@ -153,7 +153,7 @@ async function thinking(source = "## **Check the implementation**\n\nInspect the
 	};
 }
 
-test("with no file the thinking block's control row is the toggle: ╰ U+F004B expand, then ╰ U+F0063 collapse", async () => {
+test("with no file the thinking block's control row is the toggle: ╰ U+F0B26 expand, then ╰ U+F0B2C collapse", async () => {
 	const block = await thinking();
 	try {
 		assert.deepEqual(block.draw(), ["╭─\uE0B6Thinking…\uE0B4", `${CLOSE}${EXPAND} expand`]);
@@ -161,7 +161,6 @@ test("with no file the thinking block's control row is the toggle: ╰ U+F004B e
 		block.press();
 		assert.deepEqual(block.draw(), [
 			"╭─\uE0B6Thinking…\uE0B4",
-			"\u2502",
 			"\u2502 ## **Check the implementation**",
 			"\u2502",
 			"\u2502 Inspect the renderer.",

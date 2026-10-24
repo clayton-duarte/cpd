@@ -28,8 +28,23 @@ mod input_box_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;
+#[cfg(test)]
+mod failed_pill_tests;
+#[cfg(test)]
+mod moon_tests;
+pub mod trace;
+#[cfg(test)]
+mod trace_tests;
+#[cfg(test)]
+mod icons_tests;
 pub mod merge;
+pub mod pace;
+#[cfg(test)]
+mod pace_tests;
 pub mod palette;
+pub mod pill;
+#[cfg(test)]
+mod pill_tests;
 #[cfg(test)]
 mod updating_label;
 #[cfg(test)]
@@ -146,7 +161,7 @@ pub enum View {
     Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
-    /// A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup)
+    /// A dialog of the kit: `confirm`, `input`, `text`, `checklist` or `select` (opened by the cockpit's actions, in a tmux popup)
     Dialog(dialog::Args),
     /// The chat slot's placeholder
     Chat,

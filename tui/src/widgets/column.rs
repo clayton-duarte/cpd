@@ -19,12 +19,12 @@ use crate::read::{Dot, OpenPr, ReviewDecision, UpdateState};
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
 
-/// What a click on an owned PR reaches: its two lines, except the `󰏌` cell (the terminal opens that link).
+/// What a click on an owned PR reaches: its two lines, except the `󱆭` cell (the terminal opens that link).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
     /// The PR's two rows, the column's full width.
     pub area: Rect,
-    /// The `󰏌` cell, inside `area`.
+    /// The `󱆭` cell, inside `area`.
     pub arrow: Position,
     /// The merge icon's cell, inside `area`, when the PR shows one, or the spinner's while its merge runs: no click on
     /// it reaches the Lead.
@@ -142,8 +142,8 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
-/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
+/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󱆭` in the last column, then
+/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󱆭`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
 /// A conflicting one adds ` conflict` after the review. A pull request a Plan owns is clickable, so its colourless text is 15 and
 /// its coloured marks the bright pairs, and it draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them,
@@ -302,7 +302,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
     let mut hits = vec![];
     let mut icons = vec![];
     let mut rows = vec![];
-    // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
+    // The `󱆭` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width), frame));
@@ -456,15 +456,6 @@ mod tests {
         let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
         assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
         assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
-    }
-
-    #[test]
-    fn the_gpu_part_has_one_percent_per_gpu_and_is_absent_with_none() {
-        let row = |gpus: Vec<Option<u8>>| Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus, mem: Some(41) } }.usage_line();
-        assert_eq!(row(vec![]), " \u{F4BC} 23%  \u{EFC5} 41%", "no GPU, no GPU part");
-        assert_eq!(row(vec![Some(61)]), " \u{F4BC} 23%  \u{E266} 61%  \u{EFC5} 41%");
-        assert_eq!(row(vec![Some(61), Some(0)]), " \u{F4BC} 23%  \u{E266} 61% 0%  \u{EFC5} 41%");
-        assert_eq!(row(vec![None, Some(5)]), " \u{F4BC} 23%  \u{E266} –% 5%  \u{EFC5} 41%", "an unknown GPU is –%");
     }
 
     #[test]

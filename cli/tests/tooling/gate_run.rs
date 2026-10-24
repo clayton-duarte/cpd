@@ -25,7 +25,8 @@ impl Fx {
         let env = TestEnv::new();
         let tmp = env.root().join("tmp");
         fs::create_dir_all(&tmp).unwrap();
-        let _cleanup = Cleanup { pid_files: vec![env.root().join("left.pid")], socket_id: env.root().join("run-id") };
+        let left_socket = format!("cpdt-left-{}", env.root().file_name().unwrap().to_string_lossy());
+        let _cleanup = Cleanup { pid_files: vec![env.root().join("left.pid")], socket_id: env.root().join("run-id"), left_socket };
         Fx { env, tmp, _cleanup }
     }
 
@@ -54,6 +55,8 @@ impl Fx {
 struct Cleanup {
     pid_files: Vec<PathBuf>,
     socket_id: PathBuf,
+    /// The socket (without the run id) of the server `leave_a_process` starts: tmux leaves its file.
+    left_socket: String,
 }
 
 impl Drop for Cleanup {
@@ -63,6 +66,7 @@ impl Drop for Cleanup {
                 let _ = std::process::Command::new("kill").args(["-KILL", pid.trim()]).status();
             }
         }
+        let _ = fs::remove_file(socket_file(&self.left_socket));
         if let Ok(id) = fs::read_to_string(&self.socket_id) {
             let socket = format!("cpdt-{}-1-0", id.trim());
             let _ = std::process::Command::new("tmux").args(["-L", &socket, "kill-server"]).env_remove("TMUX_TMPDIR").env_remove("TMUX").output();
@@ -72,17 +76,56 @@ impl Drop for Cleanup {
 }
 
 fn socket_file(socket: &str) -> PathBuf {
-    Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata("/proc/self").unwrap().uid() })).join(socket)
+    let uid = std::process::Command::new("id").arg("-u").output().expect("id -u");
+    let uid = String::from_utf8(uid.stdout).unwrap();
+    Path::new("/tmp").join(format!("tmux-{}", uid.trim())).join(socket)
 }
 
 fn alive(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().expect("ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
 }
 
-/// A command that leaves a detached process (`setsid`, out of every group) and writes its pid to `left.pid`.
+/// A command that leaves a process and writes its pid to `left.pid`: a detached tmux server on tmux's default
+/// directory, whose socket name does not hold the run id (so the process check is what is exercised, not the socket
+/// check). It is tmux, not a plain `sleep`, because on macOS `ps -E` hides the environment of Apple platform binaries
+/// (/bin/sh, /bin/sleep: SIP): a leftover of that kind is not seen by gate-run.sh there, while non-platform processes
+/// (tmux, node, cpd and the other cargo-built test binaries) are. The server is started from the command, so it
+/// inherits `GATE_RUN`, and it is not a descendant of the command once it has detached.
 fn leave_a_process(fx: &Fx) -> String {
-    format!("setsid sleep {SLEEP_SECONDS} </dev/null >/dev/null 2>&1 & echo $! > '{}'", fx.file("left.pid").display())
+    let socket = format!("cpdt-left-{}", fx.env.root().file_name().unwrap().to_string_lossy());
+    format!(
+        "unset TMUX TMUX_TMPDIR; tmux -L '{socket}' -f /dev/null new-session -d -P -F '#{{pid}}' 'exec sleep {SLEEP_SECONDS}' > '{}'",
+        fx.file("left.pid").display()
+    )
+}
+
+#[test]
+fn a_clean_run_of_true_prints_nothing_and_exits_0() {
+    let fx = Fx::new();
+
+    let run = fx.gate_run("true");
+
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(fx.tmp_entries(), Vec::<String>::new(), "a clean run removes its empty directory");
+}
+
+#[test]
+fn the_hint_for_a_left_process_names_a_command_this_os_has() {
+    let fx = Fx::new();
+
+    let run = fx.gate_run(&leave_a_process(&fx));
+
+    let pid: u32 = fs::read_to_string(fx.file("left.pid")).unwrap_or_default().trim().parse().unwrap_or_else(|_| panic!("the command left no process: {run:?}"));
+    assert_eq!(run.exit, 1, "{run:?}");
+    if Path::new("/proc/self").exists() {
+        assert!(run.stderr.contains(&format!("/proc/{pid}/environ")), "{run:?}");
+    } else {
+        assert!(run.stderr.contains(&format!("ps -E -p {pid}")), "{run:?}");
+        assert!(!run.stderr.contains("/proc/"), "{run:?}");
+    }
 }
 
 #[test]

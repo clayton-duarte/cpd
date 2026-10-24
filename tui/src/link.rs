@@ -21,8 +21,8 @@
 use ratatui::buffer::{Buffer, CellDiffOption, CellWidth};
 use ratatui::layout::Rect;
 
-/// The link cue, drawn where a view links to a page (hs-d191, hs-d235): `nf-md-open_in_new` (U+F03CC).
-pub const CUE: &str = "\u{F03CC}";
+/// The link cue, drawn where a view links to a page (hs-d191, hs-d235): `nf-md-share_circle` (U+F11AD).
+pub const CUE: &str = "\u{F11AD}";
 
 /// Makes the cells of `area` (one row, `area.y`) an OSC 8 link to `url`, in pieces of at most 2 cells.
 ///
