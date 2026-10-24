@@ -27,6 +27,14 @@ pub mod fold;
 mod history;
 mod input_box;
 #[cfg(test)]
+mod layout_dialog_tests;
+#[cfg(test)]
+mod layout_popup_tests;
+#[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
+mod layout_tree_tests;
+#[cfg(test)]
 mod input_box_tests;
 pub mod link;
 pub mod logs;

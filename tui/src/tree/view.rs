@@ -766,6 +766,24 @@ impl View {
     }
 }
 
+/// The layout test's sample (`layout_tests`): a right click at `click` in a `width` x `height` pane of an empty tree,
+/// drawn by [`View::draw`] as in production; the menu's rect is the one the view hit-tests.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::Case) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Case, Kind, Placed, Sample};
+    use ratatui::backend::TestBackend;
+    let Case::Menu(click) = case else { panic!("the tree samples a menu") };
+    let (column, row) = click.at(width, height);
+    let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE });
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    let rect = view.menu.as_ref().expect("the right click opens a menu").rect(view.pane);
+    let boxes = vec![Placed { name: "tree menu", kind: Kind::Full, rect, exempt: Vec::new() }];
+    Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;

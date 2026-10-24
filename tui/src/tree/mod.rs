@@ -50,6 +50,8 @@ mod menu;
 mod rows;
 mod slug;
 mod view;
+#[cfg(test)]
+pub(crate) use view::layout_sample;
 
 #[cfg(test)]
 mod fixture;

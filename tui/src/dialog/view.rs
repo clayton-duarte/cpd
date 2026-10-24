@@ -564,6 +564,67 @@ impl Dialog {
     }
 }
 
+/// The layout test's sample (`layout_tests`): `case` drawn by [`Dialog::draw`] as a popup of `width` x `height`, set in a
+/// client wider by two margins so the test sees the margin columns. The frame is `Dialog::area` as saved; an input's box
+/// is the dialog's body rect, as many rows as its text shows.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::Case) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Case, Exempt, Kind, Placed, Rule, Sample};
+    use ratatui::buffer::Buffer;
+    let body_width = usize::from(width.saturating_sub(4));
+    let tw = body_width.saturating_sub(4).max(1);
+    let input = |len: usize| {
+        let text: String = ('a'..='z').cycle().take(len).collect();
+        let mode = Mode::Input { validator: Validator::PlanId, field: Field::new(&text), refused: None };
+        (Dialog::new("New Plan".into(), "Name:".into(), mode), len)
+    };
+    let (mut dialog, input_len) = match case {
+        Case::Confirm => (Dialog::new("Archive".into(), "Archive cpd-ui?".into(), Mode::Confirm { yes: "Archive".into() }), None),
+        Case::InputEmpty => (input(0).0, Some(0)),
+        Case::InputOne => (input(3).0, Some(3)),
+        Case::InputWrapped => (input(2 * tw).0, Some(2 * tw)),
+        Case::Text => (Dialog::new("Legend".into(), "line 1\nline 2\nline 3".into(), Mode::Text), None),
+        Case::Checklist => {
+            let row = |id: &str, text: &str, detail: &str| Row { id: id.into(), text: text.into(), detail: detail.into() };
+            let rows = vec![row("r-1", "use sqlite as the store", "duplicate r-0"), row("r-2", "wire format", "documented docs/a.md")];
+            let mode = Mode::Checklist { rows, ticked: vec![false, false], cursor: 0 };
+            (Dialog::new("Retire records of cpd".into(), String::new(), mode), None)
+        }
+        Case::Menu(_) => panic!("a menu is no dialog"),
+    };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| dialog.draw(f)).unwrap();
+    let popup = terminal.backend().buffer().clone();
+    let margin = crate::box_widget::spacing::MARGIN_X;
+    let container = Rect::new(0, 0, width + 2 * margin, height);
+    let mut buf = Buffer::empty(container);
+    for y in 0..height {
+        for x in 0..width {
+            buf[(x + margin, y)] = popup[(x, y)].clone();
+        }
+    }
+    let shift = |r: Rect| Rect::new(r.x + margin, r.y, r.width, r.height);
+    let spacing = "dialog blank row (hs-d578)";
+    let mut boxes = vec![Placed {
+        name: "dialog frame",
+        kind: Kind::Full,
+        rect: shift(dialog.area),
+        exempt: vec![
+            Exempt { name: spacing, row: 1, rule: Rule::Vertical },
+            Exempt { name: spacing, row: height.saturating_sub(3), rule: Rule::Vertical },
+            Exempt { name: "buttons row, empty when no button fits (A13)", row: height.saturating_sub(2), rule: Rule::Vertical },
+        ],
+    }];
+    if let Some(len) = input_len {
+        let body = layout(dialog.area).body;
+        let avail = usize::from(body.height).saturating_sub(2 + REFUSAL_ROWS).max(1);
+        let rows = (len / tw + 1).min(avail);
+        let rect = Rect::new(body.x, body.y, body.width, u16::try_from(rows + 2).unwrap());
+        boxes.push(Placed { name: "input box", kind: Kind::Full, rect: shift(rect), exempt: Vec::new() });
+    }
+    Sample { buf, container, boxes }
+}
+
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod tests;
