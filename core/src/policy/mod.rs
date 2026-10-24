@@ -9,6 +9,8 @@
 
 mod domain;
 mod exposure;
+#[allow(dead_code)] // the stub: nothing calls it until the implementation
+mod known;
 mod load;
 mod origin;
 mod resolve;
