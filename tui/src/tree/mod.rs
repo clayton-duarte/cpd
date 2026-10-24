@@ -64,10 +64,8 @@ mod needs_tests;
 
 /// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is `!view.tree.inbox.is_empty()` (an
 /// age text is on screen), `at` is `None` (the safety read covers the engine's lock, a snooze's end and the merge marker).
-// Stub: the Job views-impl implements it, uses it in `event_loop` and removes this allow.
-#[allow(dead_code)]
-fn needs(_view: &View) -> crate::pump::Needs {
-    todo!()
+fn needs(view: &View) -> crate::pump::Needs {
+    crate::pump::Needs { frame: view.animated(), second: !view.tree.inbox.is_empty(), at: None }
 }
 
 use std::collections::BTreeSet;
@@ -76,6 +74,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
+use crate::pump::{self, Pump, Schedule, Signal};
 use time::OffsetDateTime;
 
 use super::background::Background;
@@ -96,8 +95,6 @@ use view::{Effect, View};
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 
-/// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
-const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
 /// What one poll of the reader thread found: each read apart, so each has its own error (`runner::kept`).
 struct Polled {
     changes: Result<read::Changes, CpdError>,
@@ -105,16 +102,10 @@ struct Polled {
     merging: Result<BTreeSet<String>, CpdError>,
 }
 
-/// What the reader thread brings back.
-enum Read {
-    Poll(Polled),
-    Snapshot(Result<(Option<OffsetDateTime>, read::Tree), CpdError>),
-}
-
-/// A new snapshot is due: an Event came, or a pull request row changed (a pull request's checks change with no Event,
-/// §17), and `since` the last snapshot reaches [`SNAPSHOT_EVERY`]. With nothing changed none is ever due.
-fn snapshot_due(dirty: bool, since: Duration) -> bool {
-    dirty && since >= SNAPSHOT_EVERY
+/// What the reader thread brings back: the poll, and the snapshot when the poll (or a force) called for one.
+struct Read {
+    poll: Polled,
+    snapshot: Option<Result<(Option<OffsetDateTime>, read::Tree), CpdError>>,
 }
 
 pub(super) fn run() -> Result<Output, CpdError> {
@@ -151,9 +142,16 @@ fn event_loop(
     let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
     let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
     let epoch = Instant::now();
-    let mut dirty = false;
-    let mut last_snapshot = Instant::now();
-    let mut last_poll = Instant::now();
+    let pump = Pump::new(event::read);
+    // the store's directory is watched once; a watcher that cannot start is said in the error row, and the schedule polls
+    let (_watch, watch_error, mut schedule) = match read::watch::Watch::start(home.root(), pump.waker()) {
+        Ok(watch) => (Some(watch), None, Schedule::new(Instant::now(), pump::SAFETY)),
+        Err(why) => (
+            None,
+            Some(format!("no commit watcher: {}; polling every {} ms", why.message(), poll.as_millis())),
+            Schedule::new(Instant::now(), poll),
+        ),
+    };
     // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll (of the Events or of the
     // engine's lock) at the next poll. All are shown (runner::kept): the footer says the snapshot's error, else the
     // follow's, else the lock's.
@@ -163,11 +161,11 @@ fn event_loop(
     let (mut redraw, mut drawn_frame, mut drawn_second) = (true, palette::frame(SystemTime::now()), unix_second());
     // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
-    let mut actions = Background::<Result<String, Failed>>::new();
-    let mut popups = Background::<Result<(), String>>::new();
+    let mut actions = Background::<Result<String, Failed>>::with_waker(pump.waker());
+    let mut popups = Background::<Result<(), String>>::with_waker(pump.waker());
     // the reads run on the reader thread (R4), one at a time: none is asked for while one is out
-    let mut reads = Reads::<Read>::new();
-    let mut reading = false;
+    let mut reads = Reads::<Read>::with_waker(pump.waker());
+    view.error = watch_error.clone();
     for line in view.keep_folds(FoldsFile::at(home)) {
         show(log.line(&line), &mut popups, runner);
     }
@@ -176,8 +174,7 @@ fn event_loop(
         while let Some(result) = actions.finished() {
             show(said(&mut view, &mut log, result), &mut popups, runner);
             // the tree shows the result on this loop's snapshot
-            dirty = true;
-            last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+            schedule.force();
         }
         while let Some(result) = popups.finished() {
             // only a failure is logged: a popup that failed cannot be asked to say so
@@ -186,52 +183,52 @@ fn event_loop(
             }
         }
         while let Some(done) = trace.read(|| reads.take()) {
-            reading = false;
-            match done {
-                Read::Poll(poll) => {
-                    dirty |= kept(poll.changes, &mut follow_error).is_some_and(|changes| changes.any());
-                    dirty |= kept(poll.engine, &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
-                    if let Some(merging) = kept(poll.merging, &mut open_error) {
-                        redraw |= view.set_merging(merging);
-                    }
-                }
-                Read::Snapshot(next) => {
-                    if let Some((end, tree)) = kept(next, &mut snapshot_error) {
-                        snooze_end = end;
-                        let t = &view.tree;
-                        if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
-                            view.refresh(tree);
-                            redraw = true;
-                        }
+            schedule.done();
+            let poll = done.poll;
+            kept(poll.changes, &mut follow_error);
+            kept(poll.engine, &mut engine_error);
+            if let Some(merging) = kept(poll.merging, &mut open_error) {
+                redraw |= view.set_merging(merging);
+            }
+            if let Some(next) = done.snapshot {
+                if let Some((end, tree)) = kept(next, &mut snapshot_error) {
+                    snooze_end = end;
+                    let t = &view.tree;
+                    if (&tree.contexts, &tree.inbox, tree.engine_running) != (&t.contexts, &t.inbox, t.engine_running) {
+                        view.refresh(tree);
+                        redraw = true;
                     }
                 }
             }
-            view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone()).or_else(|| open_error.clone());
+            view.error = snapshot_error
+                .clone()
+                .or_else(|| follow_error.clone())
+                .or_else(|| engine_error.clone())
+                .or_else(|| open_error.clone())
+                .or_else(|| watch_error.clone());
         }
-        // a due snapshot goes before a poll: when the frame is longer than `poll`, the poll would always take the turn
-        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) && !reading {
-            // what comes while the snapshot is read (an action's end) is seen by the next
-            dirty = false;
-            last_snapshot = Instant::now();
-            let shared = Arc::clone(&reader);
-            reading = true;
-            reads.request(move || {
-                Read::Snapshot(pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?)))))
-            });
-        }
-        if last_poll.elapsed() >= poll && !reading {
-            last_poll = Instant::now();
-            // the Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`, §17); a merge
-            // starts and ends with no Event: its marker (hs-d495) is read on each poll
-            dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
+        if let Some(kind) = schedule.take(Instant::now()) {
+            // one job does the poll, then the snapshot when something changed (a pull request's checks change with no
+            // Event, §17; the Inbox changes with no Event when a snooze ends or the engine stops or starts, `engine-down`;
+            // a merge starts and ends with no Event: its marker, hs-d495, is read on each poll), or on `force`, or after a
+            // failed snapshot
             let (shared, home) = (Arc::clone(&reader), home.clone());
-            reading = true;
+            let (engine_shown, merging_shown) = (view.tree.engine_running, view.merging().clone());
+            let retry = snapshot_error.is_some() || kind.force || snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
             reads.request(move || {
                 let (changes, merging) = (
                     pace::Owned::read(&shared, |store, follow| follow.poll_changes(store)),
                     pace::Owned::read(&shared, |store, _| read::open_pulls(store)).map(|open| crate::merge::marker::live(&home, &open)),
                 );
-                Read::Poll(Polled { changes, engine: model::engine_running(&home), merging })
+                let engine = model::engine_running(&home);
+                let due = retry
+                    || changes.as_ref().is_ok_and(|c| c.any())
+                    || engine.as_ref().is_ok_and(|on| *on != engine_shown)
+                    || merging.as_ref().is_ok_and(|m| *m != merging_shown);
+                let snapshot = due.then(|| {
+                    pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?))))
+                });
+                Read { poll: Polled { changes, engine, merging }, snapshot }
             });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
@@ -245,9 +242,10 @@ fn event_loop(
             show(log.line(&line), &mut popups, runner);
         }
         let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
-        redraw |= view.error != error || (view.animated() && frame != drawn_frame);
+        let wants = needs(&view);
+        redraw |= view.error != error || (wants.frame && frame != drawn_frame);
         // the Inbox items' ages are redrawn every second, from `opened_at`
-        redraw |= !view.tree.inbox.is_empty() && second != drawn_second;
+        redraw |= wants.second && second != drawn_second;
         if redraw {
             let (drawn, written) = trace.draw(epoch, &log.file, frame, || terminal.draw(|f| view.draw(f, frame)).map(drop));
             drawn?;
@@ -256,11 +254,20 @@ fn event_loop(
             }
             (redraw, drawn_frame, drawn_second) = (false, frame, second);
         }
-        if !event::poll(pace::wait_now())? {
-            continue;
-        }
+        let wall_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let now = Instant::now();
+        let event = match pump.wait(pump::wake(now, wall_ms, &wants, schedule.deadline(now))) {
+            Signal::Input(event) => event,
+            Signal::InputFailed(why) => return Err(why),
+            Signal::Commit => {
+                schedule.commit();
+                continue;
+            }
+            Signal::Read | Signal::Due => continue,
+        };
         redraw = true; // a key, a click, a resize, the focus
-        let effect = match event::read()? {
+        let frame = palette::frame(SystemTime::now());
+        let effect = match event {
             Event::FocusGained => {
                 view.focus(true);
                 Effect::None
@@ -292,8 +299,7 @@ fn event_loop(
                     Ok(Some(action)) => {
                         show(said(&mut view, &mut log, runner.run(&action)), &mut popups, runner);
                         // the tree shows the result on this loop's snapshot
-                        dirty = true;
-                        last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+                        schedule.force();
                     }
                     // the dialog failed, or the answer is refused (a title no id can be made of): the User must see it
                     Err(why) => {
@@ -310,13 +316,13 @@ fn event_loop(
                 // the merge popup returns when it closes; only a failure is said, and a merge shows on the next snapshot
                 let runner = Arc::clone(runner);
                 popups.submit(move || runner.merge(&pull));
-                dirty = true;
+                schedule.force();
             }
             Effect::Curate(kind, context) => {
                 // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
                 let runner = Arc::clone(runner);
                 popups.submit(move || runner.curate(kind, &context));
-                dirty = true;
+                schedule.force();
             }
             Effect::Run(action) => {
                 let runner = Arc::clone(runner);
@@ -325,8 +331,7 @@ fn event_loop(
             text @ Effect::Text { .. } => show(text, &mut popups, runner),
             Effect::Steps(steps) => {
                 show(said(&mut view, &mut log, runner.run_all(&steps)), &mut popups, runner);
-                dirty = true;
-                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+                schedule.force();
             }
         }
     }
@@ -373,19 +378,4 @@ fn show(effect: Effect, popups: &mut Background<Result<(), String>>, runner: &Ar
 /// The Unix second now: the Inbox items' ages change with it.
 fn unix_second() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_snapshot_is_due_on_a_change_after_half_a_second_and_never_with_none() {
-        let ms = Duration::from_millis;
-        assert!(!snapshot_due(false, ms(0)));
-        assert!(!snapshot_due(false, ms(2000)), "no change: no snapshot (tui-F3)");
-        assert!(!snapshot_due(false, Duration::from_secs(3600)));
-        assert!(!snapshot_due(true, ms(499)), "at most one snapshot per 500 ms");
-        assert!(snapshot_due(true, ms(500)));
-    }
 }
