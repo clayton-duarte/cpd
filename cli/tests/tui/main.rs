@@ -21,6 +21,7 @@ mod tui_plan_cancelled;
 mod tui_plan_waiting;
 mod tui_pulse;
 mod tui_read;
+mod tui_reset_layout;
 mod tui;
 mod tui_runner;
 mod tui_tree;

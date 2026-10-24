@@ -162,6 +162,13 @@ simple_id!(
     |s| matches(s, lower, lower_digit, 0, 7)
 );
 
+simple_id!(
+    /// Host name, the ssh `Host` that names `policy/machines/<host>.toml`: `^[a-z][a-z0-9-]{0,31}$`,
+    /// set in `config.toml` (contract §8.2), so an invalid one is `config_invalid`.
+    HostName, ConfigInvalid, "host name", "^[a-z][a-z0-9-]{0,31}$",
+    |s| matches(s, lower, lower_digit_dash, 0, 31)
+);
+
 impl SessionId {
     /// A new session id for a pi session cpd starts: a lowercase UUID v4.
     pub fn new_v4() -> SessionId {

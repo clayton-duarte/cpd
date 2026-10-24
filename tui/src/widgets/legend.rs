@@ -24,7 +24,7 @@ use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
-use crate::section;
+use crate::box_widget::SectionTitle;
 use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
@@ -261,7 +261,7 @@ pub fn draw(f: &mut Frame, area: Rect) {
 fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
-    f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(title.width))), title);
+    f.render_widget(SectionTitle::new(INTRO, None), head);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
     for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
@@ -324,9 +324,27 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
     }
 }
 
+/// The layout test's sample (`layout_tests`): the legend drawn as the view draws it; its title is rows 0 to 2 (row 2 is the
+/// body's first gap).
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::SectionCase) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Kind, Placed, SectionCase, Sample};
+    // the title row is tall enough for the whole body: a scrolled legend writes its position over the title's rule
+    let height = if case == SectionCase::Title { height.max(size().1) } else { height };
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| draw(f, f.area())).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let boxes = match case {
+        SectionCase::Title => vec![Placed { name: "legend title", kind: Kind::Rule, rect: Rect::new(0, 0, width, 3), exempt: Vec::new() }],
+        SectionCase::Rows => Vec::new(),
+    };
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::section;
     use crate::read::Kind;
 
     static CAP_L: &str = "\u{e0b6}";
@@ -470,7 +488,7 @@ mod tests {
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
-        for name in ["queued", "running", "merging", "merged", "failed", "draft", "counters row"] {
+        for name in ["queued", "running", "landing", "merged", "failed", "draft", "counters row"] {
             assert!(names.contains(&name.to_owned()), "{name}: {names:?}");
         }
         let shown: String =

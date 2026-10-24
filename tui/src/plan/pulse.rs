@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::palette::{self, Meaning};
-use crate::read::{Bucket, Kind, Pulse, PulseRow, QUIET_MINUTES};
+use crate::read::{Bucket, age_text, Kind, Pulse, PulseRow, QUIET_MINUTES};
 
 /// The fewest buckets a row draws, whatever the width.
 const MIN_BUCKETS: usize = 12;
@@ -52,21 +52,9 @@ pub fn bar(level: usize, kind: Kind) -> Span<'static> {
     Span::styled(BARS[level.clamp(1, 8) - 1].to_string(), Style::new().fg(palette::pulse_kind(kind)))
 }
 
-/// `Nm` under 60 minutes, `Nh` under 48 hours, else `Nd`.
-pub fn age_text(minutes: i64) -> String {
-    let minutes = minutes.max(0);
-    if minutes < 60 {
-        format!("{minutes}m")
-    } else if minutes < 48 * 60 {
-        format!("{}h", minutes / 60)
-    } else {
-        format!("{}d", minutes / (24 * 60))
-    }
-}
-
 /// The age cell, [`AGE_WIDTH`] wide, right-aligned: muted, as is `quiet <age>` (hs-d534: no longer a yellow).
-fn age_cell(row: &PulseRow) -> Span<'static> {
-    let age = row.age_minutes.map(age_text);
+pub(crate) fn age_cell(row: &PulseRow) -> Span<'static> {
+    let age = row.age_minutes.map(|m| age_text(m * 60));
     if row.quiet {
         let text = age.map_or("quiet".to_owned(), |a| format!("quiet {a}"));
         return Span::styled(format!("{text:>AGE_WIDTH$}"), palette::muted_text());
@@ -237,15 +225,12 @@ mod tests {
     }
 
     #[test]
-    fn ages_are_minutes_hours_or_days() {
-        for (m, t) in [(0, "0m"), (59, "59m"), (60, "1h"), (47 * 60 + 59, "47h"), (48 * 60, "2d"), (5 * 24 * 60, "5d")] {
-            assert_eq!(age_text(m), t, "{m}");
-        }
+    fn an_age_cell_is_blank_without_activity_and_otherwise_muted() {
         let mut r = row("api", vec![]);
         assert_eq!(text(&Line::from(age_cell(&r))), "         ", "no activity ever: blank");
         r.age_minutes = Some(0);
         let cell = age_cell(&r);
-        assert_eq!((cell.content.as_ref(), cell.style), ("       0m", palette::muted_text()));
+        assert_eq!((cell.content.as_ref(), cell.style), ("       0s", palette::muted_text()));
     }
 
     #[test]

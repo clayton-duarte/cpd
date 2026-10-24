@@ -13,7 +13,7 @@ use cpd_core::store::Store;
 
 use super::flow::{WorkerRef, waiting_on};
 use super::shared::{
-    AttemptStatus, Cause, EscalationStatus, JobStatus, Origin, Outcome, SessionNode, bad_row, id, sessions, tier,
+    AttemptStatus, Cause, SHOWN_STATUS, EscalationStatus, JobStatus, Origin, Outcome, SessionNode, bad_row, id, sessions, tier,
 };
 
 /// What a `worker` view shows: an Attempt (its form) or a Job (its form, which has no Attempt until the Job starts).
@@ -179,9 +179,11 @@ fn job_row(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<WorkerJob, 
 /// The Attempt `attempt`, which exists (its Job was found by it or is its Job's latest).
 fn attempt_row(conn: &Connection, plan: &PlanId, attempt: &AttemptId) -> Result<AttemptDetail, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT tier, origin, status, outcome, cause, branch, worktree, worker_session, spec_path,
-                submitted_sha, submitted_at, check_tail, merged_sha, nudged, stop_request, metrics, started_at, ended_at
-           FROM attempts WHERE plan = ?1 AND id = ?2",
+        &format!(
+            "SELECT a.tier, a.origin, {SHOWN_STATUS}, a.outcome, a.cause, a.branch, a.worktree, a.worker_session, a.spec_path,
+                a.submitted_sha, a.submitted_at, a.check_tail, a.merged_sha, a.nudged, a.stop_request, a.metrics, a.started_at, a.ended_at
+           FROM attempts a WHERE a.plan = ?1 AND a.id = ?2"
+        ),
     )?;
     let mut rows = stmt.query([plan.as_str(), &attempt.to_string()])?;
     let Some(r) = rows.next()? else {

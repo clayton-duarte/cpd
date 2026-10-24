@@ -16,3 +16,4 @@ mod pr_push;
 mod pr;
 mod pr_start;
 mod pr_view;
+mod repo_hooks;

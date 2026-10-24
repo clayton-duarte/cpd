@@ -78,16 +78,16 @@ A PR that changes behaviour has a test Job and an implementation Job after its d
   Its submit builds the branch and runs the named tests, and is refused unless they fail for a reason other than a build error (`tests_build_failed`, `tests_not_red`; `test_files_missing` when a `test_files` entry matches nothing the Job changed).
 - **An implementation Job names no tests.** Its tests are the union of the `tests` of the test Jobs it needs directly (derived, so the tests it must pass are the ones that were red). Its submit is refused unless they pass (`tests_failed`). Its Spec's `context` says which test Jobs it builds on.
 - **The red tests are guarded.** The implementation Job may not change a path matched by the `test_files` of the test Jobs it needs (`tests_tampered`), unless you approve the path with `cpd job approve-tests <job> --path <p> --reason "<why>"`. A Worker that needs a test changed asks you with `cpd ask`; the decision is yours ([Escalations](../SKILL.md#escalations)).
-- **The repo's test commands** are the `[tests]` table of its protected `.config/cpd.toml`, which you add (a Worker's diff of that file is refused):
+- **The repo's test commands** are the `[test-commands]` table (formerly `[tests]` before the policy file migration) of the repo's policy file at `$CPD_HOME/policy/repos/<owner>/<name>.toml`, which the Lead drafts and the User approves:
 
   ```toml
-  [tests]
+  [test-commands]
   build = "<compile what the named tests need; \"true\" when nothing builds>"
   list  = "<optional: exit zero when the one test named by {{ test }} exists>"
   run   = "<run the named tests, {{ tests }}: exit non-zero when one fails>"
   ```
 
-  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no table refuses a test or implementation Job (`tests_unconfigured`): a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
+  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is refused `repo_unconfigured` and one with no `[test-commands]` table is refused `tests_unconfigured`: a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
 
 ## Research Jobs
 

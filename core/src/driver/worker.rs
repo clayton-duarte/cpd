@@ -11,7 +11,6 @@ use serde_json::Value;
 use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::git;
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
@@ -134,11 +133,12 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 }
 
 /// A3: renders the Worker Spec to `run/<plan>/specs/<attempt>.md` and returns its path.
-pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
+pub fn render_spec(conn: &Connection, home: &CpdHome, host: &crate::ids::HostName, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
-    let quick_check = spec::quick_check(&target.worktree)?;
-    let protected = git::protected_list(&target.worktree, &target.lead_branch)?;
+    let policy = crate::pr::policy_of_job(conn, home, host, &target.plan, &job.key)?;
+    let quick_check = spec::quick_check(&policy.hooks.pre_commit);
+    let protected = policy.protected.paths.clone();
     let job_spec = job.require_spec()?;
     let (touches, acceptance, out_of_scope) = (
         strings(&job_spec.touches, "touches")?,

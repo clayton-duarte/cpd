@@ -106,7 +106,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["role"], Value::Null);
     let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
     domains.sort_unstable();
-    assert_eq!(domains, ["code", "deploy", "instructions", "monitor", "pr", "tests"]);
+    assert_eq!(domains, ["code", "deploy", "hooks", "instructions", "monitor", "pr", "protected", "test-commands", "tests"]);
     for (name, domain) in out["policy"].as_object().unwrap() {
         let mut fields: Vec<&str> = domain.as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort_unstable();
@@ -152,9 +152,10 @@ fn a_repo_file_overrides_one_domain() {
     assert_eq!(out["policy"]["code"]["source"], format!("repo:{}", fx.real("repos/acme/cpd.toml")));
     assert_eq!(out["policy"]["code"]["text"], "Repo code text.");
     assert_eq!(out["policy"]["pr"]["source"], format!("owner:{}", fx.real("owners/acme.toml")));
-    // A repo without a file reads the owner's.
+    // A repo with an empty file reads the owner's.
+    fx.env.repo_policy("acme", "other", "");
     let other = fx.show(&["--owner", "acme", "--repo", "other"]).ok();
-    assert_eq!(other["files"], files(&fx, &["owners/acme.toml"]));
+    assert_eq!(other["files"], files(&fx, &["owners/acme.toml", "repos/acme/other.toml"]));
     assert_eq!(other["policy"]["code"]["text"], "Owner code text.");
 }
 
@@ -240,14 +241,14 @@ fn owner_unset_names_the_next_command() {
 }
 
 #[test]
-fn owner_unknown_even_with_a_repo_file() {
+fn owner_unconfirmed_even_with_a_repo_file() {
     let fx = Fx::new();
     let home = fx.env.cpd_home();
     fs::create_dir_all(home.join("policy/repos/ghost")).unwrap();
     fs::write(home.join("policy/repos/ghost/x.toml"), REPO_FILE).unwrap();
-    let error = refused(&fx.show(&["--owner", "ghost", "--repo", "x"]), "owner_unknown", 1);
+    let error = refused(&fx.show(&["--owner", "ghost", "--repo", "x"]), "owner_unconfirmed", 1);
     assert_eq!(error["details"]["owner"], "ghost");
-    refused(&fx.show(&["--owner", "ghost"]), "owner_unknown", 1);
+    refused(&fx.show(&["--owner", "ghost"]), "owner_unconfirmed", 1);
 }
 
 #[test]
