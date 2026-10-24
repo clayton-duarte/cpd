@@ -9,6 +9,9 @@ publish.workspace = true
 name = "cpd"
 path = "src/main.rs"
 
+[features]
+fakes = []
+
 [dependencies]
 cpd-core = { path = "../core" }
 cpd-engine = { path = "../engine" }
@@ -25,3 +28,4 @@ ratatui.workspace = true
 tempfile.workspace = true
 sha2.workspace = true
 toml.workspace = true
+cpd = { path = ".", features = ["fakes"] }
