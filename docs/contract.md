@@ -3459,6 +3459,7 @@ Rules:
 ```toml
 version = 1                  # required; the schema of this file
 machine = "hs"               # required; names this machine in Context record ids (§2.1)
+host = "homeserver"          # the machine's ssh config `Host`, names policy/machines/<host>.toml; default the value of `machine`
 
 concurrency = 3              # Attempts not ended, machine-wide (§3.4)
 test_concurrency = 2         # full test runs at once (Gates and `cpd slot` commands), machine-wide (§7.6 "The test slot", hs-d336, hs-d301)
@@ -3518,6 +3519,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 |---|---|---|---|
 | `version` | int | required | `1` |
 | `machine` | text | required | `^[a-z][a-z0-9]{0,7}$` |
+| `host` | text | `machine` | `^[a-z][a-z0-9-]{0,31}$`, required when it differs from `machine` (optional key); names `policy/machines/<host>.toml` of this machine only; never an id prefix or a Context field (hs-d9, hs-d12) |
 | `concurrency` | int | `3` | ≥ 1 |
 | `test_concurrency` | int | `2` | 1–64, else `config_invalid`; a top-level key of `$CPD_HOME/config.toml`, like `concurrency` and separate from it; the number of `run/test-<i>.lock` slots (§1.4), so at most this many full test runs (a Gate's `pre-start` and `pre-merge` of `pr open`, `pr push`, `pr rebase`, and every command run by `cpd slot`) run at once on the machine (§7.6 "The test slot", hs-d336, hs-d301). `1` serialises them; a run beyond it waits and logs the wait, with no refusal. Replaces `gate_concurrency` (never shipped). A change takes effect on the next run that takes a slot |
 | `retry_cap` | int | `2` | ≥ 0 |
@@ -3550,25 +3552,26 @@ Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). 
 
 ### 8.3 Policies
 
-A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). It is not machine config (§8.1): `config.toml` is per machine, a policy is per owner and repo and never per machine (hs-d263). This section is the first build; what it does not name does not exist yet.
+A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). Policies have three scopes in precedence order (most specific wins): the built-in default, the machine scope, the owner scope, and the repo scope. The machine is never part of the key, but the host of the process (§8.2 `host`), so a policy resolves the same for every key on one machine and differently across machines (hs-d9, hs-d12).
 
 #### Model
 
 - A **domain** is a typed slot of a policy, owned by cpd's code. Its value has up to two parts: **typed keys**, closed values cpd's own code branches on, parsed once, unknown ones refused; and **`text`**, Markdown for agents, never parsed by cpd. A policy is the fixed set of domains below: every domain has a value, always.
-- A **scope** is where a domain value is set: cpd's built-in **default**, an **owner** (a GitHub login, user or organisation) or a **repo** (`<owner>/<name>`).
-- The **policy key** names what a policy is resolved for: `PolicyKey = Owner(login) | Repo(login, name)` (§2.1 "Owner login", "Repo name"). It is never a machine, a path or a cwd (hs-d263).
-- The **resolved policy** of a key is every domain's value with its **source**: `default`, `owner:<path>` (the owner file) or `repo:<path>` (the repo file), `<path>` the file's realpath; `default (no owner file)` for a pull request row no PR owns whose owner has no file ("Keys and resolution"). A typed key a set domain leaves out carries `(key default)` after its domain's source (below, "Precedence and replace").
+- A **scope** is where a domain value is set: cpd's built-in **default**, a **machine** ($CPD_HOME/policy/machines/<host>.toml, the machine's host from §8.2 `host`), an **owner** (a GitHub login, user or organisation), or a **repo** (`<owner>/<name>`).
+- The **machine scope** holds policies for one machine on which cpd runs. Its file is optional: a missing machine file sets nothing, and resolution continues to the owner scope. The file has the same grammar as owner and repo files and may be a symlink.
+- The **policy key** names what a policy is resolved for: `PolicyKey = Owner(login) | Repo(login, name)` (§2.1 "Owner login", "Repo name"). It is never a machine, a path or a cwd.
+- The **resolved policy** of a key is every domain's value with its **source**: `default`, `machine:<path>` (the machine file's realpath), `owner:<path>` (the owner file) or `repo:<path>` (the repo file), `<path>` the file's realpath; `default (no owner file)` for a pull request row no PR owns whose owner has no file ("Keys and resolution"). A typed key a set domain leaves out carries `(key default)` after its domain's source (below, "Precedence and replace").
 
 **The domains** of the first build. Each is a TOML table read with `deny_unknown_fields` (a sub-table such as `pr.feedback` too). `text` is a string in every domain, default `""`. The audience of a domain's `text` is fixed in code, not configurable.
 
-| Domain | Typed keys (cpd's default) | `text` reaches |
-|---|---|---|
-| `pr` | `gate = "local" \| "ci"` (`ci`; hs-d292): with `local`, `pr open`, `pr push` and `pr rebase` run the Gate before they push (§7.3, §7.6), with `ci` they run none and the repo's CI is the check. `feedback.checks = "any" \| "none"` (`any`; hs-d292, hs-d283): with `any`, failing checks raise `pr-feedback` (`checks_failed`, §5.2, §7.6); with `none` they raise neither, and only mergeability and reviews do | Lead, Worker |
-| `deploy` | none | Lead |
-| `code` | none | Lead, Worker |
-| `tests` | none | Lead, Worker |
-| `monitor` | none | Lead, Worker |
-| `instructions` | none | Manager, Lead, Worker |
+| Domain | Typed keys (cpd's default) | Exposure | `text` reaches |
+|---|---|---|---|
+| `pr` | `gate = "local" \| "ci"` (`ci`; hs-d292): with `local`, `pr open`, `pr push` and `pr rebase` run the Gate before they push (§7.3, §7.6), with `ci` they run none and the repo's CI is the check. `feedback.checks = "any" \| "none"` (`any`; hs-d292, hs-d283): with `any`, failing checks raise `pr-feedback` (`checks_failed`, §5.2, §7.6); with `none` they raise neither, and only mergeability and reviews do | machine, owner, repo | Lead, Worker |
+| `deploy` | none | machine, owner, repo | Lead |
+| `code` | none | machine, owner, repo | Lead, Worker |
+| `tests` | none | machine, owner, repo | Lead, Worker |
+| `monitor` | none | machine, owner, repo | Lead, Worker |
+| `instructions` | none | machine, owner, repo | Manager, Lead, Worker |
 
 `mcp` and `hooks` are **planned** domains (policy-architecture.md §1.2, §5.5): until they are built, a file that has either table is refused `policy_invalid`, like any unknown domain.
 
