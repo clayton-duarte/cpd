@@ -2,7 +2,7 @@
 
 ## Summary
 
-Before only. The after and the comparison are added by moon-after-ui and moon-after-pi.
+Before only: the cockpit (moon-before-ui) and pi (moon-before-pi) 'before' are in. The after and the comparison are added by moon-after-ui and moon-after-pi.
 
 ## Method
 
@@ -249,6 +249,63 @@ python3 /tmp/cpd-moon-anim/table.py debug
 
 Teardown: the trap of `run.sh`; `tmux -L moon-anim-before ls` reported no server afterwards.
 
+### pi
+
+Job moon-before-pi, attempt 1. A REAL interactive pi pane (not the extension's render path only): `node_modules/.bin/pi` of the worktree in a private tmux server, 200x50, loading THIS worktree's `pi/compact-tools/extensions/compact-tools.ts` with `-ne -e <path>` (no other extension, so it is not loaded twice), model `github-copilot/claude-haiku-4.5` (a small model keeps the turn at about 6k tokens), `--offline --no-session`. BASELINE = unchanged code: `git diff --stat $(git merge-base HEAD origin/main)..HEAD -- pi/compact-tools` printed nothing before the runs. The pane runs under `env -i` with only `PATH`, `HOME`, `TERM`, `LANG` and `CPD_HOME` set to an empty temp directory: no `CPD_*` or `PI_*` variable but that one, so no cpd session and no cpd database. The tmux server is `moon-pi-before` and a `trap` kills it and removes the temp directories on any exit.
+
+Scenarios: `work` = one prompt ("Run the bash command: sleep 45. Then answer only: ok"); the script waits for the tool row (`Run sleep`) on screen, then 5 s, then the window is 35 s (so it ends 40 s into the 45 s sleep). Both loaders animate: the working indicator in the input's top border (`╭─<moon> Running command…`) and the running row's closing ` ╰<moon>`. `idle` = the same pane with no turn, 35 s. CPU % is (utime + stime ticks of `/proc/<pid>/stat`, 100 per s) of the pi `node` process (the deepest descendant of the pane whose `comm` is `node` or `pi`) over the window. The pane is captured at the window's start and end (`results/pi-<scn>-<n>.start.screen`, `.end.screen`); `done_at_start` and `done_at_end` count `Done in` lines of the capture (0 = the tool row was still running). The after Job runs the same text (`pi-run.sh`, from the worktree, `work 1..3` and `idle 1`); the tool row is found by the text `Run sleep`, which depends on the model's wording of the command: unverified for other models.
+
+Discarded: a first run with a wrong wait (the pattern `╭─bash` does not match, pi puts private-use glyphs around `bash`) waited 60 s, so the tool had finished; its CPU was 0.00 % and the tool row was `Done` at the window's start. The script below is the fixed one, and every number of the doc is from it.
+
+```sh
+#!/bin/bash
+# usage: pi-run.sh <work|idle> <run n>   (run from the worktree; WT = the worktree, npm ci done)
+# work: one prompt, the agent runs `sleep 45` (bash tool) then answers ok; window 35 s from 5 s into the sleep.
+# idle: no turn, 35 s. Prints one JSON line (also appended to results/pi.jsonl).
+set -u
+SCN=$1 N=$2 WIN=35
+WT=$(pwd); D=/tmp/cpd-moon-pi
+HOMEDIR=$(mktemp -d /tmp/cpd-moon-pi/cpdhome.XXXXXX)
+TT=$(mktemp -d /tmp/cpd-moon-pi/tmux.XXXXXX)
+S="env -i PATH=$PATH HOME=$HOME TMUX_TMPDIR=$TT tmux -L moon-pi-before -f /dev/null"
+cleanup() { $S kill-server 2>/dev/null; rm -rf "$HOMEDIR" "$TT"; }
+trap cleanup EXIT
+# no CPD_* / PI_* in the pane except an empty CPD_HOME; --offline = no startup network
+$S new-session -d -x 200 -y 50 -c "$WT" env -i PATH="$PATH" HOME="$HOME" TERM=xterm-256color LANG=C.UTF-8 CPD_HOME="$HOMEDIR" \
+  "$WT/node_modules/.bin/pi" --offline --no-session -ne -e "$WT/pi/compact-tools/extensions/compact-tools.ts" \
+  --model github-copilot/claude-haiku-4.5
+sleep 8
+PANE=$($S list-panes -F '#{pane_pid}')
+# the pi (node) process: the deepest descendant of the pane whose comm is node (or pi)
+find_pid() { local p=$1 c; for c in $(pgrep -P "$p"); do find_pid "$c"; done; case "$(cat /proc/$p/comm 2>/dev/null)" in node|pi) echo "$p";; esac; }
+PID=$(find_pid "$PANE" | head -1)
+[ -z "$PID" ] && { echo "no pi process" >&2; exit 1; }
+cap() { $S capture-pane -p; }
+if [ "$SCN" = work ]; then
+  $S send-keys -l "Run the bash command: sleep 45. Then answer only: ok"
+  $S send-keys Enter
+  for i in $(seq 1 60); do cap | grep -q "Run sleep" && break; sleep 1; done
+  sleep 5
+fi
+cap > "$D/results/pi-$SCN-$N.start.screen"
+ticks() { awk '{print $14+$15}' /proc/$PID/stat; }
+T0=$(date +%s.%N); K0=$(ticks)
+sleep $WIN
+K1=$(ticks); T1=$(date +%s.%N)
+NI=$(ps -o ni= -p $PID | tr -d ' ')
+LOAD=$(cut -d' ' -f1-3 /proc/loadavg)
+cap > "$D/results/pi-$SCN-$N.end.screen"
+ROW0=$(grep -c "Done in" "$D/results/pi-$SCN-$N.start.screen"); ROW1=$(grep -c "Done in" "$D/results/pi-$SCN-$N.end.screen")
+CPU=$(python3 -c "print(($K1-$K0)/100/($T1-$T0)*100)")
+echo "{\"scn\":\"$SCN\",\"run\":$N,\"pid\":$PID,\"cpu\":$CPU,\"ni\":$NI,\"load\":\"$LOAD\",\"win\":$WIN,\"done_at_start\":$ROW0,\"done_at_end\":$ROW1}" | tee -a "$D/results/pi.jsonl"
+```
+
+```sh
+cd $WT   # the worktree
+for n in 1 2 3; do timeout 200 /tmp/cpd-moon-pi/pi-run.sh work $n; done
+timeout 100 /tmp/cpd-moon-pi/pi-run.sh idle 1
+```
+
 ## Before
 
 Columns: runs; draws in the window (median, range); gaps in ms over the draws of the window; share of gaps above 150 ms; skipped frames over frame changes; CPU % (median, range of the runs); `draw_us` p50 / p95 in ms; `ps -o ni` of the view; load average, 1 min at the end of the run (median). A-type scenarios are the median of 3 runs, D is 1 run.
@@ -297,12 +354,26 @@ Load averages at the end of the runs, debug: 1 min 2.13-3.83, 5 min 2.77-3.46, 1
 
 Notes on the tables: plan D draws nothing in its 30 s window (the one draw is at the start, before the 3 s wait), so its CPU is 0.00 % (release, 0 ticks in 30 s) and 0.03 % (debug, 1 tick); one tick is 0.03 % over 30 s. Tree D redraws once a second by design (the Inbox ages), so its gaps are 1000 ms and its "skipped" is not a stutter measure (every draw is a new frame). The `layout_us` was 0 on every draw of the window in every run (`parse.py` printed `layout_nonzero` 0 in all 34 runs of the table): the layout is not part of the frame cost in this build; `read_us` p50 is 0.001 ms where there is one (a hand-over only). The JSON line of each run is in /tmp/cpd-moon-anim/results/<profile>.jsonl.
 
+### pi
+
+Real pi pane, unchanged code (8 nf-md moons at 100 ms), nice and load as in the JSON line of each run (`results/pi.jsonl`: `ps -o ni` of the pi process; load average, 1 min at the end of the window):
+
+| scenario | runs | CPU % median (range) | nice | load 1 min | what the pane showed |
+|---|---|---|---|---|---|
+| work (agent working, one `sleep 45` tool row running) | 3 | 4.08 (3.94-4.11) | 19 | 2.72 (2.52-2.92) | start and end of every run: the tool row ` ╭─bash Run sleep` still running, closing row ` ╰<nf-md moon>` and the border pill ` ╭─<nf-md moon> Running command…` with a moon glyph (U+F0F61..F0F68), a different glyph at the start and at the end; no `Done in` line |
+| idle (no turn) | 1 | 0.43 (0.43-0.43) | 19 | 2.11 | an empty input box (no pill, no moon), no tool row |
+
+Per run, work: 3.94 %, 4.08 %, 4.11 % (load 2.92, 2.72, 2.52); idle: 0.43 %.
+
 
 ## Left
 
-- Not measured: pi (moon-before-pi), the changed code (moon-after-ui), nice 0 (the real views), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
+- Not measured: the changed code (moon-after-ui), nice 0 (the real views), the real cockpit's load: the machine was quiet in these runs (load 1 min about 2-5), far below the load of the earlier docs (7-38), so CPU and gaps are optimistic for the User's real machine; unverified how the cost moves at that load.
 - A single machine and a single base: unverified that other hardware gives the same CPU %.
 - The snapshot count per run (the trace has no snapshot field): unverified.
 - `strace`: not tried (ptrace was denied in the earlier docs): no syscall counts.
 - The first-draw cost (time to first paint, 0.7 s in the earlier docs) is outside the windows (the wait is 3 s): not measured.
 - Whether the Lead dot and the running Job really spun in every run is read from the trace (draws every 100 ms, 8 frames), not from the screen of each run: unverified for single runs; the screen of each run was captured at its end (not kept here).
+- pi: one machine, one model (`claude-haiku-4.5`), one tmux size (200x50); the model's wait for the tool call differs per run (the window starts 5 s after the tool row appears), unverified that the model never streams text inside the window. The nice of the pi pane is 19 (inherited from the Worker session), unverified at nice 0 (the real pane); the load (2-3) is far below the User's usual, so the CPU is optimistic.
+- pi: the idle control is 1 run, so its 0.43 % has no range; a node process has no idle cost of zero (timers, the editor's cursor), unverified what it is made of.
+- pi: the frame rate of the two loaders is not read from the pane (only two captures per run, a different moon glyph in each); unverified that both really redrew at 100 ms in every run. The CPU is of the node process only, not of the terminal or tmux.
