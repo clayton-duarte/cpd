@@ -18,6 +18,8 @@
 pub(crate) mod column;
 #[cfg(test)]
 mod kinds_tests;
+#[cfg(test)]
+mod needs_tests;
 mod host;
 pub mod legend;
 
@@ -289,6 +291,15 @@ fn tick(prs: &[OpenPr]) -> Duration {
 /// spinner turns.
 fn spins(prs: &[OpenPr]) -> bool {
     prs.iter().any(|p| p.lead_working || (p.merging && p.clean))
+}
+
+/// The clocks the Dispatch column's screen needs: `frame` is `spins(prs)` (a shown PR's Lead works, or a clean PR's
+/// merge runs); `second` is false; `at` is always `Some(sampled_at + SAMPLE_EVERY)`.
+// The Job views-impl-widgets removes this allow.
+#[allow(dead_code)]
+fn needs(prs: &[OpenPr], sampled_at: Instant) -> crate::pump::Needs {
+    let _ = (prs, sampled_at);
+    todo!()
 }
 
 /// Sets `merging` of each PR whose merge runs: `live` is the pull requests with a live merge marker (hs-d495).
