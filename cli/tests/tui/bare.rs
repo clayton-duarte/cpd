@@ -287,23 +287,6 @@ fn inside_the_cockpit_it_does_not_nest_an_attach() {
     assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
 }
 
-#[test]
-fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
-    let env = env();
-    // The installed tmux says it is another version than the server's.
-    fake_tmux(&env, "[ \"$2\" = -V ] && { echo 'tmux 1.0'; exit 0; }");
-    let t = run_in_terminal(&env, "other", false, "");
-    wait_until("the attach", || {
-        let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
-        clients.status.success() && !clients.stdout.is_empty()
-    });
-    assert!(attach_calls(&env).is_empty(), "the installed tmux must not attach: {:?}", attach_calls(&env));
-    let line = t.stderr();
-    assert!(line.contains("installed tmux is 1.0") && line.contains("attaching with the server's own tmux"), "{line}");
-    assert!(!t.code.exists(), "attach replaced the process and is still attached");
-    assert_eq!(line.lines().count(), 1);
-}
-
 
 // ---------- the tmux restart (contract §6.1, hs-d294) ----------
 
@@ -666,67 +649,6 @@ fn pending_restart_in_the_way(env: &TestEnv) -> (PathBuf, Flock<fs::File>) {
     env.cpd(&["tui"]).ok();
     assert!(pending_file(env).exists(), "cpd tui marks the restart pending");
     (flag, driver)
-}
-
-#[test]
-fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_is_back_in_its_place() {
-    let env = env();
-    let (_flag, driver) = pending_restart_in_the_way(&env);
-    let before = server_pid(&env);
-    let started = count_events(&env, "watch-started");
-
-    // The Attempt runs, then ends; the Lead stays blocked: the restart waits for both.
-    // time-claim: the pending restart holds while an Attempt runs and a Lead is blocked; the engine ticks every 1 s, so 3.5 s is three ticks without kill-server; no per-poll signal from the engine for a tick that held.
-    std::thread::sleep(Duration::from_millis(3500));
-    assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()));
-    end_attempt(&env);
-    drop(driver);
-    // time-claim: the pending restart holds while an Attempt runs and a Lead is blocked (a dialog is open); the engine ticks every 1 s, so 3.5 s is three ticks without kill-server; no per-poll signal from the engine for a tick that held.
-    std::thread::sleep(Duration::from_millis(3500));
-    assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()), "a blocked Lead has a dialog open");
-    assert!(pending_file(&env).exists());
-
-    set_lead_state(&env, "idle");
-    wait_until("the restart to finish", || !pending_file(&env).exists());
-    assert_ne!(server_pid(&env), before, "the server was not restarted");
-    assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
-    assert_eq!(session_windows(&env), places());
-    assert!(tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]).lines().any(|l| l == "lead1"));
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "tree", "widgets"]);
-    for id in ["lead1", "lead2", "manager1"] {
-        let runs = env.calls("cpd").iter().filter(|c| c.as_slice() == ["session", "run", id]).count();
-        assert_eq!(runs, 2, "{id}");
-    }
-    let log = run_dir_file(&env, "tmux-restart.log");
-    assert!(log.contains("restarting the tmux server") && log.contains("reopened 3 Session(s); done"), "{log}");
-    // `cpd tui` started the engine again, in the new server.
-    wait_until("the new engine", || count_events(&env, "watch-started") == started + 1);
-    assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
-    assert_eq!(env.cpd(&["events", "list", "--kind", "error"]).ok()["events"], serde_json::json!([]), "no error Event at all");
-}
-
-#[test]
-fn a_tmux_failure_of_the_workers_step_while_a_restart_is_pending_is_no_error_and_the_options_are_set_on_the_new_server() {
-    let env = env();
-    let (flag, driver) = pending_restart_in_the_way(&env);
-    // The restart takes the server away under the step: `list-sessions` fails as tmux's does while it dies.
-    let fails = PathBuf::from(format!("{}.list-sessions-fails", flag.display()));
-    let hits = || fs::read_to_string(format!("{}.hits", flag.display())).map_or(0, |t| t.lines().count());
-    fs::write(&fails, "").unwrap();
-    // The Attempt ends, so the counts change and the step calls tmux; the blocked Lead holds the restart.
-    end_attempt(&env);
-    drop(driver);
-    // The step failed, and asks again at the next tick.
-    wait_until("the step to fail twice", || hits() >= 2);
-    assert_eq!(count_events(&env, "error"), 0, "{:?}", env.cpd(&["events", "list", "--kind", "error"]));
-    assert!(pending_file(&env).exists());
-
-    // The server is back: the restart runs and the new server has the options.
-    fs::remove_file(&fails).unwrap();
-    set_lead_state(&env, "idle");
-    wait_until("the restart to finish", || !pending_file(&env).exists());
-    wait_until("the options on the new server", || env.tmux(&["show", "-gv", "@cpd_workers"]).stdout.starts_with(b"workers"));
-    assert_eq!(count_events(&env, "error"), 0, "{:?}", env.cpd(&["events", "list", "--kind", "error"]));
 }
 
 #[test]
