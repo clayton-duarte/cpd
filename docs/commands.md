@@ -141,7 +141,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
 | `kind_reserved` | 3 | `job add --kind open` or `update` (§5.1): cpd adds those Jobs, never the Lead (contract §2.2 "Job kinds"); `details.kind` |
 | `test_job_required` | 3 | an `impl` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no `test` Job of its PR; `details.jobs` lists the `impl` Jobs |
-| `repo_unconfigured` | 3 | the PR's repo has no policy file `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; raised by `pr add`, `pr open`, `pr push`, `pr rebase`, the `open` and `update` Jobs' submit, `policy show`; the PR poll is exempt); `details` `{repo, file}` |
+| `repo_unconfigured` | 3 | the PR's repo has no policy file `$CPD_HOME/policy/<owner>/<repo>.toml` (contract §8.3 "Keys and resolution"; raised by `pr add`, `pr open`, `pr push`, `pr rebase`, the `open` and `update` Jobs' submit, `policy show`; the PR poll is exempt); `details` `{repo, file}` |
 | `tests_unconfigured` | 3 | `pr add --shape tdd` (§9.4), `job add --kind test` or `impl` (§5.1) or a `test` or `impl` Job's submit (§6.1) found that the repo's policy has no `[test-commands]` (contract §7.7); the message names `--shape docs`, `--shape config` and the table |
 | `test_files_missing` | 3 | a `test` Job's submit (§6.1): `details.paths` lists the `test_files` entries that match no path the Job changed |
 | `tests_build_failed`, `tests_not_red`, `tests_failed` | 3 | a `test` or `impl` Job's submit (§6.1, contract §7.7): the repo's `build` failed; the named tests passed where they must fail (`test`); they failed where they must pass (`impl`). `details` `{job, tests, tail, log}` |
@@ -222,13 +222,13 @@ cpd context new <id> --title <text> --owner <login> [--jira <key>]
 | `<id>` | Context id (§2.1) |
 | `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--owner <login>` | required: the GitHub owner (user or organisation) of every repo the Context's Plans work on, its policy key (contract §8.3, hs-d288); a login of contract §2.1, else `usage`; stored lowercased |
-| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
+| `--confirm-fallback` | optional: if the owner is unknown, create `policy/<login>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `policy/clayton-duarte/owner.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 | `--jira <key>` | Jira Epic key, stored only (`^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
+| the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects:
@@ -550,7 +550,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | Flag | Meaning |
 |---|---|
 | `<login>` | the owner, a login of contract §2.1, else `usage`; stored lowercased |
-| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
+| `--confirm-fallback` | optional: if the owner is unknown, create `policy/<login>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `policy/clayton-duarte/owner.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -558,7 +558,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | the Context exists | `context_not_found` | 4 |
 | the same owner again (no write, no Event) | `already` | 0 |
 | the Context has an owner other than this one and a PR row exists; details: `context`, `owner` (the current owner), `prs` (the PR rows as `<plan>/<key>`, sorted) | `owner_in_use` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`, else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
+| the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml`, else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 An archived Context is not refused: changing its owner changes no work.
@@ -4176,31 +4176,31 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | with no flag, a Session was selected | `session_required` | 2 |
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
 | the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
-| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
-| a `Repo` key's file `repos/<owner>/<name>.toml` exists (after the owner check; never for an `Owner` key); the message names the file to create and says an empty file means nothing to configure; `details.repo`, `details.file` | `repo_unconfigured` | 3 |
+| the key's owner has `policy/<owner>/owner.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
+| a `Repo` key's file `policy/<owner>/<repo>.toml` exists (after the owner check; never for an `Owner` key); the message names the file to create and says an empty file means nothing to configure; `details.repo`, `details.file` | `repo_unconfigured` | 3 |
 | every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 
-Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`machines/<host>.toml` when it exists, `owners/<owner>.toml`, `repos/<owner>/<name>.toml` for a `Repo` key, required), each parsed once. No subprocess. `check_file_names`: an entry of `machines/` must be `<host>.toml` where `<host>` is valid (§8.2), else `policy_invalid`.
+Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key, required), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 
 Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The three repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
- "files": ["/home/clayton/.cpd/policy/machines/homeserver.toml", "/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
+ "files": ["/home/clayton/.cpd/policy/host.toml", "/home/clayton/.cpd/policy/clayton-duarte/owner.toml"],
  "policy": {
-   "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
-                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+   "pr": {"source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml", "audience": ["lead", "worker"],
+          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"},
+                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"}},
           "text": "These repos run no GitHub Actions: …"},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "monitor": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""},
-   "hooks": {"source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml", "audience": [],
-             "keys": {"pre-start": {"value": [], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"},
-                      "pre-commit": {"value": [[{"name": null, "command": "npm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"},
-                      "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"}}, "text": ""},
+   "hooks": {"source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml", "audience": [],
+             "keys": {"pre-start": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
+                      "pre-commit": {"value": [[{"name": null, "command": "npm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
+                      "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"}}, "text": ""},
    "test-commands": {"source": "default", "audience": [],
                      "keys": {"build": {"value": null, "source": "default"}, "run": {"value": null, "source": "default"}, "list": {"value": null, "source": "default"}}, "text": ""},
    "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""}}}

@@ -104,9 +104,11 @@ Exit codes (kept from cpd 1 §2):
 ```
 $CPD_HOME/
   config.toml                     machine config (§8)
-  policy/                         the owner and repo scopes of the policies (§8.3); any file may be a symlink
-    owners/<owner>.toml           an owner's policy; required for every owner a Context uses
-    repos/<owner>/<name>.toml     a repo's policy; optional
+  policy/                         machine, owner and repo scopes of the policies (§8.3); any file may be a symlink
+    host.toml                     the machine scope, optional; names this machine's policy
+    <owner>/
+      owner.toml                  the owner scope; required for every owner a Context uses
+      <repo>.toml                 a repo's policy; optional
   bin/git                         the `git` wrapper first on every Session's `PATH`: refuses `git stash` (§6.5, hs-d310); an executable `sh` script
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
@@ -3466,7 +3468,7 @@ Rules:
 ```toml
 version = 1                  # required; the schema of this file
 machine = "hs"               # required; names this machine in Context record ids (§2.1)
-host = "homeserver"          # the machine's ssh config `Host`, names policy/machines/<host>.toml; default the value of `machine`
+
 
 concurrency = 3              # Attempts not ended, machine-wide (§3.4)
 test_concurrency = 2         # full test runs at once (Gates and `cpd slot` commands), machine-wide (§7.6 "The test slot", hs-d336, hs-d301)
@@ -3526,7 +3528,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 |---|---|---|---|
 | `version` | int | required | `1` |
 | `machine` | text | required | `^[a-z][a-z0-9]{0,7}$` |
-| `host` | text | `machine` | `^[a-z][a-z0-9-]{0,31}$`, required when it differs from `machine` (optional key); names `policy/machines/<host>.toml` of this machine only; never an id prefix or a Context field (hs-d9, hs-d12) |
+
 | `concurrency` | int | `3` | ≥ 1 |
 | `test_concurrency` | int | `2` | 1–64, else `config_invalid`; a top-level key of `$CPD_HOME/config.toml`, like `concurrency` and separate from it; the number of `run/test-<i>.lock` slots (§1.4), so at most this many full test runs (a Gate's `pre-start` and `pre-merge` of `pr open`, `pr push`, `pr rebase`, and every command run by `cpd slot`) run at once on the machine (§7.6 "The test slot", hs-d336, hs-d301). `1` serialises them; a run beyond it waits and logs the wait, with no refusal. Replaces `gate_concurrency` (never shipped). A change takes effect on the next run that takes a slot |
 | `retry_cap` | int | `2` | ≥ 0 |
@@ -3564,8 +3566,8 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 #### Model
 
 - A **domain** is a typed slot of a policy, owned by cpd's code. Its value has up to two parts: **typed keys**, closed values cpd's own code branches on, parsed once, unknown ones refused; and **`text`**, Markdown for agents, never parsed by cpd. A policy is the fixed set of domains below: every domain has a value, always.
-- A **scope** is where a domain value is set: cpd's built-in **default**, a **machine** ($CPD_HOME/policy/machines/<host>.toml, the machine's host from §8.2 `host`), an **owner** (a GitHub login, user or organisation), or a **repo** (`<owner>/<name>`).
-- The **machine scope** holds policies for one machine on which cpd runs. Its file is optional: a missing machine file sets nothing, and resolution continues to the owner scope. The file has the same grammar as owner and repo files and may be a symlink.
+- A **scope** is where a domain value is set: cpd's built-in **default**, a **machine** (`$CPD_HOME/policy/host.toml`), an **owner** (a GitHub login, user or organisation), or a **repo** (`<owner>/<name>`).
+- The **machine scope** holds the policy for one machine on which cpd runs, in the file `$CPD_HOME/policy/host.toml`. It is optional: a missing file sets nothing, and resolution continues to the owner scope. The file has the same grammar as owner and repo files and may be a symlink.
 - The **policy key** names what a policy is resolved for: `PolicyKey = Owner(login) | Repo(login, name)` (§2.1 "Owner login", "Repo name"). It is never a machine, a path or a cwd.
 - The **resolved policy** of a key is every domain's value with its **source**: `default`, `machine:<path>` (the machine file's realpath), `owner:<path>` (the owner file) or `repo:<path>` (the repo file), `<path>` the file's realpath; `default (no owner file)` for a pull request row no PR owns whose owner has no file ("Keys and resolution"). A typed key a set domain leaves out carries `(key default)` after its domain's source (below, "Precedence and replace").
 
@@ -3592,24 +3594,29 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 #### Files
 
 - **cpd's default** is `core/src/policy/default.toml`, compiled into the binary (`include_str!`) and parsed by the same loader as every scope file, so the code and `cpd policy show` have one source. It sets every domain, and holds today's behaviour except `pr.gate = "ci"` (hs-d292): before policies, `pr open`, `pr push` and `pr rebase` always ran the Gate. Every `text` is empty.
-- **The three scope files** are files of the instance (§1.4), sharing one grammar and domain tables:
+- **The three scope files** are files of the instance (§1.4), sharing one grammar and domain tables, one policy tree:
 
   ```
   $CPD_HOME/policy/
-    machines/<host>.toml          the machine scope, optional; the machine's ssh `Host` from config.toml §8.2
-    owners/<owner>.toml           the owner scope; required for every owner a Context uses
-    repos/<owner>/<name>.toml     the repo scope; required (`repo_unconfigured`)
+    host.toml                     the machine scope, optional
+    <owner>/owner.toml            the owner scope; required for every owner a Context uses
+    <owner>/<repo>.toml           the repo scope; optional
   ```
 
-- **The path is the key.** A file has no owner or name field to disagree with its path. A file name that is not a valid owner login, repo name, or host (§2.1, §8.2) is `policy_invalid`.
+- **The path is the key.** A file has no owner or name field to disagree with its path. A file name or directory name that is not a valid owner login, repo name or `host.toml` is `policy_invalid`.
+- **HARD CUT: no legacy read.** Every entry of `$CPD_HOME/policy/` is checked by name:
+  - The file `host.toml` is the machine scope (missing sets nothing).
+  - A directory whose name is a valid owner login: it must contain only `owner.toml` and files whose names are valid repo names ending in `.toml`. A directory with `owner.toml` and `<repo>.toml` files (any of them) but no `owner.toml`, or `owner.toml` with other files, is `policy_invalid` (the old layout `owners/`, `repos/`, `machines/` is no longer read).
+  - Files and directories named starting with `.` (such as `.DS_Store`) are ignored.
+  - Anything else is `policy_invalid`.
+- **Known owners** are those with an `<owner>/owner.toml` file (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback`. An unknown owner may be confirmed by `context new --owner <login> --confirm-fallback` or `context owner <login> --confirm-fallback`: if the owner is unknown, the command creates the directory `policy/<owner>/` and the file `policy/<owner>/owner.toml` as a RELATIVE symlink to `../clayton-duarte/owner.toml`, then proceeds; if the owner is already known, the flag changes nothing (idempotent, no error). The fallback owner is `clayton-duarte`: if `policy/clayton-duarte/owner.toml` does not exist (and the owner is unknown) the command fails with `fallback_missing` (exit 1, `details.file` the missing path) and creates nothing. No other consumer of an unknown owner—`policy show`, `pr add`, `plan new`, `pr open`, `pr push`, `pr rebase` or the engine—creates the link: only the two commands with the flag do. `policy show` of a confirmed owner prints the real path of `clayton-duarte`'s file (source `owner:<realpath>`); deleting the link revokes the confirmation (the owner is unconfirmed again). An empty owner file is the explicit "cpd's default in every domain". The machine scope is optional: a machine without a file resolves every domain from the next less specific scope and the default. The repo scope is optional; an empty repo file is valid.
 - **Any file may be a symlink**; `cpd policy show` prints its realpath.
-- **Known owners** are those with an `owners/<owner>.toml` file (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback`. An unknown owner may be confirmed by `context new --owner <login> --confirm-fallback` or `context owner <login> --confirm-fallback`: if the owner is unknown, the command creates `owners/<login>.toml` as a RELATIVE symlink to `clayton-duarte.toml`, then proceeds; if the owner is already known, the flag changes nothing (idempotent, no error). The fallback owner is `clayton-duarte`: if `owners/clayton-duarte.toml` does not exist (and the owner is unknown) the command fails with `fallback_missing` (exit 1, `details.file` the missing path) and creates nothing. No other consumer of an unknown owner—`policy show`, `pr add`, `plan new`, `pr open`, `pr push`, `pr rebase` or the engine—creates the link: only the two commands with the flag do. `policy show` of a confirmed owner prints the real path of `clayton-duarte`'s file (source `owner:<realpath>`); deleting the link revokes the confirmation (the owner is unconfirmed again). An empty owner file is the explicit "cpd's default in every domain". The machine scope is optional: a machine without a file resolves every domain from the next less specific scope and the default. The repo scope is required for a Repo key (`repo_unconfigured`, "Keys and resolution"); an empty repo file is valid.
 - **Nothing from a repo's tree**: cpd reads no file of a repo's tree. `.config/wt.toml` and `.config/cpd.toml` are ignored, with no error; the repo policy file holds the repo's `[hooks]` (§7.3), `[test-commands]` (§7.7) and `[protected]` (§7.5).
 
 The owner file of `clayton-duarte` comes from the User's dotfiles on every machine (hs-d292). It sets `pr` only: the local Gate, no feedback from GitHub checks (its repos run no GitHub Actions; the Gate is the check, and only mergeability matters, hs-d283), and the conflict procedure of hs-d289 (rebase onto the base, the Gate, push through cpd; the Lead resolves a conflict itself, at once, hs-d269):
 
 ```toml
-# $CPD_HOME/policy/owners/clayton-duarte.toml
+# $CPD_HOME/policy/clayton-duarte/owner.toml
 [pr]
 gate = "local"
 feedback.checks = "none"
@@ -3642,7 +3649,7 @@ cpd's own default for a conflict (hs-d289) is the same procedure without the loc
 - **A row no PR owns, of an owner without a file**: The Inbox no longer reads such rows (hs-d481); cpd's default is available if needed by other code, which resolves it with the rule below, so they raise no `owner_unconfirmed`; `owner_unconfirmed` applies only where cpd works on the owner: `context new`, `context owner`, `pr add`, and resolving for a Context, a PR or a Session.
 - **One owner per Context** (hs-d288): `contexts.owner` is the GitHub login of every repo its Plans' PRs are in; `pr add` refuses a repo of another owner (`owner_mismatch`). A Plan may span several repos of that owner. `prs` stores only the repo's `name`: its owner is its Context's (DRY), and `owner_mismatch` keeps them equal.
 - So a Lead resolves `Owner`, never `Repo`: its owner's policy. Repo-scope `text` reaches a Lead only per PR, through `cpd policy show --pr <key>`.
-- **`repo_unconfigured`**: `resolve` of a Repo key whose file `$CPD_HOME/policy/repos/<owner>/<name>.toml` is missing fails `repo_unconfigured` (exit 3, a refusal; `details.repo` `"<owner>/<name>"`, `details.file` the path); the message names the file to create and says that an empty file means nothing to configure. It comes after the owner check: a missing owner file is still `owner_unconfirmed`. An empty file is valid. An Owner key never raises it. Every consumer is strict except the PR poll: its per-row policy (`pr_policy_resolved`) treats a missing repo file as no repo scope (owner and default only), because the poll needs only `pr.feedback` and an already-open PR of an unconfigured repo must keep being polled; `cpd policy show` stays strict.
+- **`repo_unconfigured`**: `resolve` of a Repo key whose file `$CPD_HOME/policy/<owner>/<repo>.toml` is missing fails `repo_unconfigured` (exit 3, a refusal; `details.repo` `"<owner>/<repo>"`, `details.file` the path); the message names the file to create and says that an empty file means nothing to configure. It comes after the owner check: a missing owner file is still `owner_unconfirmed`. An empty file is valid. An Owner key never raises it. Every consumer is strict except the PR poll: its per-row policy (`pr_policy_resolved`) treats a missing repo file as no repo scope (owner and default only), because the poll needs only `pr.feedback` and an already-open PR of an unconfigured repo must keep being polled; `cpd policy show` stays strict.
 - **Rows from before the migration** (§4.5): a PR whose `name` is NULL resolves `Owner(contexts.owner)`, so it never raises `repo_unconfigured`, and its hooks, test commands and protected paths are the empty defaults. A Context whose `owner` is NULL has no key: every resolve for it, and `plan new` and `pr add` in it, fail `owner_unset` until `cpd context owner` sets one.
 
 #### Validation
@@ -3652,9 +3659,9 @@ Every input is parsed once, at the boundary: a scope file at the first resolve o
 | Condition | Code | Exit | `details` | Raised by |
 |---|---|---|---|---|
 | a scope file is not TOML; names an unknown domain, an unknown key, a wrong type or an enum value outside its set; has a domain not exposed to its scope; or its file name is not a valid login, repo name, or host | `policy_invalid` | 1 | `file`, `key` (null when the file does not parse), or the domain's table name and file for an unexposed domain | any resolve; `cpd policy show` |
-| a key's owner has no `owners/<owner>.toml`, also when its repo file exists (never for a row no PR owns, above); the message warns and tells the agent to ask the User and repeat with `--confirm-fallback` | `owner_unconfirmed` | 1 | `owner`, `file` (path the link would have), `fallback` (`clayton-duarte`), `flag` (`--confirm-fallback`) | `context new`, `context owner`, `pr add`, any resolve for a Context, a PR or a Session |
+| a key's owner has no `policy/<owner>/owner.toml`, also when its repo file exists (never for a row no PR owns, above); the message warns and tells the agent to ask the User and repeat with `--confirm-fallback` | `owner_unconfirmed` | 1 | `owner`, `file` (path the link would have), `fallback` (`clayton-duarte`), `flag` (`--confirm-fallback`) | `context new`, `context owner`, `pr add`, any resolve for a Context, a PR or a Session |
 | `owners/clayton-duarte.toml` does not exist (and the owner is unknown) when creating the link | `fallback_missing` | 1 | `file` (the missing path) | `context new --confirm-fallback`, `context owner --confirm-fallback` |
-| the Repo key's file `repos/<owner>/<name>.toml` is missing (after the owner check; never for an Owner key; the poll excepted, above) | `repo_unconfigured` | 3 | `repo`, `file` | any resolve of a Repo key; `cpd policy show`; `pr add` |
+| the Repo key's file `policy/<owner>/<repo>.toml` is missing (after the owner check; never for an Owner key; the poll excepted, above) | `repo_unconfigured` | 3 | `repo`, `file` | any resolve of a Repo key; `cpd policy show`; `pr add` |
 | the repo cannot be keyed from `origin`: it has no `origin`, the URL is not `https://github.com/<o>/<n>` or `git@github.com:<o>/<n>` (each with or without `.git`; a non-`github.com` host and an SSH host alias such as `git@github-work:<work-owner>/x.git` are refused) | `repo_unkeyed` | 1 | `url` (null when there is no `origin`) | `pr add`, `pr edit --repo` |
 | the repo's owner is not the Context's | `owner_mismatch` | 3 | `owner` (the Context's), `repo_owner` | `pr add`, `pr edit --repo` |
 | the Context's `owner` is NULL (made before the migration, §4.5); the message names `cpd context owner <login> --context <c>` (no `details.next`: it holds only a command that runs as written) | `owner_unset` | 3 | `context` | `plan new`, `pr add`, any resolve, `cpd policy show` |
