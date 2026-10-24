@@ -28,7 +28,7 @@ use super::inbox::{self, Hit, Jump, Shape};
 use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
-use super::rows::{self, Id, Row};
+use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
@@ -598,14 +598,13 @@ impl View {
         if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
         }
-        let items = rows::items(&self.tree, self.state.opened(), 0, 0);
-        let drawn = self.state.flatten(&items);
-        let anchor = drawn.iter().position(|f| f.identifier == path)?;
+        let drawn = rows::items(&self.tree, self.state.opened(), 0, 0);
+        let anchor = drawn.iter().position(|f| f.path == path)?;
         let live: Vec<(usize, &SessionNode)> = drawn
             .iter()
             .enumerate()
             .filter_map(|(i, f)| {
-                let row = rows::row(&self.tree, &f.identifier).filter(|r| !r.archived())?;
+                let row = rows::row(&self.tree, &f.path).filter(|r| !r.archived())?;
                 let session = row.session().filter(|s| !archiving.iter().any(|a| a.id == s.id))?;
                 Some((i, session))
             })
@@ -697,13 +696,13 @@ impl View {
         }
     }
 
-    /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
+    /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
-        let path = self.state.rendered_at(at)?.to_vec();
+        let Hits { rows, paths } = self.tree_scroll.hits();
+        let path = rows.contains(at).then(|| paths.get(usize::from(at.y - rows.y)))??;
         // an empty row between two Contexts is no row
-        rows::row(&self.tree, &path)?;
-        let above = at.y.checked_sub(1).and_then(|y| self.state.rendered_at(Position::new(at.x, y)));
-        (above != Some(path.as_slice())).then_some(path)
+        rows::row(&self.tree, path)?;
+        Some(path.clone())
     }
 
     /// The text of the footer: the error of the last snapshot, if any (a lasting state, commands.md §17 "No notes").
