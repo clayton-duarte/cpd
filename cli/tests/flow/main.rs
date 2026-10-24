@@ -23,7 +23,7 @@ mod flow {
 }
 mod driver_reload;
 mod driver;
-mod inbox_cyan;
+mod context_inbox_cyan;
 mod job;
 mod metrics;
 mod plan_cancel;

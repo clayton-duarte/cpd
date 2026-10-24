@@ -1,4 +1,4 @@
-//! The palette on tmux's side (contract §6.1.1, hs-d534): pane title pills, the status line's pills, tmux's menus and copy mode.
+//! The Dango palette on tmux's side (contract §6.1.1, hs-d534): pane title pills, the status line's pills, tmux's menus and copy mode.
 //!
 //! The formats are drawn by tmux itself: each test sets the options a format reads on a private server (its socket in a
 //! temp dir, killed when the test ends), has tmux expand the format (`display-message -p`), and reads back, cell by cell,
@@ -115,8 +115,19 @@ impl Drop for Server {
 impl Server {
     /// A server with `panes` panes in one window, `%0` focused.
     pub(super) fn new(panes: usize) -> Server {
-        let dir = tempfile::tempdir().unwrap();
-        let tmux = Tmux::with_tmpdir("cpd-palette-test", dir.path());
+        // tmux's socket is `<dir>/tmux-<uid>/cpd-palette-test`, which must fit `sun_path` (104 bytes on macOS): a
+        // long default TMPDIR (resolved: /var is /private/var) keeps the directory in /tmp.
+        let socket = "cpd-palette-test";
+        let default = tempfile::tempdir().unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(default.path()).unwrap());
+        let path_len = std::fs::canonicalize(default.path()).unwrap().join(format!("tmux-{uid}")).join(socket).as_os_str().len();
+        let dir = if path_len > 100 {
+            drop(default);
+            tempfile::Builder::new().tempdir_in("/tmp").unwrap()
+        } else {
+            default
+        };
+        let tmux = Tmux::with_tmpdir(socket, dir.path());
         tmux.run(&strings(&["new-session", "-d", "-s", "t", "-x", "200", "-y", "20", "sleep 600"])).unwrap();
         let server = Server { tmux, _dir: dir };
         for _ in 1..panes {

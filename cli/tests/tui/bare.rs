@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -99,13 +99,18 @@ fn run_in_terminal<'a>(env: &'a TestEnv, name: &str, inside: bool, redirect: &st
     t
 }
 
+/// How long a `cpd` in a terminal may take to exit: a restart of a real tmux server that brings every session back.
+/// Alone these tests take 11-41 s (16 `bare::` tests at once, 14 cores); in the Gate they ran 66-77 s and the 30 s
+/// of `common::WAIT` was not enough. Only `bare::` waits this long (see the test group in `.config/nextest.toml`).
+const EXIT_WAIT: Duration = Duration::from_secs(90);
+
 impl Terminal<'_> {
     /// Waits for the command to exit; its exit code. The shell creates the file before it
     /// writes the code (`echo $? > file`), so the file existing is not the code being there:
     /// the wait is for the whole line.
     fn exit_code(&self) -> i32 {
         let mut code = None;
-        wait_until("the command to exit", || {
+        wait_until_for("the command to exit", EXIT_WAIT, || {
             code = fs::read_to_string(&self.code).ok().and_then(|text| text.strip_suffix('\n')?.parse().ok());
             code.is_some()
         });
@@ -139,9 +144,20 @@ fn view_pids(env: &TestEnv) -> Vec<(String, u32)> {
     views
 }
 
+/// The path of the executable process `pid` runs: `/proc/<pid>/exe` where it exists, `lsof` (whose first
+/// `n` line of the `txt` descriptors is the executable) on macOS.
+fn exe_of(pid: u32) -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        let out = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"]).output().ok()?;
+        let text = String::from_utf8(out.stdout).ok()?;
+        return text.lines().find_map(|l| l.strip_prefix('n')).map(PathBuf::from);
+    }
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// Whether the process `pid` runs the file `exe` (device and inode).
 fn runs(pid: u32, exe: &str) -> bool {
-    let (Ok(proc), Ok(file)) = (fs::metadata(format!("/proc/{pid}/exe")), fs::metadata(exe)) else { return false };
+    let (Some(proc), Ok(file)) = (exe_of(pid).and_then(|p| fs::metadata(p).ok()), fs::metadata(exe)) else { return false };
     (proc.dev(), proc.ino()) == (file.dev(), file.ino())
 }
 

@@ -10,9 +10,10 @@ use ratatui::style::{Modifier, Style};
 
 use super::numbered::{C0, C1, C10, C11, C13, C14, C15, C2, C3, C4, C5, C6, C7, C8, C9};
 use super::{
-    archived_text, asleep_text, bright, clickable_text, color, color_clickable, job_pill, muted_text, pill_focus, pill_interactive,
+    archived_text, asleep_text, dot_span, bright, clickable_text, color, count_style, color_clickable, job_pill, muted_text, pill_focus, pill_interactive,
     pill_static, read_only_text, selected, toggle_text, JobStatus, Meaning,
 };
+use crate::read::Dot;
 use crate::section;
 
 /// A block: the colour as background, text 0, no modifier.
@@ -28,14 +29,13 @@ fn text(fg: ratatui::style::Color) -> Style {
 #[test]
 fn job_pills_are_their_status_colour_bright_with_black_text() {
     // (status, merging, stuck, the pill's background number): draft 13, queued 15, running 14, merging 11, merged 10,
-    // failed (its Lead handles it) 14, failed and stuck 9, cancelled 8; text 0.
+    // failed 9, cancelled 8; text 0.
     let table = [
         ("draft", JobStatus::Draft, false, false, C13),
         ("queued", JobStatus::Queued, false, false, C15),
         ("running", JobStatus::Running, false, false, C14),
         ("merging", JobStatus::Running, true, false, C11),
         ("merged", JobStatus::Merged, false, false, C10),
-        ("failed, handled", JobStatus::Failed, false, false, C14),
         ("failed, stuck", JobStatus::Failed, false, true, C9),
         ("cancelled", JobStatus::Cancelled, false, false, C8),
     ];
@@ -139,4 +139,36 @@ fn no_dim_or_reversed_outside_the_palette() {
         "no DIM (colour 8 instead) and no REVERSED (a blue block from palette::selected() instead) outside tui/src/palette.rs:\n{}",
         offenders.join("\n")
     );
+}
+
+#[test]
+fn counters_are_in_their_status_colour_bright_and_a_failed_count_is_red() {
+    let table = [
+        (JobStatus::Draft, false, C13),
+        (JobStatus::Queued, false, C15),
+        (JobStatus::Running, false, C14),
+        (JobStatus::Running, true, C11),
+        (JobStatus::Merged, false, C10),
+        (JobStatus::Failed, false, C9),
+        (JobStatus::Cancelled, false, C8),
+    ];
+    for (status, merging, want) in table {
+        assert_eq!(count_style(status, merging, 3), text(want), "{status:?} merging={merging}");
+        assert_eq!(count_style(status, merging, 0), text(C8), "{status:?} zero");
+    }
+}
+
+#[test]
+fn the_red_loader_is_the_eight_moon_frames_in_red_and_archived_the_first_in_colour_8() {
+    let moons = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
+    for f in 0..16 {
+        let span = dot_span(Dot::Fixing, f, false);
+        assert_eq!(span.content, moons[f % 8], "frame {f}");
+        assert_eq!(span.style, text(C9), "frame {f}: red 9");
+        let archived = dot_span(Dot::Fixing, f, true);
+        assert_eq!(archived.content, moons[0], "archived, frame {f}: the first frame");
+        assert_eq!(archived.style, archived_text(), "archived, frame {f}");
+        assert_eq!(archived.style, text(C8));
+    }
+    assert_eq!(dot_span(Dot::Working, 3, false).style, text(C14), "the working loader stays cyan");
 }

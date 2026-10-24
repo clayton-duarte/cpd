@@ -27,8 +27,8 @@ use crate::read::{AttemptStatus, JobNode, JobStatus};
 use cpd_core::ids::JobKey;
 
 /// A Job's status as the chart draws it. A `cancelled` Job is a colour 8 pill, in its place; a `running` Job whose Attempt is
-/// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
-/// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
+/// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is always red (hs-d586): `Failed` with the static close
+/// circle, `FailedWorked` (the red moon loader) while the Plan's Lead works.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Live {
     Draft,
@@ -37,7 +37,7 @@ pub enum Live {
     Merging,
     Merged,
     Failed,
-    Stuck,
+    FailedWorked,
     Cancelled,
 }
 
@@ -51,7 +51,7 @@ impl Live {
             Live::Merging => palette::job_status(JobStatus::Running, true),
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
-            Live::Stuck => palette::JOB_STUCK,
+            Live::FailedWorked => (palette::SPINNER[frame % palette::SPINNER.len()], palette::job_status(JobStatus::Failed, false).1),
             Live::Cancelled => palette::job_status(JobStatus::Cancelled, false),
         }
     }
@@ -64,21 +64,20 @@ impl Live {
             Live::Running => palette::job_pill(JobStatus::Running, false, false),
             Live::Merging => palette::job_pill(JobStatus::Running, true, false),
             Live::Merged => palette::job_pill(JobStatus::Merged, false, false),
-            Live::Failed => palette::job_pill(JobStatus::Failed, false, false),
-            Live::Stuck => palette::job_pill(JobStatus::Failed, false, true),
+            Live::Failed | Live::FailedWorked => palette::job_pill(JobStatus::Failed, false, true),
             Live::Cancelled => palette::job_pill(JobStatus::Cancelled, false, false),
         }
     }
 
-    /// `stuck`: the Job has an open `job-stuck` item.
-    pub fn of(job: &JobNode, stuck: bool) -> Live {
+    /// `lead_working`: the Plan's Lead is working (a failed Job's pill turns).
+    pub fn of(job: &JobNode, lead_working: bool) -> Live {
         match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
-            JobStatus::Failed if stuck => Live::Stuck,
+            JobStatus::Failed if lead_working => Live::FailedWorked,
             JobStatus::Failed => Live::Failed,
             JobStatus::Cancelled => Live::Cancelled,
         }
@@ -103,15 +102,14 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `stuck` are the keys of the Jobs with an
-/// open `job-stuck` item.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
+/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `lead_working`: the Plan's Lead is working.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, lead_working: bool) -> Vec<FlowJob> {
     let all: Vec<&JobNode> = jobs.into_iter().collect();
     let cancelled = |key: &JobKey| all.iter().any(|j| &j.key == key && j.status == JobStatus::Cancelled);
     all.iter()
         .map(|j| FlowJob {
             key: j.key.to_string(),
-            status: Live::of(j, stuck.contains(&j.key)),
+            status: Live::of(j, lead_working),
             tier: j.tier,
             needs: if j.status == JobStatus::Cancelled {
                 Vec::new()
@@ -623,7 +621,7 @@ mod tests {
 
     #[test]
     fn a_pill_has_the_icon_and_colour_of_its_status() {
-        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck, Live::Cancelled];
+        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::FailedWorked, Live::Cancelled];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
@@ -678,18 +676,6 @@ mod tests {
         assert_eq!(cells(&c, 1), format!("{CAP_L}{icon} long│S1{CAP_R}"));
     }
 
-    #[test]
-    fn a_failed_pill_is_waiting_and_red_only_once_its_job_is_stuck() {
-        assert_eq!(Live::Failed.icon(0).1, Meaning::Waiting, "its Lead handles it");
-        assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
-        assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
-        let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
-        // the body, after the left cap
-        let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
-        let bright = |m| Some(palette::color_clickable(m));
-        assert_eq!((Some(bg(0)), Some(bg(1))), (bright(Meaning::Waiting), bright(Meaning::Failed)), "the status colour's bright pair");
-    }
-
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
     fn icon_at(status: Live, frame: usize) -> String {
         let c = layout(&[FlowJob { status, ..job("a", &[]) }], frame);
@@ -697,8 +683,8 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pill_spins_through_the_nine_frames() {
-        let icons: Vec<String> = (0..10).map(|f| icon_at(Live::Running, f)).collect();
+    fn a_running_pill_spins_through_the_eight_moon_phases() {
+        let icons: Vec<String> = (0..=palette::SPINNER.len()).map(|f| icon_at(Live::Running, f)).collect();
         assert_eq!(icons, [palette::SPINNER.to_vec(), vec![palette::SPINNER[0]]].concat());
     }
 

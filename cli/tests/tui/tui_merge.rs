@@ -385,6 +385,9 @@ fn the_confirm_closes_the_view_at_once_and_the_merge_then_the_poll_run_in_the_ba
         gh_with(&env, "CLEAN", 0, Some(&release_file(&env)), POLL_OK);
         fake_cpd(&env);
         fake_tmux(&env);
+        // the view is the server's only session: without another one the server exits with it and the
+        // pending `run-shell -b` job is lost (the real cockpit has other sessions)
+        env.tmux(&["new-session", "-d", "-s", "keep", "sleep 120"]);
         let pane = start(&env);
         wait_dialog(&env, &pane);
         confirm(&env, &pane, how);

@@ -1,6 +1,6 @@
 //! The tree column's section look v3, as exact rows (commands.md §13.2 "Rows", "Inbox section", "Clicks"; §17
 //! "Collapsible blocks", "Section titles", "Scroll cues"; hs-d344 to hs-d349). Red until the tree draws them: the
-//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰁚` when no rows; hs-d574), the Inbox's title is the
+//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰬪` when no rows; hs-d574), the Inbox's title is the
 //! pill under one empty row, its item rows keep their icon and colour, and its scroll cues are right-aligned.
 //!
 //! The view is drawn on a `TestBackend` and read back cell by cell, so the rows and the styles that matter are pinned
@@ -20,10 +20,10 @@ use super::view::{Effect, View};
 use crate::palette::{self, IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED};
 use cpd_core::inbox::model::{Item, Kind, Urgency};
 
-/// U+F004B md-arrow_down_drop_circle_outline: the folded block's arrow.
-const DOWN: &str = "\u{F004B}";
-/// U+F0063 md-arrow_up_drop_circle_outline: the expanded block's arrow.
-const UP: &str = "\u{F0063}";
+/// U+F0B26 md-arrow_down_drop_circle_outline: the folded block's arrow.
+const DOWN: &str = "\u{F0B26}";
+/// U+F0B2C md-arrow_up_drop_circle_outline: the expanded block's arrow.
+const UP: &str = "\u{F0B2C}";
 /// The pill's caps, U+E0B6 and U+E0B4.
 const CAP_LEFT: &str = "\u{E0B6}";
 const CAP_RIGHT: &str = "\u{E0B4}";
@@ -76,7 +76,7 @@ fn is_muted_line(buf: &Buffer, y: u16, from: u16, to: u16) {
         if cell.symbol() != " " {
             seen = true;
             // the rule glyphs are muted (8); the toggle's arrow and word are read-only text (7)
-            let want = if "╭├╰│─󰁚".contains(cell.symbol()) { muted() } else { palette::toggle_text().fg.unwrap() };
+            let want = if "╭├╰│─󰬪".contains(cell.symbol()) { muted() } else { palette::toggle_text().fg.unwrap() };
             assert_eq!(cell.fg, want, "column {x} of row {y} ({:?}) is muted, or the toggle's 7", cell.symbol());
             assert!(!cell.modifier.contains(Modifier::BOLD), "column {x} of row {y} is not bold");
         }
@@ -182,7 +182,7 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
     assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
     assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
-    assert_eq!(got[12], " ╰󰁚", "gamma, with no row at all, ends with the terminator: {got:#?}");
+    assert_eq!(got[12], " ╰󰬪", "gamma, with no row at all, ends with the terminator: {got:#?}");
     assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
     for y in [6, 9] {
         is_muted_line(&buf, y, 1, 3);
@@ -236,7 +236,7 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
         item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"),
         item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"),
         item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"),
-        " ╰󰁚".to_owned(),
+        " ╰󰬪".to_owned(),
         String::new(),
     ];
     assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, the terminator (nothing to fold) and one empty row: {got:#?}");
@@ -256,7 +256,7 @@ fn the_empty_row_above_the_inbox_title_is_never_a_tree_row_in_a_short_pane() {
 fn with_no_item_the_section_is_the_empty_row_and_the_pill_with_a_zero() {
     let mut view = with_inbox(Vec::new());
     let got = rows(&draw(&mut view, 43, 16));
-    assert_eq!(&got[12..], [String::new(), pill(41, 0), " ╰\u{F005A} up to date, drink some water".to_owned(), String::new()], "the empty row, the pill with a zero, the closing row, the empty row: {got:#?}");
+    assert_eq!(&got[12..], [String::new(), pill(41, 0), " ╰\u{F0B2A} up to date, drink some water".to_owned(), String::new()], "the empty row, the pill with a zero, the closing row, the empty row: {got:#?}");
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
 
 #[test]
 fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_no_word() {
-    const TERMINATOR: &str = "\u{F005A}";
+    const TERMINATOR: &str = "\u{F0B2A}";
     let empty = View::new(super::fixture::tree(vec![super::fixture::context("gamma", vec![])]), true);
     let mut with_three = with_inbox(inbox_items(3));
     let mut empty = empty;

@@ -16,6 +16,32 @@ use crate::ids::{ContextId, RecordId};
 use crate::output::Output;
 use crate::store::Store;
 
+/// Why a Context is not curable (hs-d592 R2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotCurable {
+    Archived,
+    Deleted,
+    Young { records: u32 },
+}
+
+/// Whether the Context is curable: not archived, not deleted and holding at least `floor` records (every kind and
+/// state). `Ok(None)` is curable. An unknown Context counts as deleted.
+pub fn not_curable(conn: &Connection, context: &ContextId, floor: u32) -> Result<Option<NotCurable>, CpdError> {
+    let row: Option<(bool, bool)> = conn
+        .query_row("SELECT archived_at IS NOT NULL, deleted_at IS NOT NULL FROM contexts WHERE id = ?1", [context.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((archived, deleted)) = row else { return Ok(Some(NotCurable::Deleted)) };
+    if deleted {
+        return Ok(Some(NotCurable::Deleted));
+    }
+    if archived {
+        return Ok(Some(NotCurable::Archived));
+    }
+    let records: i64 = conn.query_row("SELECT count(*) FROM context_records WHERE context = ?1", [context.as_str()], |r| r.get(0))?;
+    let records = u32::try_from(records).unwrap_or(u32::MAX);
+    Ok((records < floor).then_some(NotCurable::Young { records }))
+}
+
 /// Why a record is proposed for retirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reason {

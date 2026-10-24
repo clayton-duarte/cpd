@@ -28,7 +28,19 @@ mod input_box_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;
+#[cfg(test)]
+mod failed_pill_tests;
+#[cfg(test)]
+mod moon_tests;
+pub mod trace;
+#[cfg(test)]
+mod trace_tests;
+#[cfg(test)]
+mod icons_tests;
 pub mod merge;
+pub mod pace;
+#[cfg(test)]
+mod pace_tests;
 pub mod palette;
 #[cfg(test)]
 mod updating_label;

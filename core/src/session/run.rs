@@ -480,7 +480,7 @@ mod tests {
         let mut pi = adopt("exec sleep 60");
         stop_pi(&mut pi, Duration::from_secs(5));
         assert_eq!(pi.try_wait().unwrap().and_then(|s| s.signal()), Some(Signal::SIGTERM as i32));
-        let mut stubborn = adopt("trap '' TERM; while :; do sleep 0.1; done");
+        let mut stubborn = adopt("trap '' TERM; exec sleep 60");
         std::thread::sleep(Duration::from_millis(300));
         stop_pi(&mut stubborn, Duration::from_millis(500));
         assert_eq!(stubborn.try_wait().unwrap().and_then(|s| s.signal()), Some(Signal::SIGKILL as i32));
