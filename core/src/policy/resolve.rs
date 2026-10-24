@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use super::domain::{merge, Policy, Scope, Source, Sources};
 use super::exposure::ScopeKind;
 use super::load::{load_scope_file, parse_scope, policy_invalid};
-use super::{owner_unknown, PolicyKey, Resolved};
+use super::{owner_unconfirmed, repo_unconfigured, PolicyKey, Resolved};
 use crate::home::CpdHome;
 use crate::ids::{HostName, OwnerLogin};
 
@@ -40,21 +40,37 @@ pub(super) fn machine_file(home: &CpdHome, host: &HostName) -> PathBuf {
     machines_dir(home).join(format!("{host}.toml"))
 }
 
-fn owner_file(home: &CpdHome, owner: &OwnerLogin) -> PathBuf {
+pub(super) fn owner_file(home: &CpdHome, owner: &OwnerLogin) -> PathBuf {
     owners_dir(home).join(format!("{owner}.toml"))
+}
+
+/// What a missing repo file is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepoFile {
+    /// `repo_unconfigured`.
+    Required,
+    /// No repo scope.
+    Optional,
 }
 
 /// The scope layers of `key`, most specific first (repo, owner, machine), or `None` when the owner
 /// has no file. A missing machine file is no layer.
-fn layers(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Option<Vec<(Source, Scope)>>, crate::error::CpdError> {
+fn layers(
+    home: &CpdHome,
+    host: &HostName,
+    key: &PolicyKey,
+    repo_file: RepoFile,
+) -> Result<Option<Vec<(Source, Scope)>>, crate::error::CpdError> {
     let Some((owner_real, owner_scope)) = load_scope_file(&owner_file(home, key.owner()), ScopeKind::Owner)? else {
         return Ok(None);
     };
     let mut layers = Vec::new();
     if let PolicyKey::Repo(owner, name) = key {
         let path = repos_dir(home).join(owner.as_str()).join(format!("{name}.toml"));
-        if let Some((real, scope)) = load_scope_file(&path, ScopeKind::Repo)? {
-            layers.push((Source::Repo(real), scope));
+        match load_scope_file(&path, ScopeKind::Repo)? {
+            Some((real, scope)) => layers.push((Source::Repo(real), scope)),
+            None if repo_file == RepoFile::Required => return Err(repo_unconfigured(owner, name, &path)),
+            None => {}
         }
     }
     layers.push((Source::Owner(owner_real), owner_scope));
@@ -71,19 +87,29 @@ fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
 
 /// The policy of `key`: cpd's default, then the machine file, the owner file and the repo file,
 /// per domain, the whole domain replaced. A key whose owner has no file is
-/// `owner_unknown`, even when its repo file exists.
+/// `owner_unconfirmed`, even when its repo file exists. A Repo key whose repo file is missing is
+/// `repo_unconfigured` (an empty file is valid), after the owner check.
 pub fn resolve(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, host, key)? {
+    match layers(home, host, key, RepoFile::Required)? {
         Some(layers) => Ok(merge_layers(&layers)),
-        None => Err(owner_unknown(key.owner())),
+        None => Err(owner_unconfirmed(home, key.owner())),
+    }
+}
+
+/// [`resolve`] with the repo file optional: a missing one is no repo scope (owner, machine and default only).
+/// For the `pr poll`, which needs only `pr.feedback` and keeps polling an open PR of an unconfigured repo.
+pub fn resolve_lenient(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
+    match layers(home, host, key, RepoFile::Optional)? {
+        Some(layers) => Ok(merge_layers(&layers)),
+        None => Err(owner_unconfirmed(home, key.owner())),
     }
 }
 
 /// [`resolve`] for a `pull_requests` row no PR owns:
 /// an owner without a file is cpd's default, source `default (no owner file)`,
-/// not `owner_unknown`.
+/// not `owner_unconfirmed`.
 pub fn resolve_unowned_row(home: &CpdHome, host: &HostName, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, host, key)? {
+    match layers(home, host, key, RepoFile::Optional)? {
         Some(layers) => Ok(merge_layers(&layers)),
         None => Ok(Resolved {
             policy: default_policy().clone(),

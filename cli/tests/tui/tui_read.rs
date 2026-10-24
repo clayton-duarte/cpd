@@ -758,6 +758,76 @@ fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
     assert_eq!((ship.head.open_escalations, ship.head.review_pending, sketch.head.review_pending), (1, true, false));
 }
 
+/// An `attempt-status` Event of a check span: `check` is "start" or "end".
+fn span(job: &str, attempt: &str, check: &str) -> String {
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+         VALUES (cpd_txn(), '2026-01-03T00:10:00.000Z', 'attempt-status', 'alpha', 'ship', '{job}', '{attempt}', 'fixture span',
+                 '{{\"from\":\"running\",\"to\":\"running\",\"check\":\"{check}\",\"what\":\"checks\"}}');"
+    )
+}
+
+fn ship_counts(store: &mut Store) -> (usize, usize) {
+    let c = read::tree(store).unwrap().contexts[0].plans[0].head.counts;
+    (c.running, c.merging)
+}
+
+#[test]
+fn a_running_attempt_in_an_open_check_span_is_counted_with_the_merging_jobs() {
+    let (_env, mut store) = fixture();
+    assert_eq!(ship_counts(&mut store), (1, 1));
+    sql(&mut store, &span("c", "c-a2", "start"));
+    assert_eq!(ship_counts(&mut store), (0, 2), "job c is landing, apart from running");
+}
+
+#[test]
+fn the_latest_check_event_of_an_attempt_decides_whether_its_span_is_open() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, &span("c", "c-a2", "start"));
+    sql(&mut store, &span("c", "c-a2", "end"));
+    assert_eq!(ship_counts(&mut store), (1, 1), "start, end: running again");
+    sql(&mut store, &span("c", "c-a2", "start"));
+    assert_eq!(ship_counts(&mut store), (0, 2), "start, end, start: checking");
+}
+
+#[test]
+fn an_open_span_of_an_ended_or_another_attempt_changes_no_count() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, &span("c", "c-a1", "start")); // ended
+    sql(&mut store, &span("r1", "r1-a1", "start")); // another Plan's Job: not ship's count
+    sql(&mut store, &span("zz", "zz-a9", "start")); // no such Attempt
+    assert_eq!(ship_counts(&mut store), (1, 1));
+    sql(&mut store, &span("c", "c-a2", "start"));
+    sql(&mut store, &span("c", "c-a1", "end")); // another Attempt's end does not close c-a2's span
+    assert_eq!(ship_counts(&mut store), (0, 2));
+}
+
+#[test]
+fn every_read_shows_an_attempt_in_an_open_check_span_as_checking() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, &span("c", "c-a2", "start"));
+    sql(&mut store, &span("c", "c-a1", "start")); // the ended Attempt stays ended
+
+    let flow = read::flow(&mut store, &plan("ship")).unwrap();
+    let status = |job: &str| flow.jobs.iter().find(|j| j.key == key(job)).unwrap().active_attempt().map(|a| a.status);
+    assert_eq!((status("c"), status("b")), (Some(AttemptStatus::Checking), Some(AttemptStatus::Merging)));
+    let c1 = flow.jobs.iter().find(|j| j.key == key("c")).unwrap().attempts.iter().find(|a| a.number == 1).unwrap();
+    assert_eq!(c1.status, AttemptStatus::Ended);
+
+    let (slots, _) = read::slots(&mut store, 3).unwrap();
+    let held = |id: &str| slots.held.iter().find(|h| h.attempt == attempt(id)).unwrap().status;
+    assert_eq!((held("c-a2"), held("b-a1")), (AttemptStatus::Checking, AttemptStatus::Merging));
+
+    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
+    assert_eq!(w.attempt.unwrap().status, AttemptStatus::Checking);
+    let ended = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a1"))).unwrap();
+    assert_eq!(ended.attempt.unwrap().status, AttemptStatus::Ended);
+
+    sql(&mut store, &span("c", "c-a2", "end"));
+    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
+    assert_eq!(w.attempt.unwrap().status, AttemptStatus::Running);
+}
+
 #[test]
 fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
     let (env, mut store) = fixture();

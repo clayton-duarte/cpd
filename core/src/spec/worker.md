@@ -37,7 +37,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 - Your submit builds the branch and runs the named tests: the build must succeed and the tests must pass.
 {% endif %}
 {% if quick_check %}
-- Before submitting, run the quick check yourself, from this worktree. It is the `pre-commit` hook of `.config/wt.toml`; its commands, verbatim:
+- Before submitting, run the quick check yourself, from this worktree. It is `hooks.pre-commit` of the repo's policy file; its commands, verbatim:
 
 {% for command in quick_check %}
 {{ command }}
@@ -187,14 +187,14 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `check_error`: the quick check could not run. Ask the Lead.
 {% if kind == "test" %}
 - `test_files_missing`: a file of "Tests" matches nothing you changed. Write the tests in those files (`details.paths`), commit, then submit again.
-- `tests_unconfigured`: the repo has no `[tests]` in its `.config/cpd.toml`. Ask the Lead.
+- `tests_unconfigured`: the repo's policy has no `[test-commands]`. Ask the Lead.
 - `tests_build_failed`: the branch does not build: fix the stubs (the tail is in `details`), commit, then submit again.
 - `tests_not_found`: a named test does not exist (`details.tests`): fix the name or write the test, commit, then submit again.
 - `tests_not_red`: a named test passes. Make it fail for the right reason, for example against the stub, commit, then submit again.
 - `tests_error`: the test commands could not run. Ask the Lead.
 {% elif kind == "impl" %}
 - `tests_tampered`: your diff touches a guarded file (`details.paths`). Revert those paths and commit, or ask the Lead to approve them, then submit again.
-- `tests_unconfigured`: the repo has no `[tests]` in its `.config/cpd.toml`. Ask the Lead.
+- `tests_unconfigured`: the repo's policy has no `[test-commands]`. Ask the Lead.
 - `tests_build_failed`: the branch does not build (the tail is in `details`): fix it, commit, then submit again.
 - `tests_not_found`: a named test does not exist (`details.tests`). Ask the Lead.
 - `tests_failed`: a named test fails (the tail is in `details`): fix the implementation, commit, then submit again.
@@ -210,7 +210,7 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 - `base_not_found`: the base branch is not on the remote. Ask the Lead.
 - `gate_failed`: the Gate failed on your head (the tail is in `details`). Fix it, commit, then submit again.
 - `gate_error`: the Gate could not run. Ask the Lead.
-- `owner_unset`, `owner_unknown`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
+- `owner_unset`, `owner_unconfirmed`, `policy_invalid`: the PR's policy does not resolve. Ask the Lead.
 {% endif %}
 - `attempt_not_running`: the Attempt was stopped. Stop.
 

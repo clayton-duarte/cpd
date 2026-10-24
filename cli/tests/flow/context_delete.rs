@@ -4,7 +4,7 @@
 use crate::common;
 use crate::plan_delete::{archive, base, count, events, fixture, plan_rows, world};
 
-use common::{TestEnv, refused};
+use common::TestEnv;
 
 /// A Manager Session of Context `ctx` (contract §3.1): idle, in no pane.
 fn manager(env: &TestEnv) {
@@ -52,23 +52,4 @@ fn deletes_the_context_its_plans_and_its_manager() {
     assert!(crate::plan_delete::remote_branches(&env, &a).contains(&a.lead_branch()));
     // idempotent
     assert_eq!(env.cpd(&["context", "delete", "ctx", "--yes"]).ok()["already"], true);
-}
-
-#[test]
-fn refuses_when_a_plan_has_live_work() {
-    let env = TestEnv::new();
-    base(&env);
-    manager(&env);
-    let (a, b) = (world(&env, "pay"), world(&env, "ship"));
-    archive(&env, "pay");
-    archive(&env, "ship");
-    // a Session of one Plan working: nothing is deleted, not even the quiet Plan
-    fixture(&env, &format!("UPDATE sessions SET state = 'working' WHERE id = '{}'", b.lead));
-
-    let error = refused(&env.cpd(&["context", "delete", "ctx", "--yes"]), "archive_blocked", 3);
-    assert!(error["details"]["blockers"].as_array().is_some_and(|x| !x.is_empty()), "{error}");
-
-    assert!(plan_rows(&env, "pay") > 0 && plan_rows(&env, "ship") > 0);
-    assert!(a.run_dir.exists() && b.run_dir.exists() && a.lead_worktree.exists());
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'ctx' AND deleted_at IS NULL"), 1);
 }

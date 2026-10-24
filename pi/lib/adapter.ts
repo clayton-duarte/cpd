@@ -7,6 +7,7 @@ import { primaryCheckoutMove, reasonText as mainReasonText } from "./mainguard.t
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
+import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -57,6 +58,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (host.run && event.toolName === "bash" && typeof (event.input as { command?: unknown }).command === "string") {
       const moved = primaryCheckoutMove((event.input as { command: string }).command, ctx.cwd, homedir());
       if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
+      const secret = secretBypass((event.input as { command: string }).command);
+      if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);

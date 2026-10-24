@@ -118,7 +118,9 @@ pub enum Action {
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
     /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
-    NewContext { id: ContextId, title: String, owner: String },
+    /// With `confirm_fallback` the argv gains `--confirm-fallback` last (the User confirmed clayton-duarte's policy for
+    /// an unknown owner).
+    NewContext { id: ContextId, title: String, owner: String, confirm_fallback: bool },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -178,8 +180,12 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}"), "--by-user".into()]);
                 argv
             }
-            Action::NewContext { id, title, owner } => {
-                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+            Action::NewContext { id, title, owner, confirm_fallback } => {
+                let mut argv = vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")];
+                if *confirm_fallback {
+                    argv.push("--confirm-fallback".into());
+                }
+                argv
             }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
@@ -551,6 +557,7 @@ mod tests {
                     id: ContextId::parse("building-cpd").unwrap(),
                     title: "Building cpd!".into(),
                     owner: "clayton-duarte".into(),
+                    confirm_fallback: false,
                 },
                 vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
             ),
@@ -644,7 +651,7 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into(), confirm_fallback: false };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
         let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");

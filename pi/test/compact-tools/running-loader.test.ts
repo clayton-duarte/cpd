@@ -1,6 +1,6 @@
 /**
  * The closing row of a running tool row (docs/contract.md 6.1.1, 6.9): " ╰" in 8 and ONE frame of pi's moon-phase loader
- * in 6 (loader-frames.ts, one frame every 100 ms), no text after it. A finished row closes with its
+ * in 6 (loader-frames.ts, one frame every 50 ms), no text after it. A finished row closes with its
  * toggle in 7; fold "status" keeps " └ Running".
  */
 import assert from "node:assert/strict";
@@ -68,21 +68,21 @@ test("a running group head has the same closing row and never an open rail", asy
 	});
 });
 
-test("the loader steps through the eight moon phases, one every 100 ms", async () => {
+test("the loader steps through the 28 moon_alt phases one every 50 ms", async () => {
 	await withRow("toggle", undefined, (row) => {
 		const seen: string[] = [];
-		for (let step = 0; step < 18; step++) {
+		for (let step = 0; step < 58; step++) {
 			seen.push([...plain(closing(row))].at(-1)!);
-			advance(100);
+			advance(50);
 		}
 		assert.ok(seen.every((frame) => FRAMES.includes(frame)), JSON.stringify(seen));
 		const start = FRAMES.indexOf(seen[0]!);
-		const expected = seen.map((_, i) => FRAMES[(start + i) % 8]);
-		assert.deepEqual(seen, expected, "each 100 ms is the next frame, in order, wrapping after eight");
-		advance(50);
+		const expected = seen.map((_, i) => FRAMES[(start + i) % 28]);
+		assert.deepEqual(seen, expected, "each 50 ms is the next frame, in order, wrapping after 28");
+		advance(25);
 		const before = [...plain(closing(row))].at(-1);
-		advance(40);
-		assert.equal([...plain(closing(row))].at(-1), before, "no step inside 100 ms");
+		advance(20);
+		assert.equal([...plain(closing(row))].at(-1), before, "no step inside 50 ms");
 	});
 });
 

@@ -1,5 +1,7 @@
 //! The logs popup's rows keep one blank column on each side (commands.md §13.2): the text starts in column 1 and ends
-//! at column W-2 at the latest. Red until `view::line` loses 2 cells of room and the rows are drawn one column in.
+//! at column W-2 at the latest.
+//!
+//! These pin the exact end column and the `…` cut, which the layout rows do not.
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

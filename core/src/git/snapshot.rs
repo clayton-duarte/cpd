@@ -10,7 +10,7 @@ use nix::unistd::Pid;
 
 use super::gate::{self, Slots};
 use crate::slot::SLOT_VARIABLE;
-use super::hooks::{Detached, HookOutcome, Log, Operation, run_hook_as};
+use super::hooks::{Detached, HookOutcome, Log, Operation, Pipeline, run_hook_as};
 use super::run::{ok, worktree_add};
 use super::worktree::{Setup, list};
 use crate::error::{CpdError, ErrorCode};
@@ -73,6 +73,9 @@ pub struct GateHooks<'a> {
     pub pre_start: Setup,
     /// `gate_minutes`, and `run/<plan>/logs/pr-<key>.pre-merge.log`.
     pub pre_merge: Setup,
+    /// The PR's policy `hooks.pre-start` and `hooks.pre-merge` (§7.3): what each hook runs.
+    pub pre_start_commands: &'a Pipeline,
+    pub pre_merge_commands: &'a Pipeline,
     /// The machine-wide test slots, one of which the Gate holds from before `pre-start` to after `pre-merge`
     /// (contract §7.6 "The test slot").
     pub slots: Slots,
@@ -121,7 +124,7 @@ impl GateWorktree {
     }
 
     /// The Gate in W (contract §7.6 step 3): a slot (waited for, and the wait logged at the head of the
-    /// `pre-merge` log), `pre-start`, then, when it passed, `pre-merge`, both from W's `.config/wt.toml` (the gated commit's), with
+    /// `pre-merge` log), `pre-start`, then, when it passed, `pre-merge`, both from the PR's policy `hooks`, with
     /// `branch` the Lead Branch. `Err` is a git call that failed while building
     /// the template variables.
     pub fn run(&self, hooks: &GateHooks<'_>) -> Result<Result<(), Refused>, CpdError> {
@@ -131,8 +134,11 @@ impl GateWorktree {
         // Both hooks see the slot they run in, so a `cpd slot` inside them takes no second one (contract §7.6).
         let held = slot.index().to_string();
         let detached = Detached { branch: hooks.lead_branch, env: &[(SLOT_VARIABLE, &held)] };
-        for (hook, setup, log) in [(Hook::PreStart, &hooks.pre_start, Log::Truncate), (Hook::PreMerge, &hooks.pre_merge, Log::Append)] {
-            let result = run_hook_as(hook, &self.path, &detached, Some(&operation), setup.timeout, &setup.log, log)?;
+        for (hook, pipeline, setup, log) in [
+            (Hook::PreStart, hooks.pre_start_commands, &hooks.pre_start, Log::Truncate),
+            (Hook::PreMerge, hooks.pre_merge_commands, &hooks.pre_merge, Log::Append),
+        ] {
+            let result = run_hook_as(hook, pipeline, &self.path, &detached, Some(&operation), setup.timeout, &setup.log, log)?;
             if result.outcome != HookOutcome::Passed {
                 return Ok(Err(Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }));
             }

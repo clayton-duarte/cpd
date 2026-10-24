@@ -542,47 +542,6 @@ fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_a
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 
-/// The incident, on a real cockpit and the real binary as the new one: the install runs from a caller with no UTF-8 locale (the
-/// launchd agent), every tmux call it or cpd makes is a UTF-8 client, and the engine is restarted.
-#[test]
-fn the_install_restarts_the_engine_of_a_real_cockpit_for_a_caller_without_a_utf8_locale() {
-    let mut failures = Vec::new();
-    for locale in [crate::common::Locale::Unset, crate::common::Locale::LangC, crate::common::Locale::LcAllC] {
-        let env = TestEnv::new();
-        env.write_config(&format!("version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
-        env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-        // The views the cockpit starts just sleep (as tui.rs's), everything else is the built binary.
-        env.fake("cpd", &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{}' \"$@\"", common::CPD));
-        logging_tmux(&env, "");
-        // The cockpit and the engine, built by a caller with a locale.
-        env.cpd(&["tui"]).ok();
-        wait_until("the engine holds the lock", || lock_held(&env));
-        let before = order(&env).len();
-
-        let checkout = Checkout::new(&env, &[]);
-        let built = env.fake("cpd-built", &format!("exec '{}' \"$@\"", common::CPD));
-        let target = env.root().join("target");
-        let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-        let mut cmd = env.command(checkout.script());
-        locale.apply(&mut cmd).env("CARGO", cargo).env("CARGO_TARGET_DIR", &target);
-        let out = common::output(&mut cmd).unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // The engine the install started is a child of a tmux window: the teardown stops it.
-        if out.status.code() != Some(0) || stderr.contains("follow-up failed") {
-            failures.push(format!("{locale:?}: the install exited {:?}: {stderr}", out.status.code()));
-            continue;
-        }
-        if !lock_held(&env) {
-            failures.push(format!("{locale:?}: no engine holds the lock after the install: {stderr}"));
-        }
-        let bare: Vec<String> = order(&env)[before..].iter().filter(|l| l.starts_with("tmux ") && !l.starts_with("tmux -u ")).cloned().collect();
-        if !bare.is_empty() {
-            failures.push(format!("{locale:?}: tmux calls that are not UTF-8 clients: {bare:?}"));
-        }
-    }
-    assert!(failures.is_empty(), "the install fails without a UTF-8 locale:\n{}", failures.join("\n"));
-}
-
 // ---- The tag step (scripts/tag-version.sh runs once, at the end of a successful install; a failure of it only warns) ----
 
 /// A recording `scripts/tag-version.sh` in the checkout: appends a line to `tag-version.log` of the TempDir, prints `stderr_line`

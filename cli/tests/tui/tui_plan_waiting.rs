@@ -7,7 +7,7 @@ use crate::tui_plan_cancelled::{env, plan, screen_when, start_view};
 
 /// The chart rows of the `api` box: those between its top and bottom borders, the borders and the padding cut off.
 fn chart(screen: &[String]) -> Vec<String> {
-    let top = screen.iter().position(|l| l.trim_start().starts_with("╭ ") && l.contains("api ·")).unwrap_or_else(|| panic!("no box:\n{}", screen.join("\n")));
+    let top = screen.iter().position(|l| l.trim_start().starts_with("╭─ ") && l.contains("api ·")).unwrap_or_else(|| panic!("no box:\n{}", screen.join("\n")));
     screen[top + 1..]
         .iter()
         .take_while(|l| !l.trim_start().starts_with('╰'))

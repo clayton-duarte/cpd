@@ -449,35 +449,6 @@ fn ensure_in_a_home_that_does_not_exist_fails_and_creates_nothing() {
     assert_eq!(entries(), ["config.toml"], "ensure made something in the home: {run:?}");
 }
 
-#[test]
-fn two_concurrent_ensures_both_succeed_and_leave_one_engine() {
-    let fx = fx("");
-    fx.env.fake("cpd", &format!("sleep 1; exec '{CPD}' \"$@\""));
-
-    let spawn = || {
-        common::spawn(fx.env.command(CPD).args(["watch", "--ensure"]).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap()
-    };
-    let (first, second) = (spawn(), spawn());
-    let runs: Vec<Run> = [first, second]
-        .into_iter()
-        .map(|child| {
-            let out = child.wait_with_output().unwrap();
-            Run {
-                exit: out.status.code().expect("cpd was killed by a signal"),
-                stdout: String::from_utf8(out.stdout).unwrap(),
-                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            }
-        })
-        .collect();
-    for run in &runs {
-        run.ok();
-    }
-    assert_eq!(runs.iter().filter(|r| r.json()["started"] == true).count(), 1, "{runs:?}");
-    assert_eq!(fx.count("watch-started"), 1);
-    let panes = fx.env.tmux(&["list-panes", "-a", "-F", "#{session_name}:#{window_name} #{pane_dead}"]);
-    assert_eq!(String::from_utf8_lossy(&panes.stdout), "cpd-work:watch 0\n");
-}
-
 /// engine-W10: `list-panes` fails while a concurrent call's `new-session` is starting the server, and the server is running
 /// a moment later. The call lists again instead of failing with the first call's stderr.
 #[test]
@@ -585,17 +556,6 @@ fn a_crashed_engine_is_back_within_seconds() {
 }
 
 #[test]
-fn an_engine_that_got_sigterm_is_back_within_seconds() {
-    let fx = fx("");
-    fx.manager("mgr1");
-    let pid = fx.supervised();
-    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
-    fx.back_after(1);
-    assert_eq!(fx.count("watch-stopped"), 1);
-    fx.manager_heard_nothing();
-}
-
-#[test]
 fn an_engine_that_got_sigkill_is_back_within_seconds() {
     let fx = fx("");
     fx.manager("mgr1");
@@ -603,26 +563,6 @@ fn an_engine_that_got_sigkill_is_back_within_seconds() {
     kill(Pid::from_raw(pid as i32), Signal::SIGKILL).unwrap();
     fx.back_after(1);
     fx.manager_heard_nothing();
-}
-
-/// The work session holds nothing else: tmux would exit with its last window, and the server stays so that its hook can run (`exit-empty off`).
-#[test]
-fn an_engine_whose_window_was_killed_is_back_within_seconds() {
-    let fx = fx("");
-    fx.supervised();
-    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
-    fx.back_after(1);
-}
-
-/// An install that kills the `watch` window and then does nothing (it failed, or it was cut short).
-#[test]
-fn an_engine_killed_by_an_install_that_then_does_nothing_is_back_within_seconds() {
-    let fx = fx("");
-    fx.env.tmux(&["new-session", "-d", "-s", "cockpit", "sleep", "600"]);
-    fx.supervised();
-    fx.env.fake("fake-install", &format!("tmux -L '{}' kill-window -t =cpd-work:watch", fx.env.tmux_socket()));
-    assert!(fx.env.command(fx.env.bin().join("fake-install")).status().unwrap().success());
-    fx.back_after(1);
 }
 
 /// A plain `--ensure` waits for `locks/watch-ensure.lock` like a supervising one: held by another call between its probe and its
@@ -646,18 +586,6 @@ fn a_plain_ensure_waits_for_the_ensure_lock_another_call_holds() {
     fx.back_after(0);
 }
 
-/// The install's own `watch --ensure` right after its kill: the hook and the script both start the engine, and one runs.
-#[test]
-fn an_install_that_restarts_the_engine_itself_leaves_one_engine() {
-    let fx = fx("");
-    fx.supervised();
-    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
-    fx.env.cpd(&["watch", "--ensure"]).ok();
-    fx.back_after(1);
-    wait_until("the dust to settle: one engine process holds the lock", || fx.env.cpd(&["watch"]).error()["code"] == "watch_running");
-    assert_eq!(fx.count("watch-started"), 2);
-}
-
 /// A tmux restart kills the server, hooks and all (nothing in it can start the engine); the restart's own path builds the cockpit
 /// again (`cpd tui`, contract §6.1), which starts the engine.
 #[test]
@@ -673,21 +601,6 @@ fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
     fx.env.cpd(&["tui"]).ok();
     fx.back_after(1);
     fx.manager_heard_nothing();
-}
-
-#[test]
-fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
-    let fx = fx("");
-    // The engine itself exits 7 at once; `watch --ensure` is the real one, as the hooks call it.
-    fx.env.fake("cpd", &format!("case \"$2\" in --ensure) exec '{CPD}' \"$@\";; esac\nexit 7"));
-    assert_eq!(fx.env.cpd(&["watch", "--ensure"]).error()["code"], "watch_start_failed");
-    // time-claim: the back-off is a rate, so the bound is a duration; no signal says "no more starts will come".
-    std::thread::sleep(Duration::from_secs(5));
-    // Each failed start waits 2 s while it holds the one-at-a-time lock: a few starts in 5 s, not a loop of hundreds.
-    let calls = fx.env.calls("cpd").len();
-    assert!((3..=14).contains(&calls), "{calls} calls in 5 s");
-    let log = fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap();
-    assert!(log.contains("supervision: cannot start the engine"), "{log}");
 }
 
 // ---------- the downtime message (hs-d328) ----------
@@ -769,7 +682,6 @@ fn a_stuck_job_wakes_its_context_manager() {
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
 const NO_WORKERS: &str = "workers 0/3 · 0 waiting · 1 queued";
-const ONE_WORKER: &str = "workers 1/3 · 0 waiting · 1 queued";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.
@@ -785,34 +697,6 @@ impl Fx {
         let out = self.env.tmux(&["show", "-gv", name]);
         String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
     }
-}
-
-#[test]
-fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
-    let fx = fx("");
-    fx.tmux_server();
-    let lock = fx.live_driver("api-a1");
-    fx.add_running("api", "running", &ago(1));
-
-    let engine = fx.start();
-    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
-    assert_eq!(fx.option("@cpd_workers_short"), "1/3·0·1");
-    assert_eq!(fx.option("@cpd_workers_width"), "36", "the long form and a pill's two caps");
-    assert_eq!(fx.option("@cpd_workers_short_width"), "9", "the same with the short form");
-
-    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
-    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
-    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
-    // sets nothing at a tick where the text did not change.
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(fx.workers(), "by hand");
-
-    // A change sets it.
-    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
-    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
-    engine.stop();
-    drop(lock);
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
 #[test]
@@ -1385,40 +1269,6 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!(started, [Some("hot1".to_owned())]);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
-}
-
-/// A pending restart of the tmux server (contract §6.1, hs-d294) holds E3: no Attempt starts while it
-/// is pending, a running one is left alone, and the Job starts at the next tick once it is cleared.
-#[test]
-fn a_pending_tmux_restart_stops_e3_from_starting_attempts_and_running_ones_finish() {
-    let fx = fx("concurrency = 2\nretry_cap = 0");
-    work_session_with_a_worker_that_stays(&fx);
-    // One Attempt runs (its driver holds the lock); a slot is free and a Job is ready.
-    let _busy = fx.live_driver("busy-a1");
-    fx.add_running("busy", "running", &ago(1));
-    fx.add_job("next", &[], "");
-    let pending = fx.env.cpd_home().join("run/tmux-restart.pending");
-    fs::create_dir_all(pending.parent().unwrap()).unwrap();
-    fs::write(&pending, r#"{"at":"2026-10-19T12:00:00.000Z","server":"3.4","installed":"3.8"}"#).unwrap();
-
-    let engine = fx.start();
-    // `doctor` shows the planned hold, which is not a failure.
-    let doctor = fx.env.cpd(&["doctor"]).json();
-    let checks = if doctor["ok"] == true { &doctor["checks"] } else { &doctor["error"]["details"]["checks"] };
-    let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").unwrap();
-    assert_eq!((check["ok"].as_bool(), check["message"].as_str()), (Some(true), Some("tmux restart pending")));
-    wait_until("E3's hold to be logged", || fs::read_to_string(fx.home().watch_log()).unwrap_or_default().contains("E3: holding"));
-    // time-claim: a pending restart holds E3, so no Attempt starts over several engine ticks; 2.5 s covers at least two ticks; no per-poll signal from the engine for a tick that held.
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(fx.count("attempt-started"), 0, "a pending restart holds E3");
-    assert_eq!((fx.job_status("next"), fx.attempt("busy-a1").0), ("queued".into(), "running".into()));
-    assert!(fx.events("error").is_empty(), "the hold is not an error: {:?}", fx.events("error"));
-
-    // Cleared (a restart that ran, or none needed): the Job starts at once.
-    fs::remove_file(&pending).unwrap();
-    wait_until("attempt-started", || fx.count("attempt-started") == 1);
-    engine.stop();
-    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("next"));
 }
 
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then

@@ -518,6 +518,7 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()]);
     // Keyed by its GitHub URL; git still reaches the local repo.
     env.git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/clone.git"]);
+    env.repo_policy("acme", "clone", "");
     env.git(&clone, &["config", &format!("url.{}.insteadOf", origin.display()), "https://github.com/acme/clone.git"]);
     // From a subdirectory of a linked worktree: the repo is the main worktree.
     let linked = env.root().join("repos").join("clone-linked");
@@ -1343,10 +1344,7 @@ fn lock_refusals_change_nothing() {
     env.git(&repo, &["branch", "-D", "cpd/pay/pay"]);
 
     // pre-start fails: the worktree and branch are removed.
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/wt.toml"), "pre-start = \"echo setting up; exit 3\"\n").unwrap();
-    env.git(&repo, &["add", "-A"]);
-    env.git(&repo, &["commit", "-q", "-m", "setup"]);
+    env.repo_policy("acme", "pay", "[hooks]\npre-start = \"echo setting up; exit 3\"\n");
     let error = refused(&lock(), "setup_failed", 1);
     assert_eq!(error["details"]["log"], home(&env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
     assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));
