@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentSession, DefaultResourceLoader, type ExtensionFactory, type McpExtensionOptions, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { notify } from "./fake.ts";
 
 /** A real pi 1.3.0 SDK session with an inline extension factory set (docs/sdk.md "Codemode and MCP"), in a temporary agent directory and cwd. No network, no model call. */
 
@@ -31,6 +32,7 @@ export function harness(): Harness {
   const disposers: (() => void)[] = [];
   const createTransport: CreateTransport = (entry, dir) => {
     transports.push({ name: entry.name, config: entry.config, cwd: dir });
+    notify();
     return {
       start: () => Promise.reject(new Error("fake transport: never connects")),
       send: () => Promise.reject(new Error("fake transport: never connects")),
