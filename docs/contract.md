@@ -3561,7 +3561,7 @@ Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). 
 
 ### 8.3 Policies
 
-A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). Policies have three scopes in precedence order (most specific wins): the built-in default, the machine scope, the owner scope, and the repo scope. The machine is never part of the key, but the host of the process (§8.2 `host`), so a policy resolves the same for every key on one machine and differently across machines (hs-d9, hs-d12).
+A **policy** says how cpd and its agents work for one GitHub owner or repo: what cpd's commands do where the owners differ, and what the agents are told (hs-d288; design `docs/research/policy-architecture.md` Option 1, evidence `docs/research/repo-policy.md`; where they differ, the decisions cited here win). Policies have three scopes in precedence order (most specific wins): the built-in default, the machine scope, the owner scope, and the repo scope. The machine is never part of the key, but the machine, whether the same one or different across runs, so a policy resolves the same for every key on one machine and differently across machines (hs-d9, hs-d12).
 
 #### Model
 
