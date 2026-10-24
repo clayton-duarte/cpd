@@ -14,6 +14,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::lock::WatchLock;
 use super::log::Log;
+use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, workers};
 use cpd_core::clock;
@@ -54,6 +55,8 @@ pub(super) struct Engine {
     catalog: Option<Catalog>,
     /// When E5's last `pr poll` ended.
     pub last_poll_end: Option<Instant>,
+    /// E5's `pr poll` in flight.
+    pub poll: Option<PollRun>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
     /// The `@cpd_workers` texts and width last set on the tmux server.
@@ -84,6 +87,7 @@ impl Engine {
             report: Report::new(Duration::from_secs(60)),
             catalog: None,
             last_poll_end: None,
+            poll: None,
             paused_until: None,
             workers: None,
             distill_started: HashMap::new(),
@@ -116,14 +120,15 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5, E7–E11, E12 and E13 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 14] = [
+        let steps: [fn(&mut Engine); 15] = [
             restart::drain,
             workers::run,
             escalations::run,
             liveness::run,
             schedule::run,
             open::run,
-            pr::run,
+            pr::reap,
+            pr::start,
             start_prs,
             inbox::run,
             distill::run,
@@ -388,6 +393,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         report,
         catalog: None,
         last_poll_end: None,
+        poll: None,
         paused_until: None,
         workers: None,
         distill_started: HashMap::new(),
@@ -405,9 +411,12 @@ pub(super) fn run() -> Result<Output, CpdError> {
         }
         engine.tick();
         // The next tick comes at the earlier of a tick from now and E5's due time (§3.7): a poll is not held to a tick boundary.
-        let next = (began + tick).min(pr::due(&engine, began));
+        // A finished poll is applied at the next nap, and E5's due time starts then.
         while !stopping() {
-            let left = next.saturating_duration_since(Instant::now());
+            pr::reap(&mut engine);
+            let now = Instant::now();
+            let next = pr::due(&engine, began).map_or(began + tick, |due| (began + tick).min(due));
+            let left = next.saturating_duration_since(now);
             if left.is_zero() {
                 break;
             }
@@ -416,6 +425,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     }
 
     engine.log.line("stopping on a signal");
+    pr::finish(&mut engine);
     // `watch-stopped` is not lost to a busy store: it waits for as long as that lasts.
     engine.store.persist(persist(&engine.home, || false)?);
     if let Err(e) = watch_event(&mut engine.store, NewEvent::watch_stopped(format!("The engine stopped (pid {pid}). Start it: cpd watch --ensure"), pid)) {
