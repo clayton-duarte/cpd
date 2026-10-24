@@ -227,7 +227,7 @@ fn f10_an_origin_that_does_not_parse_is_repo_unkeyed() {
 }
 
 #[test]
-fn f11_owner_unknown_is_gone() {
+fn f11_owner_unconfirmed_replaces_the_old_refusal() {
     let env = env();
     unconfirmed(&show(&env, "nobody"));
     new_ctx(&env, "c0", "acme", false).ok();
