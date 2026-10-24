@@ -41,4 +41,6 @@ pub mod spec;
 pub mod store;
 
 #[cfg(test)]
+mod clock_tests;
+#[cfg(test)]
 mod pill_tests;

@@ -5,6 +5,8 @@
 //! Every module reads through [`Store::read`] and writes through
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
+#[cfg(test)]
+mod clock_tests;
 mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
@@ -26,6 +28,7 @@ use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
 
+use crate::clock::Clock;
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -195,12 +198,20 @@ impl Store {
     /// `locks/store.lock` (§1.4): SQLite answers concurrent switches to WAL of
     /// a new database with `SQLITE_BUSY` at once, without its busy handler.
     pub fn open(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
-        Store::open_with(home, busy_ms, &Catalog::BUILT_IN)
+        Store::open_catalog(home, busy_ms, &Catalog::BUILT_IN)
+    }
+
+    /// [`Store::open`] on `clock`: every wait of the open (the busy back-off of `persist`, the retry of the setup
+    /// lock) sleeps on it. With `persist`, a transient error is waited out as [`Store::open_persistent`] does,
+    /// until [`lock::MIGRATION_WAIT_CEILING`] of `clock` time has passed since the first one; then the error returns.
+    pub fn open_with(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, persist: Option<Persist>) -> Result<Store, CpdError> {
+        let _ = (clock, home, busy_ms, persist);
+        todo!("stub: the Clock Job implements Store::open_with")
     }
 
     /// [`Store::open`] with the migrations and the pinned hash of `catalog`:
     /// the tests' way to run migrations this binary does not have.
-    fn open_with(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
+    fn open_catalog(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
         let path = home.db();
         let setup = setup_lock(home, busy_ms)?;
         // An opener that waited out a migration may meet its holder still finishing (closing its connection, which
@@ -1016,7 +1027,7 @@ mod tests {
         let probe_home = CpdHome::resolve(Some(probe.path().join("cpd").into()), None).unwrap();
         // Even a refusal of `home` is judged against the pinned hash of a fresh store with the same list.
         let pinned = canonical_hash(&verdict::reference_database(&Catalog { named, schema_hash: "" }, &probe_home)?)?;
-        Store::open_with(home, 5000, &Catalog { named, schema_hash: &pinned })
+        Store::open_catalog(home, 5000, &Catalog { named, schema_hash: &pinned })
     }
 
     pub(super) fn applied(store: &mut Store) -> Vec<(String, i64, i64)> {
