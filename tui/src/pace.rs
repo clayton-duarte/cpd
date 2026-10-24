@@ -68,6 +68,11 @@ impl<T: Send + 'static> Reads<T> {
         Reads { queue, results }
     }
 
+    /// Like [`Reads::new`]; the reader thread calls `waker.read_done()` after each result it sends.
+    pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
+        todo!()
+    }
+
     /// Ask for `job` to run on the reader thread.
     pub fn request(&mut self, job: impl FnOnce() -> T + Send + 'static) {
         let (lock, wake) = &*self.queue;
