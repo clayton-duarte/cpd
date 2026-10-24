@@ -39,9 +39,12 @@ pub(crate) const ANOTHER_OWNER: &str = "Another owner…";
 pub(crate) const USE_FALLBACK: &str = "Use clayton-duarte's policy";
 
 /// The check of the typed owner login: the login lowercased, or why it is refused (a GitHub login, 1-39 characters).
-/// Stub: the owner input's validator.
-pub(crate) fn check_login(_text: &str) -> Result<String, String> {
-    todo!("validate a GitHub login")
+pub(crate) fn check_login(text: &str) -> Result<String, String> {
+    let ok = !text.is_empty()
+        && text.chars().count() <= 39
+        && !text.starts_with('-')
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok { Ok(text.to_ascii_lowercase()) } else { Err(format!("{text:?} is not a GitHub login.")) }
 }
 
 /// The refusal of a title no id can be derived from.
@@ -168,11 +171,20 @@ impl Question {
                 match ask.answer(text)? {
                     Step::Run(action) => Ok(Some(action)),
                     Step::Owner { id, title: name, owners } => {
-                        let owner = dialogs.select(title, "Owner:", &owners).map_err(failed)?;
-                        if owner.as_deref() == Some(ANOTHER_OWNER) {
-                            todo!("ask the login in an input, then confirm an unknown one")
+                        let mut options = owners.clone();
+                        options.push(ANOTHER_OWNER.to_owned());
+                        let Some(owner) = dialogs.select(title, "Owner:", &options).map_err(failed)? else { return Ok(None) };
+                        if owner != ANOTHER_OWNER {
+                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
                         }
-                        Ok(owner.map(|owner| Action::NewContext { id, title: name, owner, confirm_fallback: false }))
+                        let Some(typed) = dialogs.input(title, "Owner login:", "", Validator::Name).map_err(failed)? else { return Ok(None) };
+                        let owner = check_login(&typed)?;
+                        if owners.contains(&owner) {
+                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
+                        }
+                        let text = format!("{owner} has no policy. cpd will use clayton-duarte's policy for it and link {owner}.toml to it.");
+                        let yes = dialogs.confirm(title, &text, USE_FALLBACK).map_err(failed)?;
+                        Ok(yes.then_some(Action::NewContext { id, title: name, owner, confirm_fallback: true }))
                     }
                 }
             }

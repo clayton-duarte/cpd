@@ -180,9 +180,12 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}"), "--by-user".into()]);
                 argv
             }
-            Action::NewContext { confirm_fallback: true, .. } => todo!("--confirm-fallback goes last in the argv"),
-            Action::NewContext { id, title, owner, .. } => {
-                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+            Action::NewContext { id, title, owner, confirm_fallback } => {
+                let mut argv = vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")];
+                if *confirm_fallback {
+                    argv.push("--confirm-fallback".into());
+                }
+                argv
             }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
