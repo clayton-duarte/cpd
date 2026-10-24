@@ -281,7 +281,7 @@ fn a_rerun_writes_nothing_and_calls_nothing() {
     let (events_before, calls) = (env.query::<i64>("SELECT count(*) FROM events"), env.calls("gh").len());
 
     let again = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
-    assert_eq!(again, json!({"ok": true, "cancelled": [], "closed_prs": [], "closed": [], "archived": [], "already": true}));
+    assert_eq!(again, json!({"ok": true, "cancelled": [], "closed_prs": [], "closed": [], "archived": [], "left_open": [], "already": true}));
     assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
     assert_eq!(env.calls("gh").len(), calls);
 }
