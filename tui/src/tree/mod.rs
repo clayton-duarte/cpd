@@ -59,6 +59,16 @@ pub(crate) use view::layout_sample;
 
 #[cfg(test)]
 mod fixture;
+#[cfg(test)]
+mod needs_tests;
+
+/// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is `!view.tree.inbox.is_empty()` (an
+/// age text is on screen), `at` is `None` (the safety read covers the engine's lock, a snooze's end and the merge marker).
+// Stub: the Job views-impl implements it, uses it in `event_loop` and removes this allow.
+#[allow(dead_code)]
+fn needs(_view: &View) -> crate::pump::Needs {
+    todo!()
+}
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
