@@ -457,7 +457,7 @@ pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<Repo
     if repo_owner != owner {
         return Err(owner_mismatch(&owner, &repo_owner));
     }
-    resolve(&env.home, &PolicyKey::Repo(owner, name.clone()))?;
+    resolve(&env.home, &env.config.host, &PolicyKey::Repo(owner, name.clone()))?;
     Ok(name)
 }
 

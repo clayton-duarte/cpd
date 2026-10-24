@@ -1,27 +1,11 @@
-//! The core the tree and plan loops share (commands.md §17, rules R3 and R4): clock-aligned pacing and the reader
-//! thread's one-at-a-time, newest-wins queue.
+//! The core the view loops share (commands.md §17, rule R4): the reader thread's one-at-a-time, newest-wins queue.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-
-/// One frame of the spinner, in ms (the clock of [`crate::palette::frame`]).
-const FRAME_MS: u64 = 100;
-
-/// How long to wait from `now_ms` (Unix ms) to the next 100 ms frame boundary of the clock: 1..=100 ms.
-pub fn wait_for_next_frame(now_ms: u64) -> Duration {
-    Duration::from_millis(FRAME_MS - now_ms % FRAME_MS)
-}
-
-/// [`wait_for_next_frame`] from the system clock now.
-pub fn wait_now() -> Duration {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-    wait_for_next_frame(now)
-}
 
 type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
 
@@ -38,11 +22,8 @@ pub struct Reads<T> {
 }
 
 impl<T: Send + 'static> Reads<T> {
-    pub fn new() -> Self {
-        Self::spawn(None)
-    }
-
-    fn spawn(waker: Option<crate::pump::Waker>) -> Self {
+    /// The reader thread calls `waker.read_done()` after each result it sends.
+    pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
         let queue = Arc::new((Mutex::new(Queue { waiting: None, closed: false }), Condvar::new()));
         let (send, results): (Sender<T>, Receiver<T>) = mpsc::channel();
         let shared = Arc::clone(&queue);
@@ -66,18 +47,11 @@ impl<T: Send + 'static> Reads<T> {
                     if send.send(job()).is_err() {
                         return;
                     }
-                    if let Some(w) = &waker {
-                        w.read_done();
-                    }
+                    waker.read_done();
                 }
             })
             .expect("spawn the reader thread");
         Reads { queue, results }
-    }
-
-    /// Like [`Reads::new`]; the reader thread calls `waker.read_done()` after each result it sends.
-    pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
-        Self::spawn(Some(waker))
     }
 
     /// Ask for `job` to run on the reader thread.

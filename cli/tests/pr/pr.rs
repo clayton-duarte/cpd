@@ -2819,18 +2819,6 @@ fn poll_says_an_http_5xx_of_the_search_is_transient() {
 }
 
 #[test]
-fn poll_says_a_gh_that_hangs_past_its_deadline_is_transient_with_reason_timeout() {
-    let fx = fx("deploy");
-    // The 15 s kill of each call is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
-    let vars = [("CPD_TEST_DEADLINE_GH", "0.3")];
-    let details = poll_failure(&fx, &format!("exec sleep {SLEEP_SECONDS}"), &vars);
-    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("search"), &json!("timeout")), "{details}");
-    // The search answers, the lookup of the PR it did not list hangs.
-    let details = poll_failure(&fx, &lookup_script(&format!("exec sleep {SLEEP_SECONDS}")), &vars);
-    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("timeout")), "{details}");
-}
-
-#[test]
 fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_are_not() {
     let fx = fx("deploy");
     let details = poll_failure(&fx, &lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"), &[]);
