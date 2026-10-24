@@ -164,11 +164,6 @@ impl CpdHome {
         self.locks_dir().join(format!("check-{plan}--{attempt}.lock"))
     }
 
-    /// `locks/plannotator-ports.lock`: held while a Plan's plannotator port is assigned (contract §6.5).
-    pub fn plannotator_ports_lock(&self) -> PathBuf {
-        self.locks_dir().join("plannotator-ports.lock")
-    }
-
     /// `locks/distill-<context>.lock`: held by the Context's one distill run (contract §4.6).
     pub fn distill_lock(&self, context: &ContextId) -> PathBuf {
         self.locks_dir().join(format!("distill-{context}.lock"))
@@ -339,11 +334,6 @@ impl CpdHome {
         }
     }
 
-    /// `run/<plan>/plannotator-port`: the Plan's plannotator port, one line (contract §6.5).
-    pub fn plannotator_port(&self, plan: &PlanId) -> PathBuf {
-        self.plan_dir(plan).join("plannotator-port")
-    }
-
     /// `run/<plan>/logs/<attempt>.<hook>.log`: the full output of a hook run.
     pub fn hook_log(&self, plan: &PlanId, attempt: &AttemptId, hook: Hook) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("{attempt}.{}.log", hook.as_str()))
@@ -425,9 +415,7 @@ mod tests {
             h.attempt_lock(&plan(), &attempt()),
             p("/h/.cpd/locks/attempt-pay-4521--api-schema-a2.lock")
         );
-        assert_eq!(h.plannotator_ports_lock(), p("/h/.cpd/locks/plannotator-ports.lock"));
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
-        assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
         assert_eq!(h.attempt_infra(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/attempts/api-schema-a2.infra"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
         assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));

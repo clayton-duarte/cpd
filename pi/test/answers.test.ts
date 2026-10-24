@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -50,8 +49,7 @@ test("the Fixture's default respond calls are the answers", async () => {
   const f = new Fixture();
   try {
     for (const key of KEYS) {
-      const written = JSON.parse(readFileSync(join(f.dir, "resp", `${key}.json`), "utf8")) as { stdout: unknown };
-      assert.deepEqual(written.stdout, entry(key), `the Fixture answers ${key} with its own copy`);
+      assert.deepEqual(f.cpd.responses.get(key)?.stdout, entry(key), `the Fixture answers ${key} with its own copy`);
     }
   } finally {
     await f.close();
