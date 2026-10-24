@@ -67,7 +67,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("status", target.status));
     }
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, &target)? };
+    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, &ctx.config.host, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
@@ -126,7 +126,7 @@ fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(store: &mut Store, home: &CpdHome, target: &Attempt) -> Result<Stepped, CpdError> {
+fn steps(store: &mut Store, home: &CpdHome, host: &crate::ids::HostName, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -162,7 +162,7 @@ fn steps(store: &mut Store, home: &CpdHome, target: &Attempt) -> Result<Stepped,
             crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
-        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
+        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, host, &target.plan, target.job.as_str()))?;
         let touched = git::tamper::touched_protected_over(repo, &old, &policy.protected.paths, &base_refs, &old, &target.branch)?;
         if !touched.is_empty() {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));

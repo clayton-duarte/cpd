@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::exposure::ScopeKind;
 use crate::config::RepoTests;
 use crate::git::hooks::Pipeline;
 use crate::session::Role;
@@ -302,6 +303,8 @@ impl Set for ProtectedSet {
 pub enum Source {
     /// cpd's compiled default.
     Default,
+    /// The machine file, by realpath.
+    Machine(PathBuf),
     /// The owner file, by realpath.
     Owner(PathBuf),
     /// The repo file, by realpath.
@@ -314,6 +317,7 @@ impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Source::Default => f.write_str("default"),
+            Source::Machine(p) => write!(f, "machine:{}", p.display()),
             Source::Owner(p) => write!(f, "owner:{}", p.display()),
             Source::Repo(p) => write!(f, "repo:{}", p.display()),
             Source::DefaultNoOwnerFile => f.write_str("default (no owner file)"),
@@ -348,7 +352,7 @@ impl std::fmt::Display for DomainSource {
 macro_rules! domains {
     (@name $field:ident) => { stringify!($field) };
     (@name $field:ident $name:literal) => { $name };
-    ($($field:ident $(= $name:literal)?, $variant:ident, [$($role:ident),*], $value:ty, $set:ty;)+) => {
+    ($($field:ident $(= $name:literal)?, $variant:ident, [$($role:ident),*], [$($scope:ident),+], $value:ty, $set:ty;)+) => {
         /// A domain of the policy.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub enum Domain {
@@ -378,6 +382,13 @@ macro_rules! domains {
             }
         }
 
+        /// The scopes a domain may be set in, fixed in code (contract §8.3 "Exposure").
+        pub fn exposure(domain: Domain) -> &'static [ScopeKind] {
+            match domain {
+                $(Domain::$variant => &[$(ScopeKind::$scope),+],)+
+            }
+        }
+
         /// A policy: every domain has a value, always.
         #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -402,6 +413,13 @@ macro_rules! domains {
         }
 
         impl Scope {
+            /// Whether the file has a table for `domain`.
+            pub(super) fn sets(&self, domain: Domain) -> bool {
+                match domain {
+                    $(Domain::$variant => self.$field.is_some(),)+
+                }
+            }
+
             /// cpd's default from its own scope file: it must set everything.
             pub(super) fn complete(&self) -> Option<Policy> {
                 Some(Policy { $($field: self.$field.as_ref()?.complete()?,)+ })
@@ -438,15 +456,15 @@ macro_rules! domains {
 }
 
 domains! {
-    pr, Pr, [Lead, Worker], Pr, PrSet;
-    deploy, Deploy, [Lead], Text, TextSet;
-    code, Code, [Lead, Worker], Text, TextSet;
-    tests, Tests, [Lead, Worker], Text, TextSet;
-    monitor, Monitor, [Lead, Worker], Text, TextSet;
-    instructions, Instructions, [Manager, Lead, Worker], Text, TextSet;
-    hooks, Hooks, [], Hooks, HooksSet;
-    test_commands = "test-commands", TestCommands, [], Option<RepoTests>, TestCommandsSet;
-    protected, Protected, [], Protected, ProtectedSet;
+    pr, Pr, [Lead, Worker], [Machine, Owner, Repo], Pr, PrSet;
+    deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
+    code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
+    tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
+    monitor, Monitor, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
+    instructions, Instructions, [Manager, Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
+    hooks, Hooks, [], [Repo], Hooks, HooksSet;
+    test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
+    protected, Protected, [], [Repo], Protected, ProtectedSet;
 }
 
 impl Sources {

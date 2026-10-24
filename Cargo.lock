@@ -300,6 +300,7 @@ name = "cpd"
 version = "0.13.45"
 dependencies = [
  "clap",
+ "cpd",
  "cpd-core",
  "cpd-engine",
  "cpd-tui",

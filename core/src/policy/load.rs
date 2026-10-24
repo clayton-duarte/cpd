@@ -14,6 +14,7 @@ use toml::de::{DeTable, DeValue};
 use toml::{Table, Value};
 
 use super::domain::{HooksSet, Scope};
+use super::exposure::{check_exposed, ScopeKind};
 use crate::git::hooks::parse_value;
 use crate::error::{CpdError, ErrorCode};
 
@@ -112,8 +113,9 @@ fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
 }
 
 /// Reads and parses the scope file at `path`: `Ok(None)` when it does not
-/// exist (a dangling symlink included), else its realpath and its [`Scope`].
-pub fn load_scope_file(path: &Path) -> Result<Option<(PathBuf, Scope)>, CpdError> {
+/// exist (a dangling symlink included), else its realpath and its [`Scope`], which sets only
+/// domains exposed to `kind`.
+pub fn load_scope_file(path: &Path, kind: ScopeKind) -> Result<Option<(PathBuf, Scope)>, CpdError> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
@@ -130,5 +132,6 @@ pub fn load_scope_file(path: &Path) -> Result<Option<(PathBuf, Scope)>, CpdError
             .with("file", path.display().to_string())
     })?;
     let scope = parse_scope(&real, &text)?;
+    check_exposed(&real, kind, &scope)?;
     Ok(Some((real, scope)))
 }

@@ -119,11 +119,11 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   |---|---|
   | `engine` | `watch*`, `doctor` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy`, `config`, `repo_config`, `repo_cmds` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds` |
   | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
 
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
@@ -285,6 +285,38 @@ The full suite is the Gate's (hs-d338): while you edit, run only the tests your 
 - Otherwise it runs that command and exits with nextest's status. Inside its selection it runs every test: it never skips, filters or weakens one (the selection is by files; the Gate runs everything).
 - A Worker session refuses an unfiltered full run (hs-d338), so where the fallback in 4 applies there, `scripts/test-changed --dry-run` shows the full command and you run the tests you changed by name (`-p cpd --test <area> -E 'test(/^<module>::/)'`, see Running cargo).
 - **bacon** (a developer's tool, not a dependency; the Gate does not use it) watches the checkout and reruns on save. `bacon.toml` at the root has two jobs: `fast`, the default (`bacon`), runs `scripts/test-changed`; `full` (`bacon full`) runs the whole suite, `scripts/cargo.sh nextest run --workspace`. Both go through `scripts/cargo.sh`, so sccache and the `$CARGO` lookup apply.
+
+### The fake tmux
+
+A stand-in `tmux` binary on the test's PATH; the adapter (`core/src/host/tmux.rs`) runs `tmux -u -L <socket> -f /dev/null <args>` from PATH with `TMUX_TMPDIR`, and `TestEnv::command` puts `env.bin()` first on PATH, so a `tmux` there wins for the built `cpd`, for the scripts the tests run and for the engine; no product change.
+
+**Where it lives and how it is built.** Cargo mechanics (verified on a scratch crate with cargo 1.99.1; `cargo nextest` through `scripts/cargo.sh` not yet run, so check it first): the `cpd` package (`cli/`) owns every integration test and has `src/lib.rs`; the fake lives in it as lib module `cli/src/fakes/` behind the cargo feature `fakes`, with `[[bin]] name = "fake-tmux" path = "src/bin/fake-tmux.rs" required-features = ["fakes"]` and `[dev-dependencies] cpd = { path = ".", features = ["fakes"] }`; `cargo build` (the quick check, the install) never builds it, `cargo test`/nextest build it and set `CARGO_BIN_EXE_fake-tmux` for the package's integration tests. The 7 in-crate tests that use `Tmux::with_program` scripts keep their own script (core, engine and tui unit tests cannot see another package's bin).
+
+**The API.** Decided API (document it exactly; a Worker may only refine names with a reason in the docs): lib module `cpd::fakes::tmux` (feature `fakes`) exposes:
+- `pub struct Invocation { pub argv: Vec<String> /* everything after `tmux`, including the global flags `-u -L <socket> -f <file>` */, pub tmux_tmpdir: PathBuf, pub cwd: PathBuf, pub env: Vec<(String, String)> /* the caller's environment: PATH and the rest, for `run-shell` */ }`
+- `pub struct Outcome { pub code: i32, pub stdout: String, pub stderr: String }`
+- `pub fn run(inv: &Invocation) -> Outcome` (the one entry the bin and the unit tests share: no global state, no process exit, no sleep)
+- A read-only view `pub struct State` with `State::open(tmux_tmpdir: &Path, socket: &str) -> Option<State>` (None while no server exists) and `panes()`, `pane_env(pane_id)`, `options()`, `keys(pane_id)`, `popups()`, `hooks()`, `sessions()`, `windows()` returning plain structs (`Pane { id, window, session, argv, cwd, dead, dead_status, options }` and the like).
+
+**State.** One SQLite file `$TMUX_TMPDIR/fake-tmux-<socket>.db` (journal mode DELETE), one `BEGIN IMMEDIATE` per client call so concurrent calls serialise as on a real server; no daemon, so nothing can leak; a pane is a row and no process is ever started for it; `kill-server` deletes the file, so the next call says `no server running on <TMUX_TMPDIR>/tmux-<uid>/<socket>` (exit 1) at once. Tables: server (options, hooks, bindings, buffers, environment, version), sessions (`$n`), windows (`@n`), panes (`%n`, argv, cwd, env, dead, dead_status), pane_options (`@cpd_*`), keys (send-keys log per pane), screen (text a test seeds), popups, clients. Ids count from 0 and are never reused.
+
+**Fidelity the adapter depends on.** Exit 1 means `no` for `has-session`; the stderr line `no server running on `; a missing TMUX_TMPDIR directory is refused; the global flags `-u -L -f` are accepted and `-L` picks the DB; a `;`-chained argv (the adapter prefixes 24 server options to `new-session`); `-P -F '#{window_id} #{pane_id}'` prints `@n %n`; `display -p '#{pid}'` prints `$FAKE_TMUX_SERVER_PID` (set by `TestEnv::command` to the test process's own pid: UNVERIFIED that macOS libproc and Linux /proc/<pid>/exe then resolve to the test binary: say so in the doc); `#{version}` prints a version the adapter accepts.
+
+**The 35 subcommands.** Product: list-sessions has-session new-session set set-environment show display display-message new-window split-window swap-pane rename-window respawn-pane(-k) kill-pane kill-window kill-server list-panes set-hook bind select-pane resize-pane list-clients display-popup set-buffer run-shell attach; tests add: capture-pane send-keys list-windows show-environment list-keys show-hooks show-buffer resize-window select-layout. Options: `set -g|-s|-gq|-as|-p|-t`, `show -gv|-gqv`, the `@cpd_*` user options, `remain-on-exit`; `-t` forms `=name`, `=name:`, `%p`, `@w`, `=`. An unknown subcommand exits 1 with `unknown command: <name>`.
+
+**Not modelled: rendering.** `capture-pane -p` returns the text a test seeded with `__ctl screen`, `send-keys` appends to the pane's key log, `display-popup` and `display-menu` record argv and client and return 0 at once, `attach` records the client and exits 0; `STATUS_FORMAT`, `BORDER_FORMAT` and pane geometry are tmux's to compute, so no test asserts them (the live cockpit and scripts/preview-tui.sh are the eye check).
+
+**Formats.** A small evaluator for `#{var}`, `#{@opt}`, `#{?c,a,b}`, `#{==:a,b}`, `#{!=:}`, `#{&&:}`, `#{||:}`, `#{!:}`, `#{n:}` and the variables the product reads (pane_id window_id session_name session_id window_name pane_pid pane_dead pane_dead_status pane_index pane_width client_name client_width client_height client_activity version pid hook_window_name); `#{e|..}` arithmetic and `#{P/i/:}` loops are stored, never evaluated.
+
+**Hooks and `run-shell`, synchronously.** `set-hook -g` stores the command string; an event the fake itself causes fires the hook inside the same client call, before it returns (`__ctl pane-exit %3 --status 1` marks the pane dead and fires `pane-died` with the pane as target; `kill-window` and `kill-pane` fire `window-unlinked` with `hook_window_name`); a hook is a tmux command string run by a small interpreter for `if -F`, `run-shell [-b]`, `respawn-pane`, `select-pane`, `send-keys -M` and `;`; `run-shell -b` runs in the FOREGROUND with `sh -c`, the caller's PATH and the format-expanded command, and the call returns when it ends; a hook that recurses into the fake is bounded to one nesting level (a deeper one is queued and drained before the call returns). Bindings (`MouseDown1Status`) are stored; `__ctl click status <range>` fires one.
+
+**Control surface for tests.** `__ctl` is reachable only as the first argument and is never produced by the product: `__ctl pane-exit <pane> --status <n>`, `__ctl screen <pane> <text>`, `__ctl click status <range>`; and the Rust view `env.tmux_state()` (returns `State`, reads the SQLite file, starts no process; added to `TestEnv` by the harness).
+
+**Harness.** `TestEnv::fake_tmux()` symlinks `env.bin()/tmux` to the built `fake-tmux` (one symlink, no copy); the env's teardown removes `fake-tmux-<socket>*` from the tmux dir when that dir is outside the env (the `/tmp` fallback of `env.tmux_tmpdir()`), because it never removes tmux's own directory.
+
+**How it is pinned (and nothing else pins it).** About 110 unit tests of `run` in `cli/src/fakes/tmux/tests/` and about 40 tests in `cli/tests/tooling/fake_tmux.rs` (exec of the built bin, concurrent calls, hook order, and every public `Tmux::*` method of the adapter run against the fake through `Tmux::with_program`), written from tmux(1) as read and from the adapter's own expectations; never compared with a real tmux (no real tmux in any test); recorded real output may be pasted as a literal in a test but is never regenerated in the Gate.
+
+**The real-tmux harness** (`env.tmux`, `env.tmux_socket()`, `TestEnv::kill_tmux_server`, `real_tmux()`, the reaper's tmux stop, the Gate leak check's tmux part) stays as it is and is marked `legacy: removed by the last PR of Plan tests-mock`.
 
 ## Debuginfo
 

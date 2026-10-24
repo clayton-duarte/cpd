@@ -140,7 +140,7 @@ fn hooks_test_commands_and_protected_in_an_owner_file_are_policy_invalid() {
         let error = refused(&run, "policy_invalid", 1);
         assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/owners/acme.toml"), "{domain}: {run:?}");
         assert_eq!(error["details"]["key"], domain, "{run:?}");
-        assert!(error["message"].as_str().unwrap().contains("repo file"), "{domain}: {run:?}");
+        assert!(error["message"].as_str().unwrap().contains("exposed to repo only"), "{domain}: {run:?}");
     }
 }
 

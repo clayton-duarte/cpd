@@ -332,7 +332,7 @@ impl Driver {
             timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
             log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
         };
-        let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.plan, &job.key)) {
+        let policy = match self.store.read(|conn| crate::pr::policy_of_job(conn, &self.home, &self.config.host, &self.plan, &job.key)) {
             Ok(policy) => policy,
             Err(e) => {
                 let detail = format!("Reading the policy of the PR failed: {}", e.message());
@@ -376,7 +376,7 @@ impl Driver {
         // A3: the Spec, the Session, the Worker.
         log("A3: rendering the Spec and starting the Worker");
         let home = &self.home;
-        let spec = self.store.read(|conn| worker::render_spec(conn, home, target, job))?;
+        let spec = self.store.read(|conn| worker::render_spec(conn, home, &self.config.host, target, job))?;
         let session = SessionId::new_v4();
         self.register(target, &session, &spec, fork.as_ref().map(|f| &f.session))?;
         let pane = worker::start(&self.home, &self.config, self.catalog(), &self.tmux, dirs, target, &session, fork.as_ref())?;
