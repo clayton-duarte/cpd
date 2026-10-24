@@ -176,7 +176,7 @@ fn show(
     let pump = Pump::new(ratatui::crossterm::event::read);
     let mut reads = Reads::<Read>::with_waker(pump.waker());
     let watch = read::watch::Watch::start(opener.home.root(), pump.waker());
-    let (every, watch_note) = match &watch {
+    let (every, watch_failure) = match &watch {
         Ok(_) => (pump::SAFETY, None),
         Err(e) => (
             Duration::from_millis(u64::from(poll_ms)),
@@ -200,7 +200,7 @@ fn show(
             terminal.draw(|f| {
                 pane = f.area();
                 last = Some(draw(f, pane, &prs, &machine, scroll, frame));
-                if let Some(error) = error.as_ref().or(watch_note.as_ref()) {
+                if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
