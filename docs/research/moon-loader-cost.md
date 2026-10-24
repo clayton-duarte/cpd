@@ -274,9 +274,28 @@ Tree view, release build:
 
 Load averages at the end of the runs, release: 1 min 2.16-5.39, 5 min 3.17-4.04, 15 min 3.19-3.41 (min-max over the runs).
 
-Debug build: not yet measured (this file is committed after the release runs; the debug tables follow).
+Debug build (`target/debug/cpd`):
 
-Notes on the tables: plan D draws nothing in its 30 s window (the one draw is at the start, before the 3 s wait), so its CPU reads 0.00 % (0 ticks of CPU in 30 s, resolution 0.03 %). Tree D redraws once a second by design (the Inbox ages), so its gaps are 1000 ms and its "skipped" is not a stutter measure (every draw is a new frame). The `layout_us` was 0 on every draw of the window in every run (`parse.py` printed `layout_nonzero` 0 in all 18 runs of the table): the layout is not part of the frame cost in this build; `read_us` p50 is 0.001 ms where there is one (a hand-over only). The JSON line of each run is in /tmp/cpd-moon-anim/results/<profile>.jsonl.
+Plan view, debug build:
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| plan A1 | 3 | 350 (350-350) | 100.0 / 101.4 / 102.7 | 0 (0.0 %) | 0 of 349 | 4.83 (4.74-5.06) | 1.18 / 1.36 | 19 | 3.20 |
+| plan A2 | 3 | 350 (350-350) | 99.9 / 101.7 / 104.5 | 0 (0.0 %) | 0 of 349 | 4.83 (4.74-4.94) | 1.12 / 1.55 | 19 | 2.86 |
+| plan B | 3 | 350 (350-350) | 100.0 / 101.8 / 103.7 | 0 (0.0 %) | 0 of 349 | 4.80 (4.37-4.83) | 1.15 / 1.49 | 19 | 3.09 |
+| plan D | 1 | 0 | - / - / - | 0 (- %) | 0 of 0 | 0.03 (0.03-0.03) | - / - | 19 | 2.71 |
+
+Tree view, debug build:
+
+| scenario | runs | draws | gap p50 / p95 / max ms | > 150 ms | skipped frames | CPU % median (range) | draw_us p50 / p95 ms | nice | load 1 min |
+|---|---|---|---|---|---|---|---|---|---|
+| tree A | 3 | 350 (350-351) | 100.2 / 100.5 / 101.6 | 0 (0.0 %) | 0 of 349 | 2.14 (2.00-2.23) | 1.93 / 2.32 | 19 | 2.87 |
+| tree B | 3 | 350 (350-350) | 100.2 / 100.4 / 100.9 | 0 (0.0 %) | 0 of 349 | 2.17 (1.89-2.23) | 1.91 / 2.41 | 19 | 2.51 |
+| tree D | 1 | 36 | 1000.0 / 1000.5 / 1001.3 | 36 (100.0 %) | 35 of 35 | 0.26 (0.26-0.26) | 1.95 / 2.31 | 19 | 2.42 |
+
+Load averages at the end of the runs, debug: 1 min 2.13-3.83, 5 min 2.77-3.46, 15 min 3.03-3.32 (min-max over the runs).
+
+Notes on the tables: plan D draws nothing in its 30 s window (the one draw is at the start, before the 3 s wait), so its CPU is 0.00 % (release, 0 ticks in 30 s) and 0.03 % (debug, 1 tick); one tick is 0.03 % over 30 s. Tree D redraws once a second by design (the Inbox ages), so its gaps are 1000 ms and its "skipped" is not a stutter measure (every draw is a new frame). The `layout_us` was 0 on every draw of the window in every run (`parse.py` printed `layout_nonzero` 0 in all 34 runs of the table): the layout is not part of the frame cost in this build; `read_us` p50 is 0.001 ms where there is one (a hand-over only). The JSON line of each run is in /tmp/cpd-moon-anim/results/<profile>.jsonl.
 
 
 ## Left
