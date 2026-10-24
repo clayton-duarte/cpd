@@ -20,12 +20,21 @@ fn persist() -> Option<Persist> {
     Some(Persist::new(|_| {}, || false))
 }
 
-/// A database, created by a first open, that a second connection of the test holds with `BEGIN EXCLUSIVE`.
+/// A new database file (no first open: rollback-journal mode) that a connection of the test holds with `BEGIN EXCLUSIVE`,
+/// as when another process is still setting it up: a plain open is busy.
 fn held_database(home: &CpdHome) -> Connection {
-    drop(Store::open(home, 5000).unwrap());
+    std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
     let other = Connection::open(home.db()).unwrap();
     other.execute_batch("BEGIN EXCLUSIVE").unwrap();
     other
+}
+
+#[test]
+fn a_held_database_is_busy_for_a_plain_open_at_once() {
+    let (_dir, home) = home();
+    let _held = held_database(&home);
+    let err = Store::open(&home, 0).err().expect("held");
+    assert!(is_transient(&err), "{err:?}");
 }
 
 #[test]
