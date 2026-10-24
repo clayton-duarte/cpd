@@ -839,7 +839,7 @@ The adapter counts blocking reasons, of two kinds, and reports `blocked` while a
 
 ### 3.7 The engine, `cpd watch`
 
-One per machine (D5). Every `tick_seconds` (a decimal, for example `0.2`; minimum `0.1`), the **tmux restart's drain** (below), then E1–E12 in order. The engine sleeps until the earlier of its next tick and E5's due time, so E5 is not held back to a tick boundary:
+One per machine (D5). Every `tick_seconds` (a decimal, for example `0.2`; minimum `0.1`), the **tmux restart's drain** (below), then E1–E12 in order. The engine sleeps until the earlier of its next tick and E5's due time, so E5 is not held back to a tick boundary. **A tick starts at the earliest of:** `tick_seconds` after the previous tick began (the longest wait); **E5's due time** (when a poll comes due); and **500 ms after the previous tick began** when another process other than the engine committed to the store since that tick began (the engine detects this by comparing SQLite's `PRAGMA data_version` at each 100 ms nap; the engine's own commits do not trigger it). So the Inbox (E8) and the PR starts (E7) follow another process's commit within 500 ms plus the tick's own time, and ticks come at most twice a second. `tick_seconds` stays the longest wait, and the time-only rules (job-stuck, a snooze's end, liveness) keep it.
 
 | Step | What it does |
 |---|---|
