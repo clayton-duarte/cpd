@@ -26,6 +26,7 @@ impl Waker {
     pub fn commit(&self) {
         let _ = self.send.send(Signal::Commit);
     }
+    /// A result is ready to take: a read's or a background job's.
     pub fn read_done(&self) {
         let _ = self.send.send(Signal::Read);
     }

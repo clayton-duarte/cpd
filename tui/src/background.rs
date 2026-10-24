@@ -13,19 +13,19 @@ pub(crate) struct Background<T> {
     rx: Receiver<T>,
     queued: VecDeque<Job<T>>,
     running: bool,
+    waker: Option<crate::pump::Waker>,
 }
 
 impl<T: Send + 'static> Background<T> {
     pub(crate) fn new() -> Background<T> {
         let (tx, rx) = channel();
-        Background { tx, rx, queued: VecDeque::new(), running: false }
+        Background { tx, rx, queued: VecDeque::new(), running: false, waker: None }
     }
 
-    // stub: the Job views-impl-background replaces it with the real one and removes this allow
+    // not called until the loops convert
     #[allow(dead_code)]
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Background<T> {
-        let _ = waker;
-        todo!()
+        Background { waker: Some(waker), ..Background::new() }
     }
 
     /// Runs `job` on a thread, after the jobs submitted before it.
@@ -49,9 +49,13 @@ impl<T: Send + 'static> Background<T> {
         let Some(job) = self.queued.pop_front() else { return };
         self.running = true;
         let tx = self.tx.clone();
+        let waker = self.waker.clone();
         std::thread::spawn(move || {
             // the receiver is gone only when the view ended
             let _ = tx.send(job());
+            if let Some(waker) = waker {
+                waker.read_done();
+            }
         });
     }
 }
