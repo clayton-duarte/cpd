@@ -409,18 +409,20 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         let about: Vec<Value> = events.iter().filter(|e| e["attempt"] == attempt).cloned().collect();
         assert_eq!(
             kinds(&about),
-            ["attempt-started", "attempt-status", "attempt-status", "job-merged"],
+            ["attempt-started", "attempt-status", "attempt-status", "attempt-status", "attempt-status", "job-merged"],
             "{key}: {about:?}"
         );
         assert_eq!(about[0]["data"], json!({"number": 1, "tier": tier, "origin": "ladder"}));
         assert_eq!(about[1]["data"], json!({"from": "starting", "to": "running"}));
-        assert_eq!(about[2]["data"], json!({"from": "running", "to": "merging"}));
+        assert_eq!(about[2]["data"], json!({"check": "start", "from": "running", "to": "running", "what": "checks"}));
+        assert_eq!(about[3]["data"], json!({"check": "end", "from": "running", "to": "running", "what": "checks"}));
+        assert_eq!(about[4]["data"], json!({"from": "running", "to": "merging"}));
         let submit = submitted(&fx.repo.parent().unwrap().join(format!("submit-{attempt}.json")));
         assert_eq!(submit["submitted"], true, "{submit}");
         let shown = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"].clone();
         assert_eq!((&shown["status"], &shown["outcome"], &shown["cause"]), (&json!("ended"), &json!("merged"), &json!("merged")));
-        assert_eq!(shown["merged_sha"], about[3]["data"]["sha"]);
-        assert_eq!(about[3]["data"]["tier"], tier);
+        assert_eq!(shown["merged_sha"], about[5]["data"]["sha"]);
+        assert_eq!(about[5]["data"]["tier"], tier);
         // The Worker's Session: registered, started in the work session.
         let worker = shown["worker_session"].as_str().unwrap();
         let mine: Vec<&Value> = events.iter().filter(|e| e["session"] == worker).collect();

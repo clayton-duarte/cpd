@@ -17,7 +17,7 @@ use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
-use super::shared::{AttemptStatus, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
+use super::shared::{AttemptStatus, SHOWN_STATUS, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
 
 /// What the Dispatch column shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -308,7 +308,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
 
 fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT plan, id, tier, status, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, plan, id",
+        &format!("SELECT a.plan, a.id, a.tier, {SHOWN_STATUS}, a.started_at FROM attempts a WHERE a.status <> 'ended' ORDER BY a.started_at, a.plan, a.id"),
     )?;
     let mut rows = stmt.query([])?;
     let mut held = Vec::new();
