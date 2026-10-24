@@ -43,6 +43,8 @@ mod scroll_tests;
 #[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
+mod new_context_tests;
+#[cfg(test)]
 mod counter_tests;
 mod menu;
 mod rows;

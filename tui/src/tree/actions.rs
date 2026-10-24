@@ -420,6 +420,10 @@ impl Dialogs for Runner {
         dialog::confirm(&self.tmux, title, text, yes_label)
     }
 
+    fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
+        dialog::select(&self.tmux, title, prompt, options)
+    }
+
     fn preview(&self, what: &Deletable) -> Result<Value, String> {
         command(&Action::Delete { what: what.clone(), yes: false })
     }
