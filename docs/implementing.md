@@ -125,6 +125,46 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `tui` | `tui*`, `inbox*`, `bare` |
   | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
 
+### Time in tests
+
+A test never sleeps, polls on the wall clock, or measures real elapsed time (no `thread::sleep`, no `Instant::now()` bound); it runs the product's timer on virtual time. `host::limit::limit(name, default)` (CPD_TEST_<NAME>, debug builds) stays only for what a built binary alone can reach, until PR final.
+
+Decided API: in `core/src/clock.rs` (cpd-core, always compiled, no feature):
+```rust
+pub trait Clock: Send + Sync {
+    fn now(&self) -> std::time::Instant;
+    fn sleep(&self, d: std::time::Duration);
+}
+
+pub struct SystemClock;  // Instant::now, thread::sleep
+
+pub struct ManualClock {
+    fn new() -> Self;
+    fn advance(&self, d: Duration);
+    fn elapsed(&self) -> Duration;
+    fn naps(&self) -> Vec<Duration>;
+}  // Clone shares one state; now() is construction Instant + virtual elapsed; sleep(d) records d, advances by d, returns at once
+```
+The Clock trait lives in core, not behind a feature, so core, engine and tui unit tests use it. A timer is passed as `&dyn Clock` (later `Ports::clock`) at the entry of the loop that waits, never a global. Every existing public signature stays: the Clock-taking form is added beside it (`<name>_with(clock, ...)`) and the old one calls it with `&SystemClock`, so no caller changes and behaviour is identical.
+
+A ManualClock is for waits that END BY TIME (a deadline, a back-off, a nap count). A loop whose condition is changed by something outside the test (a real child process exiting, a file another process writes) must not run on a ManualClock: its virtual naps would burn the whole deadline before the event happens; such a loop is tested after its ports exist (PRs port-run, port-tmux, ports), where the event is an in-memory state change.
+
+Timers and which PR gives each the seam:
+
+| Timer | PR |
+|---|---|
+| Store busy back-off 500 ms doubling to 5 s, flock retry 20 ms, migration wait 10 minutes | this PR (`Store::open_with`) |
+| Subprocess deadline poll 10 ms, grace 5 s, drain 1 s (`host::deadline`) | port-run |
+| Git 60 s/300 s (`git::run`) | port-git |
+| Tmux 10 s | port-tmux |
+| Driver poll, lead poll, kill pause, wait log, stall grace (`driver`) | ports |
+| Session file poll, watchdog, pane wait, retry, stop poll, chat idle, adapter watchdog, fork source poll (`session`) | ports |
+| Slot poll, ask poll, plan cancel wait, distill poll, PR rebase guard, engine tick, everything in `engine/src/watch` | ports |
+
+Do not describe code that this PR has not created yet as present: this PR creates `Clock`, `SystemClock`, `ManualClock` and `Store::open_with`.
+
+**Update (pro-d29):** `cpd slot` is being removed by the Plan `no-slots` of Context cpd; if the `slot poll` named above is gone from main when you start, skip it.
+
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
