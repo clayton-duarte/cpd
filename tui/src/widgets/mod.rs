@@ -102,6 +102,27 @@ const KINDS: &[Kind] = &[
     Kind::JobCancelled,
 ];
 
+/// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
+/// each side.
+pub(crate) fn menu_pane(pane: Rect) -> Rect {
+    pane.inner(Margin::new(1, 0))
+}
+
+/// The layout test's sample (`layout_tests`): a menu of a PR row opened by a right click at `case`'s cell in a `width` x
+/// `height` pane, drawn as the view draws it, in [`menu_pane`].
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::Case) -> crate::layout_tests::Sample {
+    use crate::layout_tests::{Case, Kind, Placed, Sample};
+    let Case::Menu(click) = case else { panic!("the Deploy column samples a menu") };
+    let (column, row) = click.at(width, height);
+    let menu = Menu::new(vec![column::PrItem::Merge, column::PrItem::CopyLink, column::PrItem::GoToLead], Position::new(column, row));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| menu.draw_at(f, menu_pane(f.area()), 0)).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let boxes = vec![Placed { name: "deploy menu", kind: Kind::Full, rect: menu.rect(menu_pane(pane)), exempt: Vec::new() }];
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 /// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
 /// `log` is `run/tui/widgets.log`.
 struct Opener<'a> {
@@ -170,7 +191,7 @@ fn show(
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
-                    open.menu.draw_at(f, pane.inner(Margin::new(1, 0)), frame);
+                    open.menu.draw_at(f, menu_pane(pane), frame);
                 }
             })?;
             (redraw, drawn_frame) = (false, Some(frame));
@@ -184,7 +205,7 @@ fn show(
                 // an open menu takes every key and click
                 let outcome = match &event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => open.menu.key(*key),
-                    Event::Mouse(m) => open.menu.mouse(pane.inner(Margin::new(1, 0)), *m),
+                    Event::Mouse(m) => open.menu.mouse(menu_pane(pane), *m),
                     _ => Outcome::Stay,
                 };
                 match outcome {

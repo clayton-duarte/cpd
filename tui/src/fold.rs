@@ -2,8 +2,8 @@
 //! the cockpit that folds, drawn here and nowhere else. The tree's Contexts and the Inbox's list use it; a popup or a
 //! Plan view panel that folds would too.
 //!
-//! - **Margins** (hs-d476): the widget has **one empty row above and one below**, and none inside: [`Fold::drawn`]
-//!   draws them. The tree's Contexts and the Inbox each draw their own margins (two blocks share one empty row).
+//! - **Margins** (hs-d476): the widget has **one empty row above and one below**, and none inside. The tree's Contexts and the
+//!   Inbox (`crate::box_widget`, `Walls::Rail`) each draw their own margins (two blocks share one empty row).
 //! - **Expanded:** the title row `╭` and the title's content (bold), for example `╭󰪥 building-cpd`; each content row
 //!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
 //!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰬬 collapse`.
@@ -12,10 +12,10 @@
 //! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `│`, `╰`). The toggle's arrow and word
 //!   (`expand`, `collapse`) are `palette::toggle_text()` (colour 7, hs-d534). The content is not muted, and a row the widget
 //!   wraps keeps its own glyphs and colours: the fold only adds muted lines.
-//! - **Toggling:** only the closing row toggles. [`Drawn::toggle`] is its row, so the caller can hit-test it; a click
+//! - **Toggling:** only the closing row toggles. The caller hit-tests its row; a click
 //!   on the title row keeps the caller's own action.
 //!
-//! Pure: it only builds lines.
+//! Pure: it only builds lines (the Inbox's rows are laid out by `box_widget`).
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -72,52 +72,34 @@ pub fn done(text: &str) -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{TERMINATOR} {text}"), muted()))
 }
 
+/// A closing row without its `╰`, `width` cells at most: what `Walls::Rail { closing }` takes (the widget draws the corner, and
+/// the row ends before the rail's right padding).
+pub fn after_corner(line: Line<'static>, width: usize) -> Line<'static> {
+    let mut left = width;
+    let mut spans = Vec::new();
+    let mut corner = true;
+    for span in line.spans {
+        let text = if corner { span.content.strip_prefix(CLOSE).unwrap_or(&span.content).to_owned() } else { span.content.to_string() };
+        corner = false;
+        let mut cut = String::new();
+        for c in text.chars() {
+            let w = Span::raw(c.to_string()).width();
+            if w > left {
+                break;
+            }
+            left -= w;
+            cut.push(c);
+        }
+        spans.push(Span::styled(cut, span.style));
+    }
+    Line { spans, ..line }
+}
+
 /// A content row: the muted `branch`, then the content as it is.
 pub fn content(branch: &str, line: Line<'static>) -> Line<'static> {
     let mut spans = vec![Span::styled(branch.to_owned(), muted())];
     spans.extend(line.spans);
     Line { spans, ..line }
-}
-
-/// One block that folds.
-pub struct Fold {
-    title: Line<'static>,
-    content: Vec<Line<'static>>,
-    expanded: bool,
-    branch: &'static str,
-}
-
-/// The lines of a block, top to bottom.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Drawn {
-    /// The empty row above, the title, the content (only when expanded), the toggle row and the empty row below.
-    pub lines: Vec<Line<'static>>,
-    /// The row, in `lines`, of the `╰󰬦 expand` / `╰󰬬 collapse` closing row: the only one that toggles (the empty row below follows).
-    pub toggle: usize,
-}
-
-impl Fold {
-    /// A block with the title `title` (what follows the `╭`) and `content`, led by [`BRANCH`].
-    pub fn new(title: Line<'static>, content: Vec<Line<'static>>, expanded: bool) -> Fold {
-        Fold { title, content, expanded, branch: BRANCH }
-    }
-
-    /// The same, its content led by `branch`.
-    pub fn branch(self, branch: &'static str) -> Fold {
-        Fold { branch, ..self }
-    }
-
-    /// The lines to draw, between the margin rows. Folded, the content is not drawn.
-    pub fn drawn(self) -> Drawn {
-        let mut lines = vec![Line::default(), title(self.title)];
-        if self.expanded {
-            lines.extend(self.content.into_iter().map(|line| content(self.branch, line)));
-        }
-        lines.push(toggle(self.expanded));
-        let toggle = lines.len() - 1;
-        lines.push(Line::default());
-        Drawn { toggle, lines }
-    }
 }
 
 #[cfg(test)]
@@ -128,72 +110,12 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
-    fn words(drawn: &Drawn) -> Vec<String> {
-        drawn.lines.iter().map(flat).collect()
-    }
-
-    /// `drawn` without its margin rows: the block itself.
-    fn bare(mut drawn: Drawn) -> Drawn {
-        drawn.lines.pop();
-        drawn.lines.remove(0);
-        drawn.toggle -= 1;
-        drawn
-    }
-
-    fn block(expanded: bool) -> Drawn {
-        Fold::new(Line::from("󰪥 building-cpd"), vec![Line::from("󰪥 cross-repo"), Line::from("󰝦 other")], expanded).branch(TREE_BRANCH).drawn()
-    }
-
     fn is_muted(span: &Span<'_>) -> bool {
         span.style.fg == palette::muted_text().fg
     }
 
     fn bold(span: &Span<'_>) -> bool {
         span.style.add_modifier.contains(Modifier::BOLD)
-    }
-
-    #[test]
-    fn expanded_is_the_title_the_content_straight_against_its_branch_and_one_collapse() {
-        let drawn = bare(block(true));
-        assert_eq!(words(&drawn), ["╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", format!("╰{UP} collapse").as_str()]);
-        assert_eq!(drawn.toggle, 3, "the toggle is the last row, and the only one");
-    }
-
-    #[test]
-    fn folded_is_the_title_and_expand_and_the_content_is_not_drawn() {
-        let drawn = bare(Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn());
-        assert_eq!(words(&drawn), ["╭󰝦 dotfiles", format!("╰{DOWN} expand").as_str()]);
-        assert_eq!(drawn.toggle, 1);
-    }
-
-    #[test]
-    fn the_lines_and_the_words_are_muted_the_content_is_not_and_the_title_is_bold() {
-        let drawn = bare(block(true));
-        let title = &drawn.lines[0].spans;
-        assert_eq!(title[0].content, "╭");
-        assert!(is_muted(&title[0]) && !bold(&title[0]), "the `╭` is muted");
-        assert!(title[1..].iter().all(|s| bold(s) && !is_muted(s)), "the title's content is bold, not muted");
-        for row in [1, 2] {
-            let spans = &drawn.lines[row].spans;
-            assert_eq!(spans[0].content, "├─");
-            assert!(is_muted(&spans[0]), "the branch is muted");
-            assert!(spans[1..].iter().all(|s| !is_muted(s) && s.style.fg.is_none()), "the content is not");
-        }
-        assert!(is_muted(&drawn.lines[3].spans[0]), "the closing row's corner is muted");
-        assert!(!drawn.lines[3].spans.iter().any(bold));
-        assert!(is_muted(&bare(Fold::new(Line::from("x"), vec![], false).drawn()).lines[1].spans[0]), "folded too");
-    }
-
-    #[test]
-    fn a_block_with_no_glyph_leads_its_content_with_the_plain_line() {
-        let drawn = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn());
-        assert_eq!(words(&drawn), ["╭t", "│ one", format!("╰{UP} collapse").as_str()]);
-        assert!(is_muted(&drawn.lines[1].spans[0]));
-    }
-
-    #[test]
-    fn a_block_with_no_content_is_its_title_and_its_toggle() {
-        assert_eq!(words(&bare(Fold::new(Line::from("x"), vec![], true).drawn())), ["╭x", format!("╰{UP} collapse").as_str()]);
     }
 
     #[test]
@@ -230,54 +152,11 @@ mod tests {
     }
 
     #[test]
-    fn a_block_drawn_by_the_widget_ends_in_one_arrow_row_and_the_toggle_is_that_row() {
-        let folded = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], false).drawn());
-        assert_eq!(folded.lines.last().map(flat), Some(format!("╰{DOWN} expand")));
-        let open = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn());
-        assert_eq!(open.lines.last().map(flat), Some(format!("╰{UP} collapse")));
-        assert_eq!(open.toggle, open.lines.len() - 1);
-        assert_eq!(open.lines.iter().filter(|l| flat(l).starts_with('╰')).count(), 1, "one closing row");
-    }
-
-    #[test]
-    fn a_wrapped_row_keeps_its_own_glyphs_and_colours_and_the_fold_only_adds_muted_lines() {
-        let item = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(palette::NEEDS_YOU, palette::fg(palette::Meaning::Failed)),
-            Span::raw(" cpd#129 merge conflict"),
-            Span::styled("  18m", palette::muted_text()),
-        ]);
-        let drawn = bare(Fold::new(Line::from("title"), vec![item.clone()], true).drawn());
-        let row = &drawn.lines[1];
-        assert_eq!(flat(row), format!("│ {} cpd#129 merge conflict  18m", palette::NEEDS_YOU));
-        assert_eq!(row.spans[0].content, BRANCH);
-        assert!(is_muted(&row.spans[0]), "only the line is added, and it is muted");
-        assert_eq!(&row.spans[1..], &item.spans[..], "every span of the wrapped row, as it was: glyph, colour and age");
-        assert_eq!(row.spans[2].style.fg, Some(palette::color(palette::Meaning::Failed)), "the icon keeps its colour");
-        assert_eq!(flat(drawn.lines.last().unwrap()), format!("╰{UP} collapse"), "and the block closes with the arrow row");
-    }
-
-    // ---- spacing v2 (commands.md §17, "Collapsible blocks"; hs-d476): red until `Fold::drawn` adds the margins ----
-
-    #[test]
-    fn a_collapsible_widget_has_one_empty_row_above_and_one_below_and_none_inside() {
-        assert_eq!(
-            words(&block(true)),
-            ["", "╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", format!("╰{UP} collapse").as_str(), ""],
-            "expanded: the margins, and the body with no vertical spacing"
-        );
-        let folded = Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn();
-        assert_eq!(words(&folded), ["", "╭󰝦 dotfiles", format!("╰{DOWN} expand").as_str(), ""], "folded");
-        assert_eq!(words(&Fold::new(Line::from("x"), vec![], true).drawn()), ["", "╭x", format!("╰{UP} collapse").as_str(), ""], "no content");
-    }
-
-    #[test]
-    fn the_toggle_is_still_the_closing_row_between_the_margins() {
-        for (drawn, word) in [(block(true), "collapse"), (block(false), "expand")] {
-            assert_eq!(drawn.toggle, drawn.lines.len() - 2, "the row above the bottom margin");
-            assert!(flat(&drawn.lines[drawn.toggle]).starts_with('╰') && flat(&drawn.lines[drawn.toggle]).ends_with(word), "{:?}", words(&drawn));
-            assert_eq!(drawn.lines.iter().filter(|l| flat(l).starts_with('╰')).count(), 1, "one closing row");
-            assert_eq!(drawn.lines.iter().filter(|l| l.spans.iter().all(|s| s.content.is_empty())).count(), 2, "two empty rows, no more");
-        }
+    fn after_corner_drops_the_corner_and_cuts_the_row_to_the_room() {
+        assert_eq!(flat(&after_corner(toggle(true), 80)), format!("{UP} collapse"));
+        assert_eq!(flat(&after_corner(toggle(true), 4)), format!("{UP} co"));
+        assert_eq!(flat(&after_corner(plain(), 80)), TERMINATOR);
+        assert_eq!(flat(&after_corner(plain(), 0)), "");
+        assert!(after_corner(toggle(false), 80).spans[1].style == palette::toggle_text(), "the styles are kept");
     }
 }

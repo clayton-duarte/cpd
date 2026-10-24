@@ -121,7 +121,7 @@ fn no_dim_or_reversed_outside_the_palette() {
             if path.is_dir() {
                 walk(&path, dim, reversed, offenders);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let pins_blocks = ["pill_colours.rs", "pill_tests.rs", "view_tests.rs", "input_tests.rs", "input_box_tests.rs"];
+                let pins_blocks = ["pill_colours.rs", "pill_tests.rs", "view_tests.rs", "input_tests.rs", "input_box_tests.rs", "layout_tests.rs", "box_widget_tests.rs"];
                 let in_palette = path.file_name().is_some_and(|n| n == "palette.rs" || pins_blocks.iter().any(|p| n == *p)) || path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette"));
                 let text = std::fs::read_to_string(&path).unwrap();
                 for (n, line) in text.lines().enumerate() {

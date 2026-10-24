@@ -1057,11 +1057,11 @@ fn the_tree_follows_the_archive_events() {
 
 /// The screen has a menu box whose first inner row (after the top border) holds `first`.
 fn menu_open(screen: &[String], first: &str) -> bool {
-    screen.windows(2).any(|w| w[0].contains('┌') && w[0].contains('┐') && w[1].contains(&format!("│ {first}")))
+    screen.windows(2).any(|w| w[0].contains('╮') && w[1].contains(&format!("│ {first}")))
 }
 
 fn the_menu_is_closed(screen: &[String]) -> bool {
-    screen.iter().all(|r| !r.contains('┌') && !r.contains('┘'))
+    screen.iter().all(|r| !r.contains('╮') && !r.contains('╯'))
 }
 
 #[test]

@@ -17,12 +17,23 @@
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
+pub mod box_widget;
+#[cfg(test)]
+mod box_widget_tests;
 mod chat;
 mod cockpit;
 pub mod dialog;
 pub mod fold;
 mod history;
 mod input_box;
+#[cfg(test)]
+mod layout_dialog_tests;
+#[cfg(test)]
+mod layout_popup_tests;
+#[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
+mod layout_tree_tests;
 #[cfg(test)]
 mod input_box_tests;
 pub mod link;
