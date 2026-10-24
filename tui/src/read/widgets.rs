@@ -98,6 +98,8 @@ pub struct OpenPr {
     /// The owner's Lead Session has `state = 'working'` (contract §3.6): the row shows the Lead's working dot (hs-d335).
     /// False when no Plan owns it.
     pub lead_working: bool,
+    /// The Plan of the owner has a failed Job (the tree's `failed` rule).
+    pub plan_failed: bool,
     /// A merge of this pull request is running (a live merge marker, `crate::merge::marker`, hs-d495): the merge
     /// button shows the spinner instead and cannot be clicked. Not in the store: the view sets it from the markers.
     pub merging: bool,
@@ -220,7 +222,11 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                            WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
                 (SELECT j.status FROM prs r JOIN jobs j ON j.plan = r.plan AND j.pr = r.key
                   WHERE r.pull_request = q.id AND j.kind = 'update' AND j.status IN ('queued', 'running')
-                  ORDER BY j.status = 'running' DESC LIMIT 1)
+                  ORDER BY j.status = 'running' DESC LIMIT 1),
+                -- the tree's rule (`PlanHead::counts.failed >= 1`, tree.rs): the Plan has a failed Job
+                COALESCE((SELECT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'failed')
+                            FROM prs r JOIN plans p ON p.id = r.plan
+                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
@@ -246,6 +252,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             lead_working: r.get(11)?,
+            plan_failed: r.get(13)?,
             merging: false,
             repo,
             number,

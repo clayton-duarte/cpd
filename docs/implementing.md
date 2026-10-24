@@ -163,10 +163,11 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
 | `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
 | `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui` (history); crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
+| `notify` 8.2 | `default-features = false`, `macos_fsevent` | the commit watcher of the views (`tui/src/read/watch.rs`): one watcher on the store's directory, so a view wakes on a commit instead of polling |
 | `tui-tree-widget` 0.24 | | `TreeState`, the open and selected store for the `tree` view (`opened`, `selected`, `open`, `close`, `toggle`, `select`); the view paints rows from its own flat list |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
 
-Removed: `sha1` 0.10, which named the per-repo lock `repo-<sha1>.lock`; hs-d243 removed the lock (contract §1.4, §7), and with it `CpdHome::repo_lock` and the dependency (the one exception to the rule above, decided with the lock's removal).
+Removed: `sha1` 0.10, which named the per-repo lock `repo-<sha1>.lock`; hs-d243 removed the lock (contract §1.4, §7), and with it `CpdHome::repo_lock` and the dependency (the one exception to the rule above, decided with the lock's removal). `notify` is the one dependency added after the TUI Job, by decision of the User in Plan sync (hs-d595 part 3), added by that Plan's Job sync-tests-watch so the tests build; the rule stands for everything else.
 
 Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand in `ids`), an error-derive crate (`CpdError` is one struct), a hex crate (see `sha2`), `libc` (`nix` covers it), crossterm as a direct dependency (see `ratatui`).
 
