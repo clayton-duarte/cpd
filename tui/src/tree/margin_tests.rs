@@ -1,6 +1,7 @@
 //! The rail's spacing (commands.md §17, contract §6.1.1): a fold's rows end at column W-4 of the pane, the columns W-3 to
-//! W-1 being blank (the padding, the box's wall column, the margin). Red until the Inbox rows, its cue rows and the
-//! Context block's rows leave that room.
+//! W-1 being blank (the padding, the box's wall column, the margin).
+//!
+//! These pin the exact end column and the cut, which the layout rows (an upper bound only) do not.
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;

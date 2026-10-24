@@ -21,7 +21,7 @@ use cpd_core::store::Store;
 
 use super::tree::visible_items;
 use super::shared::{
-    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, bad_row, id, plan_heads, tier,
+    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, plan_heads, tier,
     value_enum,
 };
 
@@ -145,6 +145,8 @@ pub struct Pull {
     /// working dot beside the state (hs-d335).
     pub lead_working: bool,
     /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    /// `pull_requests.draft`.
+    pub draft: bool,
     pub update: Option<UpdateState>,
 }
 
@@ -299,7 +301,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
     }
     let mut stmt = conn.prepare(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
-                COALESCE(q.merge_state = 'clean', 0),
+                COALESCE(q.merge_state = 'clean', 0), COALESCE(q.draft, 0),
                 (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
@@ -312,7 +314,8 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
             (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
         let clean: bool = r.get(8)?;
-        let update: Option<String> = r.get(9)?;
+        let draft: bool = r.get(9)?;
+        let update: Option<String> = r.get(10)?;
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -335,6 +338,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     clean,
                     lead_working,
                     update: update_state(&what, update.as_deref())?,
+                    draft,
                 })
             })
             .transpose()?;
@@ -399,10 +403,10 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
 /// Every Attempt of the Plan by Job key, oldest first, with its Worker's state.
 fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<AttemptNode>>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT a.job, a.id, a.number, a.tier, a.origin, a.status, a.outcome, a.cause, a.started_at, a.submitted_at,
+        &format!("SELECT a.job, a.id, a.number, a.tier, a.origin, {SHOWN_STATUS}, a.outcome, a.cause, a.started_at, a.submitted_at,
                 a.ended_at, a.worker_session, s.state, s.state_label, s.state_at
            FROM attempts a LEFT JOIN sessions s ON s.id = a.worker_session
-          WHERE a.plan = ?1 ORDER BY a.job, a.number",
+          WHERE a.plan = ?1 ORDER BY a.job, a.number"),
     )?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut by_job: BTreeMap<String, Vec<AttemptNode>> = BTreeMap::new();

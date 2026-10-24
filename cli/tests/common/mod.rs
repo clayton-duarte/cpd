@@ -224,6 +224,8 @@ teardown() {
   stop_tmux
   # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
   [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
+  # The fake tmux's state files of this socket and the derived ones (`fake-tmux-<socket>.db*`, `fake-tmux-<socket>-*`).
+  rm -f "$tmuxdir/fake-tmux-$socket".db* "$tmuxdir/fake-tmux-$socket"-*
   rm -rf "$dir"
 }
 
@@ -796,6 +798,20 @@ impl TestEnv {
         fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
     }
 
+    /// Replaces the repo `<owner>/<name>`'s policy file (contract §8.3), creating its directories, with `toml`.
+    pub fn repo_policy(&self, owner: &str, name: &str, toml: &str) {
+        let dir = self.cpd_home().join("policy/repos").join(owner);
+        fs::create_dir_all(&dir).expect("create the repo policy directory");
+        fs::write(dir.join(format!("{name}.toml")), toml).expect("write the repo policy file");
+    }
+
+    /// A `keyed_repo` whose repo policy file is removed: its repo is unconfigured (`repo_unconfigured`).
+    pub fn unconfigured_repo(&self, name: &str) -> PathBuf {
+        let repo = self.keyed_repo(name);
+        let _ = fs::remove_file(self.cpd_home().join(format!("policy/repos/acme/{name}.toml")));
+        repo
+    }
+
     /// `$CPD_HOME` of every command run here (empty at first).
     pub fn cpd_home(&self) -> PathBuf {
         self.root().join("cpd-home")
@@ -857,6 +873,7 @@ impl TestEnv {
             .env("CPD_HOME", self.cpd_home())
             .env("HOME", self.home())
             .env("TMUX_TMPDIR", self.tmux_tmpdir())
+            .env("FAKE_TMUX_SERVER_PID", std::process::id().to_string())
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -1010,6 +1027,9 @@ impl TestEnv {
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+        if !self.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+            self.repo_policy("acme", &name, "");
+        }
         url
     }
 
@@ -1043,6 +1063,18 @@ impl TestEnv {
     /// `tmux -L <private socket> <args>` in this env.
     pub fn tmux(&self, args: &[&str]) -> Output {
         output(self.command("tmux").arg("-L").arg(&self.tmux_socket).args(args)).expect("run tmux")
+    }
+
+    /// Makes `tmux` on this env's PATH the fake tmux: a symlink `bin/tmux` to the built `fake-tmux`. Idempotent.
+    pub fn fake_tmux(&self) {
+        let link = self.bin().join("tmux");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_fake-tmux"), &link).expect("link bin/tmux to the fake tmux");
+    }
+
+    /// The fake's state of this env's socket (`None` while no server exists).
+    pub fn tmux_state(&self) -> Option<cpd::fakes::tmux::State> {
+        cpd::fakes::tmux::State::open(&self.tmux_tmpdir(), self.tmux_socket())
     }
 
     /// Installs `bin/<name>`: a shell script that records its argv (see

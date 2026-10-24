@@ -51,14 +51,14 @@ fn question(owners: &[&str]) -> Question {
 }
 
 fn new_context(id: &str, title: &str, owner: &str) -> Action {
-    Action::NewContext { id: ContextId::parse(id).unwrap(), title: title.into(), owner: owner.into() }
+    Action::NewContext { id: ContextId::parse(id).unwrap(), title: title.into(), owner: owner.into(), confirm_fallback: false }
 }
 
 #[test]
 fn the_owner_is_asked_in_a_select_popup_after_the_title_even_when_there_is_only_one() {
     let dialogs = Recording::new("Building cpd!", Ok(Some("clayton-duarte")));
     let action = question(&["clayton-duarte"]).ask(&dialogs);
-    assert_eq!(dialogs.log(), ["input | New Context | Title:", "select | New Context | Owner: | clayton-duarte"]);
+    assert_eq!(dialogs.log(), ["input | New Context | Title:", "select | New Context | Owner: | clayton-duarte, Another owner…"]);
     assert_eq!(action, Ok(Some(new_context("building-cpd", "Building cpd!", "clayton-duarte"))));
 }
 
@@ -66,7 +66,7 @@ fn the_owner_is_asked_in_a_select_popup_after_the_title_even_when_there_is_only_
 fn the_select_lists_every_owner_in_the_order_given_and_context_new_runs_with_the_chosen_one() {
     let dialogs = Recording::new("Building cpd!", Ok(Some("b")));
     let action = question(&["a", "b", "c"]).ask(&dialogs);
-    assert_eq!(dialogs.log()[1], "select | New Context | Owner: | a, b, c");
+    assert_eq!(dialogs.log()[1], "select | New Context | Owner: | a, b, c, Another owner…");
     assert_eq!(action, Ok(Some(new_context("building-cpd", "Building cpd!", "b"))));
 }
 

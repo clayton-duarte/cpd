@@ -1,6 +1,6 @@
-//! The hooks of `.config/wt.toml` (contract §7.3): `pre-start` (setup),
-//! `pre-commit` (the quick check) and `pre-merge` (the Gate), read from the
-//! worktree at the moment they run, rendered, run, and their output captured.
+//! The hooks of the PR's policy `hooks` domain (contract §7.3): `pre-start` (setup),
+//! `pre-commit` (the quick check) and `pre-merge` (the Gate), given as the
+//! hook's [`Pipeline`], rendered, run, and their output captured.
 //!
 //! What a result means (`setup_failed`, `check_failed`, `gate_failed`, …) is the
 //! caller's: [`HookOutcome`] only says how the hook ended.
@@ -22,14 +22,14 @@ use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
 
-pub use def::{HookCommand, Pipeline, load};
+pub use def::{HookCommand, Pipeline, parse_value};
 pub use exec::is_withheld;
 pub use template::{shell_escape, uses as template_uses};
 
 /// Why a hook could not be judged (contract §7.3, the last row of the result table).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HookError {
-    /// `hook_invalid`: `.config/wt.toml` is malformed or a template does not
+    /// `hook_invalid`: a template does not
     /// render (an undefined variable, an unknown filter); nothing ran.
     Invalid(String),
     /// Killed at the timeout.
@@ -90,7 +90,7 @@ pub struct Operation<'a> {
     pub branch: &'a str,
 }
 
-/// Reads `hook` from `<worktree>/.config/wt.toml`, renders and runs its commands
+/// Renders and runs the commands of `pipeline` (the policy's `hooks.<hook>`)
 /// in `worktree`, and writes the output to `log` as it arrives.
 ///
 /// `operation` is needed by every hook cpd runs; without it the `base` and
@@ -99,12 +99,13 @@ pub struct Operation<'a> {
 /// the template variables.
 pub fn run_hook(
     hook: Hook,
+    pipeline: &Pipeline,
     worktree: &Path,
     operation: Option<&Operation<'_>>,
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, None, operation, timeout, log, Log::Truncate)
+    run_with_branch(hook, pipeline, worktree, None, operation, timeout, log, Log::Truncate)
 }
 
 /// How a hook's log is opened: every hook starts its log afresh, except the Gate's `pre-merge`, whose log
@@ -129,6 +130,7 @@ pub struct Detached<'a> {
 /// instead of being read from `HEAD`, and `detached.env` is added to the environment.
 pub fn run_hook_as(
     hook: Hook,
+    pipeline: &Pipeline,
     worktree: &Path,
     detached: &Detached<'_>,
     operation: Option<&Operation<'_>>,
@@ -136,11 +138,12 @@ pub fn run_hook_as(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, Some(detached), operation, timeout, log, mode)
+    run_with_branch(hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
     hook: Hook,
+    pipeline: &Pipeline,
     worktree: &Path,
     detached: Option<&Detached<'_>>,
     operation: Option<&Operation<'_>>,
@@ -148,10 +151,6 @@ fn run_with_branch(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    let pipeline = match load(worktree, hook) {
-        Ok(p) => p,
-        Err(e) => return Ok(HookResult { outcome: HookOutcome::Error(e), tail: None }),
-    };
     if pipeline.is_empty() {
         return Ok(HookResult { outcome: HookOutcome::Passed, tail: None });
     }

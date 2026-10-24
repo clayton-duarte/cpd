@@ -27,6 +27,14 @@ pub fn parse_origin(url: &str) -> Option<(OwnerLogin, RepoName)> {
 /// (`repo_unkeyed` when it has none, or one that does not key it).
 pub fn repo_key(repo: &Path) -> Result<(OwnerLogin, RepoName), CpdError> {
     let url = origin_url(repo)?;
+    if url.is_none() {
+        // No remote: clayton-duarte's, named by the directory (contract §8.3).
+        let name = repo.file_name().and_then(|n| n.to_str()).and_then(|n| RepoName::parse(n).ok());
+        return match name {
+            Some(name) => Ok((OwnerLogin::parse(super::FALLBACK_OWNER).expect("a valid login"), name)),
+            None => Err(repo_unkeyed(None)),
+        };
+    }
     url.as_deref().and_then(parse_origin).ok_or_else(|| repo_unkeyed(url.as_deref()))
 }
 
@@ -93,19 +101,23 @@ mod tests {
 
     #[test]
     fn repo_key_reads_origin_and_refuses_with_the_url() {
-        let dir = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("my-repo");
+        std::fs::create_dir(&dir).unwrap();
         let git = |args: &[&str]| {
-            let st = std::process::Command::new("git").arg("-C").arg(dir.path()).args(args).status().unwrap();
+            let st = std::process::Command::new("git").arg("-C").arg(&dir).args(args).status().unwrap();
             assert!(st.success());
         };
         git(&["init", "-q"]);
-        let none = repo_key(dir.path()).unwrap_err();
-        assert_eq!((none.code(), none.exit().code()), (ErrorCode::RepoUnkeyed, 1));
-        assert_eq!(none.details()["url"], serde_json::Value::Null);
+        // No origin: clayton-duarte's, named by the directory.
+        let (o, n) = repo_key(&dir).unwrap();
+        assert_eq!((o.as_str(), n.as_str()), ("clayton-duarte", "my-repo"));
         git(&["remote", "add", "origin", "git@github-work:acme/x.git"]);
-        assert_eq!(repo_key(dir.path()).unwrap_err().details()["url"], "git@github-work:acme/x.git");
+        let bad = repo_key(&dir).unwrap_err();
+        assert_eq!((bad.code(), bad.exit().code()), (ErrorCode::RepoUnkeyed, 1));
+        assert_eq!(bad.details()["url"], "git@github-work:acme/x.git");
         git(&["remote", "set-url", "origin", "git@github.com:Acme/X.git"]);
-        let (o, n) = repo_key(dir.path()).unwrap();
+        let (o, n) = repo_key(&dir).unwrap();
         assert_eq!((o.as_str(), n.as_str()), ("acme", "x"));
     }
 }

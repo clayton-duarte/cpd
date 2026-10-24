@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::ids::{ContextId, HostName, MachineName, OwnerLogin, RecordId, RecordKind};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
@@ -76,6 +76,7 @@ pub struct Written {
 /// only place they live (contract §4.6). Every write is one transaction.
 pub struct Contexts<'a> {
     machine: MachineName,
+    host: HostName,
     store: &'a mut Store,
 }
 
@@ -88,12 +89,12 @@ enum Next {
 
 impl<'a> Contexts<'a> {
     pub fn new(config: &Config, store: &'a mut Store) -> Contexts<'a> {
-        Contexts { machine: config.machine.clone(), store }
+        Contexts { machine: config.machine.clone(), host: config.host.clone(), store }
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
     /// Returns the row and whether it already existed with this title, Jira key and owner.
-    /// The owner's policy file must resolve (`owner_unknown`, `policy_invalid`).
+    /// The owner's policy file must resolve (`owner_unconfirmed`, `policy_invalid`).
     pub fn create(
         &mut self,
         home: &CpdHome,
@@ -101,6 +102,7 @@ impl<'a> Contexts<'a> {
         title: &Text,
         jira: Option<&Jira>,
         owner: &OwnerLogin,
+        confirm_fallback: bool,
     ) -> Result<(ContextRow, bool), CpdError> {
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
             // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
@@ -128,7 +130,13 @@ impl<'a> Contexts<'a> {
         if let Some(row) = self.store.read(|conn| existing(conn))? {
             return Ok((row, true));
         }
-        resolve(home, &PolicyKey::Owner(owner.clone()))?;
+        let link = match resolve(home, &self.host, &PolicyKey::Owner(owner.clone())) {
+            Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
+            other => other.map(|_| false)?,
+        };
+        if link {
+            crate::policy::confirm_fallback(home, owner)?;
+        }
         let machine = self.machine.clone();
         self.store.write("context new", |tx| {
             // Another process may have created it since the read.

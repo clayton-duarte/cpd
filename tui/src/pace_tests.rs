@@ -7,87 +7,21 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use crate::pace::{Reads, wait_for_next_frame};
-use crate::palette;
+use crate::pace::Reads;
+use crate::pump::Pump;
 use crate::plan::boxes::{self, LAYOUTS};
 use crate::plan::{CHART_MARGIN, Centre};
 use crate::read::{JobNode, JobStatus, NeedsUser, PlanBoxes, PrNode, PrState, PrStatus, Pull, ChatSlot};
 use cpd_core::config::Tier;
 use cpd_core::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 
-fn phase(ms: u64) -> usize {
-    palette::frame(UNIX_EPOCH + Duration::from_millis(ms))
-}
-
-#[test]
-fn the_wait_runs_to_the_next_100_ms_boundary_of_the_clock() {
-    let ms = Duration::from_millis;
-    assert_eq!(wait_for_next_frame(1_000), ms(100));
-    assert_eq!(wait_for_next_frame(1_001), ms(99));
-    assert_eq!(wait_for_next_frame(1_099), ms(1));
-    for now in [0u64, 1, 50, 99, 100, 777, 123_456_789] {
-        let wait = wait_for_next_frame(now);
-        assert_eq!(phase(now + wait.as_millis() as u64), (phase(now) + 1) % 8, "now {now}");
-    }
-}
-
-#[test]
-fn a_draw_under_a_frame_long_skips_no_phase() {
-    let mut t: u64 = 1_700_000_000_037;
-    let mut seen = Vec::new();
-    for _ in 0..80 {
-        t += wait_for_next_frame(t).as_millis() as u64;
-        seen.push(phase(t));
-        t += 15; // the draw's work
-    }
-    for pair in seen.windows(2) {
-        assert_eq!(pair[1], (pair[0] + 1) % 8, "phases {seen:?}");
-    }
-}
-
-#[test]
-fn a_draw_over_a_frame_long_is_followed_by_one_draw_per_frame_not_a_burst() {
-    let mut t: u64 = 1_700_000_000_037;
-    let mut ticks = Vec::new();
-    for _ in 0..40 {
-        t += wait_for_next_frame(t).as_millis() as u64;
-        ticks.push(t / 100);
-        t += 250; // the draw's work
-    }
-    for pair in ticks.windows(2) {
-        assert_ne!(pair[0], pair[1], "two draws in one frame: {ticks:?}");
-        assert!(pair[1] - pair[0] <= 3, "more than 3 phases apart: {ticks:?}");
-    }
-}
-
-#[test]
-fn a_slow_reader_never_delays_the_draw_cadence() {
-    let mut reads: Reads<u32> = Reads::new();
-    let began = Instant::now();
-    reads.request(|| {
-        std::thread::sleep(Duration::from_millis(1200));
-        7
-    });
-    let mut last = Instant::now();
-    let mut widest = Duration::ZERO;
-    while began.elapsed() < Duration::from_millis(1500) {
-        let now_ms = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        std::thread::sleep(wait_for_next_frame(now_ms));
-        let got = reads.take();
-        if began.elapsed() < Duration::from_millis(1190) {
-            assert!(got.is_none(), "a result before the job ended");
-        }
-        widest = widest.max(last.elapsed());
-        last = Instant::now();
-    }
-    assert!(widest < Duration::from_millis(250), "the widest gap between draws was {widest:?}");
-}
-
 #[test]
 fn one_read_runs_at_a_time_and_the_newest_waiting_request_wins() {
-    let mut reads: Reads<u32> = Reads::new();
+    let (_tx, input) = mpsc::channel::<ratatui::crossterm::event::Event>();
+    let pump = Pump::new(move || input.recv().map_err(std::io::Error::other));
+    let mut reads: Reads<u32> = Reads::with_waker(pump.waker());
     let running = Arc::new(AtomicUsize::new(0));
     let overlapped = Arc::new(AtomicBool::new(false));
     let second_ran = Arc::new(AtomicBool::new(false));
@@ -148,7 +82,7 @@ fn pr_node(pull: Option<Pull>) -> PrNode {
 }
 
 fn pull(lead_working: bool) -> Pull {
-    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, lead_working, update: None }
+    Pull { number: 12, state: PrState::Open, url: "https://github.com/acme/repo/pull/12".into(), conflicting: false, clean: false, lead_working, update: None, draft: false }
 }
 
 fn job_node(key: &str, status: JobStatus) -> JobNode {

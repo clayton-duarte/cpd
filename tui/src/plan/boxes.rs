@@ -17,18 +17,39 @@ use ratatui::{
     layout::{Margin, Rect},
     style::Modifier,
     text::{Line, Span},
-    widgets::{Block, BorderType, Widget},
+    widgets::Widget,
 };
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull, UpdateState};
+use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
-/// What the box of a PR with no Jobs says.
-const NO_JOBS: &str = " no Jobs ";
+/// What the box of a PR with no Jobs says (the widget's padding is the space around it).
+const NO_JOBS: &str = "no Jobs";
+
+/// The body of a PR box: the chart's buffer blitted at the body's corner, or [`NO_JOBS`] when the PR has none.
+struct ChartBody<'a> {
+    chart: &'a Chart,
+}
+
+impl Widget for ChartBody<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.chart.pills.is_empty() {
+            Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(area, buf);
+        }
+        let src = &self.chart.buf;
+        for y in 0..src.area.height.min(area.height) {
+            for x in 0..src.area.width.min(area.width) {
+                buf[(area.x + x, area.y + y)] = src[(x, y)].clone();
+            }
+        }
+    }
+}
+
 /// The head of an arrow, just above the needing box's top border: `nf-md-arrow_down_thin` (U+F19B3).
 const ARROW: &str = "\u{F19B3}";
 /// Between a box title's repo name and its base: `nf-md-arrow_right_thin` (U+F19B0).
@@ -89,38 +110,32 @@ fn live_needs(prs: &[PrNode], i: usize) -> Vec<usize> {
     prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != PrStatus::Cancelled)).collect()
 }
 
-/// A PR state's word.
-fn state_text(state: PrState) -> &'static str {
-    match state {
-        PrState::Open => "open",
-        PrState::Merged => "merged",
-        PrState::Closed => "closed",
-    }
-}
-
-/// The word and colour of a pull request's state in a title: `updating` for a conflict while its update Job is not ended
-/// (hs-d532; running or waiting colour), else `conflict` (waiting: every box's pull request is one a
-/// Plan owns, so its Lead fixes it, hs-d302) for an open one that conflicts, else
-/// its state in the palette's PR state colour; a `closed` one is waiting too, and red only when `asked`: its Plan's Lead
-/// has an open `dialog` item, it asks the User (audit Q4). The title and its link's width both use it.
-fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
-    match pull.state {
-        PrState::Open if pull.conflicting => match pull.update {
-            Some(UpdateState::Running) => palette::PR_UPDATING_RUNNING,
-            Some(UpdateState::Queued) => palette::PR_UPDATING_QUEUED,
-            None => palette::PR_CONFLICT_OWNED,
-        },
-        PrState::Closed if asked => palette::PR_CLOSED_ASKED,
-        PrState::Open => (state_text(PrState::Open), palette::pr_open(pull.clean)),
-        state => (state_text(state), palette::pr_state(state)),
-    }
+/// The word and colour a title shows: the conflict word when there is one, else the state word (`pr_look`). The title and
+/// its link's width both use it.
+fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
+    let look = pr_look(&PrFacts {
+        state: pull.state,
+        draft: pull.draft,
+        clean: pull.clean,
+        conflicting: pull.conflicting,
+        owned: true, // every box's pull request is one a Plan owns
+        update: pull.update,
+        asked,
+    });
+    look.conflict.unwrap_or(look.state)
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, muted. While the Plan's Lead
+/// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
 /// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`.
+#[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
+    title_of(pr, asked, false, frame)
+}
+
+/// [`title`] for a Plan that has a failed Job (`plan_failed`): its working Lead's dot is the red loader.
+fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -131,10 +146,10 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
         Some(pull) => {
             // the title is a hit target (the link): clickable text and the bright pairs
             spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
-            let (word, meaning) = state_word(pull, asked);
+            let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::Working, frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -170,16 +185,19 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), needs_user.lead_working), frame))
         .collect();
-    let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
-    // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
+    // the tree's rule: the Plan has a failed Job
+    let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, frame)).collect();
+    // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title (the
+    // corner, a dash, the title, the corner)
     let size: Vec<(u16, u16)> = charts
         .iter()
         .zip(&titles)
         .map(|(c, t)| {
             let empty = c.pills.is_empty();
-            let inner_w = c.buf.area.width.max(t.width() as u16).max(if empty { NO_JOBS.chars().count() as u16 } else { 0 });
+            let body_w = c.buf.area.width.max(if empty { NO_JOBS.chars().count() as u16 } else { 0 });
             let inner_h = if empty { 1 } else { c.buf.area.height };
-            (inner_w + 2, inner_h + 2)
+            ((body_w + 2 + 2 * spacing::PAD_X).max(t.width() as u16 + 1 + 2), inner_h + 2)
         })
         .collect();
 
@@ -246,22 +264,13 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     let lines = palette::muted_text();
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
-        Block::bordered().border_type(BorderType::Rounded).border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
+        BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
-            // the title starts after the corner and ends with one space; the `󱆭` is the cell before it, and the link
-            // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󱆭`
+            // the title starts after the corner and the dash and ends with one space; the `󱆭` is the cell before it, and
+            // the link runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󱆭`
             let dot = if pull.lead_working { 2 } else { 0 };
-            let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16 + dot;
-            link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
-        }
-        let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
-        if chart.pills.is_empty() {
-            Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(inner, &mut buf);
-        }
-        for y in 0..chart.buf.area.height {
-            for x in 0..chart.buf.area.width {
-                buf[(inner.x + x, inner.y + y)] = chart.buf[(x, y)].clone();
-            }
+            let len = format!("#{} {} {CUE}", pull.number, word(pull, false).0).chars().count() as u16 + dot;
+            link(&mut buf, Rect::new(rect.x + 1 + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
         }
     }
     // the lines lie between the boxes, never on them (a line's end on a border is replaced by the exit below)
@@ -278,13 +287,20 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     }
 
     // the pills on the whole buffer; the columns row of boxes by row, box by box, then by each box's own chart columns
+    // a box's body starts where its widget puts it
+    let body: Vec<(u16, u16)> = (0..prs.len())
+        .map(|i| {
+            let inner = geometry(&Walls::Full, Rect::new(at[i].0, at[i].1, size[i].0, size[i].1)).inner;
+            (inner.x, inner.y)
+        })
+        .collect();
     let mut base = Vec::with_capacity(prs.len());
     let mut pills: Vec<Pill> = Vec::new();
     for (i, chart) in charts.iter().enumerate() {
         base.push(pills.len());
         pills.extend(chart.pills.iter().map(|p| Pill {
             key: p.key.clone(),
-            rect: Rect { x: p.rect.x + at[i].0 + 1, y: p.rect.y + at[i].1 + 1, ..p.rect },
+            rect: Rect { x: p.rect.x + body[i].0, y: p.rect.y + body[i].1, ..p.rect },
             column: 0, // set below
         }));
     }
@@ -344,7 +360,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
-    use crate::read::{JobStatus, PrStatus};
+    use crate::read::PrState;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
 
@@ -362,7 +378,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None, draft: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -447,14 +463,14 @@ mod tests {
         assert_eq!(levels(&prs), [0, 1]);
         let b = layout(&prs, &[], &NeedsUser::default(), 0);
         snap(&b.chart, "
-╭ api · api-repo 󱦰 main · merged ╮
-│ no Jobs                        │
-╰───────────────┬────────────────╯
-                ╰╮
-                 󱦳
-╭ web · web-repo 󱦰 main · dispatch ╮
-│ no Jobs                          │
-╰──────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · merged ╮
+│ no Jobs                         │
+╰────────────────┬────────────────╯
+                 ╰╮
+                  󱦳
+╭─ web · web-repo 󱦰 main · dispatch ╮
+│ no Jobs                           │
+╰───────────────────────────────────╯");
     }
 
     #[test]
@@ -496,9 +512,9 @@ mod tests {
         assert_eq!(c.columns, [vec![1], vec![0]], "alpha's column first");
         assert_eq!(b.row_of, [0, 0]);
         snap(c, "
-╭ alpha · alpha-repo 󱦰 main · dispatch ╮ ╭ zed · zed-repo 󱦰 main · dispatch ╮
-│ 󰝦 a│S1                             │ │ 󰝦 z│S1                         │
-╰──────────────────────────────────────╯ ╰──────────────────────────────────╯");
+╭─ alpha · alpha-repo 󱦰 main · dispatch ╮ ╭─ zed · zed-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1                              │ │ 󰝦 z│S1                          │
+╰───────────────────────────────────────╯ ╰───────────────────────────────────╯");
     }
 
     #[test]
@@ -509,15 +525,15 @@ mod tests {
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {
-            let inside: String = rows[y + 1].chars().skip(1).take(want.chars().count()).collect();
+            let inside: String = rows[y + 1].chars().skip(1 + spacing::PAD_X as usize).take(want.chars().count()).collect();
             assert_eq!(inside, want, "row {y}");
         }
         snap(&c, "
-╭ api · api-repo 󱦰 main · dispatch ╮
-│ 󰝦 a│S1──╮                      │
-│           ├──󰝦 c│S1            │
-│ 󰝦 b│S1──╯                      │
-╰──────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1──╮                       │
+│           ├──󰝦 c│S1             │
+│ 󰝦 b│S1──╯                       │
+╰───────────────────────────────────╯");
     }
 
     /// The glyphs at the four corners of the buffer of a single box.
@@ -555,10 +571,10 @@ mod tests {
     fn a_pr_with_no_jobs_is_an_empty_box() {
         let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart;
         snap(&c, "
-╭ api · api-repo 󱦰 main · dispatch ╮
-│ no Jobs                          │
-╰──────────────────────────────────╯");
-        assert!(crate::palette::check::is_muted(&c.buf[(1, 1)]));
+╭─ api · api-repo 󱦰 main · dispatch ╮
+│ no Jobs                           │
+╰───────────────────────────────────╯");
+        assert!(crate::palette::check::is_muted(&c.buf[(2, 1)]));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
         assert_eq!(layout(&[], &[], &NeedsUser::default(), 0).chart.buf.area.area(), 0);
     }
@@ -720,9 +736,9 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-╭ api · api-repo 󱦰 main · #12 conflict 󱆭 ╮
-│ no Jobs                                │
-╰────────────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · #12 conflict 󱆭 ╮
+│ no Jobs                                 │
+╰─────────────────────────────────────────╯");
         let (covered, first, arrow) = link_cells(&c, &plain);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󱆭` whole, not the key nor the separators");
     }
@@ -735,9 +751,9 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-╭ api · api-repo 󱦰 main · #12 open 󱆭 ╮
-│ no Jobs                            │
-╰────────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · #12 open 󱆭 ╮
+│ no Jobs                             │
+╰─────────────────────────────────────╯");
         assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󱆭` is two cells longer than `dispatch`");
         let (covered, first, arrow) = link_cells(&c, &plain);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󱆭`, not the key nor the separators");
@@ -750,14 +766,14 @@ mod tests {
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
         let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
         snap(&c, "
-╭ api · api-repo 󱦰 main · dispatch ╮
-│ 󰝦 a│S1─────󰝦 b│S1            │
-╰────────────────┬─────────────────╯
-                 │
-                 󱦳
-╭ web · web-repo 󱦰 main · dispatch ╮
-│ 󰝦 c│S1                         │
-╰──────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1─────󰝦 b│S1             │
+╰─────────────────┬─────────────────╯
+                  │
+                  󱦳
+╭─ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 c│S1                          │
+╰───────────────────────────────────╯");
         // the arrow is in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
         assert_eq!(Some(exit.fg), palette::fg(Meaning::Nothing).fg);
@@ -768,14 +784,14 @@ mod tests {
         let prs = [pr("docs", &["schema"]), pr("schema", &[]), pr("web", &["schema"])];
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
         snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
-╭ schema · schema-repo 󱦰 main · dispatch ╮
-│ 󰝦 types│S1─────󰝦 gql│S1            │
-╰───────────────────┬────────────────────╯
-                  ╭─┴───────────────────────────────────╮
-                  󱦳                                     󱦳
-╭ docs · docs-repo 󱦰 main · dispatch ╮ ╭ web · web-repo 󱦰 main · dispatch ╮
-│ 󰝦 readme│S1                      │ │ 󰝦 page│S1                      │
-╰────────────────────────────────────╯ ╰──────────────────────────────────╯");
+╭─ schema · schema-repo 󱦰 main · dispatch ╮
+│ 󰝦 types│S1─────󰝦 gql│S1             │
+╰────────────────────┬────────────────────╯
+                   ╭─┴────────────────────────────────────╮
+                   󱦳                                      󱦳
+╭─ docs · docs-repo 󱦰 main · dispatch ╮ ╭─ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 readme│S1                       │ │ 󰝦 page│S1                       │
+╰─────────────────────────────────────╯ ╰───────────────────────────────────╯");
     }
 
     #[test]
@@ -783,33 +799,33 @@ mod tests {
         let prs = [pr("api", &[]), pr("db", &[]), pr("web", &["api", "db"])];
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
         snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
-╭ api · api-repo 󱦰 main · dispatch ╮ ╭ db · db-repo 󱦰 main · dispatch ╮
-│ 󰝦 a│S1                         │ │ 󰝦 d│S1                       │
-╰────────────────┬─────────────────╯ ╰───────────────┬────────────────╯
-                 ├───────────────────────────────────╯
-                 󱦳
-╭ web · web-repo 󱦰 main · dispatch ╮
-│ 󰝦 w│S1                         │
-╰──────────────────────────────────╯");
+╭─ api · api-repo 󱦰 main · dispatch ╮ ╭─ db · db-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1                          │ │ 󰝦 d│S1                        │
+╰─────────────────┬─────────────────╯ ╰────────────────┬────────────────╯
+                  ├────────────────────────────────────╯
+                  󱦳
+╭─ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 w│S1                          │
+╰───────────────────────────────────╯");
     }
 
     #[test]
     fn a_need_that_skips_a_row_rides_a_column_free_of_boxes() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
         snap(&layout(&prs, &[], &NeedsUser::default(), 0).chart, "
-╭ a · a-repo 󱦰 main · dispatch ╮
-│ no Jobs                      │
-╰──────────────┬───────────────╯
-               ├─────────────────╮
-               󱦳                 │
-╭ b · b-repo 󱦰 main · dispatch ╮ │
-│ no Jobs                      │ │
-╰──────────────┬───────────────╯ │
-               ├─────────────────╯
-               󱦳
-╭ c · c-repo 󱦰 main · dispatch ╮
-│ no Jobs                      │
-╰──────────────────────────────╯");
+╭─ a · a-repo 󱦰 main · dispatch ╮
+│ no Jobs                       │
+╰───────────────┬───────────────╯
+                ├─────────────────╮
+                󱦳                 │
+╭─ b · b-repo 󱦰 main · dispatch ╮ │
+│ no Jobs                       │ │
+╰───────────────┬───────────────╯ │
+                ├─────────────────╯
+                󱦳
+╭─ c · c-repo 󱦰 main · dispatch ╮
+│ no Jobs                       │
+╰───────────────────────────────╯");
     }
 
     /// The pill index of Job `key`.
@@ -900,14 +916,14 @@ mod tests {
     fn at_scroll_zero_the_first_box_starts_two_columns_and_one_row_inside_the_body() {
         let rows = body(40, 6, (0, 0));
         assert_eq!(rows[0].trim(), "");
-        assert_eq!(rows[1], "  ╭ api · api-repo 󱦰 main · dispatch ╮  ");
+        assert_eq!(rows[1], "  ╭─ api · api-repo 󱦰 main · dispatch ╮ ");
     }
 
     #[test]
     fn scrolled_the_box_is_drawn_up_to_every_edge_of_the_body() {
         // the box is 34 columns by 3 rows; the body is 10×3, scrolled to the box's top-left corner, then to its
         // bottom-right one (the margin is 2 columns and 1 row on every side of it)
-        assert_eq!(body(10, 3, (2, 1)), ["╭ api · ap", "│ no Jobs ", "╰─────────"]);
-        assert_eq!(body(10, 3, (28, 1)), ["dispatch ╮", "         │", "─────────╯"]);
+        assert_eq!(body(10, 3, (2, 1)), ["╭─ api · a", "│ no Jobs ", "╰─────────"]);
+        assert_eq!(body(10, 3, (29, 1)), ["dispatch ╮", "         │", "─────────╯"]);
     }
 }

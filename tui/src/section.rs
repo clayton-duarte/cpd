@@ -23,8 +23,6 @@ const LEAD: &str = "╭─";
 const PLAIN_LEAD: &str = "──";
 /// The line to the right edge.
 const RULE: &str = "─";
-/// The input box's closing corner.
-const BOX_CLOSE: &str = "╮";
 /// The padding: one blank column on each side.
 const PAD: &str = " ";
 
@@ -32,7 +30,7 @@ const PAD: &str = " ";
 /// ` ──<pill>───…` (the padding, a muted `──`, the pill), for every in-pane title that is no collapsible widget's (logs, legend,
 /// the Deploy column's sections, dialog titles).
 pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(PLAIN_LEAD, palette::muted_text(), title, count, None, palette::pill_static(), width)
+    row(PLAIN_LEAD, palette::muted_text(), title, count, palette::pill_static(), width)
 }
 
 /// The **collapsible** section title (hs-d478): a title `width` cells wide, its first and last cell the padding: ` ╭─<pill>───…`
@@ -40,24 +38,26 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
 /// collapsible widget (the Inbox's); its left cap sits three columns from the edge, as [`title`]'s does. A title wider than the room
 /// is cut (a pill narrower than 3 cells is left out); the line never wraps. The count is a grey pill too (hs-d480).
 pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(LEAD, palette::muted_text(), title, count, None, palette::pill_static(), width)
+    row(LEAD, palette::muted_text(), title, count, palette::pill_static(), width)
 }
 
-/// The input box's top border (contract §6.1.1): ` ╭─<pill>───╮ `, the corner, the lines and `╮` in the border's colour and the
-/// label pill in that colour too (hs-d578 F9); `label` is cut to the room, and no pill is drawn for an empty one.
-pub(crate) fn box_top(label: &str, focused: bool, width: usize) -> Line<'static> {
-    row(LEAD, palette::input_border(focused), label, None, Some(BOX_CLOSE), palette::label_pill(focused), width)
+/// The title of a box drawn with `Walls::Rail` (`crate::box_widget`): what the widget does not draw, the line after the corner
+/// and the title's pill to the last cell, no corner and no padding (the widget owns both): `─<pill>───…<count>`, `width` cells.
+/// `collapsible_title` is the Plan's other callers'.
+pub fn rail_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    row_padded(RULE, 0, palette::muted_text(), title, count, palette::pill_static(), width)
 }
 
-/// The row the forms share: `lead` (two cells) and `muted`, the style of the lead, the lines and `close`, a closing cell that
-/// takes the place of the count, and `pill_style` are what differ.
-fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Option<&str>, pill_style: Style, width: usize) -> Line<'static> {
-    let pad = usize::from(width >= 2);
+/// The row the forms share: `lead` (two cells) and `muted`, the style of the lead and the lines, and `pill_style` are what differ.
+fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
+    row_padded(lead, usize::from(width >= 2), muted, title, count, pill_style, width)
+}
+
+/// [`row`] with its padding, `pad` blank cells on each side, given.
+fn row_padded(lead: &str, pad: usize, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
     let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
     let left = width - lead.chars().count();
-    let close = close.filter(|_| left >= 1);
-    let left = left - usize::from(close.is_some());
     let text: String = title.chars().take(left.saturating_sub(2)).collect();
     let pill = left >= 3 && !text.is_empty();
     let left = if pill { left - text.chars().count() - 2 } else { left };
@@ -70,9 +70,6 @@ fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Optio
     spans.push(Span::styled(RULE.repeat(fill), muted));
     if !count.is_empty() {
         spans.extend(pill::pill(count, pill_style));
-    }
-    if let Some(close) = close {
-        spans.push(Span::styled(close.to_owned(), muted));
     }
     spans.push(Span::raw(PAD.repeat(pad)));
     Line::from(spans)

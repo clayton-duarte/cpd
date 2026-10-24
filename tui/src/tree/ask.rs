@@ -32,6 +32,21 @@ pub enum Ask {
     NamedPlan { context: ContextId, label: String },
 }
 
+/// The last row of the owner select: the owner is typed in an input, not among the known ones.
+pub(crate) const ANOTHER_OWNER: &str = "Another owner…";
+
+/// The label of the confirm popup's yes button for an unknown owner.
+pub(crate) const USE_FALLBACK: &str = "Use clayton-duarte's policy";
+
+/// The check of the typed owner login: the login lowercased, or why it is refused (a GitHub login, 1-39 characters).
+pub(crate) fn check_login(text: &str) -> Result<String, String> {
+    let ok = !text.is_empty()
+        && text.chars().count() <= 39
+        && !text.starts_with('-')
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok { Ok(text.to_ascii_lowercase()) } else { Err(format!("{text:?} is not a GitHub login.")) }
+}
+
 /// The refusal of a title no id can be derived from.
 const NO_ID: &str = "A title needs at least two letters or digits, the first a letter, to make an id.";
 
@@ -156,8 +171,20 @@ impl Question {
                 match ask.answer(text)? {
                     Step::Run(action) => Ok(Some(action)),
                     Step::Owner { id, title: name, owners } => {
-                        let owner = dialogs.select(title, "Owner:", &owners).map_err(failed)?;
-                        Ok(owner.map(|owner| Action::NewContext { id, title: name, owner }))
+                        let mut options = owners.clone();
+                        options.push(ANOTHER_OWNER.to_owned());
+                        let Some(owner) = dialogs.select(title, "Owner:", &options).map_err(failed)? else { return Ok(None) };
+                        if owner != ANOTHER_OWNER {
+                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
+                        }
+                        let Some(typed) = dialogs.input(title, "Owner login:", "", Validator::Name).map_err(failed)? else { return Ok(None) };
+                        let owner = check_login(&typed)?;
+                        if owners.contains(&owner) {
+                            return Ok(Some(Action::NewContext { id, title: name, owner, confirm_fallback: false }));
+                        }
+                        let text = format!("{owner} has no policy. cpd will use clayton-duarte's policy for it and link {owner}.toml to it.");
+                        let yes = dialogs.confirm(title, &text, USE_FALLBACK).map_err(failed)?;
+                        Ok(yes.then_some(Action::NewContext { id, title: name, owner, confirm_fallback: true }))
                     }
                 }
             }
@@ -294,7 +321,7 @@ mod tests {
     #[test]
     fn new_context_derives_its_id_from_the_title_against_the_taken_ones() {
         let run = |ids: &[&str]| input(Ask::NewContext { taken: taken(ids), owners: vec!["o".into()] }, "").ask(&Stub::typing("Building cpd!"));
-        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into() }));
+        let new = |id: &str| Ok(Some(Action::NewContext { id: ContextId::parse(id).unwrap(), title: "Building cpd!".into(), owner: "o".into(), confirm_fallback: false }));
         assert_eq!(run(&[]), new("building-cpd"));
         assert_eq!(run(&["building-cpd"]), new("building-cpd-2"));
         assert_eq!(run(&["building-cpd", "building-cpd-2"]), new("building-cpd-3"));

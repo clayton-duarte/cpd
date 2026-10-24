@@ -67,9 +67,10 @@ const TOGGLE: &str = "╰─ ";
 /// What the identifier of the empty row after the Context whose own identifier is `id` starts with (hs-d476).
 const SPACER: &str = "  ";
 
-/// The columns the tree's area (already inside the pane's margin) keeps blank at the right of a rail row: the padding and the
-/// box's wall column, so that the row ends at column W-4 of the pane (commands.md §17).
-const RIGHT_PAD: u16 = 2;
+use crate::box_widget::spacing::RIGHT_PAD;
+
+/// The columns a Plan row keeps for itself before its counters may be drawn: the branch, the glyph, its space and one cell of the name.
+const MIN_LEFT: usize = BRANCH_WIDTH + 3;
 
 /// The columns a content row's branch takes (`fold::TREE_BRANCH`).
 const BRANCH_WIDTH: usize = 2;
@@ -526,15 +527,19 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         let rect = Rect::new(area.x, y, area.width, 1);
         let path = &flat_row.path;
         let Some(row) = row(tree, path) else { continue };
-        flat_row.line.clone().render(rect, buf);
+        // a rail's content ends before its right padding: a closing row that is too long is cut there
+        flat_row.line.clone().render(Rect { width: rect.width.saturating_sub(RIGHT_PAD), ..rect }, buf);
         // an asleep row's counters (separators too) are colour 8 whatever the count: the muted restyle skips them
         let mut counter_cols = 0..0;
         if let Row::Plan(_, plan) = row {
             let line = counters(plan);
             let width = rect.width.saturating_sub(RIGHT_PAD);
-            let start = rect.x + width.saturating_sub(u16::try_from(line.width()).unwrap_or(u16::MAX));
-            counter_cols = start..rect.x + width;
-            line.right_aligned().render(Rect { width, ..rect }, buf);
+            // the counters are dropped when they would not leave the branch, the glyph and a cell of the name
+            if line.width() + MIN_LEFT <= usize::from(width) {
+                let start = rect.x + width.saturating_sub(u16::try_from(line.width()).unwrap_or(u16::MAX));
+                counter_cols = start..rect.x + width;
+                line.right_aligned().render(Rect { width, ..rect }, buf);
+            }
         }
         if row.muted() {
             // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) and the counters

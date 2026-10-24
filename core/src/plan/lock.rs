@@ -88,7 +88,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     // and only when all have passed are the new branches pushed. On failure nothing is left.
     let mut prepared = Vec::new();
     for pr in prs.iter().filter(|p| p.status == "waiting" && p.needs.is_empty()) {
-        match start::prepare(&env.home, &env.config, &id, pr) {
+        match start::prepare(&env.home, &env.config, &mut env.store, &id, pr) {
             Ok(p) => prepared.push(p),
             Err(failed) => {
                 prepared.iter().for_each(start::Prepared::discard);

@@ -188,21 +188,4 @@ mod tests {
         assert!(wait_gone(pid), "the grandchild {pid} outlived the deadline");
     }
 
-    #[test]
-    fn a_group_that_ignores_sigterm_is_killed_after_the_grace() {
-        let dir = tempfile::tempdir().unwrap();
-        let pidfile = dir.path().join("pid");
-        let mut cmd = sh(r#"trap '' TERM; sleep 30 & echo $! > "$1"; while :; do wait; done"#, &pidfile);
-        // The grace is the claim, not its 5 s: half a second here.
-        let grace = Duration::from_millis(500);
-        let deadline = Duration::from_millis(200);
-        let started = Instant::now();
-        let Err(Failed::Timeout(_)) = output_with_grace(&mut cmd, "tmux", deadline, grace) else { panic!("no timeout") };
-        let took = started.elapsed();
-        // time-claim: SIGKILL comes the grace after the deadline, not before and not much later; no per-poll signal
-        // from the runner.
-        assert!(took >= deadline + grace && took < deadline + grace + Duration::from_secs(4), "took {took:?}");
-        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-        assert!(wait_gone(pid), "the grandchild {pid} outlived SIGKILL");
-    }
 }

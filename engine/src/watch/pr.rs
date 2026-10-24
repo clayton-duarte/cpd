@@ -12,6 +12,7 @@
 //! poll; E5 raises the `error` only after `watch.pr_poll_transient_minutes` of the same call failing, keeping when it
 //! first failed in `run/pr-poll-failing.json` ([`transient`]).
 
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::engine::Engine;
+use super::poll_run::{Finished, PollRun};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
@@ -34,34 +36,56 @@ const RATE_FLOOR: u64 = 100;
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
 /// When the next poll is due: `pr_poll_seconds` after the last one ended (tests: `CPD_TEST_PR_POLL`, [`limit`]), and
-/// not before the rate limit resets; `now` when none has run. The engine wakes at this time instead of at the next
-/// tick (contract §3.7).
-pub(super) fn due(engine: &Engine, now: Instant) -> Instant {
+/// not before the rate limit resets; `now` when none has run; `None` while a poll runs. The engine wakes at this time
+/// instead of at the next tick (contract §3.7).
+pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
+    if engine.poll.is_some() {
+        return None;
+    }
     let every = limit("PR_POLL", Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)));
     let after_last = engine.last_poll_end.map_or(now, |end| end + every);
-    engine.paused_until.map_or(after_last, |until| until.max(after_last))
+    Some(engine.paused_until.map_or(after_last, |until| until.max(after_last)))
 }
 
-pub(super) fn run(engine: &mut Engine) {
+/// E5, first step: starts `cpd pr poll` on its own thread when it is due and none runs.
+pub(super) fn start(engine: &mut Engine) {
     let now = Instant::now();
-    if now < due(engine, now) {
+    if due(engine, now).is_none_or(|due| now < due) {
         return;
     }
     engine.paused_until = None;
-    let polled = poll(engine);
-    let out = match polled {
+    let root = engine.home.root().to_path_buf();
+    engine.poll = Some(PollRun::start(move || poll(&root)));
+}
+
+/// E5, second step: applies the poll that ended, if one did.
+pub(super) fn reap(engine: &mut Engine) {
+    let Some(finished) = engine.poll.as_mut().and_then(PollRun::try_take) else { return };
+    engine.poll = None;
+    apply(engine, finished);
+}
+
+/// At stop: waits for a running poll and applies it.
+pub(super) fn finish(engine: &mut Engine) {
+    let Some(finished) = engine.poll.as_mut().and_then(PollRun::wait) else { return };
+    engine.poll = None;
+    apply(engine, finished);
+}
+
+fn apply(engine: &mut Engine, finished: Finished) {
+    let out = match finished.result {
         // A busy store is not a failure (contract §3.7): the poll did not happen, so it is not counted as one; it runs again at the next tick.
         Err(failure) if is_store_busy(&failure) => {
             engine.log.line(&format!("E5: the store is busy, the poll is tried again at the next tick: {}: {}", failure.code, failure.message));
             return;
         }
         Ok(out) => {
-            engine.last_poll_end = Some(Instant::now());
+            engine.last_poll_end = Some(finished.ended);
             failing::delete(engine);
             out
         }
         Err(failure) => {
-            engine.last_poll_end = Some(Instant::now());
+            engine.last_poll_end = Some(finished.ended);
             if let Some(failure) = transient(engine, failure) {
                 engine.fail(Step::E5, About::Machine, failure);
             }
@@ -222,17 +246,17 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 }
 
 /// Runs `cpd pr poll` and returns its success value, or the failure it printed.
-fn poll(engine: &Engine) -> Result<Value, Failure> {
+fn poll(root: &Path) -> Result<Value, Failure> {
     let exe = started_as().map_err(|e| Failure::from(&e))?;
     let argv = [&*exe.to_string_lossy(), "pr", "poll"];
     let mut cmd = Command::new(&exe);
     cmd.args(&argv[1..])
-        .env("CPD_HOME", engine.home.root())
+        .env("CPD_HOME", root)
         // The engine's own selection is not the subprocess's.
         .env_remove("CPD_PLAN")
         .env_remove("CPD_SESSION")
         .env_remove("CPD_ATTEMPT")
-        .current_dir(engine.home.root())
+        .current_dir(root)
         .stdin(Stdio::null());
     let out = deadline::output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
         Failed::Io(e) => {

@@ -6,8 +6,8 @@ use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
-use super::resolve::{owners_dir, repos_dir};
-use super::domain::{FEEDBACK_CHECKS, GATE};
+use super::resolve::{machine_file, owners_dir, repos_dir};
+use super::domain::{BUILD, FEEDBACK_CHECKS, GATE, LIST, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -111,7 +111,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if args.repo.is_some() && args.owner.is_none() {
         return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
     }
-    let Env { home, mut store, .. } = Env::open()?;
+    let Env { home, mut store, config, .. } = Env::open()?;
     let (role, key) = if let Some(pr) = &args.pr {
         let plan = args.plan.as_ref().ok_or_else(|| {
             CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
@@ -130,10 +130,10 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         (Some(role), key)
     };
     check_file_names(&home)?;
-    let resolved = resolve(&home, &key)?;
+    let resolved = resolve(&home, &config.host, &key)?;
 
-    // The files read, owner first: the owner's exists (resolve refused otherwise).
-    let mut files = vec![owners_dir(&home).join(format!("{}.toml", key.owner()))];
+    // The files read, machine first; the owner's exists (resolve refused otherwise).
+    let mut files = vec![machine_file(&home, &config.host), owners_dir(&home).join(format!("{}.toml", key.owner()))];
     if let PolicyKey::Repo(owner, name) = &key {
         files.push(repos_dir(&home).join(owner.as_str()).join(format!("{name}.toml")));
     }
@@ -177,6 +177,19 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
             (GATE, value(&resolved.policy.pr.gate)),
             (FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks)),
         ],
+        Domain::Hooks => {
+            let h = &resolved.policy.hooks;
+            vec![(PRE_START, value(&h.pre_start)), (PRE_COMMIT, value(&h.pre_commit)), (PRE_MERGE, value(&h.pre_merge))]
+        }
+        Domain::TestCommands => {
+            let t = resolved.policy.test_commands.as_ref();
+            vec![
+                (BUILD, value(&t.map(|t| &t.build))),
+                (RUN, value(&t.map(|t| &t.run))),
+                (LIST, value(&t.and_then(|t| t.list.as_ref()))),
+            ]
+        }
+        Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
         _ => Vec::new(),
     };
     let mut keys = Map::new();
