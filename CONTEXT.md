@@ -242,22 +242,30 @@ _Avoid_: level, profile
 
 ## Policies
 
-**Policy** (new, hs-d288):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's owner and repo files under `$CPD_HOME/policy/` (contract §8.3). Never per machine (hs-d263), and not in a repo's committed files yet. `cpd policy show` prints one.
+**Policy** (changed, hs-d9, hs-d12):
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. Not in a repo's committed files yet. `cpd policy show` prints one.
 _Avoid_: rules, settings, profile, config
 
 **Domain** (new, hs-d288):
 One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`, `monitor` or `instructions`. Its value has typed keys that cpd's commands branch on (such as `pr.gate`, `local` or `ci`) and a free `text` for the agents its fixed audience names. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
 _Avoid_: section, category, setting
 
-**Scope** (new, hs-d288):
-Where a Domain's value is set: cpd's default, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > default, hs-d279); no Domain adds up across Scopes.
+**Scope** (changed, hs-d9, hs-d12):
+Where a Domain's value is set: cpd's default, a machine file, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > machine > default, hs-d279); no Domain adds up across Scopes. The machine Scope holds policies for one machine on which cpd runs, named by its ssh Host (§8.2 `host`), and is optional: a missing machine file sets nothing. It is never part of a Policy key; a Policy resolves the same for every key on one machine and differently across machines.
 _Avoid_: layer, level, override file
+
+**Host** (new, §8.2):
+The name of one machine from its ssh config `Host`, such as `homeserver`, `mac-pro` or `mac-air`. Named in config.toml §8.2 and defaults to the value of `machine` (contract §2.1). It uniquely identifies the machine's policy file `policy/machines/<host>.toml` and is never an id prefix or a Context field.
+_Avoid_: hostname, domain, server, computer
+
+**Exposure** (new, hs-d9, hs-d12):
+The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`.
+_Avoid_: visibility, permission
 
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
 
-**Resolved policy** (new, hs-d288):
-The Policy of one Policy key: every Domain's value with its source (`default`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
+**Resolved policy** (changed, hs-d9, hs-d12):
+The Policy of one Policy key: every Domain's value with its source (`default`, `machine:<path>`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
 _Avoid_: effective config, merged policy
