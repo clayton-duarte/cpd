@@ -1284,6 +1284,17 @@ impl Locale {
     }
 }
 
+/// What a caller built with `env -i` must pass on for the Gate's tripwire (`scripts/tripwire/tmux`) to know the test:
+/// `NAME='value'` words for `NEXTEST_BINARY_ID` and `NEXTEST_TEST_NAME` (the pair it matches against `allow.txt`; without
+/// them it denies the call as an unidentified caller) and `TMPDIR` (where it logs a denied call for the Gate to print).
+/// Only the variables that are set: the same words, leading space included, for `env -i PATH=... {words} tmux`.
+pub fn tripwire_env_words() -> String {
+    ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME", "TMPDIR"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()).map(|v| format!(" {key}={}", sh_quote(&v))))
+        .collect()
+}
+
 /// The first `tmux` of the real `PATH`.
 pub fn real_tmux() -> std::path::PathBuf {
     std::env::split_paths(inherited_path()).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
