@@ -66,7 +66,6 @@ cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review::  # m-flow: flow commands that may reach a real tmux
 cpd::flow spec::  # m-flow: flow commands that may reach a real tmux
-cpd::tooling e2e::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling fake_tmux::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling gate_run::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling harness::  # m-tooling: tooling test that may reach a real tmux
