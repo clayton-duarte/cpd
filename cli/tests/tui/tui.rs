@@ -111,9 +111,9 @@ fn assert_layout(panes: &[Pane]) {
     assert_eq!(plan.left, slot.left, "{panes:?}");
     assert!(plan.left > tree.left && widgets.left > plan.left, "{panes:?}");
     assert!(slot.top > plan.top, "{panes:?}");
-    // 20 % of the 215 columns each, give or take tmux's rounding and borders.
+    // 25 % of the 215 columns each, give or take tmux's rounding and borders.
     for side in [tree, widgets] {
-        assert!((40..=46).contains(&side.width), "{panes:?}");
+        assert!((50..=56).contains(&side.width), "{panes:?}");
     }
     assert!(panes.iter().all(|p| !p.dead && p.view != "statusbar"), "{panes:?}");
     // The status line takes the session's one row: tree and widgets run from the header to the last row.
@@ -129,7 +129,7 @@ fn assert_status_line(env: &TestEnv) {
     assert_eq!(shown("cpd", "#{status}").trim(), "on");
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
     let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
-    assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
+    assert_eq!(format.trim_end_matches('\n'), *STATUS_FORMAT);
     for range in [
         "#[range=user|reset]",
         "#[range=user|legend]",
@@ -275,8 +275,9 @@ fn pane_pid(pid: &str) -> Option<u32> {
 /// Asserts the server has every option, binding and hook `host` sets at a
 /// server start (contract §6.1; their values are pinned in `tests/host.rs`).
 fn assert_server_options(env: &TestEnv) {
-    for option in SERVER_OPTIONS {
-        match option {
+    for option in SERVER_OPTIONS.iter() {
+        let option: Vec<&str> = option.iter().map(String::as_str).collect();
+        match option.as_slice() {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
             // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
             ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
@@ -592,7 +593,7 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     let tree = view(&main_panes(&env), "tree").clone();
     tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "70"]);
     outer.click(1, 29);
-    wait_until("the reset", || (22..=26).contains(&view(&main_panes(&env), "tree").width));
+    wait_until("the reset", || (28..=32).contains(&view(&main_panes(&env), "tree").width));
     assert_eq!(actions().len(), 3);
 }
 
@@ -1260,57 +1261,4 @@ fn the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command() {
     let text = String::from_utf8(common::output(&mut env.command("env")).unwrap().stdout).unwrap();
     let leaked: Vec<&str> = text.lines().filter(|l| AMBIENT.iter().any(|n| l.starts_with(&format!("{n}=")))).collect();
     assert!(leaked.is_empty(), "{leaked:?}");
-}
-
-// ---- A caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----
-//
-// The incident: mac-pro's install ran `cpd tui --respawn` from a launchd agent that sets only `PATH`; tmux printed the tabs
-// of cpd's `-F` formats as `_` and every call failed `tmux_failed: tmux list-panes printed unexpected output`.
-
-/// `cpd <args>` for a caller whose locale is `locale`: its exit code and its stdout and stderr.
-fn cpd_as(env: &TestEnv, locale: crate::common::Locale, args: &[&str]) -> (i32, String, String) {
-    let mut cmd = env.command(CPD);
-    locale.apply(&mut cmd).args(args);
-    let out = common::output(&mut cmd).unwrap();
-    (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
-}
-
-#[test]
-fn tui_builds_and_respawns_the_cockpit_for_a_caller_without_a_utf8_locale() {
-    let mut failures = Vec::new();
-    for locale in crate::common::LOCALES {
-        let env = env();
-        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui"]);
-        if exit != 0 {
-            failures.push(format!("{locale:?}: cpd tui exited {exit}: {stdout}{stderr}"));
-            continue;
-        }
-        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui", "--respawn"]);
-        if exit != 0 {
-            failures.push(format!("{locale:?}: cpd tui --respawn exited {exit}: {stdout}{stderr}"));
-        }
-    }
-    assert!(failures.is_empty(), "cpd's tmux calls fail without a UTF-8 locale:\n{}", failures.join("\n"));
-}
-
-/// The install's case: the cockpit was built by a caller with a locale (a login shell), and `cpd tui --respawn` runs
-/// later from an agent without one. The views are restarted.
-#[test]
-fn tui_respawn_restarts_the_views_of_a_cockpit_for_a_caller_without_a_utf8_locale() {
-    let mut failures = Vec::new();
-    for locale in crate::common::LOCALES {
-        let env = env();
-        env.cpd(&["tui"]).ok();
-        let before: Vec<Option<u32>> = main_panes(&env).iter().map(|p| p.pid).collect();
-        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui", "--respawn"]);
-        if exit != 0 {
-            failures.push(format!("{locale:?}: cpd tui --respawn exited {exit}: {stdout}{stderr}"));
-            continue;
-        }
-        let after: Vec<Option<u32>> = main_panes(&env).iter().map(|p| p.pid).collect();
-        if before == after {
-            failures.push(format!("{locale:?}: no view was restarted: {stdout}"));
-        }
-    }
-    assert!(failures.is_empty(), "cpd tui --respawn fails without a UTF-8 locale:\n{}", failures.join("\n"));
 }

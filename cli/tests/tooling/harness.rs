@@ -578,7 +578,7 @@ fn armed_env(marker: &std::path::Path, log: &std::path::Path) -> TestEnv {
     let out = env.tmux(&["new-session", "-d", "-s", "t", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     for option in cpd_core::host::tmux::SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
-        let out = env.tmux(option);
+        let out = env.tmux(&option.iter().map(String::as_str).collect::<Vec<_>>());
         assert!(out.status.success(), "{option:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
     env

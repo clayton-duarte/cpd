@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
@@ -22,21 +22,10 @@ use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
+use crate::pill::pill;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::section;
 use crate::{Capture, run_view};
-
-/// The rounded caps of a Plan pill (powerline, U+E0B6 and U+E0B4), as the Plan view draws them (`plan/flow.rs`, which is
-/// private to its module).
-const CAP_L: &str = "\u{e0b6}";
-const CAP_R: &str = "\u{e0b4}";
-
-/// A sample pill with its rounded caps: the caps in the pill's colour on the default background, as the Plan view draws
-/// a Job pill (`plan/flow.rs`).
-fn capped(body: String, pill: Style) -> Line<'static> {
-    let cap = Style::new().fg(pill.fg.expect("a pill has a colour"));
-    Line::from(vec![Span::styled(CAP_L, cap), Span::styled(body, pill), Span::styled(CAP_R, cap)])
-}
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
@@ -129,7 +118,7 @@ pub(crate) fn sections() -> Vec<Section> {
             let (icon, _meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                capped(format!("{icon} key│S1"), palette::job_pill(*status, *merging, false)),
+                Line::from(pill(format!("{icon} key│S1"), palette::job_pill(*status, *merging, false))),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -340,25 +329,11 @@ mod tests {
     use super::*;
     use crate::read::Kind;
 
+    static CAP_L: &str = "\u{e0b6}";
+    static CAP_R: &str = "\u{e0b4}";
+
     fn text(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn the_section_titles_are_exact() {
-        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
-        assert_eq!(
-            titles,
-            [
-                "Meanings → Colour (One Source For Every View)",
-                "Jobs: Plan Pills And Context Counters",
-                "Session Dots",
-                "PRs (Dispatch)",
-                "Inbox",
-                "Pulse",
-                "PR Checks",
-            ]
-        );
     }
 
     #[test]

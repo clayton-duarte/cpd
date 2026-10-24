@@ -51,7 +51,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "open_tier": "S2",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
-            "plannotator_ports": "19432-19441",
+            "plannotator_ports": "19432-19456",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
                 "S": "github-copilot/claude-sonnet-5.5",

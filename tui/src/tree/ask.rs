@@ -24,10 +24,8 @@ pub enum Ask {
     /// `Fork…` and `New session…`: the name of a Session forked from `source`.
     Fork { source: SessionId },
     /// The title of a new Context; its id is derived against the ids `taken`. `owners` are the owner policies of the
-    /// instance (at least one): with one it is the owner, with several the owner is asked next ([`Ask::NewContextOwner`]).
+    /// instance (at least one): the owner is always asked next, in a `select` popup of them.
     NewContext { taken: Vec<String>, owners: Vec<String> },
-    /// The owner (one of `owners`) of the new Context `id` titled `title`.
-    NewContextOwner { id: ContextId, title: String, owners: Vec<String> },
     /// The title of a new Plan in `context` (R34 A12: no repo; the Plan's PRs name theirs).
     NewPlan { context: ContextId, taken: Vec<String> },
     /// `n`: the id of a new Plan in `context`, forked from the Session `label`.
@@ -44,7 +42,6 @@ impl Ask {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => "Title:".into(),
             Ask::RenameSession(_) | Ask::Fork { .. } => "Name:".into(),
             Ask::NamedPlan { label, .. } => format!("Fork {label} into a new Plan, name:"),
-            Ask::NewContextOwner { owners, .. } => format!("Owner ({}):", owners.join(", ")),
         }
     }
 
@@ -53,7 +50,6 @@ impl Ask {
             Ask::RenameContext(_) | Ask::RenamePlan(_) | Ask::NewContext { .. } | Ask::NewPlan { .. } => Validator::Title,
             Ask::RenameSession(_) | Ask::Fork { .. } => Validator::Name,
             Ask::NamedPlan { .. } => Validator::PlanId,
-            Ask::NewContextOwner { .. } => Validator::Name,
         }
     }
 
@@ -68,16 +64,7 @@ impl Ask {
             Ask::NewContext { taken, owners } => {
                 let id = slug::derive(&text, CONTEXT_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
                 let id = ContextId::parse(&id).map_err(refuse)?;
-                match owners.as_slice() {
-                    [owner] => Action::NewContext { id, title: text, owner: owner.clone() },
-                    _ => return Ok(Step::Ask(Ask::NewContextOwner { id, title: text, owners: owners.clone() })),
-                }
-            }
-            Ask::NewContextOwner { id, title, owners } => {
-                if !owners.contains(&text) {
-                    return Err(format!("No owner policy {text}: choose one of {}.", owners.join(", ")));
-                }
-                Action::NewContext { id: id.clone(), title: title.clone(), owner: text }
+                return Ok(Step::Owner { id, title: text, owners: owners.clone() });
             }
             Ask::NewPlan { context, taken } => {
                 let id = slug::derive(&text, PLAN_MAX, |id| taken.iter().any(|t| t == id)).ok_or(NO_ID)?;
@@ -95,8 +82,8 @@ impl Ask {
 /// What the text accepted for an [`Ask`] leads to.
 enum Step {
     Run(Action),
-    /// A further question, in a further popup with the same title.
-    Ask(Ask),
+    /// The owner of the new Context `id` titled `title`, chosen in a `select` popup of `owners`.
+    Owner { id: ContextId, title: String, owners: Vec<String> },
 }
 
 /// A popup the tree opens before it runs a command.
@@ -119,6 +106,8 @@ pub trait Dialogs {
     fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError>;
     /// Whether a `confirm` popup was confirmed.
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError>;
+    /// The option chosen in a `select` popup; `None` when cancelled.
+    fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError>;
     /// What the delete of `what` would remove: the reply of the command without `--yes`, or why it is refused.
     fn preview(&self, what: &Deletable) -> Result<Value, String>;
 }
@@ -162,16 +151,13 @@ impl Question {
     pub fn ask(self, dialogs: &impl Dialogs) -> Result<Option<Action>, String> {
         let failed = |e: CpdError| e.message().to_owned();
         match self {
-            Question::Input { title, mut ask, initial } => {
-                let mut initial = initial;
-                loop {
-                    let Some(text) = dialogs.input(title, &ask.prompt(), &initial, ask.validator()).map_err(failed)? else { return Ok(None) };
-                    match ask.answer(text)? {
-                        Step::Run(action) => return Ok(Some(action)),
-                        Step::Ask(next) => {
-                            ask = next;
-                            initial = String::new();
-                        }
+            Question::Input { title, ask, initial } => {
+                let Some(text) = dialogs.input(title, &ask.prompt(), &initial, ask.validator()).map_err(failed)? else { return Ok(None) };
+                match ask.answer(text)? {
+                    Step::Run(action) => Ok(Some(action)),
+                    Step::Owner { id, title: name, owners } => {
+                        let owner = dialogs.select(title, "Owner:", &owners).map_err(failed)?;
+                        Ok(owner.map(|owner| Action::NewContext { id, title: name, owner }))
                     }
                 }
             }
@@ -238,6 +224,11 @@ mod tests {
         fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
             self.opened.borrow_mut().push(format!("confirm {title} | {text} | {yes_label}"));
             Ok(self.yes)
+        }
+
+        fn select(&self, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
+            self.opened.borrow_mut().push(format!("select {title} | {prompt} | {}", options.join(", ")));
+            Ok(self.text.map(|_| options[0].clone()))
         }
 
         fn preview(&self, _: &Deletable) -> Result<Value, String> {
@@ -383,6 +374,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, CpdError> {
                 Err(CpdError::new(cpd_core::error::ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit."))
+            }
+            fn select(&self, _: &str, _: &str, _: &[String]) -> Result<Option<String>, CpdError> {
+                unreachable!("no select in this test")
             }
             fn preview(&self, _: &Deletable) -> Result<Value, String> {
                 Err("refused".to_owned())

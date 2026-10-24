@@ -14,6 +14,8 @@ pub(crate) mod validate;
 mod view;
 #[cfg(test)]
 mod input_tests;
+#[cfg(test)]
+mod select_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +51,8 @@ enum Kind {
     Text(Text),
     /// Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}`
     Checklist(Checklist),
+    /// A radio list of options, with `[OK]` and `[Cancel]`; the outcome is `{confirmed, value}`
+    Select(Select),
 }
 
 /// What every kind takes.
@@ -107,6 +111,36 @@ struct Checklist {
     items: PathBuf,
 }
 
+#[derive(clap::Args, Debug)]
+struct Select {
+    #[command(flatten)]
+    common: Common,
+    /// The question above the options
+    #[arg(long)]
+    prompt: String,
+    /// An option, repeated, in the order shown
+    #[arg(long = "option", required = true)]
+    options: Vec<String>,
+}
+
+/// The options of a `select` on the command line: at least one, each non-empty, one line, no control character, at most
+/// 70 characters, all distinct; otherwise `args_invalid`.
+fn check_options(options: &[String]) -> Result<(), CpdError> {
+    let bad = |why: String| CpdError::new(ErrorCode::ArgsInvalid, format!("Cannot use the select options: {why}."));
+    if options.is_empty() {
+        return Err(bad("there is none".into()));
+    }
+    for (n, o) in options.iter().enumerate() {
+        if o.is_empty() || o.chars().any(char::is_control) || o.chars().count() > 70 {
+            return Err(bad(format!("{o:?} is empty, longer than 70 characters or has a control character")));
+        }
+        if options[..n].contains(o) {
+            return Err(bad(format!("{o:?} is repeated")));
+        }
+    }
+    Ok(())
+}
+
 /// How a dialog closed: the result file's content. `value` is the typed text of an accepted `input`, and only then.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +185,11 @@ impl Kind {
             Kind::Input(a) => {
                 let mode = Mode::Input { validator: a.validate, field: Field::new(&a.initial), refused: None };
                 let dialog = Dialog::new(a.common.title.clone(), a.prompt, mode);
+                (a.common, dialog)
+            }
+            Kind::Select(a) => {
+                check_options(&a.options)?;
+                let dialog = Dialog::new(a.common.title.clone(), a.prompt, Mode::Select { options: a.options, cursor: 0 });
                 (a.common, dialog)
             }
             Kind::Text(a) => {
@@ -372,6 +411,21 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
         (false, _) => Ok(None),
         (true, Some(value)) => Ok(Some(value)),
         (true, None) => Err(CpdError::new(ErrorCode::Internal, "The input dialog confirmed with no value.")),
+    }
+}
+
+/// A radio list of `options` in a popup, under the question `prompt`. The option chosen, `None` when the User cancelled.
+#[allow(dead_code)] // the tree's New Context… (Job tui-nc)
+pub(crate) fn select(tmux: &Tmux, title: &str, prompt: &str, options: &[String]) -> Result<Option<String>, CpdError> {
+    let mut fields = vec![("prompt", prompt)];
+    fields.extend(options.iter().map(|o| ("option", o.as_str())));
+    let natural = widest(prompt).max(options.iter().map(|o| 4 + o.chars().count()).max().unwrap_or(0));
+    let size = |client, title: &str| popup_size(client, title, natural, |width| wrap(prompt, width).len() + options.len());
+    let outcome = ask(tmux, On::Newest, title, "select", &fields, size)?;
+    match (outcome.confirmed, outcome.value) {
+        (false, _) => Ok(None),
+        (true, Some(value)) => Ok(Some(value)),
+        (true, None) => Err(CpdError::new(ErrorCode::Internal, "The select dialog confirmed with no value.")),
     }
 }
 

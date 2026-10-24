@@ -11,7 +11,9 @@ use ratatui::Terminal;
 
 use crate::palette::numbered::{C13, C14, C15, C4, C7};
 use crate::palette::{self};
-use crate::plan::flow::{layout, FlowJob, Live, CAP_L, CAP_R};
+const CAP_L: &str = "\u{e0b6}";
+const CAP_R: &str = "\u{e0b4}";
+use crate::plan::flow::{layout, FlowJob, Live};
 use crate::section;
 use crate::widgets::legend;
 

@@ -16,6 +16,7 @@ use super::scroll::Scroll;
 use super::validate::Validator;
 use crate::input_box;
 use crate::palette;
+use crate::pill;
 
 /// The label of the second button of `confirm` and `input` (the checklist's is [`LATER`]).
 pub(crate) const CANCEL: &str = "Cancel";
@@ -24,11 +25,6 @@ const OK: &str = "OK";
 const CLOSE: &str = "Close";
 /// Rows an `input` reserves under its field for a refusal.
 pub(crate) const REFUSAL_ROWS: usize = 2;
-/// The pill's caps (U+E0B6, U+E0B4).
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
-/// The columns a pill takes besides its label: the two caps.
-const CAPS: u16 = 2;
 
 /// What kind of dialog this is, with the state that kind has.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +38,8 @@ pub(crate) enum Mode {
     /// Entries `[ ] <id> — <detail>` with the record's full text under each, the User ticks, with the `Approve` and `Later` buttons
     /// (hs-d549, hs-d551, hs-d569 CD2, CD3). `cursor` is an entry.
     Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
+    /// A radio list: the prompt, then one row per option, with the `OK` and `Cancel` buttons. `cursor` is an option.
+    Select { options: Vec<String>, cursor: usize },
 }
 
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
@@ -177,10 +175,9 @@ fn frame_top(title: &str, width: usize) -> Line<'static> {
     let pill = !text.is_empty() && left >= text.chars().count() + 3;
     let fill = left - if pill { text.chars().count() + 2 } else { 0 };
     let style = palette::pill_static();
-    let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
     let mut spans = vec![Span::styled(lead, muted)];
     if pill {
-        spans.extend([Span::styled(CAP_LEFT, cap), Span::styled(text, style), Span::styled(CAP_RIGHT, cap)]);
+        spans.extend(pill::pill(text, style));
     }
     spans.push(Span::styled("─".repeat(fill), muted));
     if close == 1 {
@@ -203,8 +200,7 @@ fn frame_wall(width: usize) -> Line<'static> {
 
 /// A button as a pill: the caps around the label.
 fn pill(label: &str, style: Style, rect: Rect, f: &mut Frame) {
-    let cap = Style::new().fg(style.fg.expect("a pill has a colour"));
-    let line = Line::from(vec![Span::styled(CAP_LEFT, cap), Span::styled(label.to_owned(), style), Span::styled(CAP_RIGHT, cap)]);
+    let line = Line::from(pill::pill(label.to_owned(), style));
     f.render_widget(Paragraph::new(line), rect);
 }
 
@@ -263,6 +259,7 @@ impl Dialog {
             Mode::Input { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
             Mode::Text => vec![CLOSE.to_owned()],
             Mode::Checklist { .. } => vec![APPROVE.to_owned(), LATER.to_owned()],
+            Mode::Select { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
         }
     }
 
@@ -291,11 +288,27 @@ impl Dialog {
         lines
     }
 
-    /// Keeps the header line of the cursor entry of a `checklist` inside the scrolled window.
+    /// The prompt's rows of a `select` at `width` columns.
+    fn prompt_rows(&self, width: usize) -> Vec<String> {
+        wrap(&self.text, width)
+    }
+
+    /// The rows of a `select`: the prompt, then `(x) <option>` for the cursor row and `( ) <option>` for the others.
+    fn select_rows(&self, width: usize) -> Vec<String> {
+        let Mode::Select { options, cursor } = &self.mode else { return Vec::new() };
+        let mut rows = self.prompt_rows(width);
+        rows.extend(options.iter().enumerate().map(|(n, o)| cut(&format!("({}) {o}", if n == *cursor { 'x' } else { ' ' }), width)));
+        rows
+    }
+
+    /// Keeps the cursor row of a `checklist` or a `select` inside the scrolled window.
     fn follow_cursor(&mut self) {
-        let Mode::Checklist { cursor, .. } = &self.mode else { return };
         let width = usize::from(layout(self.area).body.width);
-        let cursor = self.entry_lines(width).iter().position(|l| l.header && l.entry == Some(*cursor)).unwrap_or(0);
+        let cursor = match &self.mode {
+            Mode::Checklist { cursor, .. } => self.entry_lines(width).iter().position(|l| l.header && l.entry == Some(*cursor)).unwrap_or(0),
+            Mode::Select { cursor, .. } => self.prompt_rows(width).len() + cursor,
+            _ => return,
+        };
         let (offset, page) = (self.scroll.offset(), self.scroll.page().max(1));
         if cursor < offset {
             self.scroll.by(-((offset - cursor) as isize));
@@ -313,7 +326,7 @@ impl Dialog {
             .iter()
             .enumerate()
             .map(|(n, label)| {
-                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX).saturating_add(CAPS);
+                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX).saturating_add(pill::CAPS_COLUMNS);
                 let x = if n == 0 { area.x.saturating_add(2) } else { end.saturating_sub(width) };
                 Rect::new(x, row.y, width, 1).intersection(row)
             })
@@ -324,6 +337,9 @@ impl Dialog {
     fn rows(&self, body: Rect) -> Vec<String> {
         if let Mode::Checklist { .. } = &self.mode {
             return self.entry_lines(usize::from(body.width)).into_iter().map(|l| l.text).collect();
+        }
+        if let Mode::Select { .. } = &self.mode {
+            return self.select_rows(usize::from(body.width));
         }
         wrap(&self.text, usize::from(body.width))
     }
@@ -390,6 +406,14 @@ impl Dialog {
                     f.render_widget(Paragraph::new(line.text.as_str()).style(style), row(n));
                 }
             }
+            Mode::Select { cursor, .. } => {
+                let first = self.scroll.offset();
+                let chosen = self.prompt_rows(content).len() + cursor;
+                for (n, text) in rows.iter().enumerate().skip(first).take(self.scroll.page()) {
+                    let style = if n == chosen { palette::selected() } else { palette::read_only_text() };
+                    f.render_widget(Paragraph::new(text.as_str()).style(style), row(n - first));
+                }
+            }
             _ => {
                 let first = self.scroll.offset();
                 for (n, text) in rows.iter().skip(first).take(self.scroll.page()).enumerate() {
@@ -426,6 +450,7 @@ impl Dialog {
                     None
                 }
             },
+            Mode::Select { options, cursor } => Some(Outcome::value(options[*cursor].clone())),
             _ => Some(Outcome::confirmed()),
         }
     }
@@ -478,6 +503,24 @@ impl Dialog {
             }
             return None;
         }
+        if let Mode::Select { options, cursor } = &mut self.mode {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') => return Some(Outcome::value(options[*cursor].clone())),
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => return Some(Outcome::cancelled()),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    *cursor = cursor.saturating_sub(1);
+                    self.follow_cursor();
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    *cursor = (*cursor + 1).min(options.len() - 1);
+                    self.follow_cursor();
+                }
+                _ => {
+                    self.scroll.key(key);
+                }
+            }
+            return None;
+        }
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => Some(Outcome::confirmed()),
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(Outcome::cancelled()),
@@ -502,6 +545,15 @@ impl Dialog {
             if let (Some(entry), Mode::Checklist { ticked, cursor, .. }) = (entry, &mut self.mode) {
                 ticked[entry] = !ticked[entry];
                 *cursor = entry;
+            }
+            return None;
+        }
+        if matches!(self.mode, Mode::Select { .. }) && body.contains(at) {
+            let n = (self.scroll.offset() + usize::from(at.y - body.y)).checked_sub(self.prompt_rows(usize::from(body.width)).len());
+            if let (Some(n), Mode::Select { options, cursor }) = (n, &mut self.mode) {
+                if n < options.len() {
+                    *cursor = n;
+                }
             }
             return None;
         }

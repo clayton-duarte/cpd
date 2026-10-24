@@ -12,9 +12,9 @@
 //!
 //! ```text
 //! +-------+-------------------+---------+
-//! | tree  | plan (20 %)       | widgets |
-//! | 20 %  +-------------------+  20 %   |
-//! |       | chat slot (80 %)  |         |
+//! | tree  | plan (25 %)       | widgets |
+//! | 25 %  +-------------------+  25 %   |
+//! |       | chat slot (75 %)  |         |
 //! +-------+-------------------+---------+
 //! ```
 //!
@@ -174,12 +174,11 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
         None => tmux.new_window(cockpit, MAIN_WINDOW, &spawn(View::Tree))?.1,
     };
     tmux.set_pane_view(&tree, View::Tree)?;
-    let plan = tmux.split_window(&tree, Split::Right, Some("80%"), &spawn(View::Plan))?;
+    let plan = tmux.split_window(&tree, Split::Right, None, &spawn(View::Plan))?;
     tmux.set_pane_view(&plan, View::Plan)?;
-    // 25 % of the centre's 80 % is 20 % of the window.
-    let widgets = tmux.split_window(&plan, Split::Right, Some("25%"), &spawn(View::Widgets))?;
+    let widgets = tmux.split_window(&plan, Split::Right, None, &spawn(View::Widgets))?;
     tmux.set_pane_view(&widgets, View::Widgets)?;
-    let chat = tmux.split_window(&plan, Split::Below, Some("80%"), &spawn(View::Chat))?;
+    let chat = tmux.split_window(&plan, Split::Below, None, &spawn(View::Chat))?;
     tmux.set_pane_view(&chat, View::Chat)?;
     reset_layout(tmux, cockpit)?;
     // The keyboard goes to the chat slot, as in the spike.
@@ -204,19 +203,19 @@ fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) 
     // The tree and the widgets span the window's height: `-f` puts them at its edges.
     let tree = match found(View::Tree) {
         Some(tree) => tree,
-        None => add(View::Tree, &any.pane, &["-h", "-b", "-f"], Some("20%"))?,
+        None => add(View::Tree, &any.pane, &["-h", "-b", "-f"], Some(TREE_WIDTH))?,
     };
     if found(View::Widgets).is_none() {
-        add(View::Widgets, &any.pane, &["-h", "-f"], Some("20%"))?;
+        add(View::Widgets, &any.pane, &["-h", "-f"], Some(WIDGETS_WIDTH))?;
     }
     let (plan, slot) = (found(View::Plan), chat_slot(main, cockpit).map(|p| p.pane.clone()));
     match (plan, slot) {
         (Some(_), Some(_)) => {}
-        (None, Some(slot)) => drop(add(View::Plan, &slot, &["-v", "-b"], Some("20%"))?),
-        (Some(plan), None) => drop(add(View::Chat, &plan, &["-v"], Some("80%"))?),
+        (None, Some(slot)) => drop(add(View::Plan, &slot, &["-v", "-b"], Some(PLAN_HEIGHT))?),
+        (Some(plan), None) => drop(add(View::Chat, &plan, &["-v"], None)?),
         (None, None) => {
             let plan = add(View::Plan, &tree, &["-h"], None)?;
-            add(View::Chat, &plan, &["-v"], Some("80%"))?;
+            add(View::Chat, &plan, &["-v"], None)?;
         }
     }
     if !added.is_empty() {
@@ -289,11 +288,24 @@ fn unexpected_listing(tmux: &Tmux, line: &str) -> CpdError {
         .with("stdout", line.to_owned())
 }
 
+/// The tree's width on reset.
+const TREE_WIDTH: &str = "25%";
+/// The widgets' width on reset.
+const WIDGETS_WIDTH: &str = "25%";
+/// The Plan view's height on reset.
+const PLAN_HEIGHT: &str = "25%";
+/// The Worker pane's width on reset.
+const WORKER_WIDTH: &str = "30%";
+
 /// Reset-layout (commands.md §13.2): the views resized, in order, with the
 /// `resize-pane` flag and size of each. tmux takes a percentage as a share of
 /// the window. The chat slot is never resized: it takes what is left.
-const RESET_ORDER: [(View, &str, &str); 4] =
-    [(View::Tree, "-x", "20%"), (View::Widgets, "-x", "20%"), (View::Plan, "-y", "20%"), (View::Worker, "-x", "30%")];
+const RESET_ORDER: [(View, &str, &str); 4] = [
+    (View::Tree, "-x", TREE_WIDTH),
+    (View::Widgets, "-x", WIDGETS_WIDTH),
+    (View::Plan, "-y", PLAN_HEIGHT),
+    (View::Worker, "-x", WORKER_WIDTH),
+];
 
 /// The ordered `resize-pane` arguments that reset the window, given each pane
 /// as `(pane, view)`. The Worker's step is only there when a Worker pane is open.
@@ -664,7 +676,7 @@ mod tests {
     fn the_reset_applies_the_sizes_in_order() {
         // %0 tree, %1 chat, %2 widgets, %3 plan
         let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
-        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 20%", "resize-pane -t %3 -y 20%"]);
+        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 25%", "resize-pane -t %2 -x 25%", "resize-pane -t %3 -y 25%"]);
     }
 
     #[test]

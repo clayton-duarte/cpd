@@ -12,7 +12,7 @@
 //!
 //! **Folds** (decisions hs-d337, hs-d339, hs-d344, hs-d349; `crate::fold`, the one widget). A Context is a collapsible
 //! block: the title row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight
-//! against the branch (the widget indents a child by two columns; `draw` takes it back), and **one** closing row. The
+//! against the branch (no widget indent), and **one** closing row. The
 //! toggle shows and hides **only the archived rows**: the live rows always show. Folded, the closing row is the muted
 //! `╰󰬦 expand`; expanded, the archived rows (muted) and `╰󰬬 collapse`; a Context with no archived rows closes with the
 //! terminator ` ╰󰬪` (U+F0B2A; hs-d574) and has no toggle. Only the closing row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
@@ -41,13 +41,11 @@
 use std::collections::HashSet;
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
-use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
-use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
+use ratatui::widgets::{Paragraph, Widget};
+use tui_tree_widget::TreeState;
 
 use crate::fold;
 use crate::palette;
@@ -60,7 +58,7 @@ use super::actions::{Action, Subject};
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
 
-/// One tree level is indented by two columns (`tui-tree-widget`'s own indentation, which [`draw`] takes back).
+/// One tree level is two columns, as the width of a row counts it (the frames keep it, A11).
 const INDENT: usize = 2;
 
 /// What a closing row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
@@ -365,14 +363,27 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
     (s.id.to_string(), text)
 }
 
-/// A Context's items: its item (the title row and, as the children, its live Plans and forks, then, when expanded, its
-/// archived ones) and, right after it, its closing row. `opened` is the tree state's open set: the Context is expanded
-/// when it holds the closing row's identifier. The closing row is a sibling of the title row, not a child, so that it
-/// stays under the live rows (the tree widget draws a child only under an open item) and is drawn once.
+/// A visible row of the tree: its identifier (a path) and what it says.
+pub struct FlatRow {
+    pub path: Vec<Id>,
+    pub line: Line<'static>,
+}
+
+/// What [`draw`] drew: the rectangle of the rows (the cue rows are not in it) and, one per row of it, the path drawn.
+#[derive(Debug, Default)]
+pub struct Hits {
+    pub rows: Rect,
+    pub paths: Vec<Vec<Id>>,
+}
+
+/// A Context's visible rows: its title row and, when its path is in `opened`, its live Plans and forks, then, when
+/// expanded, its archived ones, and, right after, its closing row. `opened` is the tree state's open set: the Context is
+/// expanded when it holds the closing row's identifier. The closing row is a sibling of the title row, not a child, so
+/// that it stays under the live rows.
 ///
 /// A Context with nothing to fold (no archived row) has no closing row when it has rows: its last row's branch is the
 /// `╰─` instead of `├─` (hs-d477). With no row at all it ends with the terminator ` ╰󰬪` (U+F0B2A; hs-d574).
-fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
+fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
     let id = c.id.to_string();
     let close = toggle_id(&id);
     let k = kids(c);
@@ -385,30 +396,28 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     }
     let last = rows.len().saturating_sub(1);
     let closes_in_a_row = !k.has_archived() && !rows.is_empty();
-    let children = rows
-        .into_iter()
-        .enumerate()
-        .map(|(i, (id, line))| {
+    let mut flat = vec![FlatRow { path: vec![id.clone()], line: fold::title(context_text(c, frame)) }];
+    if opened.contains(&vec![id.clone()]) {
+        flat.extend(rows.into_iter().enumerate().map(|(i, (child, line))| {
             let branch = if closes_in_a_row && i == last { fold::LAST_BRANCH } else { fold::TREE_BRANCH };
-            TreeItem::new_leaf(id, fold::content(branch, line))
-        })
-        .collect();
-    let title = TreeItem::new(id, fold::title(context_text(c, frame)), children).expect("Plan and Session ids are unique");
-    if closes_in_a_row {
-        return vec![title];
+            FlatRow { path: vec![id.clone(), child], line: fold::content(branch, line) }
+        }));
     }
-    let closing = if k.has_archived() { fold::toggle(expanded) } else { fold::plain() };
-    vec![title, TreeItem::new_leaf(close, closing)]
+    if !closes_in_a_row {
+        let closing = if k.has_archived() { fold::toggle(expanded) } else { fold::plain() };
+        flat.push(FlatRow { path: vec![close], line: closing });
+    }
+    flat
 }
 
 /// The empty row between two Contexts: one, not two (the margins of two blocks collapse into one; hs-d476).
-fn spacer(c: &ContextNode) -> TreeItem<'static, Id> {
-    TreeItem::new_leaf(format!("{SPACER}{}", c.id), Line::default())
+fn spacer(c: &ContextNode) -> FlatRow {
+    FlatRow { path: vec![format!("{SPACER}{}", c.id)], line: Line::default() }
 }
 
-/// The tree's items for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree state's
-/// open set: a Context not in it is folded. `frame` is the animation frame of the working dots.
-pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
+/// The tree's visible rows for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree
+/// state's open set: a Context not in it shows its title only. `frame` is the animation frame of the working dots.
+pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
     let contexts: Vec<&ContextNode> = live.into_iter().chain(archived).collect();
     let last = contexts.len().saturating_sub(1);
@@ -437,9 +446,17 @@ pub struct Scroll {
     /// cursor is followed when one of them changed (it moved, a fold or a snapshot changed the rows, the section
     /// below grew), never because of the wheel.
     followed: Option<(Vec<Id>, usize, u16)>,
+    /// What the last [`draw`] drew: the click geometry (`draw` is called as a statement by the tests, so it hands the
+    /// hits back through the state it already takes).
+    hits: Hits,
 }
 
 impl Scroll {
+    /// The rows the last frame drew, with the path of each.
+    pub fn hits(&self) -> &Hits {
+        &self.hits
+    }
+
     /// A wheel notch: `rows` down or up, clamped to the rows as the last frame had them.
     pub fn wheel(&mut self, down: bool, rows: usize) {
         let offset = self.offset.min(self.max);
@@ -449,7 +466,7 @@ impl Scroll {
 
 /// The number of rows the tree draws: one for every visible row, or the one `no Contexts` row.
 pub fn row_count(state: &TreeState<Id>, tree: &Tree) -> usize {
-    if tree.contexts.is_empty() { 1 } else { state.flatten(&items(tree, state.opened(), 0, 0)).len() }
+    if tree.contexts.is_empty() { 1 } else { items(tree, state.opened(), 0, 0).len() }
 }
 
 /// The rows drawn from the row `scroll` of `n` in `height` rows, with their cues. One row has no room for a cue: it draws
@@ -479,15 +496,16 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
     if tree.contexts.is_empty() {
         scroll.max = 0;
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), area);
+        scroll.hits = Hits::default();
         return;
     }
     let items = items(tree, state.opened(), area.width.saturating_sub(RIGHT_PAD), frame);
-    let flat = state.flatten(&items);
+    let flat = items;
     let height = usize::from(area.height);
     scroll.max = max_scroll(flat.len(), height, 1);
     let key = (state.selected().to_vec(), flat.len(), area.height);
     if scroll.followed.as_ref() != Some(&key) {
-        if let Some(i) = flat.iter().position(|r| r.identifier == key.0) {
+        if let Some(i) = flat.iter().position(|r| r.path == key.0) {
             scroll.offset = scroll_to(i, flat.len(), height, scroll.offset);
         }
         scroll.followed = Some(key);
@@ -495,14 +513,8 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
     let win = view(flat.len(), height, scroll.offset);
     scroll.offset = win.first;
     let above = u16::from(win.cue_above);
-    let rows = Rect::new(area.x, area.y + above, area.width, area.height.saturating_sub(above + u16::from(win.below > 0)));
-    let widget = || TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
-    // The widget scrolls by its own offset, which it clamps to what the last render saw: a render into one cell (off the
-    // frame) lets it see these rows, then the offset is ours.
-    StatefulWidget::render(widget(), Rect::new(0, 0, 1, 1), &mut Buffer::empty(Rect::new(0, 0, 1, 1)), state);
-    state.scroll_up(usize::MAX);
-    state.scroll_down(win.first);
-    f.render_stateful_widget(widget(), rows, state);
+    let rows = Rect::new(area.x, area.y + above, area.width, u16::try_from(win.shown).unwrap_or(u16::MAX).min(area.height.saturating_sub(above + u16::from(win.below > 0))));
+    let drawn = &flat[win.first..win.first + win.shown.min(usize::from(rows.height))];
     if win.cue_above {
         f.render_widget(Paragraph::new(cue(Cue::Above, win.first, usize::from(area.width))), Rect::new(area.x, area.y, area.width, 1));
     }
@@ -510,16 +522,11 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         f.render_widget(Paragraph::new(cue(Cue::Below, win.below, usize::from(area.width))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
     }
     let buf = f.buffer_mut();
-    for (y, flat_row) in (rows.y..rows.bottom()).zip(flat.iter().skip(win.first)) {
+    for (y, flat_row) in (rows.y..rows.bottom()).zip(drawn) {
         let rect = Rect::new(area.x, y, area.width, 1);
-        let path = &flat_row.identifier;
+        let path = &flat_row.path;
         let Some(row) = row(tree, path) else { continue };
-        // the widget indents a child by two columns per level; the fold's branch is straight against the edge
-        let shift = u16::try_from(path.len().saturating_sub(1) * INDENT).unwrap_or(0).min(rect.width);
-        for x in rect.x..rect.right() {
-            let cell = if x + shift < rect.right() { buf[(x + shift, y)].clone() } else { Cell::EMPTY };
-            buf[(x, y)] = cell;
-        }
+        flat_row.line.clone().render(rect, buf);
         // an asleep row's counters (separators too) are colour 8 whatever the count: the muted restyle skips them
         let mut counter_cols = 0..0;
         if let Row::Plan(_, plan) = row {
@@ -549,6 +556,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             buf.set_style(rect, palette::selected());
         }
     }
+    scroll.hits = Hits { rows, paths: drawn.iter().map(|r| r.path.clone()).collect() };
 }
 
 /// Open every Context the first time it is seen, so that its live rows show, and expand each live one (its archived rows
@@ -567,10 +575,9 @@ pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &
 
 /// The visible Session rows (the only selectable ones: the live Plans' Leads and the live forks), in order.
 fn visible(state: &TreeState<Id>, tree: &Tree) -> Vec<Vec<Id>> {
-    state
-        .flatten(&items(tree, state.opened(), 0, 0))
+    items(tree, state.opened(), 0, 0)
         .into_iter()
-        .map(|f| f.identifier)
+        .map(|f| f.path)
         .filter(|id| row(tree, id).is_some_and(|r| r.selectable()))
         .collect()
 }

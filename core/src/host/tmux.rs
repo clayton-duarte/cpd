@@ -23,11 +23,12 @@ use std::fmt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
+use crate::pill::spec;
 
 use super::deadline::{self, Failed};
 use super::layout::{LEGACY_STATUSBAR, View};
@@ -76,18 +77,6 @@ pub const OPT_VIEW: &str = "@cpd_view";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
-// A pane's title pill (§6.1.1 R3): the `━` before it, the caps and the block are colour 7, or blue on the focused pane, the text
-// is reversed (the terminal's background on the block); one attribute per `#[…]`, since a comma inside a conditional would split the branch.
-macro_rules! title_pill {
-    ($($text:expr),+) => {
-        concat!(
-            "#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[reverse]",
-            $($text,)+
-            "#[noreverse]\u{e0b4}"
-        )
-    };
-}
-
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
@@ -100,13 +89,18 @@ macro_rules! title_pill {
 /// border line characters before the format; one `━` more in the pill's colour
 /// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
 /// private server).
-pub const BORDER_FORMAT: &str = concat!(
-    "#{?#{@cpd_session},#{?#{@cpd_title},", title_pill!("#{@cpd_title}"), ",},",
-    "#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,",
-    title_pill!("#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
-    "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"),
-    "}}}"
-);
+pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
+    let colour = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
+    let title = |text: &str| pill::pill(&colour, "━", text);
+    format!(
+        "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
+        title("#{@cpd_title}"),
+        title(concat!(
+            "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
+            "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
+        )),
+    )
+});
 
 /// What the supervising hooks run when the engine's pane died or its window is
 /// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
@@ -149,39 +143,42 @@ pub const WINDOW_UNLINKED_HOOK: &str =
 /// (`select-pane -t = ; send-keys -M`), bound again so that a server that
 /// still has cpd's earlier StatusBar override gets the default back; a click
 /// on a StatusBar button is [`STATUS_CLICK`].
-pub const SERVER_OPTIONS: &[&[&str]] = &[
-    &["set", "-g", "mouse", "on"],
-    &["set", "-g", "focus-events", "on"],
-    &["set", "-g", "default-terminal", "tmux-256color"],
-    &["set", "-g", "extended-keys", "on"],
-    &["set", "-gq", "extended-keys-format", "csi-u"],
-    &["set", "-as", "terminal-features", TERMINAL_FEATURES],
-    &["set", "-g", "escape-time", "10"],
-    &["set", "-g", "status", "off"],
-    &["set", "-g", "pane-border-status", "top"],
-    &["set", "-g", "pane-border-lines", "heavy"],
-    &["set", "-g", "pane-border-format", BORDER_FORMAT],
-    // Unfocused borders are grey like their titles (hs-d489).
-    &["set", "-g", "pane-border-style", "fg=colour7"],
-    &["set", "-g", "pane-active-border-style", "fg=blue"],
-    // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
-    // background (User, hs-d353); the popup frame is colour 7, a draggable line (§6.1.1 R4). `-q`: an older tmux does not know them.
-    &["set", "-gq", "popup-style", "default"],
-    &["set", "-gq", "popup-border-style", "fg=colour7"],
-    // Menus and copy mode follow the palette (hs-d534): entries are clickable text, the border a muted line, a selection the blue block.
-    &["set", "-gq", "menu-style", "fg=colour15"],
-    &["set", "-gq", "menu-border-style", "fg=colour8"],
-    &["set", "-gq", "menu-selected-style", "fg=blue,reverse"],
-    &["set", "-gq", "mode-style", "fg=blue,reverse"],
-    &["set", "-g", "remain-on-exit", "on"],
-    &["set", "-g", "set-titles", "on"],
-    &["set", "-g", "set-titles-string", SET_TITLES_STRING],
-    &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
-    &["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK],
-    &["set", "-s", "exit-empty", "off"],
-    &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
-    &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
-];
+pub static SERVER_OPTIONS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
+    vec![
+        strings(&["set", "-g", "mouse", "on"]),
+        strings(&["set", "-g", "focus-events", "on"]),
+        strings(&["set", "-g", "default-terminal", "tmux-256color"]),
+        strings(&["set", "-g", "extended-keys", "on"]),
+        strings(&["set", "-gq", "extended-keys-format", "csi-u"]),
+        strings(&["set", "-as", "terminal-features", TERMINAL_FEATURES]),
+        strings(&["set", "-g", "escape-time", "10"]),
+        strings(&["set", "-g", "status", "off"]),
+        strings(&["set", "-g", "pane-border-status", "top"]),
+        strings(&["set", "-g", "pane-border-lines", "heavy"]),
+        vec!["set".into(), "-g".into(), "pane-border-format".into(), BORDER_FORMAT.clone()],
+        // Unfocused borders are grey like their titles (hs-d489).
+        strings(&["set", "-g", "pane-border-style", "fg=colour7"]),
+        strings(&["set", "-g", "pane-active-border-style", "fg=blue"]),
+        // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
+        // background (User, hs-d353); the popup frame is colour 7, a draggable line (§6.1.1 R4). `-q`: an older tmux does not know them.
+        strings(&["set", "-gq", "popup-style", "default"]),
+        strings(&["set", "-gq", "popup-border-style", "fg=colour7"]),
+        // Menus and copy mode follow the palette (hs-d534): entries are clickable text, the border a muted line, a selection the blue block.
+        strings(&["set", "-gq", "menu-style", "fg=colour15"]),
+        strings(&["set", "-gq", "menu-border-style", "fg=colour8"]),
+        strings(&["set", "-gq", "menu-selected-style", "fg=blue,reverse"]),
+        strings(&["set", "-gq", "mode-style", "fg=blue,reverse"]),
+        strings(&["set", "-g", "remain-on-exit", "on"]),
+        strings(&["set", "-g", "set-titles", "on"]),
+        strings(&["set", "-g", "set-titles-string", SET_TITLES_STRING]),
+        strings(&["set-hook", "-g", "pane-died", PANE_DIED_HOOK]),
+        strings(&["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK]),
+        strings(&["set", "-s", "exit-empty", "off"]),
+        strings(&["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"]),
+        strings(&["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK]),
+
+    ]
+});
 
 /// The terminal window's title (contract §6.1, hs-d300): the config's machine
 /// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
@@ -251,18 +248,6 @@ macro_rules! fill {
     };
 }
 // A join: one grey `─`, outside the click ranges.
-// An interactive pill (R2): a click range, block 15 drawn reversed, caps 15.
-macro_rules! button {
-    ($range:literal, $glyph:expr) => {
-        concat!("#[range=user|", $range, "]#[fg=colour15]\u{e0b6}#[reverse]", $glyph, "#[noreverse]\u{e0b4}#[default]#[norange]")
-    };
-}
-// A non-interactive pill (R3): its colour as the block drawn reversed, caps in the colour. `$colour` is a literal such as `"colour7"`.
-macro_rules! pill {
-    ($colour:literal, $($text:expr),+) => {
-        concat!("#[fg=", $colour, "]\u{e0b6}#[reverse]", $($text,)+ "#[noreverse]\u{e0b4}#[default]")
-    };
-}
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 
 /// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
@@ -298,26 +283,31 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 ///
 /// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
-pub const STATUS_FORMAT: &str = concat!(
-    join!(),
-    button!("reset", reset_glyph!()),
-    join!(),
-    button!("legend", legend_glyph!()),
-    join!(),
-    button!("logs", logs_glyph!()),
-    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}", pill!("colour3", "preview: #{@cpd_preview}"), ",}",
-    "#[fg=colour8]", fill!(),
-    "#[default]#[align=right]",
-    pill!("colour8", "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
-    "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("colour8", "#{@cpd_version}"), ",}",
-    join!()
-);
+pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
+    let m = &spec().meanings;
+    let button = |range: &str, glyph: &str| {
+        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.plain)), "", glyph)))
+    };
+    let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
+    format!(
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        join = join!(),
+        reset = button("reset", reset_glyph!()),
+        legend = button("legend", legend_glyph!()),
+        logs = button("logs", logs_glyph!()),
+        preview = status(m.review, "preview: #{@cpd_preview}"),
+        fill = fill!(),
+        workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
+        version = status(m.nothing, "#{@cpd_version}"),
+    )
+});
 
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
 /// is a session option, and `-g` would give `cpd-work` a row too.
 /// `status-style default` replaces tmux's green bar with the terminal's colours.
-pub const STATUS_OPTIONS: [(&str, &str); 3] =
-    [("status", "on"), ("status-style", "default"), ("status-format[0]", STATUS_FORMAT)];
+pub static STATUS_OPTIONS: LazyLock<[(&'static str, String); 3]> = LazyLock::new(|| {
+    [("status", "on".into()), ("status-style", "default".into()), ("status-format[0]", STATUS_FORMAT.clone())]
+});
 
 /// The value `terminal-features` is appended with (`set -as`), the one entry of
 /// [`SERVER_OPTIONS`] that is not idempotent: it runs once, when cpd starts
@@ -636,7 +626,7 @@ impl Tmux {
     /// server's start already made. Rerunning is safe.
     pub fn apply_server_options(&self) -> Result<(), CpdError> {
         for option in SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
-            self.run(&strings(option))?;
+            self.run(option)?;
         }
         Ok(())
     }
@@ -646,7 +636,7 @@ impl Tmux {
     /// the StatusBar, on that session only, and the global `@cpd_version` the version pill shows. Rerunning is safe.
     pub fn apply_status_line(&self, session: &str, version: &str) -> Result<(), CpdError> {
         self.run(&strings(&["set", "-g", "@cpd_version", version]))?;
-        for (option, value) in STATUS_OPTIONS {
+        for (option, value) in STATUS_OPTIONS.iter() {
             self.run(&strings(&["set", "-t", &format!("={session}:"), option, value]))?;
         }
         Ok(())
@@ -992,8 +982,8 @@ fn dying(stderr: &str) -> bool {
 fn new_session_args(name: &str, window: &str, spawn: &Spawn, fresh: bool) -> Vec<String> {
     let mut args = Vec::new();
     if fresh {
-        for option in SERVER_OPTIONS {
-            args.extend(strings(option));
+        for option in SERVER_OPTIONS.iter() {
+            args.extend(option.iter().cloned());
             args.push(";".into());
         }
     }
@@ -1075,13 +1065,13 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
 
-#[cfg(test)]
-mod no_inbox;
+pub mod pill;
 
 #[cfg(test)]
-mod junctions;
+mod pill_tests;
+
 #[cfg(test)]
-mod palette;
+mod no_inbox;
 
 #[cfg(test)]
 mod tests {
@@ -1100,14 +1090,14 @@ mod tests {
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
         let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}";
-        let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {STATUS_FORMAT}"));
+        let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {}", *STATUS_FORMAT));
         let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
-        assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
+        assert!(at > workers, "the version pill follows the workers pill: {}", *STATUS_FORMAT);
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
         assert!(tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 1, "the text is drawn once: {}", *STATUS_FORMAT);
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
@@ -1118,8 +1108,8 @@ mod tests {
         let fill = fill_count!();
         assert!(fill.contains(width), "the fill count: {fill}");
         assert!(long_fits!().contains(width), "long_fits: {}", long_fits!());
-        assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {STATUS_FORMAT}");
-        assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {STATUS_FORMAT}");
+        assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {}", *STATUS_FORMAT);
+        assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {}", *STATUS_FORMAT);
     }
 
     #[test]
@@ -1252,7 +1242,7 @@ mod tests {
         let (last, options) = commands.split_last().unwrap();
         assert_eq!(*last, new_session.as_slice());
         let options: Vec<Vec<String>> = options.iter().map(|c| c.to_vec()).collect();
-        let expected: Vec<Vec<String>> = SERVER_OPTIONS.iter().map(|o| strings(o)).collect();
+        let expected: Vec<Vec<String>> = SERVER_OPTIONS.clone();
         assert_eq!(options, expected);
     }
 
