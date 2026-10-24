@@ -33,6 +33,7 @@ mod schedule;
 mod sleep;
 pub mod team;
 mod titles;
+mod wake;
 mod workers;
 #[cfg(test)]
 mod pill_texts;
@@ -136,3 +137,5 @@ mod tests {
         wait_until("the file to be removed", || !file.exists());
     }
 }
+#[cfg(test)]
+mod wake_tests;

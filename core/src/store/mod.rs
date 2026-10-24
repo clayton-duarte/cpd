@@ -9,6 +9,8 @@ mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
 mod verdict;
+#[cfg(test)]
+mod version_tests;
 
 use std::fs::{self, OpenOptions};
 use std::ops::Deref;
@@ -481,6 +483,11 @@ impl Store {
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
+    }
+
+    /// `PRAGMA data_version` on this connection: changes only when another connection commits.
+    pub fn data_version(&mut self) -> Result<i64, CpdError> {
+        todo!()
     }
 
     /// Runs `f` in one write transaction (§4.2, §4.3): `BEGIN IMMEDIATE`
