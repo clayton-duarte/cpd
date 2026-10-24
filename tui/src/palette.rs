@@ -379,6 +379,7 @@ pub fn attempt_status(status: AttemptStatus) -> Meaning {
     match status {
         AttemptStatus::Starting => Meaning::NotStarted,
         AttemptStatus::Running => Meaning::InProgress,
+        AttemptStatus::Checking => Meaning::InProgress,
         AttemptStatus::Merging => Meaning::Review,
         AttemptStatus::Ended => Meaning::Done,
     }

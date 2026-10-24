@@ -71,7 +71,16 @@ string_enum! {
 
 string_enum! {
     /// An Attempt's status (§3.4).
-    AttemptStatus { Starting = "starting", Running = "running", Merging = "merging", Ended = "ended" }
+    AttemptStatus {
+        Starting = "starting", Running = "running", Checking = "checking", Merging = "merging", Ended = "ended"
+    }
+}
+
+impl AttemptStatus {
+    /// Landing (yellow): checking or merging. Stub: incomplete on purpose.
+    pub fn is_landing(self) -> bool {
+        matches!(self, AttemptStatus::Merging)
+    }
 }
 
 string_enum! {
