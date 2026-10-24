@@ -784,6 +784,44 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
 }
 
+/// The layout test's sample (`layout_tests`): the tree's Contexts (the fixture's live ones and an archived one) in a
+/// `width` x `height` pane, drawn by [`View::draw`] as in production. Placed is one Rail per Context, its rect from the
+/// rows the view saved for hit-testing: the blank row above, the Context's rows, the blank row below. The rows whose
+/// glyph sits against the rail by recorded design (`├─glyph`: hs-d337, hs-d339, hs-d484) are exempt by name; the fold is
+/// not the widget, so it is exempt from B3 (`Rule::Minimum`).
+#[cfg(test)]
+pub(crate) fn layout_fold_sample(width: u16, height: u16, case: crate::layout_tests::TreeCase) -> crate::layout_tests::Sample {
+    use crate::box_widget::spacing;
+    use crate::layout_tests::{Exempt, Kind, Placed, Rule, Sample, TreeCase};
+    use ratatui::backend::TestBackend;
+    assert_eq!(case, TreeCase::ContextFold, "the fold samples the Context fold");
+    let mut view = View::new(super::fixture::archived(), true);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
+    let pane = Rect::new(0, 0, width, height); // what the tree column passed: the margin is the container's to leave
+    let hits = view.tree_scroll.hits();
+    // the rows of one Context run until the empty row between two Contexts (which is no row)
+    let drawn: Vec<bool> = hits.paths.iter().map(|p| rows::row(&view.tree, p).is_some()).collect();
+    let mut boxes = Vec::new();
+    let mut start = 0;
+    while start < drawn.len() {
+        if !drawn[start] {
+            start += 1;
+            continue;
+        }
+        let end = (start..drawn.len()).find(|&i| !drawn[i]).unwrap_or(drawn.len());
+        let top = hits.rows.y + start as u16 - 1; // the blank row above
+        let rect = Rect { y: top, height: (end - start) as u16 + 2, ..spacing::contain(pane) };
+        let exempt = (start + 1..end - 1)
+            .map(|i| Exempt { name: "hs-d337 hs-d339 hs-d484: the branch ├─ sits against the rail", row: hits.rows.y + i as u16, rule: Rule::Padding })
+            .chain([Exempt { name: "hs-d484: the fold is not the widget (B3 does not apply)", row: top, rule: Rule::Minimum }])
+            .collect();
+        boxes.push(Placed { name: "context fold", kind: Kind::Rail, rect, exempt });
+        start = end;
+    }
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::Terminal;

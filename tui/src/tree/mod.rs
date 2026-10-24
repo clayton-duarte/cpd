@@ -51,6 +51,10 @@ mod rows;
 mod slug;
 mod view;
 #[cfg(test)]
+pub(crate) use inbox::layout_sample as layout_inbox_sample;
+#[cfg(test)]
+pub(crate) use view::layout_fold_sample;
+#[cfg(test)]
 pub(crate) use view::layout_sample;
 
 #[cfg(test)]

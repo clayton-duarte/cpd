@@ -35,6 +35,9 @@ pub(crate) enum Rule {
     Padding,
     /// The row under the top border and the row above the bottom border are not blank (a spacing row, hs-d578).
     Vertical,
+    /// The box is below `MIN_WIDTH` and still draws (B3 does not apply): the Context fold is not the widget, it stays
+    /// on the `fold::*` line builders (research section 2); only the margin and "nothing outside" are asserted.
+    Minimum,
 }
 
 /// A row that keeps a recorded design, by name: the name carries the record id.
@@ -97,6 +100,23 @@ pub(crate) enum Case {
     Checklist,
     /// A right-click menu opened at a click.
     Menu(Click),
+}
+
+/// The fixture the tree pane's samples draw (the Inbox and the Context fold).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TreeCase {
+    /// The Inbox with no items.
+    InboxNone,
+    /// The Inbox with three items.
+    Inbox3,
+    /// The Inbox with five items, folded.
+    Inbox5Folded,
+    /// The Inbox with five items, expanded.
+    Inbox5Expanded,
+    /// The Inbox with eight items, expanded in a column that scrolls them: both cues show.
+    InboxCues,
+    /// The tree's Contexts: live ones with Plans that have counters, and an archived one.
+    ContextFold,
 }
 
 /// A cell with nothing in it, whatever its style.
@@ -168,6 +188,9 @@ pub(crate) fn check(subject: &str, width: u16, sample: &Sample) {
             fail(r.x, r.y, &format!("(1) box {name} {r:?} keeps less than the margin from the container {container:?}"));
         }
         let min_rows = if placed.kind == Kind::Full { 2 } else { 4 };
+        if r.width < spacing::MIN_WIDTH && placed.exempt.iter().any(|e| e.rule == Rule::Minimum) {
+            continue;
+        }
         if r.width < spacing::MIN_WIDTH || r.height < min_rows {
             // (9) B3: below the minimum the box draws nothing, no half box
             for y in r.y..r.bottom() {
@@ -197,15 +220,16 @@ fn check_box(placed: &Placed, buf: &Buffer, fail: &dyn Fn(u16, u16, &str)) {
                 fail(right, y, &format!("(2) box {name}: the last column is not {end}"));
             }
         }
-        if rail && !blank(&buf[(right, y)]) {
+        // a rail's title runs to the area's last cell (the Inbox's pill ends there); the body and closing rows leave it blank
+        if rail && y != top && !blank(&buf[(right, y)]) {
             fail(right, y, &format!("(2) box {name}: a rail writes its last column"));
         }
     };
     walls(top, &["╭"], Some("╮"), "╭");
-    walls(closing, &["╰"], Some("╯"), "╰");
     for y in top + 1..closing {
         walls(y, &["│", "├"], Some("│"), "│ or ├");
     }
+    walls(closing, &["╰"], Some("╯"), "╰");
     // (6) hs-d476: a rail has a blank row above and one below
     if rail {
         for y in [r.y, r.bottom() - 1] {

@@ -381,6 +381,40 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
     }
 }
 
+/// The layout test's sample (`layout_tests`): the Inbox section drawn by [`draw`] at the top of a `width` x `height` pane
+/// (the column's pane: the tree's container); the section is capped at `height` rows. Placed is the Rail's wall rect,
+/// `spacing::contain(pane)` as wide and as tall as the section.
+#[cfg(test)]
+pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::TreeCase) -> crate::layout_tests::Sample {
+    use crate::box_widget::spacing;
+    use crate::layout_tests::{Kind as Walls, Placed, Sample, TreeCase};
+    use cpd_core::inbox::model::Urgency;
+    use ratatui::backend::TestBackend;
+    let labels = ["f-blocked: Worker question", "acme/api#12 checks failed", "ship: Job c is stuck", "engine: store busy", "ship lead has a reply", "beta: Plan review", "gamma: nothing", "delta: Job d failed"];
+    let ages = ["2026-01-02T23:59:18.000Z", "2026-01-02T23:55:00.000Z", "2026-01-02T21:00:00.000Z", "2026-01-01T00:00:00.000Z", "2026-01-02T23:50:00.000Z", "2026-01-02T22:00:00.000Z", "2026-01-02T20:00:00.000Z", "2026-01-02T10:00:00.000Z"];
+    let (count, expanded, scroll) = match case {
+        TreeCase::InboxNone => (0, false, 0),
+        TreeCase::Inbox3 => (3, false, 0),
+        TreeCase::Inbox5Folded => (5, false, 0),
+        TreeCase::Inbox5Expanded => (5, true, 0),
+        TreeCase::InboxCues => (8, true, 2),
+        TreeCase::ContextFold => panic!("the Inbox samples an Inbox case"),
+    };
+    let items: Vec<Item> = (0..count)
+        .map(|i| item(i as i64 + 1, Kind::Unread, Urgency::White, labels[i], ages[i]))
+        .collect();
+    let shape = Shape::new(count, expanded).capped(height).scrolled(scroll);
+    let now = OffsetDateTime::parse("2026-01-03T00:00:00.000Z", &Rfc3339).unwrap();
+    let pane = Rect::new(0, 0, width, height);
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|f| draw(f, Rect { height: shape.height().min(height), ..pane }, &items, shape, None, now, &|_| None))
+        .unwrap();
+    let wall = Rect { height: shape.height().min(height), ..spacing::contain(pane) };
+    let boxes = vec![Placed { name: "inbox", kind: Walls::Rail, rect: wall, exempt: Vec::new() }];
+    Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
+}
+
 /// An open item for the tests: `kind` and `urgency`, its `label`, opened at `opened_at`; the rest is none.
 #[cfg(test)]
 pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
