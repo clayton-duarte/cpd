@@ -39,6 +39,10 @@ pub struct Reads<T> {
 
 impl<T: Send + 'static> Reads<T> {
     pub fn new() -> Self {
+        Self::spawn(None)
+    }
+
+    fn spawn(waker: Option<crate::pump::Waker>) -> Self {
         let queue = Arc::new((Mutex::new(Queue { waiting: None, closed: false }), Condvar::new()));
         let (send, results): (Sender<T>, Receiver<T>) = mpsc::channel();
         let shared = Arc::clone(&queue);
@@ -62,6 +66,9 @@ impl<T: Send + 'static> Reads<T> {
                     if send.send(job()).is_err() {
                         return;
                     }
+                    if let Some(w) = &waker {
+                        w.read_done();
+                    }
                 }
             })
             .expect("spawn the reader thread");
@@ -70,7 +77,7 @@ impl<T: Send + 'static> Reads<T> {
 
     /// Like [`Reads::new`]; the reader thread calls `waker.read_done()` after each result it sends.
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
-        todo!()
+        Self::spawn(Some(waker))
     }
 
     /// Ask for `job` to run on the reader thread.
