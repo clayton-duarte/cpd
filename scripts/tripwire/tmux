@@ -3,8 +3,13 @@
 # Execs the real program only when NEXTEST_BINARY_ID + NEXTEST_TEST_NAME match a line of the allowlist
 # (allow.txt for tmux, allow-<program>.txt for any other name): `<binary_id> <prefix>  # <tag>: <reason>`.
 # Otherwise logs to ${TMPDIR:-/tmp}/tripwire.log, says so on stderr and exits 127.
-prog=$(basename "$0")
-here=$(cd "$(dirname "$0")" && pwd)
+# No subshell, no external command on the way to the verdict: a test makes hundreds of calls, each a start of this script.
+prog=${0##*/}
+case $0 in
+  /*) here=${0%/*} ;;
+  */*) here=$(cd "${0%/*}" && pwd) ;;
+  *) here=$(pwd) ;;
+esac
 if [ "$prog" = tmux ]; then list=allow.txt; else list=allow-$prog.txt; fi
 # The tripwire's directory is where its allowlist is, not where this copy of the script runs from: a test may copy
 # or wrap the `tmux` it finds on PATH (that is this script), and the copy has no allowlist next to it. $here when it
@@ -17,7 +22,7 @@ else
   IFS=:
   for d in $PATH; do
     [ -n "$d" ] && [ -f "$d/$list" ] && [ -x "$d/tmux" ] || continue
-    dir=$(cd "$d" && pwd)
+    dir=${d%/}
     break
   done
   IFS=$old_ifs
@@ -42,22 +47,29 @@ if [ -z "$allowed" ]; then
   exit 127
 fi
 
-# The real program: PATH without this directory.
+# The real program: the first one behind the tripwire, in the PATH entries after its directory (a fake `tmux` in front of
+# it, which execs the tripwire, must not be found again: that is a loop). A copy of this script that is not on PATH, and a
+# PATH that does not hold the tripwire at all, have every entry but this script's own directory.
+whole=$PATH
+behind=
 rest=
+found=
 old_ifs=$IFS
 IFS=:
 for d in $PATH; do
   [ -n "$d" ] || continue
-  if [ -d "$d" ]; then
-    abs=$(cd "$d" && pwd)
-    [ "$abs" = "$here" ] || [ "$abs" = "$dir" ] && continue
+  if [ "${d%/}" = "$here" ] || [ "${d%/}" = "$dir" ]; then
+    [ "${d%/}" = "$dir" ] && found=1
+    continue
   fi
   rest="${rest:+$rest:}$d"
+  [ -z "$found" ] || behind="${behind:+$behind:}$d"
 done
 IFS=$old_ifs
-PATH=$rest
-export PATH
+if [ -n "$found" ]; then PATH=$behind; else PATH=$rest; fi
 real=$(command -v "$prog" 2>/dev/null) || real=
+# The program itself runs with the PATH it was given: what it starts (a tmux server and its panes) still meets the tripwire.
+PATH=$whole
 if [ -z "$real" ]; then
   echo "tripwire: no real $prog behind the tripwire" >&2
   exit 127
