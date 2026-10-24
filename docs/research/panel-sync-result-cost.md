@@ -831,4 +831,4 @@ for which in ('before', 'after'):
 print(json.dumps(res, indent=1))
 ```
 
-Cleanup: `pgrep -af sync-probe` shows none of this Job's processes; `tmux -L <each of the 47 sockets sync-probe-cost2-*> ls` failed ("no server running") and the socket files are removed; the throwaway homes, `/tmp/sync-probe-cost2` and the two git worktrees (`git worktree list` shows none) are removed.
+Cleanup: `pgrep -af sync-probe` shows none of this Job's processes; `tmux -L <each of the 45 sockets sync-probe-cost2-*> ls` failed ("no server running") and the socket files are removed; the throwaway homes, `/tmp/sync-probe-cost2` and the two git worktrees (`git worktree list` shows none) are removed.
