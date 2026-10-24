@@ -433,13 +433,41 @@ test("the Manager's Plans section has one line per Plan with counts by kind", as
     { id: 302, plan: "cross-repo", kind: "pr-opened", data: { pr: "b", number: 211, url: "u" } },
     { id: 303, plan: "cross-repo", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
     { id: 304, plan: "inbox", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
+    { id: 306, plan: "cross-repo", kind: "plan-done", data: { prs: [] } },
+  ];
+  f.respond("events-list@plan-created", { ok: true, events: events.map((e) => ({ context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: 306 });
+  const m = await beforeTurn(f);
+  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, done", "- inbox: 1 Job failed"]);
+  assert.equal(m.details.event, 306);
+});
+
+test("the Manager's digest reads no Escalation Events: its Plan Events call names six kinds", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  nothingNew(f);
+  f.respond("events-list@plan-created", planEventsList([]));
+  f.respond("context-pending", pendingJson([]));
+  await beforeTurn(f);
+  const call = updatesCalls(f).find((c) => c.includes("plan-created"))!;
+  const kinds = call.flatMap((a, i) => (a === "--kind" ? [call[i + 1]] : []));
+  assert.deepEqual(kinds, ["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "plan-done"]);
+});
+
+test("the Manager's Plans section never counts an Escalation Event", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  nothingNew(f);
+  const events = [
+    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { pr: "a", number: 210, url: "u" } },
+    { id: 303, plan: "cross-repo", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
     { id: 305, plan: "cross-repo", kind: "escalation", data: { escalation: "e1", question: "q" } },
     { id: 306, plan: "cross-repo", kind: "plan-done", data: { prs: [] } },
   ];
   f.respond("events-list@plan-created", { ok: true, events: events.map((e) => ({ context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: 306 });
   const m = await beforeTurn(f);
-  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, 1 Escalation, done", "- inbox: 1 Job failed"]);
-  assert.equal(m.details.event, 306);
+  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 1 PR opened (#210), 1 Job failed, done"]);
 });
 
 test("the Manager's Pending work has one line per Plan and no Job lines", async (t) => {
