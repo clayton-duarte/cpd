@@ -761,7 +761,7 @@ fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
 #[test]
 fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
     let (env, mut store) = fixture();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    env.write_tmux_config("");
     let before = read::tree(&mut store).unwrap();
     env.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
     env.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();

@@ -5,7 +5,24 @@
 # Otherwise logs to ${TMPDIR:-/tmp}/tripwire.log, says so on stderr and exits 127.
 prog=$(basename "$0")
 here=$(cd "$(dirname "$0")" && pwd)
-if [ "$prog" = tmux ]; then allow="$here/allow.txt"; else allow="$here/allow-$prog.txt"; fi
+if [ "$prog" = tmux ]; then list=allow.txt; else list=allow-$prog.txt; fi
+# The tripwire's directory is where its allowlist is, not where this copy of the script runs from: a test may copy
+# or wrap the `tmux` it finds on PATH (that is this script), and the copy has no allowlist next to it. $here when it
+# has one, else the first directory of PATH that has the allowlist and a `tmux` (the real tripwire, first on PATH).
+dir=
+if [ -f "$here/$list" ]; then
+  dir=$here
+else
+  old_ifs=$IFS
+  IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] && [ -f "$d/$list" ] && [ -x "$d/tmux" ] || continue
+    dir=$(cd "$d" && pwd)
+    break
+  done
+  IFS=$old_ifs
+fi
+allow=${dir:-$here}/$list
 id=${NEXTEST_BINARY_ID:-}
 name=${NEXTEST_TEST_NAME:-}
 
@@ -31,7 +48,10 @@ old_ifs=$IFS
 IFS=:
 for d in $PATH; do
   [ -n "$d" ] || continue
-  if [ -d "$d" ] && [ "$(cd "$d" && pwd)" = "$here" ]; then continue; fi
+  if [ -d "$d" ]; then
+    abs=$(cd "$d" && pwd)
+    [ "$abs" = "$here" ] || [ "$abs" = "$dir" ] && continue
+  fi
   rest="${rest:+$rest:}$d"
 done
 IFS=$old_ifs
