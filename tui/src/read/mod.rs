@@ -33,6 +33,9 @@ mod dot;
 mod flow;
 mod follow;
 mod logs;
+#[cfg(test)]
+mod look_tests;
+pub mod pr_look;
 mod pulse;
 mod shared;
 mod tree;
@@ -49,6 +52,7 @@ pub use shared::{
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::Dot;
+pub use pr_look::{PrFacts, PrLook, pr_look};
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};

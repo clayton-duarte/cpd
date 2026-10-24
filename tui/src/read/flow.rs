@@ -145,6 +145,8 @@ pub struct Pull {
     /// working dot beside the state (hs-d335).
     pub lead_working: bool,
     /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    /// `pull_requests.draft`.
+    pub draft: bool,
     pub update: Option<UpdateState>,
 }
 
@@ -335,6 +337,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     clean,
                     lead_working,
                     update: update_state(&what, update.as_deref())?,
+                    draft: false,
                 })
             })
             .transpose()?;

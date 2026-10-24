@@ -402,6 +402,7 @@ mod tests {
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
+            plan_failed: false,
             merging: false,
         }
     }

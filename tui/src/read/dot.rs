@@ -39,6 +39,11 @@ impl Dot {
         self >= Dot::White
     }
 
+    /// The dot of a working Lead: the red loader when its Plan has a failed Job.
+    pub fn working(_failed: bool) -> Dot {
+        todo!()
+    }
+
     /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
     /// `palette::STOPPED`.
     pub fn glyph(state: State) -> Dot {
