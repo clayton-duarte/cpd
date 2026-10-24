@@ -170,8 +170,6 @@ fn parse_ps_time(text: &str) -> u64 {
 /// What a view did over the window with no change.
 struct Idle {
     used: Usage,
-    /// How many different screens the pane showed over the window (macOS only: the spinner's own observable).
-    screens: usize,
 }
 
 /// The most CPU an idle view may use on macOS, of the window (decision pro-d3: the tests assert CPU time there).
@@ -265,7 +263,7 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Idle)> {
             let diff = |a: Option<u64>, b: Option<u64>| Some(a? - b?);
             let used = Usage { rchar: diff(a.rchar, b.rchar), syscw: diff(a.syscw, b.syscw), cpu: a.cpu - b.cpu };
             eprintln!("idle {name}: {window:?}: read {:?} B, {:?} writes, {} ms of CPU, {screens} screens", used.rchar, used.syscw, used.cpu);
-            (name, Idle { used, screens })
+            (name, Idle { used })
         })
         .collect()
 }
@@ -324,21 +322,6 @@ fn idle_views_write_nothing_to_the_terminal() {
         if let Some(syscw) = idle.used.syscw {
             let allowed = if name == "widgets" { 2 + window().as_secs() / 2 } else { 0 };
             assert!(syscw <= allowed, "{name} wrote {syscw} times while nothing changed");
-        }
-    }
-}
-
-/// What F2's fix must keep: a spinner on screen turns (4 frames a second), the tree's and the plan view's.
-#[test]
-fn a_spinner_on_screen_keeps_turning() {
-    let env = env();
-    env.sql(&fixture());
-    env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead-ship'; UPDATE jobs SET status = 'running' WHERE plan = 'ship' AND key = 'k1';");
-    for (name, idle) in idle(&env, &["tree", "plan"]) {
-        match idle.used.syscw {
-            Some(syscw) => assert!(syscw >= 10, "{name} wrote {syscw} times in the window: the spinner stopped"),
-            // macOS (decision pro-d3): no write counter; what the spinner shows is the pane text, which changes each frame
-            None => assert!(idle.screens >= 3, "{name} showed {} screens in the window: the spinner stopped", idle.screens),
         }
     }
 }

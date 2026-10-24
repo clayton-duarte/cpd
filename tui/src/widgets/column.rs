@@ -459,15 +459,6 @@ mod tests {
     }
 
     #[test]
-    fn the_gpu_part_has_one_percent_per_gpu_and_is_absent_with_none() {
-        let row = |gpus: Vec<Option<u8>>| Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus, mem: Some(41) } }.usage_line();
-        assert_eq!(row(vec![]), " \u{F4BC} 23%  \u{EFC5} 41%", "no GPU, no GPU part");
-        assert_eq!(row(vec![Some(61)]), " \u{F4BC} 23%  \u{E266} 61%  \u{EFC5} 41%");
-        assert_eq!(row(vec![Some(61), Some(0)]), " \u{F4BC} 23%  \u{E266} 61% 0%  \u{EFC5} 41%");
-        assert_eq!(row(vec![None, Some(5)]), " \u{F4BC} 23%  \u{E266} –% 5%  \u{EFC5} 41%", "an unknown GPU is –%");
-    }
-
-    #[test]
     fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
         let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))]);
         // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes

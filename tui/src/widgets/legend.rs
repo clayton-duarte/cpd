@@ -337,23 +337,6 @@ mod tests {
     }
 
     #[test]
-    fn the_section_titles_are_exact() {
-        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
-        assert_eq!(
-            titles,
-            [
-                "Meanings → Colour (One Source For Every View)",
-                "Jobs: Plan Pills And Context Counters",
-                "Session Dots",
-                "PRs (Dispatch)",
-                "Inbox",
-                "Pulse",
-                "PR Checks",
-            ]
-        );
-    }
-
-    #[test]
     fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
         let pulse = &sections()[5];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();

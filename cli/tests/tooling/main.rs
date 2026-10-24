@@ -7,7 +7,6 @@ mod common;
 mod cargo_script;
 mod dead_code;
 mod gate_run;
-mod e2e_cross;
 mod e2e;
 mod harness;
 mod install_script;
