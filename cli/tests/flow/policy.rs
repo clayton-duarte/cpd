@@ -241,14 +241,16 @@ fn owner_unset_names_the_next_command() {
 }
 
 #[test]
-fn owner_unconfirmed_even_with_a_repo_file() {
+fn a_repo_file_without_an_owner_file_is_policy_invalid() {
     let fx = Fx::new();
     let home = fx.env.cpd_home();
     fs::create_dir_all(home.join("policy/ghost")).unwrap();
     fs::write(home.join("policy/ghost/x.toml"), REPO_FILE).unwrap();
-    let error = refused(&fx.show(&["--owner", "ghost", "--repo", "x"]), "owner_unconfirmed", 1);
-    assert_eq!(error["details"]["owner"], "ghost");
-    refused(&fx.show(&["--owner", "ghost"]), "owner_unconfirmed", 1);
+    // A directory of repo files with no `owner.toml` is refused whole (`policy_invalid`, the entry rules of §8.3), before the owner check.
+    for args in [&["--owner", "ghost", "--repo", "x"][..], &["--owner", "ghost"][..]] {
+        let error = refused(&fx.show(args), "policy_invalid", 1);
+        assert_eq!(error["details"]["file"], home.join("policy/ghost").display().to_string());
+    }
 }
 
 #[test]
