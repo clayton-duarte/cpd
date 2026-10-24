@@ -272,7 +272,7 @@ fn variable(cx: &Cx, loc: Loc, name: &str) -> Option<String> {
         "client_width" => "80".into(),
         "client_height" => "24".into(),
         "client_activity" => "0".into(),
-        "version" => "3.4".into(),
+        "version" => "3.6a".into(),
         "pid" => server_pid(cx.inv),
         "hook_window_name" => String::new(),
         _ => return None,
