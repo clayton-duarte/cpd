@@ -129,6 +129,15 @@ impl Centre {
     }
 }
 
+/// The clocks the screen of `snap` needs, `taken` being when the snapshot was taken: `frame` is true when `snap.centre` is `Some`
+/// and its `spins()` holds, else false; `second` is false (the plan view shows no per-second clock: Pulse's ages are in minutes,
+/// refreshed by `at`); `at` is `Some(taken + PULSE_REFRESH)` when `snap.pulse` is `Some`, else `None`.
+// The Job views-impl-plan removes this attribute and implements the stub.
+#[allow(dead_code)]
+fn needs(snap: &Snapshot, taken: Instant) -> crate::pump::Needs {
+    todo!()
+}
+
 /// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
 /// Event id to follow from. At most one of `pulse` and `centre` is `Some`.
 struct Snapshot {
@@ -617,6 +626,8 @@ fn show(
 
 #[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+mod needs_tests;
 
 #[cfg(test)]
 mod tests {
