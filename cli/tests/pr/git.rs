@@ -1210,6 +1210,7 @@ fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
     assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
 }
 
+<<<<<<< ours
 /// The reproduction of the Gate's race: `ROUNDS` rounds of `PARALLEL` `worktree add --detach --lock`
 /// into one repo at once (before the retry 5, 6 and 15 of 1600 adds failed in three runs).
 fn parallel_adds(env: &TestEnv, repo: &Path, sha: &str, parallel: usize, rounds: usize, add: impl Sync + Fn(&Path, &[&str], &Path) -> Result<String, cpd_core::error::CpdError>) -> usize {
@@ -1238,6 +1239,8 @@ fn parallel_worktree_adds_into_one_repo_all_succeed() {
     assert_eq!(parallel_adds(&env, &repo, &g, 16, 40, cpd_core::git::run::worktree_add), 0);
 }
 
+=======
+>>>>>>> theirs
 #[test]
 fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
     let env = TestEnv::new();
