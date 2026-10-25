@@ -168,7 +168,7 @@ fn show(fx: &Fx, signals: Vec<Signal>, steps: &Steps) -> SharedBackend {
     steps.on(&screen);
     let ports = &fx.fakes.ports;
     let ended = Ports::scope(ports, || {
-        let home = CpdHome::resolve(Some(fx.env.cpd_home()), None).unwrap();
+        let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
         let prepared = plan::prepare(ports, home, no_command, || Ok(300)).unwrap();
         let mut input = NoInput;
         let mut ctx = Ctx::new(ports, screen.terminal(), &mut input);
@@ -195,7 +195,7 @@ impl World {
     }
 
     fn sql(&self, text: &str) {
-        common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone()), None).unwrap(), 5000).unwrap(), text);
+        common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(), 5000).unwrap(), text);
     }
 }
 
