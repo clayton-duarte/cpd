@@ -21,10 +21,14 @@ const BACKOFF_CAP_SECONDS: u64 = 300;
 /// The back-off's unit: `2^k` of it (tests shorten it with `CPD_TEST_BACKOFF_UNIT`, [`limit`]).
 const BACKOFF_UNIT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Whether incident mode lets E3 start a Ready Job of urgency `urgent` (contract §3.7): while one
-/// `incident` row exists, only urgent Ready Jobs start (the `concurrency + 1` urgent slot rule is
+/// Whether incident mode lets E3 start a Ready Job of Plan `plan` and urgency `urgent` (contract
+/// §3.7, hs-d643): the incident is off, or the Plan is in `incident_plans`, or the Job is
+/// explicitly urgent; every other Ready Job holds (the `concurrency + 1` urgent slot rule is
 /// unchanged).
-pub(super) fn incident_starts(conn: &Connection, urgent: bool) -> bool {
+pub(super) fn incident_starts(conn: &Connection, plan: &PlanId, urgent: bool) -> bool {
+    // Stub for inc-v2-engine: the Plan is ignored, so only urgency lifts the hold until the
+    // Plan-scoped predicate is implemented.
+    let _ = plan;
     urgent || !cpd_core::incident::is_on(conn)
 }
 
@@ -97,11 +101,12 @@ pub(super) fn run(engine: &mut Engine) {
         let now = OffsetDateTime::now_utc();
         let mut ready = Vec::new();
         for (p, k, urgent) in rows {
-            // Incident mode on: a non-urgent Ready Job waits (§3.7 E3).
-            if !incident_starts(conn, urgent) {
+            let plan = PlanId::parse(&p)?;
+            // Incident mode on: a non-urgent Ready Job of a held Plan waits (§3.7 E3).
+            if !incident_starts(conn, &plan, urgent) {
                 continue;
             }
-            let (plan, key) = (PlanId::parse(&p)?, JobKey::parse(&k)?);
+            let key = JobKey::parse(&k)?;
             // Its driver could not be started the last times: wait before the next try.
             if !backing_off(conn, &plan, &key, now)? {
                 ready.push((plan, key, urgent));

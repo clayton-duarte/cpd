@@ -147,14 +147,24 @@ impl Engine {
     }
 }
 
-/// Whether incident mode holds `step` (contract §3.7): E4 (open Jobs), E7 (PR start), E9 (Context curation),
-/// E10 (Session titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1,
-/// E2, E5, E8, E12 and E13 run as usual. E3 is not held: it starts only urgent Jobs ([`schedule`]).
+/// Whether incident mode holds `step` machine-wide (contract §3.7): E9 (Context curation), E10 (Session
+/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1, E2, E5,
+/// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
+/// E4 and E7 act per PR ([`incident_holds_plan`]).
 pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
-    if !matches!(step, Step::E4 | Step::E7 | Step::E9 | Step::E10 | Step::E11) {
+    if !matches!(step, Step::E9 | Step::E10 | Step::E11) {
         return false;
     }
     engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
+}
+
+/// Whether incident mode holds `plan` for E4 and E7 (contract §3.7, hs-d643): the incident is on and
+/// the Plan is not in `incident_plans` (`cpd_core::incident::is_held`). A held Plan's PRs get no
+/// `open` Job and are not started.
+pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) -> bool {
+    // Stub for inc-v2-engine: machine-wide until the Plan-scoped hold is implemented.
+    let _ = plan;
+    cpd_core::incident::is_on(conn)
 }
 
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
@@ -169,21 +179,31 @@ fn startable() -> String {
     )
 }
 
+/// The ready `waiting` PRs E7 starts, the Plan-scoped incident hold applied (contract §3.7): a PR of
+/// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
+pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, PrKey)>, CpdError> {
+    engine.store.read(|conn| {
+        let mut stmt = conn.prepare(&startable())?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut waiting = Vec::new();
+        for (plan, key) in rows {
+            let plan = PlanId::parse(&plan)?;
+            let key = PrKey::parse(&key)?;
+            // Incident mode on: a held Plan's PR is not started (§3.7 E7).
+            if !incident_holds_plan(conn, &plan) {
+                waiting.push((plan, key));
+            }
+        }
+        Ok(waiting)
+    })
+}
+
 /// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
 /// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
 /// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
-    if incident_holds(engine, Step::E7) {
-        engine.log.line("E7: holding: incident mode is on");
-        return;
-    }
-    let waiting = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(&startable())?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.into_iter().map(|(plan, key)| Ok((PlanId::parse(&plan)?, PrKey::parse(&key)?))).collect::<Result<Vec<_>, CpdError>>()
-    });
-    let waiting = match waiting {
+    let waiting = match startable_prs(engine) {
         Ok(waiting) => {
             engine.clear(Step::E7, &About::Machine);
             waiting
