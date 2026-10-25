@@ -879,16 +879,13 @@ fn every_read_shows_an_attempt_in_an_open_check_span_as_checking() {
 
 #[test]
 fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
-    // Stays on `TestEnv` and the built binary: `session rename` sets the pane header through tmux (`env.fake_tmux()`),
-    // an external on PATH that `Fx` does not fake (it waits for the tmux-route seam).
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::with_ports();
+    let mut store = open(&fx.env);
     populate(&mut store);
-    env.write_tmux_config("");
-    env.fake_tmux();
+    fx.env.write_tmux_config("");
     let before = read::tree(&mut store).unwrap();
-    env.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
-    env.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
+    fx.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
+    fx.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
     let after = read::tree(&mut store).unwrap();
     let fork = &after.contexts[0].plans[0].sessions[1];
     assert_eq!((fork.state, fork.state_label.as_deref(), fork.name.as_str()), (State::Blocked, Some("cpd: asking"), "renamed fork"));
