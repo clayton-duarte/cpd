@@ -108,7 +108,10 @@ pub const PLAN_POLLS: [(&str, &str); 6] = [
 ///   the tmux server once more after them (a driver may have started it again).
 ///
 /// A process that leaves the group (`setsid`, `setpgid`) and that cpd does not record is not
-/// stopped. Each stop is SIGTERM, then SIGKILL to what is left after a grace of 1 s.
+/// stopped, except in an env that had a tmux server (`tmux_used`): there the last step stops every process
+/// that runs with the env's `CPD_HOME` (the server and its panes inherit it), so that a pane of its tmux
+/// never outlives the test, even if `list-panes` failed or the server's SIGHUP came late (a pane the
+/// Gate's leak check, `scripts/gate-run.sh`, found as `zsh -c sleep 120`). Each stop is SIGTERM, then SIGKILL to what is left after a grace of 1 s.
 ///
 /// `sh teardown.sh <pgid>` tears the env down and removes its directory; `sh teardown.sh watch
 /// <pid>` (the reaper, the group's leader) waits until `<pid>` is gone or the directory is, and
@@ -209,11 +212,39 @@ stop_tmux() {
   done
 }
 
+# tmux_used: this env ever had a tmux server: its socket is there, or the directory tmux makes for
+# the sockets in the env's own tmux dir (a server that has died leaves that, not its socket).
+tmux_used() {
+  for _s in "$tmuxdir"/tmux-*/"$socket" "$tmuxdir"/tmux-*/"$socket"-*; do
+    [ -S "$_s" ] && return 0
+  done
+  [ "$tmuxdir" = "$dir/tmux" ] && [ -d "$tmuxdir/tmux-$(id -u)" ]
+}
+
+# tagged: the pids of the processes that run with this env's CPD_HOME, but this one: the tmux server
+# and its panes inherit it from the cpd command or the test that started the server.
+tagged() {
+  if [ "$(uname)" = Darwin ]; then
+    ps -axww -E -o pid=,command= 2>/dev/null | while read -r _p _c; do
+      case " $_c " in *" CPD_HOME=$home "*) [ "$_p" -eq "$$" ] || echo "$_p" ;; esac
+    done
+  else
+    for _e in /proc/[0-9]*/environ; do
+      _p=${_e#/proc/}
+      _p=${_p%/environ}
+      { grep -qzxF "CPD_HOME=$home" "$_e" && [ "$_p" -ne "$$" ] && echo "$_p"; } 2>/dev/null
+    done
+  fi
+}
+
 # teardown PGID: stops the env's group and its tmux server, then what cpd detached (now that
 # nothing is left to start more), then the tmux server again (a driver may have started one
-# since), and removes the directory.
+# since), then, for an env that had a tmux server, every process left with the env's CPD_HOME
+# (a pane that `list-panes` did not give, or that outlived its server's SIGHUP), and removes the directory.
 teardown() {
   unset TMUX
+  _tmux=
+  ! tmux_used || _tmux=1
   stop "-$1"
   stop_tmux
   _r=
@@ -222,6 +253,7 @@ teardown() {
   done
   stop $_r
   stop_tmux
+  [ -z "$_tmux" ] || stop $(tagged)
   # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
   [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
   # The fake tmux's state files of this socket and the derived ones (`fake-tmux-<socket>.db*`, `fake-tmux-<socket>-*`).
