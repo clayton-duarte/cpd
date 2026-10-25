@@ -346,6 +346,25 @@ fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Resul
     Ok(())
 }
 
+/// `job retry`: no key of `needs` is a `cancelled` Job (`needs_unavailable`, exit 3, `details.needs`; a `failed`
+/// need is allowed, §5.4, hs-d647): a Job held by a cancelled need can never start.
+pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+    let cancelled: Vec<serde_json::Value> = jobs
+        .iter()
+        .filter(|j| needs.contains(&j.key) && j.status == "cancelled")
+        .map(|j| serde_json::json!({"key": j.key, "status": j.status}))
+        .collect();
+    if !cancelled.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job held by a cancelled need can never start: cancel it and add a replacement whose needs do not name the cancelled Job.",
+        )
+        .with("plan", plan.as_str())
+        .with("needs", cancelled));
+    }
+    Ok(())
+}
+
 /// Every Job of `needs` is in PR `pr` (`needs_other_pr`; `details.jobs` lists the others) (A7).
 fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) -> Result<(), CpdError> {
     let others: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && j.pr != pr).map(|j| j.key.as_str()).collect();
