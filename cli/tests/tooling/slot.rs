@@ -1,11 +1,29 @@
-//! `cpd slot` (commands.md §23; contract §7.6 "The test slot"): the built binary, a temporary `$CPD_HOME`;
-//! and the scripts of this repo that call it (`scripts/cargo.sh`, `package.json`'s `test`).
+//! `cpd slot` (commands.md §23; contract §7.6 "The test slot"): `cpd_core::slot::run_with` in the test process, on a
+//! temporary `$CPD_HOME` ([`Fx`]), a virtual clock and a `start` that records the command it is given and says how it
+//! ended: no process is started. The real `flock` of a lock file in the temp home stays real (it is ours, not external
+//! software). Two tests keep the built binary, because their subject is the OS: a SIGKILL that frees a `flock` and a
+//! SIGTERM forwarded to a child. And the scripts of this repo that call `cpd slot` (`scripts/cargo.sh`, `package.json`'s
+//! `test`), the named exception of the bootstrap scripts.
 
+use std::ffi::OsString;
 use std::fs::{self, File};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::runner::Runner;
+use cpd_core::ports::Ports;
+use cpd_core::slot::{Args, Ended, Slots, run_with};
+
+use crate::common::fx::Fx;
 use crate::common::{CPD, SLEEP_SECONDS, TestEnv, output, spawn, wait_until, write_executable};
+#[path = "../store/scripted.rs"]
+mod scripted;
+use scripted::ScriptedClock;
 
 /// A test environment whose `config.toml` has `test_concurrency` = `n`.
 fn env(n: u32) -> TestEnv {
@@ -14,18 +32,7 @@ fn env(n: u32) -> TestEnv {
     env
 }
 
-/// Holds the file `path` as a shell script that runs until `path` exists: `touch <ready>`, then waits for `release`.
-fn holder(env: &TestEnv) -> (String, PathBuf, PathBuf) {
-    let (ready, release) = (env.root().join("ready"), env.root().join("release"));
-    let script = format!(
-        "touch {ready}; i=0; while [ ! -e {release} ] && [ $i -lt 1200 ]; do sleep 0.05; i=$((i+1)); done",
-        ready = ready.display(),
-        release = release.display()
-    );
-    (script, ready, release)
-}
-
-/// `cpd slot -- sh -c <script>` started in the background, its stderr in the file `stderr`.
+/// `cpd slot -- sh -c <script>` started in the background (the built binary), its stderr in the file `stderr`.
 fn spawn_slot(env: &TestEnv, script: &str, stderr: &Path) -> Child {
     let mut cmd = env.command(CPD);
     cmd.args(["slot", "--", "sh", "-c", script]).stderr(File::create(stderr).unwrap()).stdout(Stdio::null());
@@ -36,83 +43,187 @@ fn text(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_default()
 }
 
+/// `Fx` whose `config.toml` has `test_concurrency` = `n`.
+fn fx(n: u32) -> Fx {
+    let fx = Fx::new();
+    fx.env.write_config(&format!("version = 1\nmachine = \"t\"\ntest_concurrency = {n}\n"));
+    fx
+}
+
+fn args(command: &[&str]) -> Args {
+    Args { command: command.iter().map(OsString::from).collect() }
+}
+
+/// The `Ports` of `fx` with `clock` for its time.
+fn on(fx: &Fx, clock: ScriptedClock<'static>) -> Ports {
+    let runner: Arc<dyn Runner> = fx.fakes.runner.clone();
+    Ports { clock: Arc::new(clock), runner, spawn: fx.fakes.spawn.clone() }
+}
+
+/// What a command was given: its program, arguments and the variables it sets (`None` for one it removes).
+#[derive(Debug, PartialEq)]
+struct Given {
+    program: OsString,
+    args: Vec<OsString>,
+    envs: Vec<(OsString, Option<OsString>)>,
+}
+
+impl Given {
+    fn of(command: &Command) -> Given {
+        Given {
+            program: command.get_program().to_owned(),
+            args: command.get_args().map(ToOwned::to_owned).collect(),
+            envs: command.get_envs().map(|(k, v)| (k.to_owned(), v.map(ToOwned::to_owned))).collect(),
+        }
+    }
+
+    /// The value this command sets `CPD_TEST_SLOT` to, if it sets it.
+    fn slot(&self) -> Option<String> {
+        self.envs.iter().find(|(k, _)| k == "CPD_TEST_SLOT").and_then(|(_, v)| v.as_ref()).map(|v| v.to_string_lossy().into_owned())
+    }
+}
+
+/// `run_with` on `ports`, whose command ends as `ended` says; returns what it came to, what it said on stderr and the
+/// commands it was given.
+fn run_in(ports: &Ports, command: &[&str], mut ended: impl FnMut(Command) -> Ended) -> (Result<u8, CpdError>, String, Vec<Given>) {
+    let (mut said, mut given) = (Vec::new(), Vec::new());
+    let result = run_with(ports, args(command), &mut said, &mut |c| {
+        given.push(Given::of(&c));
+        ended(c)
+    });
+    (result, String::from_utf8(said).expect("stderr is UTF-8"), given)
+}
+
+fn exited(code: i32) -> Ended {
+    Ended::Status(ExitStatus::from_raw(code << 8))
+}
+
+/// A clock for a run that must never wait: the nap that would be the first panics, instead of looping on virtual time.
+fn never_waits() -> ScriptedClock<'static> {
+    ScriptedClock::new().at(Duration::ZERO, || panic!("the run waited for a slot nobody frees"))
+}
+
 #[test]
 fn the_command_runs_in_a_slot_with_its_output_and_its_exit_status() {
-    let env = env(2);
-    let out = output(env.command(CPD).args(["slot", "--", "sh", "-c", "echo out; echo err >&2; echo slot=$CPD_TEST_SLOT; exit 7"])).unwrap();
-    assert_eq!(out.status.code(), Some(7));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "out\nslot=0\n", "stdout is the command's alone");
-    assert_eq!(String::from_utf8_lossy(&out.stderr), "err\n", "a slot taken at once writes nothing");
+    let fx = fx(2);
+    let (result, said, given) = run_in(&on(&fx, never_waits()), &["sh", "-c", "echo out; echo err >&2; echo slot=$CPD_TEST_SLOT; exit 7"], |_| exited(7));
+    assert_eq!(result.unwrap(), 7);
+    // The command's own stdout is the command's alone: `run_with` has no writer for it, and the command is not given one.
+    assert_eq!(given.len(), 1);
+    assert_eq!((given[0].program.to_str(), given[0].slot().as_deref()), (Some("sh"), Some("0")), "{given:?}");
+    assert_eq!(given[0].args, ["-c", "echo out; echo err >&2; echo slot=$CPD_TEST_SLOT; exit 7"]);
+    assert_eq!(said, "", "a slot taken at once writes nothing");
 }
 
 #[test]
 fn a_command_that_cannot_run_or_is_killed_ends_as_the_shell_would() {
-    let env = env(2);
-    let missing = output(env.command(CPD).args(["slot", "--", "no-such-command-anywhere"])).unwrap();
-    assert_eq!(missing.status.code(), Some(127));
-    assert!(String::from_utf8_lossy(&missing.stderr).contains("no-such-command-anywhere: command not found"), "{missing:?}");
-    let plain = env.root().join("plain-file");
+    let fx = fx(2);
+    let ports = on(&fx, never_waits());
+    // The OS's refusals to start: `spawn` of the command it was given fails (nothing runs) as `start_and_wait` finds it.
+    let cannot_start = |c: Command| {
+        let mut c = c;
+        match c.spawn() {
+            Ok(_) => panic!("{:?} started", Given::of(&c)),
+            Err(e) => Ended::NotStarted(e),
+        }
+    };
+    let (missing, said, _) = run_in(&ports, &["no-such-command-anywhere"], cannot_start);
+    assert_eq!(missing.unwrap(), 127);
+    assert!(said.contains("no-such-command-anywhere: command not found"), "{said}");
+    let plain = fx.env.root().join("plain-file");
     fs::write(&plain, "x").unwrap();
-    let not_executable = output(env.command(CPD).arg("slot").arg("--").arg(&plain)).unwrap();
-    assert_eq!(not_executable.status.code(), Some(126));
-    let killed = output(env.command(CPD).args(["slot", "--", "sh", "-c", "kill -9 $$"])).unwrap();
-    assert_eq!(killed.status.code(), Some(128 + 9));
+    let (not_executable, _, _) = run_in(&ports, &[plain.to_str().unwrap()], cannot_start);
+    assert_eq!(not_executable.unwrap(), 126);
+    // Killed by signal 9: the status of a process the signal ended is the signal's number, not an exit code.
+    let (killed, _, _) = run_in(&ports, &["sh", "-c", "kill -9 $$"], |_| Ended::Status(ExitStatus::from_raw(9)));
+    assert_eq!(killed.unwrap(), 128 + 9);
 }
 
 #[test]
 fn its_own_refusals_are_the_envelope_on_stderr() {
-    let env = env(2);
-    let none = output(env.command(CPD).arg("slot")).unwrap();
-    assert_eq!((none.status.code(), none.stdout.as_slice()), (Some(2), &b""[..]));
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&none.stderr).unwrap()["error"]["code"], "usage");
+    let fx = fx(2);
+    let ports = on(&fx, never_waits());
+    let (none, said, given) = run_in(&ports, &[], |_| panic!("no command to run"));
+    let none = none.unwrap_err();
+    // `cpd` prints `to_line(err)` on stderr and exits `err.exit()`, writing nothing on stdout.
+    assert_eq!((none.exit().code(), said.as_str(), given.len()), (2, "", 0));
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&cpd_core::output::to_line(&none)).unwrap()["error"]["code"], "usage");
 
-    env.write_config("version = 1\nmachine = \"t\"\ntest_concurrency = 0\n");
-    let invalid = output(env.command(CPD).args(["slot", "--", "true"])).unwrap();
-    assert_eq!((invalid.status.code(), invalid.stdout.as_slice()), (Some(1), &b""[..]));
-    let error = serde_json::from_slice::<serde_json::Value>(&invalid.stderr).unwrap()["error"].clone();
+    fx.env.write_config("version = 1\nmachine = \"t\"\ntest_concurrency = 0\n");
+    let (invalid, _, given) = run_in(&ports, &["true"], |_| panic!("no slot, no command"));
+    let invalid = invalid.unwrap_err();
+    assert_eq!((invalid.exit().code(), given.len()), (1, 0));
+    let error = serde_json::from_str::<serde_json::Value>(&cpd_core::output::to_line(&invalid)).unwrap()["error"].clone();
     assert_eq!((error["code"].as_str(), error["details"]["key"].as_str()), (Some("config_invalid"), Some("test_concurrency")));
 }
 
 #[test]
 fn with_one_slot_a_second_command_waits_until_the_first_ends() {
-    let env = env(1);
-    let (script, ready, release) = holder(&env);
-    let (first_err, second_err) = (env.root().join("first.err"), env.root().join("second.err"));
-    let first = spawn_slot(&env, &script, &first_err);
-    wait_until("the first command to hold the slot", || ready.exists());
+    let fx = fx(1);
+    let (holding, held) = channel();
+    let (release, released) = channel::<()>();
+    // The first command, on a thread of its own: it takes the only slot and holds it until the test lets it end.
+    let first_ports = fx.fakes.ports.clone();
+    let first = std::thread::spawn(move || {
+        let mut said = Vec::new();
+        let result = run_with(&first_ports, args(&["sh", "-c", "hold"]), &mut said, &mut |_| {
+            holding.send(()).unwrap();
+            released.recv().expect("the test releases the first command");
+            exited(0)
+        });
+        (result, String::from_utf8(said).unwrap())
+    });
+    held.recv().expect("the first command holds the slot");
 
-    let ran = env.root().join("second-ran");
-    let second = spawn_slot(&env, &format!("touch {}", ran.display()), &second_err);
+    // The second command's first nap is the poll that finds the slot busy; its time-1000-ms step lets the first end (and
+    // waits for the slot to be free) before the next try.
+    let first = Mutex::new(Some(first));
+    let first_ended = Arc::new(Mutex::new(None));
+    let clock = {
+        let first_ended = Arc::clone(&first_ended);
+        ScriptedClock::new().at(Duration::from_millis(1), move || {
+            release.send(()).unwrap();
+            *first_ended.lock().unwrap() = Some(first.lock().unwrap().take().unwrap().join().unwrap());
+        })
+    };
+    let ports = on(&fx, clock);
+    let (result, said, given) = run_in(&ports, &["touch", "second-ran"], |_| exited(0));
+
+    assert_eq!(result.unwrap(), 0);
+    assert_eq!(given.len(), 1, "the second command ran once the first had ended");
     let waiting = "slot: waiting for a slot (1 of 1 busy; test_concurrency 1)\n";
-    wait_until("the second command to say it waits", || text(&second_err).contains(waiting));
-    assert!(!ran.exists(), "the second command ran while the only slot was held");
-
-    fs::write(&release, "").unwrap();
-    let (first, second) = (first.wait_with_output().unwrap(), second.wait_with_output().unwrap());
-
-    assert!(first.status.success() && second.status.success());
-    assert!(ran.exists());
-    let said = text(&second_err);
     assert!(said.starts_with(waiting) && said.contains("slot: slot 0 taken after "), "{said}");
-    assert_eq!(text(&first_err), "", "the first took its slot at once: nothing on stderr");
+    let (first_result, first_said) = first_ended.lock().unwrap().take().expect("the first command ended while the second waited");
+    assert_eq!(first_result.unwrap(), 0);
+    assert_eq!(first_said, "", "the first took its slot at once: nothing on stderr");
 }
 
 #[test]
 fn inside_a_held_slot_it_takes_no_second_one() {
-    let env = env(1);
-    let (script, ready, release) = holder(&env);
-    let held_err = env.root().join("held.err");
-    let held = spawn_slot(&env, &script, &held_err);
-    wait_until("the command to hold the only slot", || ready.exists());
+    let fx = fx(1);
+    let ports = on(&fx, never_waits());
+    let home = cpd_core::home::CpdHome::from_env().unwrap();
+    let held = Slots::new(&home, 1).take_with(&ports, "test", &mut |_, _| Ok(())).unwrap();
+    assert_eq!(held.index(), 0, "the only slot is held");
 
     // The variable says "inside a slot": nothing is taken, nothing is written, and the value is the caller's.
-    let out = output(env.command(CPD).env("CPD_TEST_SLOT", "5").args(["slot", "--", "sh", "-c", "echo $CPD_TEST_SLOT"])).unwrap();
-    assert_eq!((out.status.code(), String::from_utf8_lossy(&out.stdout).as_ref(), out.stderr.as_slice()), (Some(0), "5\n", &b""[..]));
-    // Nested in a slot it took itself, with a single slot, it cannot deadlock either.
-    fs::write(&release, "").unwrap();
-    held.wait_with_output().unwrap();
-    let nested = output(env.command(CPD).args(["slot", "--", CPD, "slot", "--", "sh", "-c", "echo $CPD_TEST_SLOT"])).unwrap();
-    assert_eq!((nested.status.code(), String::from_utf8_lossy(&nested.stdout).as_ref(), nested.stderr.as_slice()), (Some(0), "0\n", &b""[..]));
+    let (result, said, given) = fx.with_vars(&[("CPD_TEST_SLOT", "5")], || run_in(&ports, &["sh", "-c", "echo $CPD_TEST_SLOT"], |_| exited(0)));
+    assert_eq!((result.unwrap(), said.as_str()), (0, ""));
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0].slot(), None, "the command is given no CPD_TEST_SLOT of its own: it inherits the caller's 5");
+    drop(held);
+
+    // Nested in a slot it took itself, with a single slot, it cannot deadlock either: the outer command's environment
+    // (`CPD_TEST_SLOT=0`) is the one the inner `cpd slot` it starts finds.
+    let (outer, outer_said, outer_given) = run_in(&ports, &["cpd", "slot", "--", "sh", "-c", "echo $CPD_TEST_SLOT"], |c| {
+        let slot = Given::of(&c).slot().expect("the outer command is in slot 0");
+        let (inner, said, inner_given) =
+            fx.with_vars(&[("CPD_TEST_SLOT", &slot)], || run_in(&ports, &["sh", "-c", "echo $CPD_TEST_SLOT"], |_| exited(0)));
+        assert_eq!((inner.unwrap(), said.as_str(), slot.as_str()), (0, "", "0"));
+        assert_eq!(inner_given[0].slot(), None, "the inner one takes no slot");
+        exited(0)
+    });
+    assert_eq!((outer.unwrap(), outer_said.as_str(), outer_given[0].slot().as_deref()), (0, "", Some("0")));
 }
 
 #[test]
