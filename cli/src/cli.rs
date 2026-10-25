@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot, tag, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -92,6 +92,21 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// Tag the commit that set the workspace version (commands.md §26.1)
+    Tag,
+    /// The release plumbing (commands.md §26.2)
+    #[command(subcommand)]
+    Version(VersionCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VersionCommand {
+    /// Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2)
+    Sync {
+        /// Print the version and write nothing
+        #[arg(long)]
+        print: bool,
+    },
 }
 
 /// Parses `argv` and runs the command on the real ports.
@@ -152,6 +167,28 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
+        Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
+    }
+}
+
+/// The repository the release commands work in: the current directory.
+fn repo_root() -> Result<std::path::PathBuf, CpdError> {
+    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
+}
+
+/// `cpd tag` and `cpd version sync` print one plain line, not JSON (commands.md §26), and end the process: the line on
+/// stdout and exit 0, or the failure's line on stderr and exit 1. It never returns.
+fn release_exit(result: Result<String, String>) -> ! {
+    match result {
+        Ok(line) => {
+            println!("{line}");
+            std::process::exit(0)
+        }
+        Err(line) => {
+            eprintln!("{line}");
+            std::process::exit(1)
+        }
     }
 }
 

@@ -22,7 +22,6 @@ mod preview_script;
 mod prune_script;
 mod run_with;
 mod slot;
-mod tag_script;
 mod test_changed_script;
 mod testkit;
 mod testkit_screen;

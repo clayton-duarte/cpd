@@ -66,7 +66,9 @@ async function session(options: { text?: string; showHardwareCursor?: boolean } 
 	const ctx = { cwd: "/project", mode: "tui", isProjectTrusted: () => false, isIdle: () => true, ui } as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown) => { for (const handler of handlers.get(name) ?? []) handler(event, ctx); };
 	emit("session_start", { reason: "startup" });
-	const keybindings = { matches: () => false } as never;
+	const keybindings = {
+		matches: (data: string, action: string) => action === "tui.editor.deleteCharBackward" && data === "\x7f",
+	} as never;
 	const editor = new CustomEditor(tui as never, { borderColor: (text: string) => text, selectList: { selectedPrefix: (t: string) => t, selectedText: (t: string) => t, description: (t: string) => t, scrollInfo: (t: string) => t, noMatch: (t: string) => t } as never }, keybindings, { embedWorkingStatus: true });
 	editor.focused = false;
 	if (options.text !== undefined) editor.setText(options.text);
@@ -226,7 +228,7 @@ test("the highlight trail grows with each keystroke and holds the cursor's colou
 	} finally { s.dispose(); clock.uninstall(); }
 });
 
-test("the trail shrinks one character per tick after 500 ms idle and the blink resumes when it collapses", async () => {
+test("the trail collapses in one step 250 ms after the last keystroke", async () => {
 	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
 	const s = await session();
 	try {
@@ -234,15 +236,45 @@ test("the trail shrinks one character per tick after 500 ms idle and the blink r
 		s.editor.render(40);
 		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
 		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the trail starts three characters long");
-		clock.tick(500);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "bc", "after 500 ms idle the trail drops its left character");
-		clock.tick(50);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "c", "the next 50 ms tick drops one more");
-		clock.tick(50);
+		clock.tick(249);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "before 250 ms idle the trail is still held whole");
+		clock.tick(1);
 		const collapsed = s.editor.render(40);
-		assert.equal(highlighted(cursorRow(collapsed).row), "", "the trail has collapsed and the cursor is drawn again");
+		assert.equal(highlighted(cursorRow(collapsed).row), "", "at 250 ms idle the trail collapses in one step, not one character per tick");
+		assert.ok(collapsed.some((row) => row.includes(START)), `the cursor is drawn again after the collapse: ${readable(collapsed.join("\n"))}`);
 		clock.tick(500);
 		const off = s.editor.render(40);
 		assert.ok(!off.some((row) => row.includes(START) || row.includes(END)), `the resumed blink goes off 500 ms later: ${readable(off.join("\n"))}`);
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("backspace shrinks the trail by the deleted character", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	// Text before the typed characters keeps the trail shorter than the row, so a count that grew
+	// instead of shrinking would reach back over the characters the trail never covered.
+	const s = await session({ text: "xyz" });
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the typed characters are the whole trail");
+		s.editor.handleInput("\x7f");
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "ab", "Backspace deletes the character and drops it from the trail");
+		assert.ok(plain(cursorRow(s.editor.render(40)).row).includes("xyzab"), "the deleted character is gone from the text");
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("a newline clears the trail", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	const s = await session({ text: "xyz" });
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the typed characters are the whole trail");
+		s.editor.handleInput("\n");
+		const rows = s.editor.render(40);
+		assert.equal(highlighted(cursorRow(rows).row), "", "the newline leaves no highlighted character on the cursor row");
+		assert.ok(!rows.some((row) => row.includes(REVERSE) || row.includes(UNREVERSE)), `the newline clears the trail everywhere: ${readable(rows.join("\n"))}`);
 	} finally { s.dispose(); clock.uninstall(); }
 });
