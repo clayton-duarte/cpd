@@ -131,6 +131,22 @@ struct WtData {
     locked: Option<String>,
     /// `None` until something is staged; then every entry, sorted by path then stage.
     index: Option<Vec<(String, Oid, u8)>>,
+    /// The rebase stopped in this worktree (`rebase-merge/` on disk), if any.
+    rebase: Option<RebaseState>,
+}
+
+/// What a stopped `rebase` remembers: where it started, where it is and what is left to replay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RebaseState {
+    /// The tip the rebase started from (`rebase-merge/orig-head`).
+    pub orig_head: Oid,
+    /// The short name of the branch it moves when it ends; `None` for a detached `HEAD`.
+    pub branch: Option<String>,
+    pub onto: Oid,
+    /// The commit whose replay stopped.
+    pub stopped: Oid,
+    /// The commits still to replay after `stopped`, oldest first.
+    pub todo: Vec<Oid>,
 }
 
 struct RepoData {
@@ -214,6 +230,11 @@ impl Universe {
             self.config_values(repo, key).pop().unwrap_or_else(|| panic!("a commit needs {key} configured"))
         };
         let author = format!("{} <{}>", user("user.name"), user("user.email"));
+        self.commit_as(repo, &author, tree, parents, message)
+    }
+    /// [`Universe::commit`] by `author` (`<name> <<email>>`): what a rebase does to the commits it replays.
+    pub(super) fn commit_as(&mut self, repo: RepoId, author: &str, tree: &Oid, parents: &[Oid], message: &str) -> Oid {
+        let author = author.to_owned();
         let time = Self::EPOCH + self.clock.now().saturating_duration_since(self.start).as_secs();
         let mut body = format!("tree {tree}\n");
         for parent in parents {
@@ -283,7 +304,7 @@ impl Universe {
         let git_dir_of = |dir: &Path| if bare { dir.to_owned() } else { dir.join(".git") };
         std::fs::create_dir_all(git_dir_of(dir)).expect("the repo's directory can be made");
         let dir = dir.canonicalize().expect("the repo's directory exists");
-        let main = WtData { path: dir.clone(), id: None, head: Head::Branch("main".to_owned()), locked: None, index: None };
+        let main = WtData { path: dir.clone(), id: None, head: Head::Branch("main".to_owned()), locked: None, index: None, rebase: None };
         self.repos.push(RepoData {
             git_dir: git_dir_of(&dir),
             bare,
@@ -363,7 +384,7 @@ impl Universe {
         let admin = data.git_dir.join("worktrees").join(&id);
         std::fs::create_dir_all(&admin).expect("the admin directory can be made");
         std::fs::write(path.join(".git"), format!("gitdir: {}\n", admin.display())).expect("the .git file can be written");
-        data.wts.push(WtData { path: path.clone(), id: Some(id.clone()), head, locked: None, index: None });
+        data.wts.push(WtData { path: path.clone(), id: Some(id.clone()), head, locked: None, index: None, rebase: None });
         Worktree { path, id: Some(id) }
     }
     /// The git dir of a worktree: the common one for the main worktree, `<git dir>/worktrees/<id>` for a
@@ -564,6 +585,15 @@ impl Universe {
             Head::Detached(oid) => Some(oid),
         };
         commit.and_then(|c| self.commit_data(&c)).and_then(|c| self.tree_entries(&c.tree)).unwrap_or_default()
+    }
+    /// The rebase stopped in the worktree at `wt`.
+    pub(super) fn rebase_state(&self, wt: &Path) -> Option<RebaseState> {
+        let (r, w) = self.place(wt);
+        self.repos[r].wts[w].rebase.clone()
+    }
+    pub(super) fn set_rebase_state(&mut self, wt: &Path, state: Option<RebaseState>) {
+        let (r, w) = self.place(wt);
+        self.repos[r].wts[w].rebase = state;
     }
     /// `<admin dir of wt>/index`.
     pub fn index_path(&self, wt: &Path) -> PathBuf {

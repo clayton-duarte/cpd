@@ -461,9 +461,8 @@ fn cat_file(c: &mut Ctx, args: &[String]) -> Run {
 
 fn merge_base(c: &mut Ctx, args: &[String]) -> Run {
     let toks = scan("merge-base", args, &["--is-ancestor"], &[])?;
-    let (true, [a, b]) = (flags(&toks).contains(&"--is-ancestor"), &positionals(&toks)[..]) else {
-        return Err("merge-base (arguments)".to_owned());
-    };
+    let is_ancestor = flags(&toks).contains(&"--is-ancestor");
+    let [a, b] = positionals(&toks)[..] else { return Err("merge-base (arguments)".to_owned()) };
     let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
     let mut ids = Vec::new();
     for spec in [a, b] {
@@ -472,6 +471,12 @@ fn merge_base(c: &mut Ctx, args: &[String]) -> Run {
             Err(_) if is_oid(spec) => return Ok(Out::fail(128, format!("fatal: Not a valid commit name {spec}\n"))),
             Err(_) => return Ok(Out::fail(128, format!("fatal: Not a valid object name {spec}\n"))),
         }
+    }
+    if !is_ancestor {
+        return Ok(match c.u.merge_base(repo, &ids[0], &ids[1]) {
+            Some(base) => Out::ok(format!("{base}\n")),
+            None => Out::silent(1),
+        });
     }
     Ok(match c.u.is_ancestor(repo, &ids[0], &ids[1]) {
         Ok(yes) => Out::silent(if yes { 0 } else { 1 }),

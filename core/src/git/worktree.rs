@@ -281,7 +281,12 @@ fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
 /// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
 /// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
 pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let merge = run(repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
+    merge_conflicts_with(&SystemRunner, repo, onto, sha)
+}
+
+/// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`).
+pub fn merge_conflicts_with(runner: &dyn Runner, repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let merge = run_with(runner, repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
     match merge.code {
         0 => Ok(None),
         // The tree's id, the conflicted files, a blank line, then git's messages.
@@ -290,11 +295,6 @@ pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<
             .with("exit", code)
             .with("stderr", tail(&merge.stderr, TAIL_LINES))),
     }
-}
-
-/// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-pub fn merge_conflicts_with(_runner: &dyn Runner, _repo: &Path, _onto: &str, _sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    todo!("merge_conflicts_with")
 }
 
 /// Fetches `origin/<branch>` and refuses `branch_exists` when it conflicts with `origin/<base>` (hs-d490: a base that

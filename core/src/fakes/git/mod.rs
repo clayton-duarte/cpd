@@ -2,6 +2,7 @@
 //! repos, refs and worktrees, and [`GitRoute`], the `Handler` of the program `git` of a
 //! [`FakeRunner`](crate::host::runner::FakeRunner).
 
+mod merge3;
 mod repo;
 mod rev;
 mod route;

@@ -181,7 +181,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     // C4.
     let out = git::run::run(&lead, &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat())?;
     if out.code != 0 {
-        let files = unmerged(&lead)?;
+        let files = unmerged(&SystemRunner, &lead)?;
         if !files.is_empty() {
             return Err(stopped(&id, &key, &lead, branch, files));
         }
@@ -248,7 +248,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let old = git::run::rev_parse(lead, "HEAD")?;
     let out = git::run::run(lead, &[NO_EDITOR.as_slice(), &["rebase", &onto]].concat())?;
     if out.code != 0 {
-        let mut files = unmerged(lead)?;
+        let mut files = unmerged(&SystemRunner, lead)?;
         if files.is_empty() && in_progress(lead)? {
             files = listed;
         }
@@ -314,23 +314,28 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
 /// Whether a rebase is in progress in the Lead worktree (rule S step 0): `rebase-merge` or
 /// `rebase-apply` in its git dir.
 fn in_progress(lead: &Path) -> Result<bool, CpdError> {
+    in_progress_with(&SystemRunner, lead)
+}
+
+/// [`in_progress`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn in_progress_with(runner: &dyn Runner, lead: &Path) -> Result<bool, CpdError> {
     for name in ["rebase-merge", "rebase-apply"] {
-        if git_path(lead, name)?.exists() {
+        if git_path(runner, lead, name)?.exists() {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn git_path(lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
-    let path = git::run::ok(lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
+fn git_path(runner: &dyn Runner, lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
+    let path = git::run::ok_with(runner, lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
     Ok(std::path::PathBuf::from(path.trim()))
 }
 
 /// The tip the stopped rebase started from, S (`rebase-merge/orig-head`, `rebase-apply/orig-head`).
 fn orig_head(lead: &Path) -> Result<String, CpdError> {
     for name in ["rebase-merge/orig-head", "rebase-apply/orig-head"] {
-        if let Ok(sha) = std::fs::read_to_string(git_path(lead, name)?) {
+        if let Ok(sha) = std::fs::read_to_string(git_path(&SystemRunner, lead, name)?) {
             return Ok(sha.trim().to_owned());
         }
     }
@@ -338,8 +343,8 @@ fn orig_head(lead: &Path) -> Result<String, CpdError> {
 }
 
 /// The paths git has not merged (`git diff --name-only --diff-filter=U`).
-fn unmerged(lead: &Path) -> Result<Vec<String>, CpdError> {
-    let out = git::run::ok(lead, &["diff", "--name-only", "--diff-filter=U"])?;
+fn unmerged(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
+    let out = git::run::ok_with(runner, lead, &["diff", "--name-only", "--diff-filter=U"])?;
     Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect())
 }
 
@@ -347,8 +352,13 @@ fn unmerged(lead: &Path) -> Result<Vec<String>, CpdError> {
 /// (`git diff --name-only HEAD`) with a conflict marker line at column 0. `=======` alone is
 /// not one (a Markdown underline); it counts with a `<<<<<<<` line, which counts by itself.
 fn unresolved(lead: &Path) -> Result<Vec<String>, CpdError> {
-    let mut files: BTreeSet<String> = unmerged(lead)?.into_iter().collect();
-    let changed = git::run::ok(lead, &["diff", "--name-only", "-z", "HEAD"])?;
+    unresolved_with(&SystemRunner, lead)
+}
+
+/// [`unresolved`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn unresolved_with(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
+    let mut files: BTreeSet<String> = unmerged(runner, lead)?.into_iter().collect();
+    let changed = git::run::ok_with(runner, lead, &["diff", "--name-only", "-z", "HEAD"])?;
     for name in changed.split('\0').filter(|n| !n.is_empty()) {
         // A deleted file has no markers.
         let Ok(bytes) = std::fs::read(lead.join(name)) else { continue };
@@ -448,24 +458,6 @@ pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: 
     let Some(tip) = tip else { return Ok(false) };
     let known = git::run::run_with(runner, lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
     Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
-}
-
-/// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-#[allow(dead_code)]
-pub(crate) fn rebase_onto_with(_runner: &dyn Runner, _worktree: &Path, _onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    todo!("rebase_onto_with")
-}
-
-/// [`unresolved`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-#[allow(dead_code)]
-pub(crate) fn unresolved_with(_runner: &dyn Runner, _lead: &Path) -> Result<Vec<String>, CpdError> {
-    todo!("unresolved_with")
-}
-
-/// [`in_progress`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-#[allow(dead_code)]
-pub(crate) fn in_progress_with(_runner: &dyn Runner, _lead: &Path) -> Result<bool, CpdError> {
-    todo!("in_progress_with")
 }
 
 /// `error`, after removing the gate worktree; the removal's own failure is
@@ -576,13 +568,18 @@ fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdErro
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict, after
 /// `git rebase --abort`; `None` when it rebased.
 fn rebase_onto(worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let out = git::run::run(worktree, &["rebase", onto])?;
+    rebase_onto_with(&SystemRunner, worktree, onto)
+}
+
+/// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn rebase_onto_with(runner: &dyn Runner, worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let out = git::run::run_with(runner, worktree, &["rebase", onto])?;
     if out.code == 0 {
         return Ok(None);
     }
-    let conflicts = git::run::ok(worktree, &["diff", "--name-only", "--diff-filter=U"])?;
+    let conflicts = git::run::ok_with(runner, worktree, &["diff", "--name-only", "--diff-filter=U"])?;
     let files: Vec<String> = conflicts.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
-    let abort = git::run::run(worktree, &["rebase", "--abort"])?;
+    let abort = git::run::run_with(runner, worktree, &["rebase", "--abort"])?;
     if files.is_empty() || abort.code != 0 {
         let (what, failed) = if files.is_empty() {
             ("git rebase failed without a conflict", &out)
