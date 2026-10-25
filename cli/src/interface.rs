@@ -113,6 +113,7 @@ pub const TABLE: &[Entry] = &[
     ("secret delete", &[Lead, Manager], false),
     ("secret allow", &[Lead], false),
     ("host repair", &[Manager], false),
+    ("prune", &[], false),
 ];
 
 /// The tree of `cpd --help`: clap's commands depth-first in clap's order,

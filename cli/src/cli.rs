@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -92,6 +92,8 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
+    Prune(prune::Args),
 }
 
 /// Parses `argv` and runs the command on the real ports.
@@ -152,6 +154,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Prune(a) => prune::command(a),
     }
 }
 

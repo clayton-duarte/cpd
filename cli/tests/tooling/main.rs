@@ -19,7 +19,6 @@ mod pill_parity;
 mod pill_sites;
 mod npm_fresh;
 mod preview_script;
-mod prune_script;
 mod run_with;
 mod slot;
 mod tag_script;
