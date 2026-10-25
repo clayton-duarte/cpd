@@ -1,5 +1,6 @@
 //! E4, open Jobs (contract §3.7, hs-d340, hs-d573; it replaces the completion step and its `all-merged` steer, and the escalation to the
-//! Manager): each PR in status `dispatch`, of a Plan that is not archived, with no `open` Job `draft`, `queued`, `running`, `failed` or `cancelled`, gets one
+//! Manager): the **fallback** for a PR whose opener is missing. `pr add` lays an opener stub out for every shape, and `pr open` adds one to a
+//! PR that has none; E4 covers the PRs those did not, each PR in status `dispatch`, of a Plan that is not archived, with no `open` Job `draft`, `queued`, `running`, `failed` or `cancelled`, gets one
 //! ([`cpd_core::job::open::add`]), a `draft` one while a draft of the PR (any kind but `open` and `update`) remains, else `queued`. Each tick
 //! it also queues a `draft` `open` Job of such a PR when none of the PR's other Jobs is `draft` any more, with its fingerprint, in one transaction. A `merged` one on a PR still `dispatch` is a merge that died before it opened the pull request, so it
 //! counts for nothing and a fresh Job follows; a `cancelled` one is the Lead's and stands (the way on is `pr open --pr` or `pr cancel`);
@@ -116,7 +117,7 @@ fn add_all(tx: &WriteTxn<'_>, missing: &[(PlanId, PrKey)], tier: cpd_core::confi
             [plan.as_str(), key.as_str()],
             |r| r.get(0),
         )?;
-        let job = open::add(tx, plan, pr, tier, draft)?;
+        let job = open::add(tx, plan, pr, tier, draft, open::BY_ENGINE)?;
         added.push((plan.clone(), key.clone(), job));
     }
     Ok(added)

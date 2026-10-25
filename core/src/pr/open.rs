@@ -10,14 +10,16 @@ use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
-use super::start::{base_pr, unstack_stored};
+use super::start::base_pr;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, gate, gate_then, illegal_phase, pr_policy, short};
+use super::{Args, Env, gate_then, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::output::Output;
+use crate::job;
+use crate::plan::fingerprint::load_prs;
 use crate::plan::{Phase, jobs};
 use crate::store::WriteTxn;
 
@@ -56,69 +58,23 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     };
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     require_no_open_job_live(&mut env, &id, &key)?;
-    let policy = pr_policy(&mut env, &id, &key)?;
-    let list = require_jobs_done(&mut env, &plan, &key)?;
-    let stored = stored_title(&mut env, &id, &key)?;
-    // A merged base PR unstacks the PR first, before step 0 and every check after it, and the unstack stays when one of
-    // them refuses (contract §7.6 `pr open` "Stacked", hs-d301): GitHub deleted the merged branch, never look it up.
-    unstack_stored(&mut env.store, COMMAND, &id, &key, "pr open")?;
-    let plan = env.plan(&id)?;
+    require_jobs_done(&mut env, &plan, &key)?;
+    stored_title(&mut env, &id, &key)?;
 
-    // No lock and no R (hs-d243): an unrecorded merge leaves its Job `running`,
-    // which `jobs_not_done` refused above.
-    let pr = pr_of(&plan, &key);
-    let lead = pr.lead(&id)?.clone();
-    let branch = pr.lead_branch.clone();
-    // 0. The newest pull request of the Lead Branch, in any state, before the Gate (contract §7.6, hs-n236): a merged
-    // one is adopted as it is, with no Gate and no push; a closed one is refused; an open one is adopted after the push.
-    let mut existing = None;
-    if let Some(head) = gh::head_pr(&lead, &branch)? {
-        match head.state {
-            HeadState::Merged => return adopt_merged(&mut env, &plan, &key, &lead, &head),
-            HeadState::Closed => return Err(closed(&key, &branch, &head).with("plan", id.as_str())),
-            HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
+    // `pr open` no longer opens the pull request itself: it adds and queues the PR's opener, whose submit runs the
+    // Gate, pushes and opens the pull request (contract §7.6, §7.7). The write transaction decides again so two
+    // openers can never race a concurrent `pr open` or engine E4 (hs-d573).
+    let tier = env.config.open_tier;
+    let job = env.store.write(COMMAND, |tx| {
+        if let Some(live) = live_open_job(tx, &id, &key)? {
+            return Err(open_job_live(&id, &key, &live));
         }
-    }
-    // 1. B, read once, and G, read once; the conflict check on G (hs-d490: a base that merely moved ahead refuses
-    // nothing), before the Gate, under `pr.gate` `ci` as under `local`; 2. the Gate on G, in a gate worktree of its own.
-    let repo = Path::new(&pr.repo);
-    let again = format!("cpd pr open --pr {key}");
-    require_base_on_remote(&mut env, &id, repo, pr, &format!("Its Lead pushes it (cpd pr push), then run {again} again. Nothing was gated, pushed or opened."))?;
-    let base_sha = fresh_base(repo, &pr.base)?;
-    let sha = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
-    require_no_conflict(repo, &lead, pr, &base_sha, &sha, &again, "the Lead Branch")?;
-    gate(&env, &policy, &id, pr, &sha, &format!("pr open --pr {key}"))?;
-
-    // The PR is read again: another `pr open` may have opened it during the Gate.
-    let plan = env.plan(&id)?;
-    if let Step::Already(done) = require_dispatch(&plan, &args)? {
-        return Ok(done);
-    }
-    let pr = pr_of(&plan, &key);
-
-    // 3. Rule P with G, then the pull request.
-    let (pushed, remote) = match git::push_commit(&lead, &branch, &sha)? {
-        git::Push::Pushed { new } => (new, sha.clone()),
-        git::Push::Contained { remote } => (false, remote),
-        git::Push::Rejected { stderr } => {
-            return Err(CpdError::new(
-                ErrorCode::GitFailed,
-                format!("git push of {} to {branch} on origin was rejected, and the remote branch does not contain it: nothing was opened.", short(&sha)),
-            )
-            .with("plan", id.as_str())
-            .with("pr", key.as_str())
-            .with("sha", sha.as_str())
-            .with("stderr", stderr));
-        }
-    };
-    let row = opened_row(&lead, pr, existing, &stored, &list)?;
-    let pulled = Pulled { row, merged: false };
-    let phase = env.store.write(COMMAND, |tx| record(tx, &id, &key, &pulled)?.ok_or_else(|| cas_lost(&id, &key)))?;
-
-    let plan = env.plan(&id)?;
-    Ok(Output::success(
-        json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json(), "sha": sha, "pushed": pushed, "remote": remote}),
-    ))
+        let pr = load_prs(tx, &id)?.into_iter().find(|p| p.key == key).ok_or_else(|| {
+            CpdError::bad_row(format!("PR {key} of Plan {id} vanished while it was being queued"))
+        })?;
+        job::open::add(tx, &id, &pr, tier, false, COMMAND)
+    })?;
+    Ok(Output::success(json!({"plan": id, "pr": key, "job": job, "status": "queued"})))
 }
 
 /// A stacked PR's base branch, its base PR's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
@@ -203,16 +159,6 @@ fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str,
             .map(|h| PrRef { number: h.number, url: h.url })
             .ok_or(failed),
     }
-}
-
-/// A pull request of the Lead Branch that is already `merged` on GitHub (contract §7.6 `pr open` step 0): no Gate and
-/// no push. One transaction records it and merges the PR as `pr poll` does (`pr-merged`, the Plan `deploy` and `done`).
-fn adopt_merged(env: &mut Env, plan: &PlanPrs, key: &PrKey, lead: &Path, head: &gh::HeadPr) -> Result<Output, CpdError> {
-    let id = &plan.plan.id;
-    let pulled = Pulled { row: merged_row(lead, head)?, merged: true };
-    let phase = env.store.write(COMMAND, |tx| record(tx, id, key, &pulled)?.ok_or_else(|| cas_lost(id, key)))?;
-    let plan = env.plan(id)?;
-    Ok(Output::success(json!({"adopted": "merged", "plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, key).to_json()})))
 }
 
 /// A pull request of the PR's Lead Branch, as the rows of `dispatch → open` record it (contract §7.6 `pr open` steps 0 and 4, §7.4 step 8b).
@@ -540,29 +486,36 @@ fn require_dispatch(plan: &PlanPrs, args: &Args) -> Result<Step, CpdError> {
     }
 }
 
-/// `pr open` is the repair (contract §7.6, hs-d340): while the PR's `open` Job is `queued` or `running` that Job is about to open the
+/// The PR's `open` Job that is `draft`, `queued` or `running`, by key, if any (hs-d573): it is about to open the pull request.
+fn live_open_job(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<String>, CpdError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'open' AND status IN ('draft', 'queued', 'running') ORDER BY seq LIMIT 1",
+            [plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// `pr open` is the repair (contract §7.6, hs-d340): while the PR's `open` Job is `draft`, `queued` or `running` that Job is about to open the
 /// pull request, and two openers would race, so it is refused `open_job_live` (exit 3, `details.job`) with nothing run or written.
 fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
-    let live: Option<String> = env.store.read(|conn| {
-        use rusqlite::OptionalExtension;
-        Ok(conn
-            .query_row(
-                "SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'open' AND status IN ('draft', 'queued', 'running') ORDER BY seq LIMIT 1",
-                [plan.as_str(), key.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?)
-    })?;
-    match live {
+    match env.store.read(|conn| live_open_job(conn, plan, key))? {
         None => Ok(()),
-        Some(job) => Err(CpdError::new(
-            ErrorCode::OpenJobLive,
-            format!("PR {key} of Plan {plan} has its open Job {job} draft, queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the PR by hand."),
-        )
-        .with("plan", plan.as_str())
-        .with("pr", key.as_str())
-        .with("job", job)),
+        Some(job) => Err(open_job_live(plan, key, &job)),
     }
+}
+
+/// `open_job_live` (exit 3, `details.job`): the PR already has a live opener.
+fn open_job_live(plan: &PlanId, key: &PrKey, job: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::OpenJobLive,
+        format!("PR {key} of Plan {plan} has its open Job {job} draft, queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the PR by hand."),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", key.as_str())
+    .with("job", job)
 }
 
 /// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`. The PR's `open` and `update` Jobs count
