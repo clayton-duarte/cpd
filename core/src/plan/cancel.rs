@@ -17,6 +17,7 @@ use crate::events::{NewEvent, append};
 use crate::host::Tmux;
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::session::close_lead;
 use crate::store::Store;
 use crate::{job, pr};
@@ -104,6 +105,11 @@ fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<Str
 fn live_attempts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdError> {
     let mut stmt = conn.prepare("SELECT id FROM attempts WHERE plan = ?1 AND status <> 'ended' ORDER BY id")?;
     Ok(stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+}
+
+/// [`wait_until_ended`] on `ports.clock`: the deadline is read and the nap taken there.
+pub(crate) fn wait_until_ended_with(_ports: &Ports, _store: &mut Store, _plan: &PlanId, _limit: Duration, _every: Duration) -> Result<(), CpdError> {
+    todo!("plan cancel's wait on Ports: now and sleep on ports.clock")
 }
 
 /// Polls, up to `limit`, until no Attempt of `plan` is left that is not `ended`; else `cancel_timeout`.

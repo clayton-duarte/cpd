@@ -293,6 +293,11 @@ fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, Cpd
     }
 }
 
+/// [`snooze_until`] counting from `ports.clock.utc()`, `tomorrow`'s local offset from `date +%z` on `ports.runner`.
+pub fn snooze_until_on(_ports: &crate::ports::Ports, _until: Until) -> Result<OffsetDateTime, CpdError> {
+    todo!("inbox snooze on Ports: now from ports.clock.utc(), the offset from ports.runner")
+}
+
 /// `inbox snooze` (§21.3).
 fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;

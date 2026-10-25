@@ -7,7 +7,7 @@
 //!
 //! No command writes the store, and no value is in an error, a log or a file.
 
-mod grants;
+pub(crate) mod grants;
 pub mod op;
 pub mod rules;
 

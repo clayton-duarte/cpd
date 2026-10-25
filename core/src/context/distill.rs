@@ -859,7 +859,7 @@ mod pi_json {
 
 /// What became of a child that was given a time limit.
 #[derive(Debug)]
-pub(super) enum Waited {
+pub(crate) enum Waited {
     /// It ended; `stdout` is everything it printed (empty when its stdout was not piped).
     Exited { status: ExitStatus, stdout: io::Result<Vec<u8>> },
     TimedOut,
@@ -891,6 +891,28 @@ pub(super) fn run_pi_with(runner: &dyn Runner, launch: &pi::Launch, dir: &Path, 
         stderr_to: Some(log.to_path_buf()),
     };
     wait_limited_with(runner, &call, limit)
+}
+
+/// How long a pi run took, as `runs.jsonl` writes it (contract §4.6 "The run log").
+#[derive(Debug)]
+pub(crate) struct Timed {
+    /// `ports.clock.utc()` when the run began, RFC 3339 with milliseconds.
+    pub(crate) started_at: String,
+    /// The seconds the run took on `ports.clock`, rounded to the millisecond.
+    pub(crate) seconds: f64,
+    pub(crate) waited: Waited,
+}
+
+/// [`run_pi_with`] on `ports`, timed by `ports.clock` (`started_at` and `seconds` of the run log): what `Run::run_pi` calls.
+pub(crate) fn run_pi_timed_with(
+    _ports: &crate::ports::Ports,
+    _launch: &pi::Launch,
+    _dir: &Path,
+    _log: &Path,
+    _limit: Duration,
+    _environ: &[String],
+) -> io::Result<Timed> {
+    todo!("the distill run's time on Ports: started_at and seconds from ports.clock")
 }
 
 /// The last [`TAIL_LINES`] lines of `log` after byte `offset`.

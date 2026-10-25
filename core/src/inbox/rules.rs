@@ -19,6 +19,7 @@ use crate::home::CpdHome;
 use crate::host::addr::review_host;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
+use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
 
@@ -48,6 +49,12 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
     };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
     conditions_with(store, home, OffsetDateTime::now_utc(), config.loop_guard_turns, config.context_curation_min_records, team)
+}
+
+/// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and
+/// `ports.runner` runs `gh`.
+pub fn conditions_on(_ports: &Ports, _store: &mut Store, _home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    todo!("the inbox rules on Ports: the window and the GitHub memo read ports.clock; gh runs on ports.runner")
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.

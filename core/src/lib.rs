@@ -52,6 +52,8 @@ pub mod fakes;
 mod clock_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod loops_ports_tests;
 
 #[cfg(test)]
 mod pill_tests;

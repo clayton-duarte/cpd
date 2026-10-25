@@ -36,6 +36,18 @@ enum Settled {
     TimedOut,
 }
 
+/// [`ask`] for Attempt `attempt` of `plan` on the ports of `env`: the deadline and the 500 ms polls are read on
+/// `env.ports.clock`. `timeout_minutes` is `--timeout-minutes`.
+pub(crate) fn ask_in(
+    _env: &mut Env,
+    _plan: &PlanId,
+    _attempt: &AttemptId,
+    _question: &str,
+    _timeout_minutes: Option<u32>,
+) -> Result<Output, CpdError> {
+    todo!("ask on Ports: the deadline and POLL are read and slept on env.ports.clock")
+}
+
 pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;

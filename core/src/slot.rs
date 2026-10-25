@@ -99,6 +99,11 @@ impl Slots {
         }
     }
 
+    /// [`Slots::take`] with `ports.clock` for the elapsed time and the polls' naps.
+    pub fn take_with(&self, _ports: &crate::ports::Ports, _prefix: &str, _report: &mut dyn FnMut(&str, bool) -> Result<(), CpdError>) -> Result<Slot, CpdError> {
+        todo!("the gate slot wait on Ports: now and sleep on ports.clock")
+    }
+
     /// One pass over the slots in order, without blocking: the first that is free is taken.
     fn try_all(&self) -> Result<Option<Slot>, CpdError> {
         for (index, path) in self.paths.iter().enumerate() {

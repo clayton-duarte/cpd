@@ -43,13 +43,13 @@ pub enum Command {
 pub struct Scope {
     /// Events of this Plan
     #[arg(long, value_name = "id")]
-    plan: Option<PlanId>,
+    pub(crate) plan: Option<PlanId>,
     /// Events of this Context
     #[arg(long, value_name = "id")]
-    context: Option<ContextId>,
+    pub(crate) context: Option<ContextId>,
     /// Events for this Session (§5.3's rule)
     #[arg(long, value_name = "id")]
-    session: Option<SessionId>,
+    pub(crate) session: Option<SessionId>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -70,16 +70,16 @@ pub struct ListArgs {
 #[derive(clap::Args, Debug)]
 pub struct FollowArgs {
     #[command(flatten)]
-    scope: Scope,
+    pub(crate) scope: Scope,
     /// Only this kind (repeatable)
     #[arg(long = "kind", value_name = "kind")]
-    kinds: Vec<Kind>,
+    pub(crate) kinds: Vec<Kind>,
     /// Start after this id [default: the highest id now]; 0 replays everything
     #[arg(long, value_name = "id", value_parser = clap::value_parser!(i64).range(0..))]
-    since: Option<i64>,
+    pub(crate) since: Option<i64>,
     /// Exit once everything committed at the start has been printed
     #[arg(long)]
-    until_idle: bool,
+    pub(crate) until_idle: bool,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
@@ -100,6 +100,13 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
     })?;
     let next = events.last().map_or(since, |e| e.id);
     Ok(Output::success(json!({"events": events, "next": next})))
+}
+
+/// [`follow`] on the ports of `env` (`env.ports.clock` for the poll's nap, `env.ports.spawn` for the exe it restarts
+/// from) and the writer `out` for its lines, not the process's stdout: what a test of the loop calls.
+/// `out` failing with `BrokenPipe` ends it as the reader's end does.
+pub(crate) fn follow_in(_env: &mut Env, _args: FollowArgs, _out: &mut dyn Write) -> Result<Output, CpdError> {
+    todo!("events follow on Ports: the poll naps on env.ports.clock, writes to `out`, restarts through env.ports.spawn")
 }
 
 /// `events follow` (§11.2, §5.4): prints each Event as a line, in id order,

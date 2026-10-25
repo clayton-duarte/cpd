@@ -28,6 +28,7 @@ use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
 use crate::lock;
+use crate::ports::Ports;
 use crate::output::Output;
 use crate::policy::Checks;
 use crate::store::WriteTxn;
@@ -178,6 +179,11 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         out["prs"] = Value::Array(prs);
     }
     Ok(Output::success(out))
+}
+
+/// [`take_lock`] on `ports.clock`: the 60 s deadline is read and the 100 ms retries are slept there.
+pub(crate) fn take_lock_with(_ports: &Ports, _path: &Path) -> Result<fs::File, CpdError> {
+    todo!("the poll lock wait on Ports: now and sleep on ports.clock")
 }
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The

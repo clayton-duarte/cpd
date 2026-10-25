@@ -501,6 +501,11 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
     Ok(())
 }
 
+/// [`settle`] on the ports of `env`: the 60 s deadline and the 200 ms polls are read and slept on `env.ports.clock`.
+pub(crate) fn settle_in(_env: &mut Env, _catalog: &mut Option<Catalog>, _plan: &PlanId, _key: &PrKey, _attempt: &AttemptId) -> Result<(), CpdError> {
+    todo!("guard U's wait on Ports: now and sleep on env.ports.clock")
+}
+
 /// Waits until Attempt `attempt` is no longer `merging`, at most 60 s, reading the
 /// store every 200 ms; whenever its driver lock is free (the driver is dead), R
 /// ends it. pi's catalog, which R needs only to pick a crashed Attempt's next

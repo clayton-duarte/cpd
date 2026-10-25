@@ -10,7 +10,7 @@
 //! - `new`, `list`, `show`, `phase`, `review`, `lock`: the commands.
 
 pub mod archive;
-mod cancel;
+pub(crate) mod cancel;
 pub(crate) mod delete;
 pub mod display;
 pub mod fingerprint;
