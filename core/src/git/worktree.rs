@@ -60,6 +60,11 @@ pub fn attempt_worktree_path(repo: &Path, plan: &PlanId, attempt: &AttemptId) ->
     sibling(repo, &format!("{plan}--{attempt}"))
 }
 
+/// The Gate worktree for a PR's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
+pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, pid: u32) -> Result<PathBuf, CpdError> {
+    sibling(repo, &format!("{plan}--{key}-gate-{pid}"))
+}
+
 /// One entry of `git worktree list --porcelain`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {

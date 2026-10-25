@@ -706,32 +706,6 @@ impl Fx {
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
     }
 
-    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
-    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
-    pub fn drop_unreachable_origin(&self, repo: &Path) {
-        // Exit 1 and no output when nothing matches.
-        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
-        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
-            self.git(repo, &["remote", "remove", "origin"]);
-        }
-    }
-
-    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
-    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
-    pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
-        let mut done_when = serde_json::Map::new();
-        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
-            if job["status"] == "draft" {
-                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
-            }
-        }
-        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
-        let path = self.env.root().join(format!("outline-{plan}.json"));
-        std::fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
-    }
-
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
     pub fn commit_file(&self, dir: &Path, path: &str, text: &str, message: &str) {
         let file = dir.join(path);
@@ -974,6 +948,29 @@ impl Fx {
     /// The `cpd` children the engine starts on this `Fx`'s `FakeSpawn`, which the test runs itself: [`Children`].
     pub fn children(&self) -> Children {
         Children { ports: self.fakes.ports.clone(), spawn: self.fakes.spawn.clone(), run: 0 }
+    }
+
+    /// Removes the remote `origin` from `repo` if it has been rewritten (has a `url.*.insteadof` config) or if it is unreachable.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
+        let rewritten = self.git_output(repo, &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// Prepares a Plan for review: writes the outline of the Plan at `<env-root>/outline-<plan>.json`.
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
     }
 }
 
