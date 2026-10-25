@@ -12,6 +12,7 @@ use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
 use crate::host::runner::{Runner, SystemRunner};
+use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -69,7 +70,8 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    list_with(&SystemRunner, &SystemClock, dir)
+    let ports = Ports::current();
+    list_with(&*ports.runner, &*ports.clock, dir)
 }
 
 /// [`list`] on `runner`, the naps of its re-reads on `clock`.
