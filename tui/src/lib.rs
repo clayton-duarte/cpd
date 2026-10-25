@@ -25,6 +25,8 @@ mod box_widget_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
+mod guard_popup_tests;
+#[cfg(test)]
 mod guard_terminal_tests;
 #[cfg(test)]
 mod section_title_tests;
