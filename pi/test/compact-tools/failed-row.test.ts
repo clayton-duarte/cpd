@@ -63,68 +63,60 @@ function assertCapped(reason: string | undefined, width: number, label: string) 
 }
 
 test("collapsed failed row cuts the reason below half the width", async () => {
-	try {
-		for (const width of [60, 80, 81, 100, 120]) {
-			const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
-			assertCapped(reasonOf(closing(row.render(width))), width, "bash");
-			shutdown(harness);
-		}
-		const expected: Record<number, string> = {
-			60: "cpd: ask_user_question is fo\u2026",
-			80: "cpd: ask_user_question is for a few sh\u2026",
-			100: "cpd: ask_user_question is for a few short choice\u2026",
-		};
-		for (const [width, reason] of Object.entries(expected)) {
-			const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
-			assert.equal(reasonOf(closing(row.render(Number(width)))), reason, `refusal at ${width}`);
-			shutdown(harness);
-		}
-		{
-			const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
-			const line = closing(row.render(80));
-			assert.ok(line.startsWith(" \u2570"), line);
-			assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 cpd: ask_user_question is for a few sh\u2026$/u);
-			shutdown(harness);
-		}
-		{
-			const short = "twenty cells of text"; // 20 cells
-			assert.equal(visibleWidth(short), 20);
-			const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
-			const cut = reasonOf(closing(row.render(80)));
-			assert.ok(cut !== undefined && 2 * visibleWidth(cut) < 80, "the long reason is cut first");
-			shutdown(harness);
-			const whole = await failedRow("bash", { command: "npm test" }, short);
-			assert.equal(reasonOf(closing(whole.row.render(80))), short);
-			shutdown(whole.harness);
-		}
-		{
-			const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
-			const flat = row.render(2).map(plain).join("").replace(/\s+/gu, "");
-			for (const word of ["TypeError", "diagnostic"]) assert.ok(!flat.includes(word), `no reason at width 2: ${flat}`);
-			assert.ok(!flat.includes(SEPARATOR.trim()), `no separator at width 2: ${flat}`);
-			shutdown(harness);
-		}
-	} finally {
-		restoreClocks();
+	for (const width of [60, 80, 81, 100, 120]) {
+		const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
+		assertCapped(reasonOf(closing(row.render(width))), width, "bash");
+		shutdown(harness);
+	}
+	const expected: Record<number, string> = {
+		60: "cpd: ask_user_question is fo\u2026",
+		80: "cpd: ask_user_question is for a few sh\u2026",
+		100: "cpd: ask_user_question is for a few short choice\u2026",
+	};
+	for (const [width, reason] of Object.entries(expected)) {
+		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
+		assert.equal(reasonOf(closing(row.render(Number(width)))), reason, `refusal at ${width}`);
+		shutdown(harness);
+	}
+	{
+		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
+		const line = closing(row.render(80));
+		assert.ok(line.startsWith(" \u2570"), line);
+		assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 cpd: ask_user_question is for a few sh\u2026$/u);
+		shutdown(harness);
+	}
+	{
+		const short = "twenty cells of text"; // 20 cells
+		assert.equal(visibleWidth(short), 20);
+		const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
+		const cut = reasonOf(closing(row.render(80)));
+		assert.ok(cut !== undefined && 2 * visibleWidth(cut) < 80, "the long reason is cut first");
+		shutdown(harness);
+		const whole = await failedRow("bash", { command: "npm test" }, short);
+		assert.equal(reasonOf(closing(whole.row.render(80))), short);
+		shutdown(whole.harness);
+	}
+	{
+		const { row, harness } = await failedRow("bash", { command: "npm test" }, LONG);
+		const flat = row.render(2).map(plain).join("").replace(/\s+/gu, "");
+		for (const word of ["TypeError", "diagnostic"]) assert.ok(!flat.includes(word), `no reason at width 2: ${flat}`);
+		assert.ok(!flat.includes(SEPARATOR.trim()), `no separator at width 2: ${flat}`);
+		shutdown(harness);
 	}
 });
 
 test("every tool kind gets the same cap: file, shell and custom", async () => {
-	try {
-		const kinds: Array<[string, object]> = [
-			["read", { path: "src/app.ts" }],
-			["bash", { command: "npm test" }],
-			["ask_user_question", {}],
-		];
-		for (const [name, args] of kinds) {
-			for (const width of [80, 100]) {
-				const { row, harness } = await failedRow(name, args, REFUSAL);
-				assertCapped(reasonOf(closing(row.render(width))), width, name);
-				shutdown(harness);
-			}
+	const kinds: Array<[string, object]> = [
+		["read", { path: "src/app.ts" }],
+		["bash", { command: "npm test" }],
+		["ask_user_question", {}],
+	];
+	for (const [name, args] of kinds) {
+		for (const width of [80, 100]) {
+			const { row, harness } = await failedRow(name, args, REFUSAL);
+			assertCapped(reasonOf(closing(row.render(width))), width, name);
+			shutdown(harness);
 		}
-	} finally {
-		restoreClocks();
 	}
 });
 
@@ -150,27 +142,24 @@ test("collapsed group failure line is cut below half the width", async () => {
 	} finally {
 		controller.dispose();
 		shutdown(harness);
-		restoreClocks();
 	}
 });
 
 test("the full error is inside the fold: collapsed cuts it, expanded shows it whole", async () => {
-	try {
-		const collapsed = await failedRow("ask_user_question", {}, REFUSAL);
-		const lines = collapsed.row.render(100).map(plain);
-		assert.ok(!lines.join("\n").includes(REFUSAL), "the collapsed row does not hold the whole refusal");
-		assert.ok(2 * visibleWidth(reasonOf(closing(lines)) ?? "") < 100, "the collapsed reason is below half the width");
-		shutdown(collapsed.harness);
+	const collapsed = await failedRow("ask_user_question", {}, REFUSAL);
+	const lines = collapsed.row.render(100).map(plain);
+	assert.ok(!lines.join("\n").includes(REFUSAL), "the collapsed row does not hold the whole refusal");
+	assert.ok(2 * visibleWidth(reasonOf(closing(lines)) ?? "") < 100, "the collapsed reason is below half the width");
+	shutdown(collapsed.harness);
 
-		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
-		row.setExpanded(true);
-		const body = row.render(100).map(plain).filter((line) => line.trim() !== "");
-		const last = body.at(-1)!;
-		assert.match(last, /^ \u2570\S+ collapse \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s$/u, last);
-		const joined = body.slice(0, -1).map((line) => line.replace(/^\s*\u2502 ?/u, "").trim()).join(" ");
-		assert.ok(joined.replace(/\s+/gu, " ").includes(REFUSAL), `the body holds the whole error: ${JSON.stringify(joined)}`);
-		shutdown(harness);
-	} finally {
-		restoreClocks();
-	}
+	const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
+	row.setExpanded(true);
+	const body = row.render(100).map(plain).filter((line) => line.trim() !== "");
+	const last = body.at(-1)!;
+	assert.match(last, /^ \u2570\S+ collapse \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s$/u, last);
+	const joined = body.slice(0, -1).map((line) => line.replace(/^\s*\u2502 ?/u, "").trim()).join(" ");
+	assert.ok(joined.replace(/\s+/gu, " ").includes(REFUSAL), `the body holds the whole error: ${JSON.stringify(joined)}`);
+	shutdown(harness);
 });
+
+test.after(restoreClocks);
