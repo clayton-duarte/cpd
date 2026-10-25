@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
+    env.fake_tmux();
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     env
 }
