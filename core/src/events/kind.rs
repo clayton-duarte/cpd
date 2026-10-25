@@ -135,6 +135,7 @@ kinds! {
     ReviewOpened = "review-opened",
     ReviewClosed = "review-closed",
     IncidentStarted = "incident-started",
+    IncidentPlans = "incident-plans",
     IncidentEnded = "incident-ended",
 }
 
@@ -210,6 +211,7 @@ impl Kind {
             ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
             ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
             IncidentStarted => spec([N, N, N, N, N], &["by", "reason", "started_at", "plans"], &["until_pr"]),
+            IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_pr"]),
             IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }

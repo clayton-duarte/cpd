@@ -4680,38 +4680,50 @@ Incident mode (hs-d643, user decision hs-d643; supersedes hs-d634): Plan-scoped 
 ### 25.1 `incident start`
 
 ```
-cpd incident start --plan <id> [--plan <id>...] --reason <text> [--until-pr <plan>/<key>]
+cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <plan>/<key>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--plan <id>` | required, repeatable at least once; names an existing Plan in this Context |
-| `--reason <text>` | required; 1 or more characters, explanation of the incident |
+| `--reason <text>` | optional; 1 or more characters, explanation of the incident; required only on a fresh start |
 | `--until-pr <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
 | at least one `--plan` is present | `usage` | 2 |
-| `--reason` is present and at least 1 character | `usage` | 2 |
+| when incident is off, `--reason` is present and at least 1 character | `usage` | 2 |
 | no `--plan` argument, or every one names an existing Plan in the store | `plan_not_found` | 4 |
 | `--until-pr` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
 | `--until-pr` is absent, or its value's Plan is one of the named Plans | `until_pr_not_incident` | 3 |
 | `--until-pr` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
-Effects: one transaction; insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
+**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set or `until_pr` changed, update `until_plan` and `until_pr` and append `incident-plans` Event with the new `plans` array; when both are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-pr` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_pr`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
 
-Output examples:
+**Output examples:**
 
+Fresh start:
 ```json
 {"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
 ```
 
+Update with changed set:
+```json
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-c"], "until_pr": null}}
+```
+
+Update with unchanged set and until_pr:
+```json
+{"ok": true, "changed": false, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+```
+
+Fresh start with auto-end:
 ```json
 {"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
 ```
 
-Idempotent: yes; incident mode already on returns `"changed": false` with the existing row (same Plans, same reason or changed reason; unchanged `started_at` and `by`).
+**Idempotent:** yes; when the set and `until_pr` are already as named, returns `changed: false` with the existing incident.
 
 ### 25.2 `incident end`
 

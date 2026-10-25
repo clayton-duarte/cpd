@@ -549,3 +549,190 @@ fn elapsed_is_a_coarse_human_duration() {
         assert_eq!(incident::elapsed(started, base + ago).unwrap(), want, "case {i}");
     }
 }
+
+/// Assumption A1 (hs-d664): a start on a live incident replaces `incident_plans` with exactly the
+/// named Plans, so one Plan may leave while another joins.
+#[test]
+fn incident_start_on_a_live_incident_replaces_the_plan_set() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    assert_eq!(plan_set(&mut f.store), ["pay"], "the fresh start names pay");
+
+    // `ops` joins and `pay` leaves: the named list replaces the set exactly.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops.clone()], "why", None).unwrap());
+    assert_eq!(out["changed"], json!(true), "a changed set is not idempotent");
+    assert_eq!(plan_array(&out["incident"]["plans"]), ["ops"], "the output reports the new set only");
+    assert_eq!(plan_set(&mut f.store), ["ops"], "incident::plans returns exactly the named Plans");
+    assert_eq!(
+        incident_plans(&mut f.store).keys().cloned().collect::<Vec<_>>(),
+        ["ops"],
+        "one incident_plans row per named Plan, and pay's is gone"
+    );
+    assert!(!held(&mut f.store, &ops), "the named Plan is not held");
+    assert!(held(&mut f.store, &pay), "the Plan that left the incident is held");
+}
+
+/// Assumption A2 (hs-d664): an update with `--reason` omitted (the empty string) leaves the
+/// stored `started_at`, `started_by` and `reason` alone.
+#[test]
+fn incident_start_on_a_live_incident_keeps_started_at_by_and_reason() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    let first = fields(incident::start(&mut f.store, Some(&mgr), &[pay], "database migration in progress", None).unwrap());
+    let started_at = first["incident"]["started_at"].as_str().expect("started_at is a string").to_owned();
+
+    // An update names `ops` and gives no --reason ("" means omitted).
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "", None).unwrap());
+    assert_eq!(out["changed"], json!(true), "the set changed");
+    assert_eq!(out["incident"]["started_at"], json!(started_at), "started_at stays");
+    assert_eq!(out["incident"]["by"], json!("mgr"), "started_by stays");
+    assert_eq!(out["incident"]["reason"], json!("database migration in progress"), "the stored reason stays");
+    assert_eq!(plan_set(&mut f.store), ["ops"], "the set did change");
+
+    let (row_at, by, reason, _) = incident_row(&mut f.store).expect("the live incident row");
+    assert_eq!(
+        (row_at.as_str(), by.as_str(), reason.as_str()),
+        (started_at.as_str(), "mgr", "database migration in progress"),
+        "the row keeps started_at, started_by and reason"
+    );
+}
+
+/// Assumption A3 (hs-d664): an update that names the same set and the same `until_pr` reports
+/// `changed:false` and appends no Event.
+#[test]
+fn incident_start_on_a_live_incident_is_idempotent() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    let before = events(&mut f.store).len();
+    assert_eq!(before, 1, "the fresh start appends one incident-started Event");
+
+    // The same Plan, no --reason and no --until-pr: nothing changed.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "", None).unwrap());
+    assert_eq!(out["changed"], json!(false), "an unchanged update reports changed false");
+    assert_eq!(plan_array(&out["incident"]["plans"]), ["pay"]);
+    assert_eq!(plan_set(&mut f.store), ["pay"]);
+    assert_eq!(events(&mut f.store).len(), before, "an unchanged update appends no Event");
+}
+
+/// Assumption A2 (hs-d664): a new `--until-pr` replaces the stored one, and an absent
+/// `--until-pr` whose stored `until_plan` is not in the new set clears both columns.
+#[test]
+fn incident_start_on_a_live_incident_replaces_and_clears_until_pr() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    // Fresh start with `pay` and `ops` and `ops/web` as the auto-end PR.
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", Some("ops/web")).unwrap();
+    assert_eq!(
+        incident_until(&mut f.store),
+        Some((Some("ops".to_owned()), Some("ops/web".to_owned()))),
+        "the fresh start stores until_plan and until_pr"
+    );
+
+    // A new --until-pr replaces the stored one.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", Some("pay/api")).unwrap());
+    assert_eq!(out["changed"], json!(true));
+    assert_eq!(out["incident"]["until_pr"], json!("pay/api"), "the output reports the new until_pr");
+    assert_eq!(
+        incident_until(&mut f.store),
+        Some((Some("pay".to_owned()), Some("pay/api".to_owned()))),
+        "a new until-pr replaces both columns"
+    );
+
+    // `ops` leaves; with no --until-pr its stored until_plan is not in the new set, so both clear.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap());
+    assert_eq!(out["changed"], json!(true));
+    assert_eq!(out["incident"]["until_pr"], json!(null), "the output reports no until_pr");
+    assert_eq!(
+        incident_until(&mut f.store),
+        Some((None, None)),
+        "an absent until-pr whose stored until_plan left clears both columns"
+    );
+    assert_eq!(plan_set(&mut f.store), ["pay"]);
+}
+
+/// Assumption A3 (hs-d664): a changed set appends one `incident-plans` Event whose `data` carries
+/// `by` and the new `plans`.
+#[test]
+fn incident_start_on_a_live_incident_appends_an_incident_plans_event() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    incident::start(&mut f.store, Some(&mgr), &[pay], "why", None).unwrap();
+    let before = events(&mut f.store);
+    assert_eq!(before.len(), 1, "the fresh start appends one incident-started Event");
+    assert_eq!(before[0].0, "incident-started");
+
+    // The set changes: one incident-plans Event, after the incident-started one.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "why", None).unwrap());
+    assert_eq!(out["changed"], json!(true));
+    let after = events(&mut f.store);
+    assert_eq!(after.len(), 2, "exactly one incident-plans Event is appended");
+    let (kind, data) = after.into_iter().find(|(kind, _)| kind == "incident-plans").expect("one incident-plans Event");
+    assert_eq!(kind, "incident-plans");
+    assert_eq!(data["by"], json!("mgr"), "incident-plans data carries by");
+    assert_eq!(plan_array(&data["plans"]), ["ops"], "incident-plans data carries the new plans");
+}
+
+/// Assumption A3 (hs-d664): an update runs no stop-request sweep, so a running or merging Attempt
+/// keeps the `stop_request` it had (a fresh start's sweep is not repeated).
+#[test]
+fn incident_start_on_a_live_incident_does_not_interrupt_running_attempts() {
+    let mut f = fixture_with_attempts();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    // A live incident set up directly, with every Attempt's stop_request as the fixture left it.
+    f.store
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, 't', 'mgr', 'why', cpd_txn())",
+                [],
+            )?;
+            tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES ('pay', cpd_txn())", [])?;
+            Ok(())
+        })
+        .unwrap();
+    let before = stop_requests(&mut f.store);
+
+    // The update changes the set but runs no stop-request sweep.
+    let out = fields(incident::start(&mut f.store, Some(&mgr), &[ops], "why", None).unwrap());
+    assert_eq!(out["changed"], json!(true));
+    assert_eq!(plan_set(&mut f.store), ["ops"], "the update replaced the set");
+    assert_eq!(stop_requests(&mut f.store), before, "an update requests no stop");
+}
+
+/// Assumption A3 (hs-d664): a non-Manager is refused even when incident mode is already live, and
+/// the refused update changes nothing.
+#[test]
+fn incident_start_on_a_live_incident_refuses_a_non_manager() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let lead = SessionId::parse("lead1").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone()], "why", None).unwrap();
+    let before = events(&mut f.store).len();
+
+    let err = incident::start(&mut f.store, Some(&lead), &[ops], "", None).expect_err("only a live Manager may update incident mode");
+    assert_eq!(err.code(), ErrorCode::ManagerOnly);
+    assert_eq!(err.exit().code(), 3, "manager_only is exit 3");
+    assert_eq!(plan_set(&mut f.store), ["pay"], "a refused update leaves the set");
+    assert_eq!(events(&mut f.store).len(), before, "a refused update appends no Event");
+}
+
