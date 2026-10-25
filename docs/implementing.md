@@ -30,6 +30,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | `store` | rs-store | none | §4.1–§4.5 |
 | `events` | rs-events | `events list`, `events follow` (§11) | §5 |
 | `config` | rs-config | `config`, `tiers` (§14.2, §14.3) | §8, §9 |
+| `models` | rs-models | `models refresh`, `models show` (§14.4) | §1.4, §3.7 E14, §8.2 |
 | `git` | rs-git | none | §7.1–§7.3, §7.5 |
 | `host` | rs-host | none | §6 |
 | `context` | rs-context | `context …` (§3) | §2.2, §4.6 |
