@@ -8,13 +8,27 @@
 
 use crate::common;
 
+use std::cell::RefCell;
+use std::ffi::OsString;
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::tui_plan_cancelled::{cells_of, draw, draw_sized, plain, rows};
 use common::fx::Fx;
+use common::screen::{NoInput, Screen, SharedBackend, Steps};
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
-use cpd_core::error::CpdError;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::output::Output;
+use cpd_core::ports::Ports;
+use cpd_core::store::Store;
+use cpd_tui::plan;
+use cpd_tui::pump::{Feed, Signal};
+use cpd_tui::view_ports::Ctx;
+use cpd_tui::ViewError;
 use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, DRAFT, FAILED, MERGED, MERGING, Meaning, QUEUED, SPINNER};
 use cpd_tui::read::Kind;
@@ -84,12 +98,6 @@ fn fx() -> Fx {
     crate::tui_plan_cancelled::env()
 }
 
-/// Whether the styled screen has the blue block of a selection (hs-d534, hs-d594, §6.1.1): colour 4, inverted, so its caps are
-/// foreground 4 (the text is reversed, tmux prints no background), as tmux prints it.
-fn is_selected(styled: &str) -> bool {
-    styled.contains("38;5;4m") || styled.contains("[34m") || styled.contains(";34m")
-}
-
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -129,6 +137,87 @@ fn chart_rows(screen: &[String], rows: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// ---------- the view's loop, in this process ----------
+
+/// A second of virtual time, on the `ManualClock` the view runs on.
+const ONE_SECOND: Duration = Duration::from_secs(1);
+
+/// A press of the character `c`, as the scripted pump hands it to the loop.
+fn press(c: char) -> Signal {
+    Signal::Input(common::screen::ch(c))
+}
+
+/// The end of a script: the terminal fails.
+fn gone() -> Signal {
+    Signal::InputFailed(io::Error::other("gone"))
+}
+
+/// `cpd` is never run by these views' loops (no Worker pane opens): any run is a bug of the test.
+fn no_command(_: Vec<OsString>) -> Result<Output, CpdError> {
+    Err(CpdError::new(ErrorCode::StoreBusy, "the loop of this test runs no command"))
+}
+
+/// Runs the view's loop (`plan::show_with`) on the store of `fx` in a 300 × 40 pane: one thread, the `ManualClock` and a
+/// scripted pump that hands `signals` over in order (an idle wait advances the clock, no sleep, no watcher), and `steps`
+/// as what the world does while it draws. The script ends the view with the terminal's failure (`gone()`); every step
+/// must have run by then.
+fn show(fx: &Fx, signals: Vec<Signal>, steps: &Steps) -> SharedBackend {
+    let screen = SharedBackend::new(300, 40);
+    steps.on(&screen);
+    let ports = &fx.fakes.ports;
+    let ended = Ports::scope(ports, || {
+        let home = CpdHome::resolve(Some(fx.env.cpd_home()), None).unwrap();
+        let prepared = plan::prepare(ports, home, no_command, || Ok(300)).unwrap();
+        let mut input = NoInput;
+        let mut ctx = Ctx::new(ports, screen.terminal(), &mut input);
+        plan::show_with(&mut ctx, Feed::scripted(ports.clock.clone(), signals), prepared)
+    });
+    match ended {
+        Err(ViewError::Terminal(e)) => assert_eq!(e.to_string(), "gone", "the view's terminal failed"),
+        Err(ViewError::Cpd(e)) => panic!("the view's own work failed: {}", e.message()),
+        Ok(()) => panic!("the view ended with no terminal failure: no key ends it"),
+    }
+    steps.finish();
+    screen
+}
+
+/// A change of the store a test makes while the view runs, from the view's thread: it opens the store of `home` for each.
+#[derive(Clone)]
+struct World {
+    home: PathBuf,
+}
+
+impl World {
+    fn of(fx: &Fx) -> World {
+        World { home: fx.env.cpd_home() }
+    }
+
+    fn sql(&self, text: &str) {
+        common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone()), None).unwrap(), 5000).unwrap(), text);
+    }
+}
+
+/// `text` on the database `db` through a connection of its own (not through `Store`, which refuses a changed schema and keeps the Events append-only).
+fn raw(db: &Path, text: &str) {
+    rusqlite::Connection::open(db).unwrap().execute_batch(text).unwrap();
+}
+
+/// Whether `cell` is the blue block of a selection (hs-d534, hs-d594, §6.1.1): the selected style, reversed.
+fn is_block(cell: &common::screen::Cell) -> bool {
+    let block = palette::selected();
+    (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg) && cell.modifier.contains(ratatui::style::Modifier::REVERSED)
+}
+
+/// Whether a cell of the screen is the selection's block.
+fn any_selected(screen: &Screen) -> bool {
+    (0..screen.height()).any(|y| (0..screen.width()).any(|x| is_block(screen.cell(x, y))))
+}
+
+/// Whether the row that has `text` has a cell of the selection's block.
+fn row_selected(screen: &Screen, text: &str) -> bool {
+    screen.find(text).is_some_and(|(_, y)| (0..screen.width()).any(|x| is_block(screen.cell(x, y))))
 }
 
 // ---------- rows ----------
@@ -422,11 +511,6 @@ fn plan_under_review(number: u32, status: &str) -> String {
         )
 }
 
-/// The screen with its escapes (`capture-pane -e`); tmux 3.4 keeps the OSC 8 links in it.
-fn styled_screen(env: &TestEnv, pane: &str) -> String {
-    tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
-}
-
 /// The visible text the OSC 8 links to `url` cover in `buf`: a linked piece is one cell whose symbol is `ESC ] 8 ; ; <url> BEL`, its text and
 /// the closing escape (`cpd_tui::link`).
 fn linked_text(buf: &Buffer, url: &str) -> String {
@@ -468,51 +552,69 @@ fn a_conflict_shows_in_the_box_title_and_clears_with_no_event() {
 /// fail by renaming the table it reads.
 #[test]
 fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succeeds() {
-    let env = env();
-    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
-    let pane = start_view(&env);
-    let title = |s: &[String]| s.iter().any(|l| l.contains(&format!("#7 open {CUE}")));
-    screen_when(&env, &pane, "the chart", title);
-    let mut store = env.store();
-    // not through `Store`, which refuses a changed schema
-    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
-    raw("ALTER TABLE jobs RENAME TO jobs_gone;");
-    // the snapshot is taken because an Event of the Plan came (the store was opened before the rename)
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch("INSERT INTO events (txn, at, kind, context, plan, text, data)
-                 VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'plan-phase', 'ctx', 'ship', 'fixture', '{}');")?;
-            Ok::<(), CpdError>(())
+    let fx = fx();
+    fx.env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let title = |s: &Screen| s.shown_rows().iter().any(|l| l.contains(&format!("#7 open {CUE}")));
+    let failed = |s: &Screen| s.contains("no such table");
+    let mut store = fx.env.store();
+    let (db, clock) = (fx.env.cpd_home().join("cpd.db"), fx.fakes.clock.clone());
+    let steps = Steps::new()
+        .at("the chart", title, {
+            let (db, clock) = (db.clone(), clock.clone());
+            move |_| {
+                // not through `Store`, which refuses a changed schema
+                raw(&db, "ALTER TABLE jobs RENAME TO jobs_gone;");
+                // the snapshot is taken because an Event of the Plan came (the store was opened before the rename)
+                store
+                    .write("fixture", |tx| {
+                        tx.execute_batch("INSERT INTO events (txn, at, kind, context, plan, text, data)
+                             VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'plan-phase', 'ctx', 'ship', 'fixture', '{}');")?;
+                        Ok::<(), CpdError>(())
+                    })
+                    .unwrap();
+                clock.advance(ONE_SECOND);
+            }
         })
-        .unwrap();
-    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("no such table")));
-    // time-claim: the poll is 50 ms: an error cleared by the next poll's success (the old behaviour) would be gone
-    // within this second
-    std::thread::sleep(Duration::from_secs(1));
-    let screen = screen(&env, &pane);
-    assert!(screen.iter().any(|l| l.contains("no such table")) && title(&screen), "{screen:?}");
-    raw("ALTER TABLE jobs_gone RENAME TO jobs;");
-    screen_when(&env, &pane, "the error to go", |s| !s.iter().any(|l| l.contains("no such table")) && title(s));
+        .at("the error", failed, {
+            let clock = clock.clone();
+            // time-claim: the refresh is every 2 s: past two of them the snapshot was taken again, and still fails
+            move |_| clock.advance(3 * ONE_SECOND)
+        })
+        .next("a frame after the next snapshot", {
+            let (db, clock) = (db.clone(), clock.clone());
+            move |screen| {
+                assert!(failed(screen) && title(screen), "{}", screen.text());
+                raw(&db, "ALTER TABLE jobs_gone RENAME TO jobs;");
+                clock.advance(3 * ONE_SECOND);
+            }
+        })
+        .at("the error to go", move |s| !failed(s) && title(s), |_| {});
+    // a commit, the refresh that comes with it, a key for a frame, the refresh that succeeds
+    show(&fx, vec![Signal::Commit, Signal::Commit, press('x'), Signal::Commit, gone()], &steps);
 }
 
 /// A follow that fails is shown below the chart, for longer than one snapshot (tui-G4): the highest Event id fell below
 /// the cursor, which is what a replaced database looks like. The chart stays.
 #[test]
 fn a_follow_that_fails_is_shown_below_the_chart() {
-    let env = env();
-    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
-    env.sql(&event("plan-phase", "ctx", Some("ship"), None, "{}"));
-    let pane = start_view(&env);
-    let title = |s: &[String]| s.iter().any(|l| l.contains(&format!("#7 open {CUE}")));
-    screen_when(&env, &pane, "the chart", title);
-    // not through `Store`, which keeps the Events append-only
-    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
-    raw("DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > (SELECT min(id) FROM events);");
-    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("Event cursor")));
-    // time-claim: a snapshot is retaken within 3 s (the refresh): the error stays
-    std::thread::sleep(Duration::from_secs(3));
-    let screen = screen(&env, &pane);
-    assert!(screen.iter().any(|l| l.contains("Event cursor")) && title(&screen), "{screen:?}");
+    let fx = fx();
+    fx.env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    fx.env.sql(&event("plan-phase", "ctx", Some("ship"), None, "{}"));
+    let title = |s: &Screen| s.shown_rows().iter().any(|l| l.contains(&format!("#7 open {CUE}")));
+    let (db, clock) = (fx.env.cpd_home().join("cpd.db"), fx.fakes.clock.clone());
+    let steps = Steps::new()
+        .at("the chart", title, {
+            let clock = clock.clone();
+            move |_| {
+                // not through `Store`, which keeps the Events append-only
+                raw(&db, "DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > (SELECT min(id) FROM events);");
+                clock.advance(ONE_SECOND);
+            }
+        })
+        .at("the error", |s| s.contains("Event cursor"), move |_| clock.advance(3 * ONE_SECOND))
+        // time-claim: a snapshot is retaken within 3 s (the refresh): the error stays
+        .next("a frame after the next refresh", move |screen| assert!(screen.contains("Event cursor") && title(screen), "{}", screen.text()));
+    show(&fx, vec![Signal::Commit, Signal::Commit, press('x'), gone()], &steps);
 }
 
 /// P1: a pending Plan review is no row: the screen is the one of a Plan without it.
@@ -561,76 +663,85 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
 
 #[test]
 fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
-    let env = env();
+    let fx = fx();
     let mut s = plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]);
     s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
     s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
     s += &job_row("side", "other", "queued", "O3");
-    env.sql(&s);
-    let pane = start_view(&env);
-    screen_when(&env, &pane, "Job a", |s| s.len() > 2 && s[2].contains(" a│"));
-
-    // a Job is appended to the shown Plan: its Event makes the view take a new snapshot
-    env.sql(
-        &(job_row("ship", "b", "queued", "S3")
-            + &need_row("ship", "b", "a")
-            + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
-    );
-    let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b│"));
-    // the pills and the edge between them; what a note after them was is pinned by `tui_plan_waiting`
-    assert!(chart_rows(&screen, 1).starts_with(&format!(" \u{e0b6}{QUEUED} a│S3\u{e0b4}─────\u{e0b6}{QUEUED} b│S3\u{e0b4}")), "{}", screen.join("\n"));
-
-    // the other Lead moves into the chat slot: the view shows its Plan
-    env.sql(&in_chat("ctx", "side", "lead-side"));
-    let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6}{QUEUED} other│O3\u{e0b4}"));
-    assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a│"))), "{}", screen.join("\n"));
+    fx.env.sql(&s);
+    let (world, clock) = (World::of(&fx), fx.fakes.clock.clone());
+    let row2 = |word: &'static str| move |s: &Screen| s.height() > 2 && s.shown_row(2).contains(word);
+    let steps = Steps::new()
+        .at("Job a", row2(" a│"), {
+            let (world, clock) = (world.clone(), clock.clone());
+            move |_| {
+                // a Job is appended to the shown Plan: its Event makes the view take a new snapshot
+                world.sql(
+                    &(job_row("ship", "b", "queued", "S3")
+                        + &need_row("ship", "b", "a")
+                        + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
+                );
+                clock.advance(ONE_SECOND);
+            }
+        })
+        .at("Job b", row2(" b│"), move |screen| {
+            // the pills and the edge between them; what a note after them was is pinned by `tui_plan_waiting`
+            assert!(chart_rows(&screen.shown_rows(), 1).starts_with(&format!(" \u{e0b6}{QUEUED} a│S3\u{e0b4}─────\u{e0b6}{QUEUED} b│S3\u{e0b4}")), "{}", screen.text());
+            // the other Lead moves into the chat slot: the view shows its Plan
+            world.sql(&in_chat("ctx", "side", "lead-side"));
+            clock.advance(ONE_SECOND);
+        })
+        .at("the other Plan", row2("other"), |screen| {
+            let rows = screen.shown_rows();
+            assert_eq!(chart_rows(&rows, 1), format!(" \u{e0b6}{QUEUED} other│O3\u{e0b4}"));
+            assert!(!rows.iter().any(|l| l.contains(&format!("{QUEUED} a│"))), "{}", screen.text());
+        });
+    show(&fx, vec![Signal::Commit, Signal::Commit, gone()], &steps);
 }
 
 #[test]
 fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_reset() {
-    let env = env();
+    let fx = fx();
     let keys: Vec<String> = (10..60).map(|n| format!("j{n}")).collect();
     let jobs: Vec<(&str, &str, &str, &[&str], u32)> = keys.iter().map(|k| (k.as_str(), "queued", "S3", &[][..], 0)).collect();
     let mut s = plan_with("dispatch", None, &jobs);
     s += &plan_row("side", "ctx", "dispatch", "lead-side", "2026-01-02T00:00:05.000Z", None);
     s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
     s += &job_row("side", "other", "queued", "O3");
-    env.sql(&s);
-    let selected = is_selected;
-    let pane = start_view(&env);
-    let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10│"));
-
-    // arrow keys select the pills one by one, and the chart scrolls to keep the selection visible
-    let mut down = vec!["send-keys", "-t", &pane];
-    down.extend(std::iter::repeat_n("j", 45));
-    tmux_out(&env, &down);
-    // the view takes the keys one by one: wait for the last one (the 45th pill from j10, j54, selected), then for a screen that holds still
-    wait_until("the last pill selected", || {
-        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54│") && selected(l))
-    });
-    let mut scrolled = screen(&env, &pane);
-    wait_until("the chart to hold still", || {
-        // time-claim: the chart holds still when two screens 300 ms apart are the same; no signal from the view that it is done.
-        std::thread::sleep(Duration::from_millis(300));
-        let now = screen(&env, &pane);
-        std::mem::replace(&mut scrolled, now) == scrolled
-    });
-    assert!(scrolled.iter().all(|l| !l.contains(" j10│")), "{}", scrolled.join("\n"));
-    assert!(selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "no pill is selected before the switch");
-
-    // another Plan starts at its corner; coming back shows the chart where it was left, with nothing selected
-    env.sql(&in_chat("ctx", "side", "lead-side"));
-    screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    env.sql(&in_chat("ctx", "ship", "lead-ship"));
-    // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
-    // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
-    let back = common::wait_some("the chart where it was left", common::WAIT, || {
-        let now = screen(&env, &pane);
-        if now == scrolled { Ok(now) } else { Err(now.join("\n")) }
-    });
-    assert_ne!(back, top);
-    assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
+    fx.env.sql(&s);
+    let (world, clock) = (World::of(&fx), fx.fakes.clock.clone());
+    let (top, scrolled) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(Vec::new())));
+    let steps = Steps::new()
+        .at("the top of the chart", |s| s.height() > 2 && s.shown_row(2).contains(" j10│"), {
+            let top = top.clone();
+            move |screen| *top.borrow_mut() = screen.shown_rows()
+        })
+        // arrow keys select the pills one by one, and the chart scrolls to keep the selection visible: the 45th pill from j10 is j54
+        .at("the last pill selected", |s| row_selected(s, " j54│"), {
+            let (scrolled, world, clock) = (scrolled.clone(), world.clone(), clock.clone());
+            move |screen| {
+                *scrolled.borrow_mut() = screen.shown_rows();
+                assert!(scrolled.borrow().iter().all(|l| !l.contains(" j10│")), "{}", screen.text());
+                // another Plan starts at its corner
+                world.sql(&in_chat("ctx", "side", "lead-side"));
+                clock.advance(ONE_SECOND);
+            }
+        })
+        .at("the other Plan", |s| s.height() > 2 && s.shown_row(2).contains("other"), {
+            let (world, clock) = (world.clone(), clock.clone());
+            // coming back shows the chart where it was left
+            move |_| {
+                world.sql(&in_chat("ctx", "ship", "lead-ship"));
+                clock.advance(ONE_SECOND);
+            }
+        })
+        .at("the chart where it was left", { let scrolled = scrolled.clone(); move |s| s.shown_rows() == *scrolled.borrow() }, move |screen| {
+            assert_ne!(screen.shown_rows(), *top.borrow());
+            assert!(!any_selected(screen), "a pill is selected");
+        });
+    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    signals.extend([Signal::Commit, Signal::Commit, gone()]);
+    show(&fx, signals, &steps);
 }
 
 /// A Plan `ship` of 50 independent Jobs, `j10` to `j59`: a chart taller than the pane.
@@ -641,8 +752,8 @@ fn tall_plan() -> String {
 }
 
 /// The view's log, `run/tui/plan.log` (a view draws no note, commands.md §17 "No notes"): empty before its first line.
-fn plan_log(env: &TestEnv) -> String {
-    fs::read_to_string(env.cpd_home().join("run").join("tui").join("plan.log")).unwrap_or_default()
+fn plan_log(home: &Path) -> String {
+    fs::read_to_string(home.join("run").join("tui").join("plan.log")).unwrap_or_default()
 }
 
 fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
@@ -651,70 +762,66 @@ fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
 
 #[test]
 fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not() {
-    let env = env();
-    env.sql(&tall_plan());
-    let selected = is_selected;
-    let pane = start_view(&env);
-    let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10│"));
-
-    // select down the chart: it scrolls to keep the selection visible
-    let mut down = vec!["send-keys", "-t", &pane];
-    down.extend(std::iter::repeat_n("j", 45));
-    tmux_out(&env, &down);
-    wait_until("the last pill selected", || {
-        tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]).lines().any(|l| l.contains(" j54│") && selected(l))
-    });
-    let mut scrolled = screen(&env, &pane);
-    wait_until("the chart to hold still", || {
-        // time-claim: the chart has settled when two captures 300 ms apart are the same; stillness has no Event to
-        // wait for.
-        std::thread::sleep(Duration::from_millis(300));
-        let now = screen(&env, &pane);
-        std::mem::replace(&mut scrolled, now) == scrolled
-    });
-    assert!(scrolled.iter().all(|l| !l.contains(" j10│")), "{}", scrolled.join("\n"));
-
-    // the offset is written (at most once a second): wait for the file to hold, then restart the view
-    let offset = |env: &TestEnv| -> Option<serde_json::Value> {
-        let text = fs::read_to_string(scroll_file(env)).ok()?;
+    let fx = fx();
+    fx.env.sql(&tall_plan());
+    let clock = fx.fakes.clock.clone();
+    let (top, scrolled) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(Vec::new())));
+    let steps = Steps::new()
+        .at("the top of the chart", |s| s.height() > 2 && s.shown_row(2).contains(" j10│"), {
+            let top = top.clone();
+            move |screen| *top.borrow_mut() = screen.shown_rows()
+        })
+        // select down the chart: it scrolls to keep the selection visible
+        .at("the last pill selected", |s| row_selected(s, " j54│"), {
+            let scrolled = scrolled.clone();
+            move |screen| {
+                *scrolled.borrow_mut() = screen.shown_rows();
+                assert!(scrolled.borrow().iter().all(|l| !l.contains(" j10│")), "{}", screen.text());
+                // the view writes the file at most once a second (SAVE_EVERY): the write held back for the last scroll is due now
+                clock.advance(3 * ONE_SECOND / 2);
+            }
+        });
+    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    signals.extend([Signal::Due, gone()]);
+    show(&fx, signals, &steps);
+    // the offset is in the file; restart the view
+    let offset = || -> Option<serde_json::Value> {
+        let text = fs::read_to_string(scroll_file(&fx.env)).ok()?;
         serde_json::from_str::<serde_json::Value>(&text).ok()?.get("ship").cloned()
     };
-    wait_until("the offset in the file", || offset(&env).is_some_and(|o| o[1].as_u64().unwrap_or(0) > 0));
-    // time-claim: the view writes the file at most once a second (SAVE_EVERY), so 1.5 s after the first write any
-    // write still due for the last scroll has happened; the final offset has no signal of its own.
-    std::thread::sleep(Duration::from_millis(1500));
-    let written = offset(&env).unwrap();
-    tmux_out(&env, &["respawn-pane", "-k", "-t", &pane, CPD, "tui", "view", "plan"]);
+    let written = offset().expect("the offset is written");
+    assert!(written[1].as_u64().unwrap_or(0) > 0, "{written}");
 
-    // frames can reach the pane in two writes (hs-n206): poll until the whole screen is there
-    let back = screen_when(&env, &pane, "the offset restored", |s| s == scrolled.as_slice());
-    assert_ne!(back, top);
-    assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");
-    assert_eq!(offset(&env).unwrap(), written, "the restart did not move the offset");
-    let leftovers: Vec<_> = fs::read_dir(scroll_file(&env).parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    let steps = Steps::new().at("the offset restored", { let scrolled = scrolled.clone(); move |s| s.shown_rows() == *scrolled.borrow() }, move |screen| {
+        assert_ne!(screen.shown_rows(), *top.borrow());
+        assert!(!any_selected(screen), "a pill is selected");
+    });
+    show(&fx, vec![gone()], &steps);
+    assert_eq!(offset().unwrap(), written, "the restart did not move the offset");
+    let leftovers: Vec<_> = fs::read_dir(scroll_file(&fx.env).parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(leftovers, ["plan-scroll.json"], "no temporary file is left");
 }
 
 #[test]
 fn an_invalid_scroll_file_starts_the_view_at_the_top_logs_it_and_the_next_write_replaces_it() {
-    let env = env();
-    env.sql(&tall_plan());
-    fs::create_dir_all(scroll_file(&env).parent().unwrap()).unwrap();
-    fs::write(scroll_file(&env), "{not json").unwrap();
-    let pane = start_view(&env);
-    wait_until("the log line", || plan_log(&env).contains("scroll positions reset: "));
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" j10│"));
-    assert!(screen.iter().all(|l| !l.contains("scroll positions reset")), "no note: {}", screen.join("\n"));
-    assert_eq!(fs::read_to_string(scroll_file(&env)).unwrap(), "{not json", "nothing is written until an offset changes");
-
-    // scroll down the chart: the file becomes a valid one
-    let mut down = vec!["send-keys", "-t", &pane];
-    down.extend(std::iter::repeat_n("j", 45));
-    tmux_out(&env, &down);
-    wait_until("the file replaced", || {
-        fs::read_to_string(scroll_file(&env)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).is_some_and(|v| v["ship"][1].as_u64().unwrap_or(0) > 0)
+    let fx = fx();
+    fx.env.sql(&tall_plan());
+    fs::create_dir_all(scroll_file(&fx.env).parent().unwrap()).unwrap();
+    fs::write(scroll_file(&fx.env), "{not json").unwrap();
+    let home = fx.env.cpd_home();
+    let steps = Steps::new().at("the chart", |s| s.height() > 2 && s.shown_row(2).contains(" j10│"), move |screen| {
+        assert!(plan_log(&home).contains("scroll positions reset: "), "the log line");
+        assert!(screen.shown_rows().iter().all(|l| !l.contains("scroll positions reset")), "no note: {}", screen.text());
+        assert_eq!(fs::read_to_string(home.join("run").join("tui").join("plan-scroll.json")).unwrap(), "{not json", "nothing is written until an offset changes");
     });
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
+    // scroll down the chart: the file becomes a valid one; the view is alive until the script ends it
+    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    signals.push(gone());
+    show(&fx, signals, &steps);
+    assert!(
+        fs::read_to_string(scroll_file(&fx.env)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).is_some_and(|v| v["ship"][1].as_u64().unwrap_or(0) > 0),
+        "the file replaced"
+    );
 }
 
 #[test]
@@ -923,18 +1030,12 @@ fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_lo
 
 #[test]
 fn q_does_not_quit_the_view() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
-    let pane = start_view(&env);
-    screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
-    // The view handles keys in order: once `j` has selected the pill, `q` before it has been handled.
-    tmux_out(&env, &["send-keys", "-t", &pane, "q", "j"]);
-    wait_until("the pill selected", || {
-        let styled = styled_screen(&env, &pane);
-        is_selected(&styled)
-    });
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
-    assert!(screen(&env, &pane)[2].contains(" a│"));
+    let fx = fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    // The view handles keys in order: once `j` has selected the pill, `q` before it has been handled; the script ends the view
+    // after both, so a `q` that quit it would have ended it before the `j`.
+    let steps = Steps::new().at("the pill selected", any_selected, |screen| assert!(screen.shown_row(2).contains(" a│"), "{}", screen.text()));
+    show(&fx, vec![press('q'), press('j'), gone()], &steps);
 }
 
 #[test]

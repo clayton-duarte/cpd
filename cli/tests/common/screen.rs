@@ -20,8 +20,8 @@ use std::time::Duration;
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_tui::view_ports::Input;
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell as BufferCell};
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::buffer::{Buffer, Cell as BufferCell, CellDiffOption};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
@@ -32,6 +32,8 @@ pub struct Cell {
     pub fg: Color,
     pub bg: Color,
     pub modifier: Modifier,
+    /// How many columns the symbol covers: 1, or the forced width of a linked piece (`cpd_tui::link`).
+    pub covers: u16,
 }
 
 /// A copy of a `TestBackend` buffer, read as text and as styles.
@@ -48,7 +50,16 @@ impl Screen {
         let cells = buffer
             .content()
             .iter()
-            .map(|cell| Cell { symbol: cell.symbol().to_owned(), fg: cell.fg, bg: cell.bg, modifier: cell.modifier })
+            .map(|cell| Cell {
+                symbol: cell.symbol().to_owned(),
+                fg: cell.fg,
+                bg: cell.bg,
+                modifier: cell.modifier,
+                covers: match cell.diff_option {
+                    CellDiffOption::ForcedWidth(width) => width.get(),
+                    _ => 1,
+                },
+            })
             .collect();
         Screen { width: buffer.area.width, height: buffer.area.height, cells }
     }
@@ -71,6 +82,23 @@ impl Screen {
     pub fn row(&self, y: u16) -> String {
         let row: String = (0..self.width).map(|x| self.cell(x, y).symbol.as_str()).collect();
         row.trim_end().to_owned()
+    }
+
+    /// Row `y` as the terminal shows it: a linked piece is one cell whose symbol carries its OSC 8 escapes (`ESC ] 8 ; ; <url> BEL`,
+    /// which take no column) and holds the text of the cells it covers, so the cells it covers are skipped; no trailing spaces.
+    pub fn shown_row(&self, y: u16) -> String {
+        let (mut row, mut x) = (String::new(), 0);
+        while x < self.width {
+            let cell = self.cell(x, y);
+            row.push_str(&without_escapes(&cell.symbol));
+            x += cell.covers;
+        }
+        row.trim_end().to_owned()
+    }
+
+    /// Every row as [`Screen::shown_row`] shows it, top to bottom.
+    pub fn shown_rows(&self) -> Vec<String> {
+        (0..self.height).map(|y| self.shown_row(y)).collect()
     }
 
     /// Every row as text, top to bottom.
@@ -101,6 +129,20 @@ impl Screen {
         let (x, y) = self.find(text).unwrap_or_else(|| panic!("{text:?} is not on the screen:\n{}", self.text()));
         self.cell(x, y)
     }
+}
+
+/// `symbol` without its OSC 8 escapes (`ESC ] 8 ; ; <url> BEL`).
+fn without_escapes(symbol: &str) -> String {
+    let mut out = String::new();
+    let mut chars = symbol.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            chars.by_ref().find(|c| *c == '\x07');
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// A key press of `code` with no modifier.
@@ -152,6 +194,18 @@ impl Input for Keys {
     }
 }
 
+/// The input of a loop that does not read it (a scripted pump carries the events): any read is a bug of the test.
+pub struct NoInput;
+
+impl Input for NoInput {
+    fn poll(&mut self, _: Duration) -> io::Result<bool> {
+        panic!("the loop polls ctx.input: its events come from the pump");
+    }
+    fn read(&mut self) -> io::Result<Event> {
+        panic!("the loop reads ctx.input: its events come from the pump");
+    }
+}
+
 /// One notch of the wheel (`ScrollUp` or `ScrollDown`) at 0-based `column`, `row` of the screen.
 pub fn wheel(kind: MouseEventKind, column: u16, row: u16) -> Event {
     Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
@@ -159,17 +213,27 @@ pub fn wheel(kind: MouseEventKind, column: u16, row: u16) -> Event {
 
 /// A [`TestBackend`] the test keeps a handle to while the view owns the terminal: both read and write the same buffer.
 #[derive(Clone)]
-pub struct SharedBackend(Rc<RefCell<TestBackend>>);
+pub struct SharedBackend(Rc<RefCell<TestBackend>>, Rc<RefCell<Option<FrameHook>>>);
+
+/// What runs after each frame the view wrote ([`SharedBackend::on_frame`]).
+type FrameHook = Box<dyn FnMut(&Screen)>;
 
 impl SharedBackend {
     /// A blank `width` x `height` screen.
     pub fn new(width: u16, height: u16) -> SharedBackend {
-        SharedBackend(Rc::new(RefCell::new(TestBackend::new(width, height))))
+        SharedBackend(Rc::new(RefCell::new(TestBackend::new(width, height))), Rc::default())
     }
 
     /// The screen as the view drew it last.
     pub fn screen(&self) -> Screen {
         Screen::from_buffer(self.0.borrow().buffer())
+    }
+
+    /// `hook` runs after every frame the view writes (the terminal's `flush`), with the screen of that frame, on the view's
+    /// thread and before the view goes on: what the world does while the view waits (a commit, the time), and a look at
+    /// the screen. Replaces the one before. [`Steps`] is the usual hook.
+    pub fn on_frame(&self, hook: impl FnMut(&Screen) + 'static) {
+        *self.1.borrow_mut() = Some(Box::new(hook));
     }
 
     /// The terminal a view draws on (`Ctx::new(&ports, backend.terminal(), &mut input)`).
@@ -212,8 +276,85 @@ impl Backend for SharedBackend {
         self.0.borrow_mut().window_size()
     }
     fn flush(&mut self) -> Result<(), Infallible> {
-        self.0.borrow_mut().flush()
+        self.0.borrow_mut().flush()?;
+        // the hook is out of its cell while it runs: it may call `on_frame` itself
+        let hook = self.1.borrow_mut().take();
+        if let Some(mut hook) = hook {
+            hook(&self.screen());
+            self.1.borrow_mut().get_or_insert(hook);
+        }
+        Ok(())
     }
+}
+
+/// What a test does, in order, as a view draws: each step waits for a frame whose screen satisfies its condition, runs its
+/// action (a change of the world, a look at the screen, the time passing on the `ManualClock`) and hands over to the next
+/// step; one step at most per frame, so a step's action is always seen by the frames after it. No sleep and no poll: a
+/// frame is what the view draws, and the signals of the scripted pump decide when. A script of signals that is over before
+/// the last step ran is a test that did not do what it says: [`Steps::finish`] fails and names the step.
+#[derive(Clone, Default)]
+pub struct Steps {
+    todo: Rc<RefCell<VecDeque<(String, Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut(&Screen)>)>>>,
+}
+
+impl Steps {
+    pub fn new() -> Steps {
+        Steps::default()
+    }
+
+    /// At the first frame whose screen satisfies `when`: `then` runs.
+    pub fn at(self, what: &str, when: impl Fn(&Screen) -> bool + 'static, then: impl FnMut(&Screen) + 'static) -> Steps {
+        self.todo.borrow_mut().push_back((what.to_owned(), Box::new(when), Box::new(then)));
+        self
+    }
+
+    /// At the next frame: `then` runs.
+    pub fn next(self, what: &str, then: impl FnMut(&Screen) + 'static) -> Steps {
+        self.at(what, |_| true, then)
+    }
+
+    /// Makes these steps the frame hook of `backend`.
+    pub fn on(&self, backend: &SharedBackend) {
+        let todo = Rc::clone(&self.todo);
+        backend.on_frame(move |screen| {
+            // out of the queue while it runs, so an action that looks at the steps finds them as they are
+            let step = {
+                let mut todo = todo.borrow_mut();
+                match todo.front() {
+                    Some((_, when, _)) if when(screen) => todo.pop_front(),
+                    _ => None,
+                }
+            };
+            if let Some((_, _, mut then)) = step {
+                then(screen);
+            }
+        });
+    }
+
+    /// The steps no frame reached yet, by what they wait for.
+    pub fn pending(&self) -> Vec<String> {
+        self.todo.borrow().iter().map(|(what, ..)| what.clone()).collect()
+    }
+
+    /// Fails when a step was not reached: the view ended first.
+    pub fn finish(&self) {
+        let pending = self.pending();
+        assert!(pending.is_empty(), "the view ended before the steps {pending:?}");
+    }
+}
+
+/// A left click at 0-based `column`, `row` of the screen (what `\x1b[<0;..M` is).
+pub fn left_click(column: u16, row: u16) -> Event {
+    mouse(MouseEventKind::Down(MouseButton::Left), column, row)
+}
+
+/// A right click at 0-based `column`, `row` of the screen.
+pub fn right_click(column: u16, row: u16) -> Event {
+    mouse(MouseEventKind::Down(MouseButton::Right), column, row)
+}
+
+fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
 }
 
 /// One thing a scripted terminal does at a poll or a read of the loop.
