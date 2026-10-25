@@ -35,6 +35,7 @@ fn policy_show_of_a_repo_without_a_file_is_repo_unconfigured() {
 #[test]
 fn pr_add_of_a_repo_without_a_file_is_repo_unconfigured() {
     let env = env();
+    env.fake_tmux();
     env.write_tmux_config("");
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["plan", "new", "pl", "--context", "ctx", "--title", "Plan"]).ok();
