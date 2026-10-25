@@ -1,19 +1,19 @@
-//! `cpd incident start | end | status` (commands.md §25, hs-d634): machine-wide incident mode.
-//! When on (one row in the `incident` table), the engine pauses most scheduling and every running
-//! Attempt is requeued when it ends (contract §2.2 "Incident", §3.7). `start` and `end` are
-//! Manager-only; `status` is for any caller.
+//! `cpd incident start | end | status` (commands.md §25, hs-d643): Plan-scoped incident mode.
+//! When on (one row in the `incident` table plus one row per Plan in `incident_plans`), the
+//! engine holds scheduling for every Plan not in the incident (`is_held`, contract §2.2
+//! "Incident", §3.7). `start` and `end` are Manager-only; `status` is for any caller.
+//!
+//! This file is the stub set of the test Job `inc-v2-tests`: the signatures the red tests call,
+//! with the real work marked `unimplemented!()`. Job `inc-v2-impl` replaces them.
 
-use rusqlite::{Connection, OptionalExtension};
-use serde_json::{Value, json};
+use rusqlite::Connection;
 
 use crate::args::Text;
-use crate::clock;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
-use crate::ids::SessionId;
+use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 
 /// The `incident` commands.
 #[derive(clap::Subcommand, Debug)]
@@ -28,9 +28,15 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct StartArgs {
+    /// The Plans in the incident (at least one)
+    #[arg(long = "plan", value_name = "id", required = true)]
+    pub plan: Vec<PlanId>,
     /// The explanation of the incident (1 or more characters)
     #[arg(long, value_name = "text")]
     pub reason: Text,
+    /// The `<plan>/<key>` PR that ends the incident when it merges
+    #[arg(long, value_name = "<plan>/<key>")]
+    pub until_pr: Option<String>,
 }
 
 /// Runs one `incident` command. The caller's Session is `$CPD_SESSION` (commands.md §25).
@@ -41,42 +47,10 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         None => None,
     };
     match command {
-        Command::Start(args) => start(&mut store, caller.as_ref(), args.reason.as_str()),
+        Command::Start(args) => start(&mut store, caller.as_ref(), &args.plan, args.reason.as_str(), args.until_pr.as_deref()),
         Command::End => end(&mut store, caller.as_ref()),
         Command::Status => status(&mut store),
     }
-}
-
-/// The refusal of a caller that is not a live Manager (commands.md §25).
-fn manager_only() -> CpdError {
-    CpdError::new(ErrorCode::ManagerOnly, "Only a live Manager Session may change incident mode.")
-}
-
-/// The caller must be a live (not archived) Manager Session.
-fn require_manager<'a>(conn: &Connection, caller: Option<&'a SessionId>) -> Result<&'a SessionId, CpdError> {
-    let caller = caller.ok_or_else(manager_only)?;
-    let manager: Option<bool> = conn
-        .query_row(
-            "SELECT role = 'manager' FROM sessions WHERE id = ?1 AND archived_at IS NULL",
-            [caller.as_str()],
-            |r| r.get(0),
-        )
-        .optional()?;
-    match manager {
-        Some(true) => Ok(caller),
-        _ => Err(manager_only()),
-    }
-}
-
-/// The current `incident` row as the output's `incident` value, if any.
-fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
-    Ok(conn
-        .query_row(
-            "SELECT started_at, started_by, reason FROM incident WHERE id = 1",
-            [],
-            |r| Ok(json!({"started_at": r.get::<_, String>(0)?, "by": r.get::<_, String>(1)?, "reason": r.get::<_, String>(2)?})),
-        )
-        .optional()?)
 }
 
 /// Whether incident mode is on (contract §2.2): one row in `incident`.
@@ -84,58 +58,49 @@ pub fn is_on(conn: &Connection) -> bool {
     conn.query_row("SELECT EXISTS(SELECT 1 FROM incident)", [], |r| r.get::<_, bool>(0)).unwrap_or(false)
 }
 
-/// `cpd incident start` (commands.md §25.1): one transaction that inserts the row, requests the
-/// stop of every `starting` or `running` Attempt with no `stop_request` and appends one
-/// `incident-started` Event. `caller` is the Manager's Session.
-pub fn start(store: &mut Store, caller: Option<&SessionId>, reason: &str) -> Result<Output, CpdError> {
-    if reason.is_empty() {
-        return Err(CpdError::new(ErrorCode::Usage, "The incident needs a reason of at least 1 character."));
-    }
-    store.write("incident start", |tx| {
-        let caller = require_manager(tx, caller)?;
-        if let Some(existing) = row(tx)? {
-            return Ok(Output::success(json!({"changed": false, "incident": existing})));
-        }
-        let started_at = clock::now();
-        tx.execute(
-            "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, ?1, ?2, ?3, ?4)",
-            rusqlite::params![started_at, caller.as_str(), reason, tx.id()],
-        )?;
-        tx.execute(
-            "UPDATE attempts SET stop_request = 'cancelled'
-             WHERE status IN ('starting', 'running') AND stop_request IS NULL",
-            [],
-        )?;
-        append(
-            tx,
-            NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at),
-        )?;
-        Ok(Output::success(json!({
-            "changed": true,
-            "incident": {"started_at": started_at, "by": caller.as_str(), "reason": reason},
-        })))
-    })
+/// Whether `plan` is held by incident mode (contract §2.2): the incident is on and `plan` is not
+/// in `incident_plans`.
+pub fn is_held(_conn: &Connection, _plan: &PlanId) -> bool {
+    unimplemented!("incident v2: is_held")
 }
 
-/// `cpd incident end` (commands.md §25.2): one transaction that deletes the row and appends one
-/// `incident-ended` Event. `caller` is the Manager's Session.
-pub fn end(store: &mut Store, caller: Option<&SessionId>) -> Result<Output, CpdError> {
-    store.write("incident end", |tx| {
-        let caller = require_manager(tx, caller)?;
-        if row(tx)?.is_none() {
-            return Ok(Output::success(json!({"changed": false, "incident": null})));
-        }
-        tx.execute("DELETE FROM incident WHERE id = 1", [])?;
-        let ended_at = clock::now();
-        append(tx, NewEvent::incident_ended("Incident mode off.", caller.as_str(), &ended_at))?;
-        Ok(Output::success(json!({"changed": true, "incident": null})))
-    })
+/// The set of Plans in the incident, `incident_plans` (contract §2.2).
+pub fn plans(_conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
+    unimplemented!("incident v2: plans")
 }
 
-/// `cpd incident status` (commands.md §25.3): a read of the row, for any caller.
-pub fn status(store: &mut Store) -> Result<Output, CpdError> {
-    let incident = store.read(row)?;
-    Ok(Output::success(json!({"on": incident.is_some(), "incident": incident})))
+/// `cpd incident start` (commands.md §25.1): one transaction that inserts the `incident` row and
+/// one `incident_plans` row per named Plan, requests the stop of every `starting` or `running`
+/// Attempt with no `stop_request`, and appends one `incident-started` Event. `until_pr` is the
+/// optional `<plan>/<key>` auto-end PR.
+pub fn start(
+    _store: &mut Store,
+    _caller: Option<&SessionId>,
+    _plans: &[PlanId],
+    _reason: &str,
+    _until_pr: Option<&str>,
+) -> Result<Output, CpdError> {
+    unimplemented!("incident v2: start")
+}
+
+/// `cpd incident end` (commands.md §25.2): one transaction that deletes the row and every
+/// `incident_plans` row and appends one `incident-ended` Event with `cause` `"manual"`.
+pub fn end(_store: &mut Store, _caller: Option<&SessionId>) -> Result<Output, CpdError> {
+    unimplemented!("incident v2: end")
+}
+
+/// `cpd incident status` (commands.md §25.3): a read of the row and its Plan set, for any caller.
+pub fn status(_store: &mut Store) -> Result<Output, CpdError> {
+    unimplemented!("incident v2: status")
+}
+
+/// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
+/// recorded. When the stored `until_pr` PR is merged, deletes the `incident` row and every
+/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-pr"`, `by`
+/// `"engine"`), returning true; false when incident mode is off, no `until_pr` is stored, or the
+/// PR is not merged.
+pub fn end_if_until_pr_merged(_tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
+    unimplemented!("incident v2: end_if_until_pr_merged")
 }
 
 /// The coarse human duration from the incident row's `started_at` to `now` (hs-d640, contract
