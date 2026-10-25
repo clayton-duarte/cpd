@@ -9,7 +9,7 @@
 
 pub mod lock;
 #[cfg(test)]
-mod ports_tests;
+pub(crate) mod ports_tests;
 mod run;
 mod stall;
 mod start;
