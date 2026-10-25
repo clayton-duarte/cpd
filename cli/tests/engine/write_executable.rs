@@ -1,36 +1,69 @@
-//! `write_executable` over a script that is already running (ETXTBSY). The engine
-//! runs a fake `bin/tmux` on every tick while a test rewrites it with
-//! [`write_executable`]: opening a file for writing while a process executes it
-//! fails with `Text file busy`.
+//! `write_executable` and `copy_executable` must never open an executable that is in
+//! use for writing: they must write a temp file and rename it over the target.
+//!
+//! Inferred, unverified: the audit1 Gate flake (`cpd::engine watch::a_tmux_failure_of_the_workers_step_
+//! is_one_error_and_the_engine_goes_on`, `write script: Text file busy`) is the same class: a file
+//! opened for writing while it is being executed, in that case the execve window of the engine's
+//! `bin/tmux`. A *running* script is not text-busy (the kernel releases a script's write denial once
+//! its interpreter has exec'd), so that window has no deterministic trigger; a running ELF holds the
+//! denial for its whole life, which is why this test runs an authored `cpd` itself. It pins the
+//! contract the fix gives: no in-place open of an executable in use, a temp file then a rename.
 
 use crate::common;
 
-use std::io::{BufRead, BufReader, Write};
-use std::process::Stdio;
+use std::fs;
+use std::process::{Child, Stdio};
 
-use common::{TestEnv, spawn, write_executable};
+use common::{CPD, TestEnv, copy_executable, spawn, write_executable};
+
+/// The running copy of `cpd`: killed and reaped on drop, so no process is left,
+/// whether the test passes or panics.
+struct Running(Child);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn write_executable_over_a_running_script_does_not_fail() {
     let env = TestEnv::new();
+    env.write_config("version = 1\nmachine = \"m1\"\n");
+    // A Lead Session, so `cpd secret create` passes `identify` and `rules::check`
+    // (vault `cpd`) and reaches `read_value`, which blocks on stdin to EOF.
+    env.sql(
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'ctx', 't', 't');\
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)\
+         VALUES ('s1', 'lead', 'ctx', NULL, 'Lead', '/', 'S3', 'idle', 't', 't');",
+    );
     let path = env.bin().join("running");
-    write_executable(&path, "#!/bin/sh\necho ready\nread line\necho \"got $line\"\n");
+    copy_executable(CPD, &path);
 
+    // stdin is a pipe this test holds and never writes: the child blocks in read_value,
+    // so it cannot exit while the ELF is text-busy. PATH is the env's bin alone, so no
+    // real `op` can be reached.
     let mut cmd = env.command(&path);
-    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped())).expect("spawn the script");
+    cmd.env("PATH", env.bin())
+        .env("CPD_SESSION", "s1")
+        .args(["secret", "create", "item", "--vault", "cpd", "--field", "field"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = Running(spawn(&mut cmd).expect("spawn the copied cpd"));
 
-    let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
-    let mut line = String::new();
-    stdout.read_line(&mut line).expect("read the script's first line");
-    assert_eq!(line, "ready\n", "the script is running before the rewrite");
+    // The precondition: a child that died early (identify or rules failed) would make
+    // the rewrite pass for the wrong reason. A running ELF fails an open for writing
+    // with ETXTBSY (26) for as long as it lives.
+    let busy = fs::OpenOptions::new().write(true).open(&path);
+    assert_eq!(
+        busy.as_ref().err().and_then(|e| e.raw_os_error()),
+        Some(26),
+        "the running cpd is text-busy before the rewrite; child: {:?}",
+        child.0.try_wait()
+    );
+    drop(busy);
 
-    // The rewrite the engine's next tick forces: it must not open a running script
-    // for writing in place, or it fails with ETXTBSY.
     write_executable(&path, "#!/bin/sh\necho rewrote\n");
-
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    writeln!(stdin, "stop").expect("release the script's read");
-    drop(stdin);
-    let status = child.wait().expect("wait for the script");
-    assert!(status.success(), "the script exits cleanly: {status}");
 }
