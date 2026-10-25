@@ -10,6 +10,7 @@
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
+//! - [`host_alert`] E6: the `@cpd_host_alert` step, which turns the version pill red (hs-d618);
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
 //! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`, and `watch --check`, which verifies what that start depends on without touching anything;
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
@@ -21,6 +22,7 @@ mod distill;
 mod engine;
 mod ensure;
 mod escalations;
+pub mod host_alert;
 mod inbox;
 mod liveness;
 mod lock;

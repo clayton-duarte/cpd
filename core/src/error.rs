@@ -98,6 +98,7 @@ error_codes! {
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
+    InstallStateInvalid = "install_state_invalid" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,

@@ -7,6 +7,7 @@ mod common;
 mod doctor;
 mod watch_curate_inbox;
 mod watch_distill_inbox;
+mod watch_host_alert;
 mod watch_inbox;
 mod watch_loop_guard_inbox;
 mod watch_sleep;
