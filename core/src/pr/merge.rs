@@ -121,6 +121,7 @@ fn store_merge_in(tx: &WriteTxn<'_>, repo: &str, number: i64, merged_at: Option<
         poll::merge(tx, &plan, &key, &after)?;
         poll::unstack_stacked_on(tx, &plan, &key)?;
     }
+    crate::incident::end_if_until_pr_merged(tx)?;
     close_pr_ready(tx, repo, number)
 }
 
