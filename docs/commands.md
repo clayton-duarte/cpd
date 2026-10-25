@@ -618,7 +618,7 @@ Plans already deleted are not checked. Effects, with `--yes` only (**without it,
    Every `DELETE` writes a `history` row with the whole old row (§4.4); the tombstones are `update` rows. They stay, and the tamper check stays clean (contract §2.2). Last, in the same transaction, **one `context-deleted` Event** is appended, with the counts; it is never deleted by this delete.
 2. **Session files** (after commit): every Session's file, the Leads' included; files that do not exist are skipped.
 3. **Run files** (after commit): `$CPD_HOME/run/<plan>/` of each Plan and `$CPD_HOME/run/context-digests/<context>/`, with the summaries, renders, reviews, messages, specs, logs and distill artifacts under them.
-4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote), then the directories of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
+4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and, for parallel siblings, `git branch -D cpd/<plan>/<key>-<id>` (hs-d680) from their repos (not on the remote), then the directories of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
 
 **Rerun.** The rows go in one transaction and steps 2–4 after it, so a crash leaves a tombstoned Context with files on disk. A rerun with `--yes` on a deleted Context writes **nothing** to the store (no row, no Event), finishes whatever file step is left (a missing file, directory or branch is not an error) and returns `"already": true`. A preview of a deleted Context returns `"already": true` and what is left on disk, not the counts of the first preview, which only the Event keeps.
 
@@ -1226,7 +1226,7 @@ Effects, with `--yes` only (**without it, no rows or files are written**):
    Every `DELETE` writes a `history` row with the whole old row (§4.4); the tombstone is an `update` row. They stay, and the tamper check stays clean (contract §2.2). Last, in the same transaction, **one `plan-deleted` Event** is appended, with the counts; it is never deleted by this delete. The Plan's `pull_requests` rows are no Plan's: the poll deletes them once no PR points to them (§7.6 step 5).
 2. **Session files** (after commit): every Session's file, the Lead's included; files that do not exist are skipped.
 3. **Run files** (after commit): everything under `$CPD_HOME/run/<plan>/`: summaries, renders, reviews, messages, specs, logs and distill artifacts.
-4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote), then the directory of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
+4. **Worktrees and local branches** (after commit): `rm -rf` every Attempt worktree and PR Lead worktree, each with its `target/` (this, with the run files, is where the disk comes from: the database file does not shrink); then `git branch -D cpd/<plan>/<key>` and, for parallel siblings, `git branch -D cpd/<plan>/<key>-<id>` (hs-d680) from their repos (not on the remote), then the directory of step 3. The paths come from the live rows when the transaction commits, and on a rerun from their `before` copies in `history`.
 
 **Rerun.** The rows go in one transaction and steps 2–4 after it, so a crash leaves a tombstoned Plan with files on disk. A rerun with `--yes` on a deleted Plan writes **nothing** to the store (no row, no Event), finishes whatever file step is left (a missing file, directory or branch is not an error) and returns `"already": true`. A preview of a deleted Plan returns `"already": true` and what is left on disk, not the counts of the first preview, which only the Event keeps.
 
@@ -1507,7 +1507,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | Precondition | Code | Exit |
 |---|---|---|
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
-| the caller's cwd is inside the Attempt worktree, on the Attempt branch | `wrong_worktree` | 3 |
+| the caller's cwd is inside the workflow worktree (or parallel sibling's), on the PR's Branch or sibling branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha`; **for a review Job (B2) instead**: no commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits`; `review_commits` | 3 |
 | (review Job only) `run/<plan>/reviews/<job>.md` exists and is not empty (contract §7.3, precondition 3) | `review_missing` | 3 |
@@ -1530,8 +1530,8 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
 | (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
 | (kinds `open`, `update`) HEAD does not conflict with `origin/<base>`, freshly fetched (`git merge-tree --write-tree --name-only origin/<base> HEAD`; hs-d490: the base is merged only on a conflict, and a base that merely moved ahead is no refusal); `details` `{pr, base, base_sha, sha, files, next}`, `next` = `["git -C <worktree> merge --no-edit origin/<base>", "cpd attempt submit <attempt>"]` | `base_conflict` | 3 |
-| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
-| (the same) the gate worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
+| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in the workflow worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`, hs-d680) | `gate_failed` | 3 |
+| (the same) the workflow worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`, hs-d680) | `gate_error` | 1 |
 
 Effects:
 - **One check span** (contract §7.7, hs-d604, hs-d605): every check below, in order, runs inside ONE span, `what` `checks`: the tamper check, the red-test guard, the quick check (the Hooks bullet), the kind check and, for an `open` or `update` Job, the base check and the Gate. The preconditions of §7.3 run before it; a review Job has no checks and no span.
