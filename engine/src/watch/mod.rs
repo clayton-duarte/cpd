@@ -7,6 +7,7 @@
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`sleep`] E13: puts finished Lead and Manager Sessions to sleep;
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
+//! - [`models`] E14: lists the models of the providers pi can use into `run/models-<provider>.json` (7 days);
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
@@ -25,6 +26,7 @@ mod inbox;
 mod liveness;
 mod lock;
 mod log;
+mod models;
 mod poll_run;
 mod pr;
 mod report;

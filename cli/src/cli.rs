@@ -12,7 +12,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, job, models, plan, policy, pr, review, secret, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -79,6 +79,9 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
+    /// The model lists of the providers pi can use (commands.md §14.4)
+    #[command(subcommand)]
+    Models(models::Command),
     /// Run a command inside a test slot (commands.md §23)
     Slot(slot::Args),
     /// Secrets in 1Password through op (commands.md §24)
@@ -134,6 +137,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
+        Command::Models(c) => models::run(c),
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
     }

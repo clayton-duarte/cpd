@@ -29,6 +29,7 @@ pub mod host;
 pub mod inbox;
 pub mod job;
 pub mod merge;
+pub mod models;
 pub mod metrics;
 pub mod plan;
 pub mod policy;

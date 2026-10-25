@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, distill, escalations, inbox, liveness, models, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -67,6 +67,8 @@ pub(super) struct Engine {
     pub titles: titles::Runs,
     /// E11: the helper's run in flight and when the last one ended.
     pub team: team::State,
+    /// E14: the helper's run in flight and when the last one ended.
+    pub models: models::State,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
 }
@@ -93,6 +95,7 @@ impl Engine {
             distill_started: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
+            models: models::State::default(),
             restart_started: None,
         }
     }
@@ -120,7 +123,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5, E7–E11, E12 and E13 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 15] = [
+        let steps: [fn(&mut Engine); 16] = [
             restart::drain,
             workers::run,
             escalations::run,
@@ -134,6 +137,7 @@ impl Engine {
             distill::run,
             titles::run,
             team::run,
+            models::run,
             archive::run,
             sleep::run,
         ];
@@ -399,6 +403,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         distill_started: HashMap::new(),
         titles: titles::Runs::default(),
         team: team::State::default(),
+        models: models::State::default(),
         restart_started: None,
     };
 

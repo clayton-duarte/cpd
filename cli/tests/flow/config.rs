@@ -71,7 +71,7 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "pi_stop_seconds": 10,
                 "sleep_seconds": 3600
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "models_discovery_seconds": 604800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
