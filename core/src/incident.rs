@@ -130,6 +130,14 @@ pub fn plans(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
     Ok(plans)
 }
 
+/// The Lead Session a click on the incident pill opens (commands.md §9.13, hs-d678). Stub: the
+/// implementation Job `pillclick-impl` replaces it, storing the first `--plan` Plan's `lead_session`
+/// at a fresh start and falling back to the alphabetically first Plan's Lead for a pre-migration row.
+pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
+    let _ = conn;
+    Ok(None)
+}
+
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
 fn parse_until_pr(value: &str) -> Result<(PlanId, String), CpdError> {
     let usage = || {
