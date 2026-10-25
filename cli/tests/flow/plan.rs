@@ -1,7 +1,6 @@
 //! Plans (contract §2.3, §3.1; commands.md §4, §15.5 and §19 amendments 6
-//! and 8), run as the built binary against a temporary `$CPD_HOME`, temporary
-//! git repos and a private tmux server, with a fake `cpd` on `PATH` for the
-//! panes (`session run`) and for `watch --ensure`.
+//! and 8), run in-process (`Fx::with_ports`) against a temporary `$CPD_HOME`: git and tmux are the fake routes of the
+//! `FakeRunner`, and `cpd watch --ensure` (`plan lock`) is a scripted reply of it.
 
 use crate::common;
 
@@ -9,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
+use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
@@ -31,9 +30,6 @@ fn store(env: &TestEnv) -> Store {
 fn pid(id: &str) -> PlanId {
     PlanId::parse(id).unwrap()
 }
-
-const WATCH_FAILS: &str =
-    "echo '{\"ok\": false, \"error\": {\"code\": \"watch_start_failed\", \"message\": \"No lock.\", \"details\": {}}}'; exit 1";
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
@@ -533,7 +529,8 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     let fx = Fx::with_ports();
     let origin = inproc::setup(&fx);
     fx.git(&origin, &["branch", "trunk"]);
-    fx.git(&origin, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+    // The fake git route has no writing `symbolic-ref`: `switch` moves HEAD to `trunk` (the same commit, so the same tree).
+    fx.git(&origin, &["switch", "-q", "trunk"]);
     let clone = fx.env.root().join("repos").join("clone");
     fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()]);
     // Keyed by its GitHub URL; git still reaches the local repo.
