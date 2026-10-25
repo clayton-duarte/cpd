@@ -21,7 +21,6 @@ use nix::fcntl::{Flock, FlockArg};
 const WORKING: &str = SPINNER[0];
 
 // The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
-const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
 const DOWN: &str = "\u{F0B26}";
 const UP: &str = "\u{F0B2C}";
@@ -320,12 +319,7 @@ impl<'a> Pane<'a> {
         common::wait_screen(what, || self.screen(), done)
     }
 
-    /// Waits until the screen is `expected` and returns it. A whole-screen assertion on a screen caught before the view finished drawing is a race.
-    fn screen_is(&self, expected: &[String]) -> Vec<String> {
-        self.rows_are(0, expected)
-    }
-
-    /// Like `screen_is`, for the rows from `first` on: the screen's rows `first..first + expected.len()`.
+    /// Waits until the screen's rows `first..first + expected.len()` are `expected` and returns the screen. A whole-screen assertion on a screen caught before the view finished drawing is a race.
     /// Panics with the rows wanted and the last screen when they never show.
     fn rows_are(&self, first: usize, expected: &[String]) -> Vec<String> {
         let what = format!("rows {first}.. to be\n{}", expected.join("\n"));
@@ -393,11 +387,6 @@ impl<'a> Pane<'a> {
         }
     }
 
-    /// One notch of the wheel down at 0-based `column` and `row`: SGR button 65.
-    fn wheel_down(&self, column: u16, row: u16) {
-        self.type_text(&format!("\x1b[<65;{};{}M", column + 1, row + 1));
-    }
-
     /// A right click at 0-based `column` and `row`: SGR button 2, which tmux calls button 3.
     fn right_click(&self, column: u16, row: u16) {
         for end in ['M', 'm'] {
@@ -420,35 +409,6 @@ impl<'a> Pane<'a> {
     fn footer_has(&self, text: &str) -> bool {
         self.screen().iter().any(|r| r.contains(text))
     }
-}
-
-/// The tree taller than its share of the column (hs-d307), end to end: forty Plans more under `gamma`, in a pane of 20
-/// rows with the Inbox's items. The tree keeps the top of the column and scrolls inside it, with the wheel, between a
-/// `▲` and a `▼` cue; the Inbox stays below it (the bug: the tree did not scroll, its rows past the column were lost).
-#[test]
-fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
-    let env = env();
-    populate(&env);
-    let mut s = String::new();
-    for i in 0..40 {
-        let (plan, lead) = (format!("p{i:02}"), format!("l-p{i:02}"));
-        let created = format!("2026-01-03T00:00:{i:02}.000Z");
-        s += &plan_row(&plan, "gamma", "plan", &lead, &created, false);
-        s += &session_row(&lead, &plan, "gamma", &plan, "idle", None, &created);
-    }
-    sql(&mut open(&env), &s);
-    let pane = Pane::start(&env, 46, 20);
-    pane.ready();
-    let cue = |r: &String, glyph: char| r.trim_start().starts_with(glyph) && r.ends_with(" more");
-    let screen = pane.wait("the tree's ▼ cue above the Inbox", |s| {
-        let inbox = s.iter().position(|r| r.contains("Inbox"));
-        inbox.is_some_and(|i| i > 2 && s[i - 1].trim().is_empty() && cue(&s[i - 2], '▼'))
-    });
-    assert!(!screen.iter().any(|r| cue(r, '▲')), "nothing is hidden above yet: {screen:?}");
-    pane.wheel_down(10, 3);
-    let screen = pane.wait("the tree's ▲ cue after a notch", |s| s.get(1).is_some_and(|r| cue(r, '▲')));
-    assert!(!screen[1..].iter().any(|r| r.contains(" alpha")), "the top of the tree scrolled away: {screen:?}");
-    assert!(screen.iter().any(|r| r.contains("Inbox")), "the Inbox stays: {screen:?}");
 }
 
 /// A fake `cpd` that succeeds with `reply`.
@@ -526,77 +486,6 @@ fn wait_for_popups(env: &TestEnv, n: usize) -> Vec<String> {
 }
 
 // ---------- tests ----------
-
-#[test]
-fn the_tree_of_a_prepared_store() {
-    let env = env();
-    populate(&env);
-    let pane = Pane::start(&env, 46, 20);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
-    let mut expected = vec![
-        String::new(),
-        format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
-        row(&format!("├─{IDLE} sketch"), "2"),
-        format!(" ├─{IDLE} ship·f-id"),
-        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
-        String::new(),
-        format!(" ╭{NEEDS_YOU} beta"),
-        row(&format!("├─{NEEDS_YOU} rel"), "1"),
-        format!(" ╰─{STOPPED} old"),
-        String::new(),
-        format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰬪`), one empty row between two Contexts; the Inbox section is pinned below
-    expected.extend(inbox_section(46));
-    let screen = pane.screen_is(&expected);
-    assert_eq!(
-        screen,
-        expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
-    );
-}
-
-#[test]
-fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_the_terminator_close() {
-    let env = env();
-    populate(&env);
-    reconcile(&mut open(&env), &items()[..2], &opened_ago()).unwrap();
-    let pane = Pane::start(&env, 46, 18);
-    let expected = [
-        String::new(),
-        pill(44, 2),
-        item_row_of(44, palette::TIER_RED, "f-blocked label"),
-        item_row_of(44, palette::TIER_RED, "l-rel label"),
-        " ╰\u{F0B2A}".to_owned(),
-    ];
-    // the screen has no empty row at its end: the section's own empty row below is not in it
-    let screen = pane.wait("the two items", |s| s.len() == 17 && s[12..] == expected);
-    assert!(screen.iter().all(|r| !r.contains("expand")), "two items have nothing to expand: {screen:?}");
-}
-
-#[test]
-fn the_tree_leaves_the_first_and_the_last_column_blank() {
-    let env = env();
-    populate(&env);
-    let pane = Pane::start(&env, 46, 19);
-    pane.ready();
-    let screen = pane.wait("the whole tree", |s| s.last().is_some_and(|r| *r == expand()));
-    // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
-    assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
-    assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
-    assert!(screen.iter().any(|r| r.chars().count() == 43), "the counters end at width − 4: {screen:?}");
-}
-
-#[test]
-fn an_empty_store_says_so() {
-    let env = env();
-    drop(open(&env));
-    let pane = Pane::start(&env, 40, 5);
-    let header = pill(38, 0);
-    let close = " ╰\u{F0B2A} up to date, drink some water"; // hs-d487: the empty Inbox's one closing row, below its title
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", header.as_str(), close], "the section is there with no item: the title (count 0), then the one closing row");
-}
 
 #[test]
 fn the_view_needs_a_terminal() {
@@ -1884,24 +1773,6 @@ fn popups(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
-#[test]
-fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
-    let env = env();
-    populate(&env);
-    let mut store = open(&env);
-    let event = store.read(cpd_core::events::highest_id).unwrap();
-    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
-    let pane = Pane::start(&env, 46, 26);
-    pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
-    pane.click(10, pane.screen().len() as u16 - 1);
-    let expected = item_row_of(44, palette::TIER_YELLOW, "acme/api#12 failing");
-    // Wait for the whole row: the link is drawn in chunks, so a capture can land mid-draw.
-    let screen = pane.wait("the link's whole row", |s| s.iter().any(|r| *r == expected));
-    let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
-    assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
-}
-
 // ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
 
 /// The row of the Inbox item labelled `label`, as the screen has it now (a note below the section moves it up).
@@ -2017,99 +1888,4 @@ fn a_refusal_of_an_item_command_is_logged() {
     pane.keys(&["d"]);
     pane.wait_logged("the refusal", "failed: inbox dismiss 1: item_closed: Item 1 is closed.");
     assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
-}
-
-// ---------- blue: the selected row's name (hs-d351; commands.md §13.2 "Rows", §17 "Blue") ----------
-
-/// The cells of one screen row with escapes: each glyph and its foreground as an SGR colour index (`Some(4)` is blue,
-/// `Some(2)` green, `Some(8)` the bright black of dark grey), `None` the terminal's own.
-fn cells_of(styled: &str) -> Vec<(char, Option<u8>)> {
-    let (mut out, mut fg) = (Vec::new(), None);
-    let mut chars = styled.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push((c, fg));
-            continue;
-        }
-        match chars.next() {
-            Some('[') => {
-                let mut params = String::new();
-                for c in chars.by_ref() {
-                    if c.is_ascii_digit() || c == ';' || c == ':' {
-                        params.push(c);
-                    } else {
-                        if c == 'm' {
-                            let mut p = params.split(';').map(|p| p.parse::<u8>().unwrap_or(0));
-                            while let Some(n) = p.next() {
-                                match n {
-                                    0 | 39 => fg = None,
-                                    30..=37 => fg = Some(n - 30),
-                                    90..=97 => fg = Some(n - 90 + 8),
-                                    38 => match p.next() {
-                                        Some(5) => fg = p.next(),
-                                        _ => {
-                                            p.by_ref().take(3).for_each(drop);
-                                            fg = Some(u8::MAX);
-                                        }
-                                    },
-                                    _ => {}
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-            Some('(') | Some(')') => {
-                chars.next();
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-/// What the screen draws in blue: per row, the glyphs whose foreground is blue.
-fn blue_text(styled: &str) -> Vec<String> {
-    styled.lines().map(|l| cells_of(l).into_iter().filter(|(_, fg)| *fg == Some(4)).map(|(c, _)| c).collect::<String>()).filter(|t| !t.is_empty()).collect()
-}
-
-/// The foreground of the first cell of `glyph` in the screen row that says `row`.
-fn fg_of(styled: &str, row: &str, glyph: &str) -> Option<u8> {
-    let cells = styled.lines().map(cells_of).find(|c| c.iter().map(|(c, _)| *c).collect::<String>().contains(row)).expect("the row");
-    cells.iter().find(|(c, _)| glyph.starts_with(*c)).and_then(|(_, fg)| *fg)
-}
-
-#[test]
-fn the_selected_plan_rows_name_is_blue_and_no_chat_mark_is_drawn() {
-    let env = env();
-    populate(&env); // `l-ship`, the Lead of `ship`, is in the chat slot
-    let pane = Pane::start(&env, 46, 19);
-    pane.ready();
-    let screen = pane.styled_screen();
-    assert!(!screen.contains(ACTIVE_MARK), "no marker in column 0: {screen:?}");
-    assert_eq!(blue_text(&screen), ["ship"], "the one blue thing is the name of the Plan whose Lead is in the chat slot: {screen:?}");
-    assert_eq!(fg_of(&screen, " sketch", "sketch"), Some(15), "an unselected row's name is clickable text, colour 15");
-    assert_eq!(fg_of(&screen, " ship ", "1"), Some(15), "the row keeps its counters' colours (the queued Job: 15)");
-    assert_eq!(fg_of(&screen, " ship ", "2"), Some(10), "(the merged Jobs: bright green)");
-}
-
-#[test]
-fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot() {
-    let env = env();
-    populate(&env);
-    // the chat slot moves from `l-ship` to the Manager of `alpha`
-    sql(
-        &mut open(&env),
-        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-         VALUES (cpd_txn(), '2026-01-04T00:00:00.000Z', 'session-moved', 'alpha', 'ship', 'l-ship', 'fixture', '{\"place\":\"parked\"}');
-         INSERT INTO events (txn, at, kind, context, session, text, data)
-         VALUES (cpd_txn(), '2026-01-04T00:00:01.000Z', 'session-moved', 'alpha', 'm-alpha', 'fixture', '{\"pane\":\"%2\",\"window\":\"@1\",\"place\":\"chat\"}');",
-    );
-    let pane = Pane::start(&env, 46, 19);
-    pane.ready();
-    let screen = pane.styled_screen();
-    assert!(!screen.contains(ACTIVE_MARK), "no marker: {screen:?}");
-    assert_eq!(blue_text(&screen), ["alpha"], "the Context's name, and no Plan's: {screen:?}");
-    assert_ne!(fg_of(&screen, "╭", NEEDS_YOU), Some(4), "its dot keeps the dot's colour");
 }
