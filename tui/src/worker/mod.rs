@@ -18,8 +18,6 @@
 //! `G` follows the end again (the view starts there); `q` or Esc closes its pane.
 
 pub(crate) mod render;
-#[cfg(test)]
-mod screen_tests;
 mod view;
 
 use std::path::PathBuf;
@@ -224,6 +222,9 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
 fn placeholder(text: &str) -> Line<'static> {
     Line::styled(format!(" {text}"), crate::palette::muted_text())
 }
+
+#[cfg(test)]
+mod screen_tests;
 
 #[cfg(test)]
 mod tests {
