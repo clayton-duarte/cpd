@@ -628,7 +628,12 @@ fn when_the_dialog_cannot_open_the_log_line_is_first_then_the_client_gets_the_me
 
 /// The directory of the merge markers.
 pub(crate) fn markers(env: &TestEnv) -> PathBuf {
-    env.cpd_home().join("run/tui/merging")
+    markers_at(&env.cpd_home())
+}
+
+/// The directory of the merge markers of the home `home`.
+pub(crate) fn markers_at(home: &Path) -> PathBuf {
+    home.join("run/tui/merging")
 }
 
 /// The names of the files in it.
@@ -655,7 +660,12 @@ pub(crate) fn dead_pid() -> u32 {
 
 /// Writes the marker `file` (`<owner>__<repo>__<n>.json`) as the action does: `{"pid", "at"}`, by rename.
 pub(crate) fn put_marker(env: &TestEnv, file: &str, pid: u32) {
-    let dir = markers(env);
+    put_marker_at(&env.cpd_home(), file, pid);
+}
+
+/// [`put_marker`] in the home `home`.
+pub(crate) fn put_marker_at(home: &Path, file: &str, pid: u32) {
+    let dir = markers_at(home);
     fs::create_dir_all(&dir).unwrap();
     let temporary = dir.join(format!("{file}.tmp"));
     fs::write(&temporary, format!(r#"{{"pid": {pid}, "at": "2026-10-20T12:00:00Z"}}"#)).unwrap();
@@ -682,13 +692,13 @@ fn noted(gh: &Gh, call: &str) -> Vec<&'static str> {
 }
 
 /// A process the `FakeSpawn` of `fx` runs: its pid is alive.
-fn live_pid(fx: &Fx) -> u32 {
+pub(crate) fn live_pid(fx: &Fx) -> u32 {
     let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };
     fx.fakes.spawn.spawn(&launch).unwrap().0
 }
 
 /// A pid that is not alive: a process of the `FakeSpawn` that has ended.
-fn ended_pid(fx: &Fx) -> u32 {
+pub(crate) fn ended_pid(fx: &Fx) -> u32 {
     let pid = live_pid(fx);
     fx.fakes.spawn.exit(Pid(pid), 0);
     pid

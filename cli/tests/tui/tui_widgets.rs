@@ -8,13 +8,16 @@ use crate::tui_titles;
 
 use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use common::fx::Fx;
-use common::screen::{NoInput, Screen, SharedBackend, Steps, left_click, wheel};
-use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
+use common::screen::{NoInput, Screen, SharedBackend, Steps, left_click, right_click, wheel};
+use common::{TestEnv, sql};
 use cpd_core::error::CpdError;
+use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
+use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
@@ -604,8 +607,13 @@ fn show(fx: &Fx, signals: Vec<Signal>, steps: &Steps) -> SharedBackend {
 
 /// An `Fx` whose config is the one a view needs (machine `m1`, the private tmux server): `Config::load` refuses a home without one.
 fn view_fx() -> Fx {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     fx.env.write_tmux_config("");
+    // The machine header: the host's name, and no reading of its usage (every probe fails: the view shows none, no error).
+    fx.fake("hostname", Reply::ok("homeserver\n"));
+    for probe in ["sysctl", "ioreg"] {
+        fx.fake(probe, Reply::exit(1, "", ""));
+    }
     fx
 }
 
@@ -619,78 +627,119 @@ fn raw(db: &Path, text: &str) {
     rusqlite::Connection::open(db).unwrap().execute_batch(text).unwrap();
 }
 
-// ---------- the pane: links and clicks, with the view in a pane of a private tmux server ----------
+// ---------- the cockpit: the view beside the chat in the fake tmux server; the clicks and the keys are the script's ----------
 
-/// An env whose config has the private tmux server, as the tree's tests have.
-fn pane_env() -> TestEnv {
-    let env = TestEnv::new();
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    env
+/// The client the fake server's `list-clients` names ([`client`]).
+const CLIENT: &str = "/dev/pts/9";
+
+/// The pane the view draws on ([`show`]), in columns.
+const WIDTH: u16 = 120;
+
+/// The cockpit (session `cpd`, window `main`) in the fake server of `fx`: the view and the chat placeholder beside it, and the
+/// Lead `l-mine` alone in a park window, as `session open` finds it (`@cpd_session`); its row records that pane. No pane
+/// runs a program: the fake only records.
+fn cockpit(fx: &Fx) {
+    let ok = |args: &[&str]| {
+        let out = fx.tmux(args);
+        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let view = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    ok(&["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
+    let chat = ok(&["split-window", "-h", "-d", "-t", &view, "-P", "-F", "#{pane_id}", "cpd tui view chat"]);
+    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    let parked = ok(&["new-window", "-d", "-t", "=cpd:", "-n", "park-mine", "-P", "-F", "#{pane_id}", "cpd tui view chat"]);
+    ok(&["set", "-p", "-t", &parked, "@cpd_session", "l-mine"]);
+    sql(&mut open(&fx.env), &format!("UPDATE sessions SET tmux_pane = '{parked}' WHERE id = 'l-mine';"));
 }
 
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+/// The client [`CLIENT`] of 200 x 60 on the fake server: what `list-clients` answers.
+fn client(fx: &Fx) {
+    fx.tmux_route.fake().add_client(CLIENT, 200, 60);
 }
 
-/// `cpd tui view widgets` in session `name`, window `main`, 120 columns by 40 rows; returns its pane.
-fn start(env: &TestEnv, name: &str) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", name, "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", &format!("{CPD} tui view widgets")])
+/// What a step looks at while the view runs: the fake server, the Events and the calls of `fx`. It owns its handles, so a step
+/// (which owns what it captures) holds a clone.
+#[derive(Clone)]
+struct Seen {
+    route: Arc<TmuxRoute>,
+    runner: Arc<FakeRunner>,
+    socket: String,
+    tmpdir: PathBuf,
+    root: PathBuf,
+    home: PathBuf,
 }
 
-/// The cockpit (session `cpd`, the config's default): the view, the chat placeholder beside it, and the Lead `l-mine` alone in
-/// a park window, as `session open` finds it (`@cpd_session`); its row records that pane. Returns the view's pane.
-fn cockpit(env: &TestEnv) -> String {
-    let view = start(env, "cpd");
-    tmux_out(env, &["set", "-p", "-t", &view, "@cpd_view", "widgets"]);
-    let chat = tmux_out(env, &["split-window", "-h", "-d", "-t", &view, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    tmux_out(env, &["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
-    let parked =
-        tmux_out(env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-mine", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    tmux_out(env, &["set", "-p", "-t", &parked, "@cpd_session", "l-mine"]);
-    sql(&mut open(env), &format!("UPDATE sessions SET tmux_pane = '{parked}' WHERE id = 'l-mine';"));
-    view
-}
+impl Seen {
+    fn of(fx: &Fx) -> Seen {
+        Seen {
+            route: fx.tmux_route.clone(),
+            runner: fx.fakes.runner.clone(),
+            socket: fx.env.tmux_socket().to_owned(),
+            tmpdir: fx.env.tmux_tmpdir(),
+            root: fx.env.root().to_path_buf(),
+            home: fx.env.cpd_home(),
+        }
+    }
 
-/// The pane's rows, each without trailing blanks; `capture-pane` leaves out the empty rows at the end.
-fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
-    let out = env.tmux(&["capture-pane", "-p", "-t", pane]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap().lines().map(|l| l.trim_end().to_owned()).collect()
-}
+    /// `tmux <args>` on the fake server of the env's socket, as [`Fx::tmux`] sends it but not recorded as a call of the product's.
+    fn tmux(&self, args: &[&str]) -> String {
+        let argv = ["-L", self.socket.as_str()].into_iter().chain(args.iter().copied()).map(str::to_owned).collect();
+        let out = self.route.fake().run(&Invocation { argv, tmux_tmpdir: self.tmpdir.clone(), cwd: self.root.clone(), env: Vec::new() });
+        assert_eq!(out.code, 0, "tmux {args:?}: {}", out.stderr);
+        out.stdout.trim().to_owned()
+    }
 
-fn wait_for_screen(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
-    common::wait_screen(what, || screen(env, pane), ok)
-}
+    /// The argv (`display-popup` first) of every popup the fake server opened.
+    fn popups(&self) -> Vec<Vec<String>> {
+        self.route.fake().state(&self.socket).popups()
+    }
 
-/// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
-fn click(env: &TestEnv, pane: &str, column: u16, row: u16) {
-    for end in ['M', 'm'] {
-        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{};{}{end}", column + 1, row + 1)]);
+    /// The arguments of every `set-buffer` the product sent to tmux.
+    fn copies(&self) -> Vec<Vec<String>> {
+        let calls = self.runner.calls().into_iter().filter(|c| c.program.rsplit('/').next() == Some("tmux"));
+        calls.map(|c| c.args).filter(|args| args.iter().any(|a| a == "set-buffer")).collect()
+    }
+
+    /// The `session-moved` Events, `(session, place)`, in order.
+    fn moved_events(&self) -> Vec<(String, String)> {
+        Store::open(&CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(), 5000)
+            .unwrap()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT session, json_extract(data, '$.place') FROM events WHERE kind = 'session-moved' ORDER BY id")?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    }
+
+    /// The pane of the cockpit's `main` window that has the focus: `1|<@cpd_session>|<@cpd_view>` (empty for the view and the placeholder).
+    fn focused_session(&self) -> String {
+        let panes = self.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{pane_active}|#{@cpd_session}|#{@cpd_view}"]);
+        let active: Vec<&str> = panes.lines().filter(|l| l.starts_with("1|")).collect();
+        assert_eq!(active.len(), 1, "{panes}");
+        active[0].to_owned()
     }
 }
 
-fn moved_events(env: &TestEnv) -> Vec<(String, String)> {
-    open(env)
-        .read(|conn| {
-            let mut stmt = conn.prepare("SELECT session, json_extract(data, '$.place') FROM events WHERE kind = 'session-moved' ORDER BY id")?;
-            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
-            Ok(rows)
-        })
-        .unwrap()
+/// A left click at 0-based `column`, `row`, as the scripted pump hands it to the loop.
+fn click(column: u16, row: u16) -> Signal {
+    input(left_click(column, row))
 }
 
-/// The pane of the cockpit's `main` window that has the focus: its `@cpd_session` (empty for the view and the placeholder).
-fn focused_session(env: &TestEnv) -> String {
-    let panes = tmux_out(env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_active}|#{@cpd_session}|#{@cpd_view}"]);
-    let active: Vec<&str> = panes.lines().filter(|l| l.starts_with("1|")).collect();
-    assert_eq!(active.len(), 1, "{panes}");
-    active[0].to_owned()
+/// A right click at 0-based `column`, `row`.
+fn rclick(column: u16, row: u16) -> Signal {
+    input(right_click(column, row))
+}
+
+/// A press of `code`.
+fn key(code: KeyCode) -> Signal {
+    input(common::screen::key(code))
+}
+
+/// The rows of the first frame the view draws over the store of `fx`: where the clicks of a script go.
+fn first_rows(fx: &Fx) -> Vec<String> {
+    rows(&render(WIDTH, 40, &read::widgets(&mut open(&fx.env), 3, 0).unwrap()))
 }
 
 #[test]
@@ -776,28 +825,31 @@ fn a_follow_that_fails_is_shown_and_the_column_stays() {
 
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
-    let env = pane_env();
-    let mut store = prs_store(&env);
+    let fx = view_fx();
+    let mut store = prs_store(&fx.env);
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
     drop(store);
-    let view = cockpit(&env);
-    wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    let width = tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<u16>().unwrap();
-    assert_eq!(focused_session(&env), "1||widgets", "the view has the focus");
-    let before = moved_events(&env);
-
-    // The unowned rows, and the owned row's arrow (the terminal's): nothing runs.
-    click(&env, &view, 3, 6);
-    click(&env, &view, 3, 9);
-    click(&env, &view, width - 1, 10);
+    cockpit(&fx);
+    let seen = Seen::of(&fx);
+    assert_eq!(seen.focused_session(), "1||widgets", "the view has the focus");
+    let before = seen.moved_events();
+    let quiet = |what: &'static str| {
+        let (seen, before) = (seen.clone(), before.clone());
+        move |_: &Screen| assert_eq!(seen.moved_events(), before, "{what}: nothing ran")
+    };
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        // The unowned rows, and the owned row's arrow (the terminal's): nothing runs.
+        .next("the click on an unowned row", quiet("an unowned row"))
+        .next("the click on another unowned row", quiet("another unowned row"))
+        .next("the click on the arrow", quiet("the arrow"));
     // The owned row, on its second line: `session open l-mine`, then the chat slot has the focus.
-    click(&env, &view, 3, 11);
-    wait_until("the Lead in the chat slot", || moved_events(&env).len() > before.len());
+    show(&fx, vec![click(3, 6), click(3, 9), click(WIDTH - 1, 10), click(3, 11), gone()], &steps);
     let mut expected = before;
     expected.push(("l-mine".to_owned(), "chat".to_owned()));
-    assert_eq!(moved_events(&env), expected, "one `session open`, for the owned PR's Lead");
-    wait_until("the focus", || focused_session(&env).contains("|l-mine|"));
-    let chat = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}|#{pane_id}"]);
+    assert_eq!(seen.moved_events(), expected, "one `session open`, for the owned PR's Lead");
+    assert!(seen.focused_session().contains("|l-mine|"), "{}", seen.focused_session());
+    let chat = seen.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}|#{pane_id}"]);
     assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
 }
 
@@ -895,77 +947,47 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert!(hit.contains(ratatui::layout::Position::new(44, 11)));
 }
 
-/// The client `list-clients` of [`fake_tmux`] names.
-const CLIENT: &str = "/dev/pts/9";
-
-/// The Deploy column in the cockpit with a fake `tmux` on `PATH`: `list-clients` says one client [`CLIENT`] of 200x60,
-/// `display-popup` does nothing (the call is recorded), and the rest is the real tmux.
-fn fake_tmux(env: &TestEnv) {
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    env.fake(
-        "tmux",
-        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 {CLIENT}';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
-    );
-}
-
-fn popups(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
-}
-
 #[test]
 fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lead() {
     const ICON: char = '\u{F062D}';
-    let env = pane_env();
-    let mut store = prs_store(&env);
+    let fx = view_fx();
     // `acme/repo#20` (owned by `mine`) and `acme/repo#9` (no owner) are clean, `acme/web#4` is blocked.
-    sql(
-        &mut store,
-        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
-         UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
-    );
-    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
-    drop(store);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the merge icons", |s| s.iter().any(|r| r.contains(ICON)));
-    let width = tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap();
-    // The icon is the last column of the second line, under the arrow; only the clean ones have it.
-    for (name, icon) in [(" acme/web#4", false), (" acme/repo#9", true), (" acme/repo#20", true)] {
-        let first = shown.iter().position(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {shown:#?}"));
-        let second = &shown[first + 1];
-        assert_eq!(second.ends_with(ICON), icon, "{name}: {second:?}");
-        if icon {
-            assert_eq!(second.chars().count(), width, "the icon is the last column: {second:?}");
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    client(&fx);
+    let seen = Seen::of(&fx);
+    let before = seen.moved_events();
+    let first = first_rows(&fx);
+    let second_line = |name: &str| first_line_of(&first, name) + 1;
+    let steps = Steps::new().at("the merge icons", |s| s.shown_rows().iter().any(|r| r.contains(ICON)), |screen| {
+        let shown = screen.shown_rows();
+        // The icon is the last column of the second line, under the arrow; only the clean ones have it.
+        for (name, icon) in [(" acme/web#4", false), (" acme/repo#9", true), (" acme/repo#20", true)] {
+            let first = shown.iter().position(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {shown:#?}"));
+            let second = &shown[first + 1];
+            assert_eq!(second.ends_with(ICON), icon, "{name}: {second:?}");
+            if icon {
+                assert_eq!(second.chars().count(), usize::from(WIDTH), "the icon is the last column: {second:?}");
+            }
         }
-    }
-    assert_eq!(shown.iter().filter(|r| r.contains(ICON)).count(), 2, "{shown:#?}");
-
-    fake_tmux(&env);
-    let before = moved_events(&env);
-    let second_line = |name: &str| u16::try_from(shown.iter().position(|r| r.starts_with(name)).unwrap() + 1).unwrap();
-    // The unowned row's icon, then the owned row's: each opens its popup and neither runs `session open`.
-    for (n, (name, pull)) in [(" acme/repo#9", "acme/repo#9"), (" acme/repo#20", "acme/repo#20")].into_iter().enumerate() {
-        click(&env, &view, u16::try_from(width).unwrap() - 1, second_line(name));
-        wait_until("the popup", || popups(&env).len() == n + 1);
-        let popup = &popups(&env)[n];
+        assert_eq!(shown.iter().filter(|r| r.contains(ICON)).count(), 2, "{shown:#?}");
+    });
+    // The unowned row's icon, then the owned row's: each opens its popup and neither runs `session open`. The redraws after both
+    // clicks (a commit, the time): no third popup opens.
+    let signals = vec![click(WIDTH - 1, second_line(" acme/repo#9")), click(WIDTH - 1, second_line(" acme/repo#20")), Signal::Commit, Signal::Due, gone()];
+    show(&fx, signals, &steps);
+    let popups = seen.popups();
+    assert_eq!(popups.len(), 2, "{popups:?}");
+    for (popup, pull) in popups.iter().zip(["acme/repo#9", "acme/repo#20"]) {
         let at = popup.iter().position(|a| a == "display-popup").unwrap();
         assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}' --client '{CLIENT}'"), "{popup:?}");
         assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
     }
-    // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(popups(&env).len(), 2);
-    assert_eq!(moved_events(&env), before, "no `session open` ran");
-    assert_eq!(focused_session(&env), "1||widgets", "the focus did not move");
+    assert_eq!(seen.moved_events(), before, "no `session open` ran");
+    assert_eq!(seen.focused_session(), "1||widgets", "the focus did not move");
 }
 
 // ---------- the right-click menu of a PR row (hs-d296) ----------
-
-/// A right click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, button 2).
-fn right_click(env: &TestEnv, pane: &str, column: u16, row: u16) {
-    for end in ['M', 'm'] {
-        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<2;{};{}{end}", column + 1, row + 1)]);
-    }
-}
 
 /// The labels of the menu box on `screen`: the `│ <label> │` rows between the `╮` and the `╯` rows.
 fn menu_labels(screen: &[String]) -> Vec<String> {
@@ -996,94 +1018,94 @@ fn clean_prs(env: &TestEnv) {
 
 #[test]
 fn a_right_click_on_a_pr_row_opens_its_menu_merge_only_when_clean_and_go_to_lead_only_when_owned() {
-    let env = pane_env();
-    clean_prs(&env);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    let first = first_rows(&fx);
+    let mut steps = Steps::new().at("the PRs", |s| s.contains("acme/repo#20"), |_| {});
+    let mut signals = Vec::new();
     for (name, second_line, labels) in [
         (" acme/web#4", false, &["Copy Link"][..]),
         (" acme/repo#9", true, &["Merge", "Copy Link"]),
         (" acme/repo#20", false, &["Merge", "Copy Link", "Go to Lead"]),
     ] {
-        right_click(&env, &view, 3, first_line_of(&shown, name) + u16::from(second_line));
-        let screen = wait_for_screen(&env, &view, name, |s| !menu_labels(s).is_empty());
-        assert_eq!(menu_labels(&screen), labels, "{name}");
-        tmux_out(&env, &["send-keys", "-t", &view, "Escape"]);
-        wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+        signals.push(rclick(3, first_line_of(&first, name) + u16::from(second_line)));
+        signals.push(key(KeyCode::Esc));
+        steps = steps
+            .at(name, |s| !menu_labels(&s.shown_rows()).is_empty(), move |screen| assert_eq!(menu_labels(&screen.shown_rows()), labels, "{name}"))
+            .at("the menu closed", |s| the_menu_is_closed(&s.shown_rows()), |_| {});
     }
-    // Not on a PR row: no menu.
-    right_click(&env, &view, 3, 1);
-    // time-claim: over the next redraws no menu opens (a right click that opens nothing leaves no signal)
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert!(the_menu_is_closed(&screen(&env, &view)));
+    // Not on a PR row: no menu; the redraws that follow (the time) open none.
+    signals.extend([rclick(3, 1), Signal::Due, gone()]);
+    steps = steps.next("a right click that opens nothing", |screen| assert!(the_menu_is_closed(&screen.shown_rows()), "{}", screen.text()));
+    show(&fx, signals, &steps);
 }
 
 #[test]
 fn an_open_menu_takes_every_click_and_go_to_lead_opens_the_lead_and_focuses_the_chat() {
-    let env = pane_env();
-    clean_prs(&env);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    let (nine, twenty) = (first_line_of(&shown, " acme/repo#9"), first_line_of(&shown, " acme/repo#20"));
-    let before = moved_events(&env);
-
-    // A left click outside the menu, on the owned row, closes it and does not open the Lead.
-    right_click(&env, &view, 3, nine);
-    wait_for_screen(&env, &view, "the menu", |s| !menu_labels(s).is_empty());
-    click(&env, &view, 0, twenty);
-    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
-    // time-claim: over the next redraws the click that closed the menu opens no Lead
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(moved_events(&env), before, "no `session open` ran");
-    assert_eq!(focused_session(&env), "1||widgets");
-
-    // Go to Lead: what a click on the row does.
-    right_click(&env, &view, 3, twenty);
-    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s).len() == 3);
-    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Down", "Enter"]);
-    wait_until("the Lead in the chat slot", || moved_events(&env).len() > before.len());
-    let mut expected = before;
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    let first = first_rows(&fx);
+    let (nine, twenty) = (first_line_of(&first, " acme/repo#9"), first_line_of(&first, " acme/repo#20"));
+    let seen = Seen::of(&fx);
+    let before = seen.moved_events();
+    let mut expected = before.clone();
     expected.push(("l-mine".to_owned(), "chat".to_owned()));
-    assert_eq!(moved_events(&env), expected);
-    wait_until("the focus", || focused_session(&env).contains("|l-mine|"));
+    let (after_click, after_lead) = (seen.clone(), seen);
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        .at("the menu", |s| !menu_labels(&s.shown_rows()).is_empty(), |_| {})
+        // A left click outside the menu, on the owned row, closes it and does not open the Lead.
+        .at("the menu closed", |s| the_menu_is_closed(&s.shown_rows()), move |_| {
+            assert_eq!(after_click.moved_events(), before, "no `session open` ran");
+            assert_eq!(after_click.focused_session(), "1||widgets");
+        })
+        // Go to Lead: what a click on the row does.
+        .at("the menu of the owned row", |s| menu_labels(&s.shown_rows()).len() == 3, |_| {})
+        .at("the Lead in the chat slot", |s| the_menu_is_closed(&s.shown_rows()), move |_| {
+            assert_eq!(after_lead.moved_events(), expected);
+            assert!(after_lead.focused_session().contains("|l-mine|"), "{}", after_lead.focused_session());
+        });
+    let signals = vec![rclick(3, nine), click(0, twenty), rclick(3, twenty), key(KeyCode::Down), key(KeyCode::Down), key(KeyCode::Enter), gone()];
+    show(&fx, signals, &steps);
 }
 
 #[test]
 fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_nothing() {
-    let env = pane_env();
-    clean_prs(&env);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    fake_tmux(&env);
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    let seen = Seen::of(&fx);
     let url = "https://github.com/acme/repo/pull/9";
-    right_click(&env, &view, 3, first_line_of(&shown, " acme/repo#9"));
-    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s) == ["Merge", "Copy Link"]);
-    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Enter"]);
-    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
-    let copies = common::wait_some("the copy", common::WAIT, || {
-        let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
-        if copies.is_empty() { Err("no copy yet".to_owned()) } else { Ok(copies) }
-    });
-    assert!(!screen(&env, &view).iter().any(|r| r.contains("copied")), "no note");
+    let nine = first_line_of(&first_rows(&fx), " acme/repo#9");
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        .at("the menu", |s| menu_labels(&s.shown_rows()) == ["Merge", "Copy Link"], |_| {})
+        .at("the menu closed", |s| the_menu_is_closed(&s.shown_rows()), |screen| {
+            assert!(!screen.rows().iter().any(|r| r.contains("copied")), "no note: {}", screen.text());
+        });
+    show(&fx, vec![rclick(3, nine), key(KeyCode::Down), key(KeyCode::Enter), gone()], &steps);
+    let copies = seen.copies();
     let [copy] = &copies[..] else { panic!("{copies:?}") };
     assert_eq!(&copy[copy.len() - 4..], ["set-buffer", "-w", "--", url], "{copy:?}");
-    let buffer = env.tmux(&["show-buffer"]);
-    assert_eq!(String::from_utf8_lossy(&buffer.stdout), url);
-    assert!(popups(&env).is_empty(), "no popup opened");
+    assert_eq!(seen.tmux(&["show-buffer"]), url);
+    assert!(seen.popups().is_empty(), "no popup opened");
 }
 
 #[test]
 fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
-    let env = pane_env();
-    clean_prs(&env);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    fake_tmux(&env);
-    right_click(&env, &view, 3, first_line_of(&shown, " acme/repo#9"));
-    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s) == ["Merge", "Copy Link"]);
-    tmux_out(&env, &["send-keys", "-t", &view, "Enter"]);
-    wait_until("the popup", || popups(&env).len() == 1);
-    let popup = &popups(&env)[0];
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    client(&fx);
+    let nine = first_line_of(&first_rows(&fx), " acme/repo#9");
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        .at("the menu", |s| menu_labels(&s.shown_rows()) == ["Merge", "Copy Link"], |_| {});
+    show(&fx, vec![rclick(3, nine), key(KeyCode::Enter), gone()], &steps);
+    let popups = Seen::of(&fx).popups();
+    let [popup] = &popups[..] else { panic!("{popups:?}") };
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"), "{popup:?}");
     assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
@@ -1109,84 +1131,111 @@ fn has_icon(screen: &[String], name: &str) -> bool {
 
 #[test]
 fn a_live_merge_marker_shows_the_spinner_for_that_pull_request_alone_and_it_cannot_be_clicked_a_stale_one_changes_nothing() {
-    let env = pane_env();
-    clean_prs(&env);
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the merge icons", |s| has_icon(s, " acme/repo#9") && has_icon(s, " acme/repo#20"));
-    fake_tmux(&env);
-    let width = u16::try_from(tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap()).unwrap();
-    let (nine, twenty) = (first_line_of(&shown, " acme/repo#9"), first_line_of(&shown, " acme/repo#20"));
-
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    cockpit(&fx);
+    client(&fx);
+    let seen = Seen::of(&fx);
+    let first = first_rows(&fx);
+    let (nine, twenty) = (first_line_of(&first, " acme/repo#9"), first_line_of(&first, " acme/repo#20"));
     // A merge of #9 runs (a live marker, written after the view started: no Event of the store tells it) and the marker of
     // #20 is stale (a dead pid).
-    crate::tui_merge::put_marker(&env, "acme__repo__9.json", std::process::id());
-    crate::tui_merge::put_marker(&env, "acme__repo__20.json", crate::tui_merge::dead_pid());
-    let shown = wait_for_screen(&env, &view, "the spinner of #9", |s| spinning(s, " acme/repo#9"));
-    assert!(!second_line_of(&shown, " acme/repo#9").unwrap().contains('\u{F062D}'), "the spinner is instead of the icon: {shown:?}");
-    assert!(has_icon(&shown, " acme/repo#20"), "a stale marker is ignored: the icon stays: {shown:?}");
-    assert!(!spinning(&shown, " acme/web#4") && !has_icon(&shown, " acme/web#4"), "#4 is blocked: no icon, no spinner");
-
-    // A click on the spinner does nothing: no popup, no Lead (no `session open`)
-    let before = moved_events(&env);
-    click(&env, &view, width - 1, nine + 1);
-    // The icon of the stale one opens its popup, as ever: a positive signal that the click on the spinner was handled first
-    click(&env, &view, width - 1, twenty + 1);
-    wait_until("the popup of #20", || popups(&env).len() == 1);
-    // time-claim: over the next redraws no second popup opens
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
-    assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#20' --client '{CLIENT}'"));
-    assert_eq!(moved_events(&env), before, "no `session open` ran");
-
-    // The menu of #9: Merge is shown with the spinner and cannot be selected; the stale one's menu is as ever
-    right_click(&env, &view, 3, nine);
-    let screen = wait_for_screen(&env, &view, "the menu of #9", |s| menu_labels(s).len() == 2);
-    let labels = menu_labels(&screen);
-    assert!(labels[0].contains("Merge") && palette::SPINNER.iter().any(|f| labels[0].contains(f)), "Merge with the spinner: {labels:?}");
-    assert_eq!(labels[1], "Copy Link", "{labels:?}");
-    tmux_out(&env, &["send-keys", "-t", &view, "Enter"]);
-    // Copy Link's Down and Enter is the positive signal that the Enter on Merge was handled before it
-    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Enter"]);
-    common::wait_some("the copy", common::WAIT, || {
-        let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
-        if copies.is_empty() { Err("no copy yet".to_owned()) } else { Ok(copies) }
-    });
-    assert_eq!(popups(&env).len(), 1, "Enter on the busy Merge opened no popup: {:?}", popups(&env));
-    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
-    right_click(&env, &view, 3, twenty);
-    let screen = wait_for_screen(&env, &view, "the menu of #20", |s| !menu_labels(s).is_empty());
-    assert_eq!(menu_labels(&screen), ["Merge", "Copy Link", "Go to Lead"], "the stale marker changes nothing");
-    tmux_out(&env, &["send-keys", "-t", &view, "Escape"]);
-    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
-
-    // The merge ends (the action removes its marker): the icon is back, and its click opens the popup
-    std::fs::remove_file(crate::tui_merge::markers(&env).join("acme__repo__9.json")).unwrap();
-    wait_for_screen(&env, &view, "the icon of #9 back", |s| has_icon(s, " acme/repo#9") && !spinning(s, " acme/repo#9"));
-    click(&env, &view, width - 1, nine + 1);
-    wait_until("the popup of #9", || popups(&env).len() == 2);
-    assert_eq!(popups(&env)[1].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+    let (live, dead) = (crate::tui_merge::live_pid(&fx), crate::tui_merge::ended_pid(&fx));
+    let (home, clock) = (fx.env.cpd_home(), fx.fakes.clock.clone());
+    let before = seen.moved_events();
+    let (popups, copies) = (seen.clone(), seen.clone());
+    let (sees_none, sees_one, sees_two) = (seen.clone(), seen.clone(), seen.clone());
+    let steps = Steps::new()
+        .at("the merge icons", |s| has_icon(&s.shown_rows(), " acme/repo#9") && has_icon(&s.shown_rows(), " acme/repo#20"), {
+            let (home, clock) = (home.clone(), clock.clone());
+            move |_| {
+                crate::tui_merge::put_marker_at(&home, "acme__repo__9.json", live);
+                crate::tui_merge::put_marker_at(&home, "acme__repo__20.json", dead);
+                clock.advance(3 * ONE_SECOND);
+            }
+        })
+        .at("the spinner of #9", |s| spinning(&s.shown_rows(), " acme/repo#9"), |screen| {
+            let shown = screen.shown_rows();
+            assert!(!second_line_of(&shown, " acme/repo#9").unwrap().contains('\u{F062D}'), "the spinner is instead of the icon: {shown:?}");
+            assert!(has_icon(&shown, " acme/repo#20"), "a stale marker is ignored: the icon stays: {shown:?}");
+            assert!(!spinning(&shown, " acme/web#4") && !has_icon(&shown, " acme/web#4"), "#4 is blocked: no icon, no spinner");
+        })
+        // A click on the spinner does nothing: no popup, no Lead (no `session open`)
+        .next("the click on the spinner", move |_| {
+            assert_eq!(sees_none.popups(), Vec::<Vec<String>>::new());
+            assert_eq!(sees_none.moved_events(), before, "no `session open` ran");
+        })
+        // The icon of the stale one opens its popup, as ever: a positive signal that the click on the spinner was handled first
+        .next("the click on the stale one's icon", move |_| {
+            let popups = sees_one.popups();
+            assert_eq!(popups.len(), 1, "{popups:?}");
+            assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#20' --client '{CLIENT}'"));
+        })
+        // The menu of #9: Merge is shown with the spinner and cannot be selected; the stale one's menu is as ever
+        .at("the menu of #9", |s| menu_labels(&s.shown_rows()).len() == 2, |screen| {
+            let labels = menu_labels(&screen.shown_rows());
+            assert!(labels[0].contains("Merge") && palette::SPINNER.iter().any(|f| labels[0].contains(f)), "Merge with the spinner: {labels:?}");
+            assert_eq!(labels[1], "Copy Link", "{labels:?}");
+        })
+        // Copy Link's Down and Enter is the positive signal that the Enter on Merge was handled before it
+        .at("the menu closed", |s| the_menu_is_closed(&s.shown_rows()), move |_| {
+            assert_eq!(copies.copies().len(), 1, "the copy: {:?}", copies.copies());
+            assert_eq!(popups.popups().len(), 1, "Enter on the busy Merge opened no popup: {:?}", popups.popups());
+        })
+        .at("the menu of #20", |s| !menu_labels(&s.shown_rows()).is_empty(), |screen| {
+            assert_eq!(menu_labels(&screen.shown_rows()), ["Merge", "Copy Link", "Go to Lead"], "the stale marker changes nothing");
+        })
+        // The merge ends (the action removes its marker): the icon is back, and its click opens the popup
+        .at("the menu closed again", |s| the_menu_is_closed(&s.shown_rows()), {
+            let (home, clock) = (home.clone(), clock.clone());
+            move |_| {
+                std::fs::remove_file(crate::tui_merge::markers_at(&home).join("acme__repo__9.json")).unwrap();
+                clock.advance(3 * ONE_SECOND);
+            }
+        })
+        .at("the icon of #9 back", |s| has_icon(&s.shown_rows(), " acme/repo#9") && !spinning(&s.shown_rows(), " acme/repo#9"), |_| {})
+        .next("the click on the icon of #9", move |_| {
+            let popups = sees_two.popups();
+            assert_eq!(popups.len(), 2, "{popups:?}");
+            assert_eq!(popups[1].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+        });
+    let signals = vec![
+        Signal::Due,
+        click(WIDTH - 1, nine + 1),
+        click(WIDTH - 1, twenty + 1),
+        rclick(3, nine),
+        key(KeyCode::Enter),
+        key(KeyCode::Down),
+        key(KeyCode::Enter),
+        rclick(3, twenty),
+        key(KeyCode::Esc),
+        Signal::Due,
+        click(WIDTH - 1, nine + 1),
+        gone(),
+    ];
+    show(&fx, signals, &steps);
 }
 
 #[test]
 fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_too() {
-    let env = pane_env();
-    clean_prs(&env);
-    crate::tui_merge::put_marker(&env, "acme__repo__20.json", std::process::id());
-    let view = cockpit(&env);
-    let shown = wait_for_screen(&env, &view, "the spinner of #20", |s| spinning(s, " acme/repo#20"));
-    assert!(has_icon(&shown, " acme/repo#9"), "only #20 merges: {shown:?}");
-    // the owned row's click on the spinner opens neither the popup nor the Lead
-    fake_tmux(&env);
-    let width = u16::try_from(tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap()).unwrap();
-    let before = moved_events(&env);
-    click(&env, &view, width - 1, first_line_of(&shown, " acme/repo#20") + 1);
-    click(&env, &view, width - 1, first_line_of(&shown, " acme/repo#9") + 1);
-    wait_until("the popup of #9", || popups(&env).len() == 1);
-    // time-claim: over the next redraws no popup and no Lead follows the click on #20's spinner
-    std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
-    assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
-    assert_eq!(moved_events(&env), before, "no `session open` ran");
+    let fx = view_fx();
+    clean_prs(&fx.env);
+    crate::tui_merge::put_marker(&fx.env, "acme__repo__20.json", crate::tui_merge::live_pid(&fx));
+    cockpit(&fx);
+    client(&fx);
+    let seen = Seen::of(&fx);
+    let before = seen.moved_events();
+    let first = first_rows(&fx);
+    let (twenty, nine) = (first_line_of(&first, " acme/repo#20"), first_line_of(&first, " acme/repo#9"));
+    let steps = Steps::new().at("the spinner of #20", |s| spinning(&s.shown_rows(), " acme/repo#20"), |screen| {
+        assert!(has_icon(&screen.shown_rows(), " acme/repo#9"), "only #20 merges: {:?}", screen.shown_rows());
+    });
+    // the owned row's click on the spinner opens neither the popup nor the Lead; the redraws that follow add none
+    show(&fx, vec![click(WIDTH - 1, twenty + 1), click(WIDTH - 1, nine + 1), Signal::Commit, Signal::Due, gone()], &steps);
+    let popups = seen.popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+    assert_eq!(seen.moved_events(), before, "no `session open` ran");
 }
 
 // ---------- the commands ----------
