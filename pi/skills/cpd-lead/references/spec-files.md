@@ -23,8 +23,8 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 | Field | What it holds |
 |---|---|
 | `goal` | One outcome, in the imperative. |
-| `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview and the Context's records, the accepted assumptions that apply. |
-| `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. |
+| `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview and the Context's records, the accepted assumptions that apply. Paths are repo-relative, never the primary checkout of the repo. |
+| `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. Paths are repo-relative, never the primary checkout of the repo. |
 | `acceptance` | At least one item, each checkable by a command or an observable result. Test items name the targeted tests: the test files or modules of what the Job changes plus its new tests (for example `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `node --test pi/test/updates.test.ts`). Never a full unfiltered run (the whole workspace, `npm test` of everything): the full suite is the Gate's, run by the PR's open Job. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty, rarely should be. |
 
