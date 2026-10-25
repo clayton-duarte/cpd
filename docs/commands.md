@@ -3172,12 +3172,12 @@ The column has no engine line, no slots, no Escalations, no Events and no footer
 
 | # | `@cpd_view` | Size |
 |---|---|---|
-| 1 | `tree` | `-x 25%` |
-| 2 | `widgets` | `-x 25%` |
-| 3 | `plan` | `-y 25%` |
+| 1 | `tree` | `-x 20%` |
+| 2 | `widgets` | `-x 30%` |
+| 3 | `plan` | `-y 30%` |
 | 4 | `worker` | `-x 30%`, only when a Worker pane is open |
 
-The chat slot is never resized; it takes what is left. **The chat slot's last row (hs-d567; contract §6.1 "The blank row", Q1-Q4):** the status line is one row (`status on`), so the window is as tall as before hs-d561 and the `resize-pane` calls and the 25 % / 75 % sizes are fractions of it. The last row of the chat slot's pane is empty **by its occupant**, not by tmux: a Lead's or Manager's pi (the adapter, §15.1), the history view (§13.2); the placeholder draws one line at the top and needs nothing. In a 20-row client: row 1 the pane borders, rows 2-19 the panes (row 19, the chat slot's last row, empty), row 20 the `─` line; the tree, the Plan view and the widgets reach row 19; the Worker view is unchanged. Code and tests: `core/src/host/tmux.rs` and `tui/src/cockpit.rs`, with the tests that pin the status options or a pane's height. The StatusBar's 󰨝 click runs it through `cpd tui action reset`; `cpd tui` runs it once, right after building a new `main` and after killing a leftover `statusbar` pane of an existing one (§13.1).
+The chat slot is never resized; it takes what is left. **The chat slot's last row (hs-d567; contract §6.1 "The blank row", Q1-Q4):** the status line is one row (`status on`), so the window is as tall as before hs-d561. The layout divides the window into columns: tree 20%, middle 50%, widgets 30%. The middle column's rows divide as: Plan view 30%, chat slot 70%. The `resize-pane` calls and these sizes are fractions of the window. The last row of the chat slot's pane is empty **by its occupant**, not by tmux: a Lead's or Manager's pi (the adapter, §15.1), the history view (§13.2); the placeholder draws one line at the top and needs nothing. In a 20-row client: row 1 the pane borders, rows 2-19 the panes (row 19, the chat slot's last row, empty), row 20 the `─` line; the tree, the Plan view and the widgets reach row 19; the Worker view is unchanged. Code and tests: `core/src/host/tmux.rs` and `tui/src/cockpit.rs`, with the tests that pin the status options or a pane's height. The StatusBar's 󰨝 click runs it through `cpd tui action reset`; `cpd tui` runs it once, right after building a new `main` and after killing a leftover `statusbar` pane of an existing one (§13.1).
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
