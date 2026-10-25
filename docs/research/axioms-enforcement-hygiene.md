@@ -2,24 +2,90 @@
 
 ## Method
 
-TBD
+Read (all read-only, hs-d606): this Spec; the 29 axiom titles/texts as quoted in it; `/home/clayton/.pi/agent/AGENTS.md`;
+`package.json`, `scripts/gate-run.sh`, `scripts/tripwire/{tmux,allow.txt}`, `scripts/cargo.sh`,
+`scripts/check-portable.sh`, `scripts/pi-check.sh`, `.config/nextest.toml`;
+`cli/tests/common/mod.rs`, `cli/tests/tooling/{harness.rs,gate_run.rs,tripwire_script.rs,slot.rs,fake_tmux.rs}`;
+`cli/src/fakes/`; `pi/test/{no-fixed-sleeps.test.ts,tripwire-allow.test.ts,gate.test.ts,sleep-allow.txt}`;
+`core/src/{git/run.rs,context/distill.rs,policy/origin.rs,events,host/pi/launch.rs}`;
+`docs/implementing.md` ("Tests", "The guard", "The Gate leak check"), `docs/research/{hygiene.md,tests-mock-design.md}`.
+Ran the read-only `timeout`-wrapped commands listed under each entry's **Verified** (counts, `du`, `find`, `cpd events
+list`, one `node --test` of the static sleep check, one run of the tripwire script that starts no tmux). No test suite,
+no `tmux` server, no `cpd watch`/`events follow`/`tui`.
+
+**My own system prompt (this Attempt).** `core/src/host/pi/launch.rs:163` (`worker()`) builds the argv with no
+`--no-context-files` (only `distiller()` at `:195` passes it), so pi loads context files for a Worker. My prompt carries
+the `<project_instructions path="/home/clayton/.pi/agent/AGENTS.md">` block. That file at this checkout holds **19**
+axioms (`timeout 30 rg -c '^## ' /home/clayton/.pi/agent/AGENTS.md` → 19; the file ends at "Brevity is not vagueness",
+line 77): the prompt carries axioms 1-19, so axioms 28 and 29 are **not** in it yet — they arrive with PR `agents`.
+A9 holds for the file; for these two axioms the text is the Spec, unverified against any live prompt other than this one.
 
 ### 28. No flakes, no leaks, no orphans, no sleep, no errors
 
-- **Enforced by:** TBD
-- **Prose only:** TBD
-- **Gap:** TBD
-- **Proposal:** TBD
-- **Verified:** TBD
+- **Enforced by:**
+  - `gate` `package.json:14` (`verify` is `scripts/gate-run.sh npm run verify:steps`, pinned by `test` `pi/test/gate.test.ts:8`): the whole Gate runs under one random run id. Blind spot: it checks only this run.
+  - `script` `scripts/gate-run.sh:27` (`GATE_RUN` + private `TMPDIR=$RUN`) and `finish()` `:88`: at the end it fails the run when the run left a process carrying `GATE_RUN` (Linux `/proc/<pid>/environ` `:73`; macOS `ps -axww -E` `:76`), a tmux socket named `*-<id>-*` (`:117`) or any path under `$RUN`, then kills/removes only what it listed. Blind spot: a run killed before `finish()` leaves its leftovers, and a machine-wide leftover from any other run is invisible by design.
+  - `hook` `scripts/gate-run.sh:96`: `finish()` reads `$TMPDIR/tripwire.log` and fails the run on any line, so a test that swallowed the tripwire's exit 127 still fails. Blind spot: only real-`tmux` calls made under the tripwire (axiom 29's guard), no file/socket leak.
+  - `check` `.config/nextest.toml:19` (`fail-fast = false`): a red run lists every failing test, never only the first, so a flake cannot hide behind an earlier failure. Blind spot: reporting, not detection.
+  - `check` `.config/nextest.toml:24` (`leak-timeout = { period = "100ms", result = "fail" }`, the ms-leak incident): a test that leaves a process holding its stdout/stderr pipes fails. Blind spot: a detached process that closes its pipes, a leaked file or a leaked socket.
+  - `check` `.config/nextest.toml:33` (`slow-timeout = { period = "30s", terminate-after = 3 }`, `:79` for the tmux-restart group): a test that hangs is killed at 90 s and fails. Blind spot: "not a hang", not "no sleep"; a 20 s sleep passes.
+  - `test` static sleep ratchet `pi/test/no-fixed-sleeps.test.ts:8` (no `settle`/`sleep(` in a pi test), `:61` (no `setTimeout`/`setInterval`/`Date.now()`/`spawnSync("sleep"`/`waitFor(` outside `pi/test/fake.ts` and the allowlist) and `:80` (no `thread::sleep(`/`Instant::now(`/`SystemTime::now(` in Rust test code outside the allowlist). Blind spot: it counts text, not behaviour, and it allows the listed debt (`pi/test/sleep-allow.txt`: 79 entries, 469 waits).
+  - `test` `cli/tests/tooling/harness.rs:149` (`no_fake_sleeps_longer_than_sleep_seconds`, `SLEEP_SECONDS` = 120 at `cli/tests/common/mod.rs:75`): a fake's shell `sleep N` is bounded. Blind spot: a shim's `sleep` is allowed because the harness reaps it.
+  - `test` `cli/tests/tooling/harness.rs:208` (`no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes`: a `sleep >= 250 ms` or an elapsed upper bound needs a `// time-claim:` line) and `:268` (`every_wait_polls_through_the_harness`). Blind spot: a sleep under 250 ms, and a loop that polls without sleeping, pass.
+  - `test` leak behaviour: `cli/tests/tooling/harness.rs:449` (a killed test leaves no tmux server, process, dir or reaper), `:488` (a dropped env), `:579` (no git wrapper), `:656` (a process that leaves the process group and is not recorded), `:667`, `:685`; `cli/tests/tooling/gate_run.rs:106,132,148,161,176,195,226,237,248` pin every direction of the Gate check (clean run, process/dir/socket left, another run's leftovers, a failing command's status, the tripwire log).
+  - `check` `scripts/cargo.sh:101` runs a full test run inside `cpd slot --` (and `package.json` `test` does too): full runs serialise through the machine's slots, so two Gates do not contend. Blind spot: full runs only; a slot does not bound a sleep or a leak.
+- **Prose only:** `docs/implementing.md:138` ("never a fixed sleep to get a result; waits poll a positive signal"); `:133-137` (the tripwire/allowlist/sleep-check prose, whose mechanisms are code); `:143-149` (the Gate leak check prose); `docs/research/hygiene.md:1` documents the leaks in prose and nothing enforces its findings. The axiom's "never retried, ignored or bypassed" has no mechanism and no other text: `rg -n 'retries' .config/nextest.toml` prints nothing.
+- **Gap:** (a) **flakes** have no metric: `rg -n 'flak' core cli engine scripts docs/research/hygiene.md` → 6 lines, one in source (`cli/tests/session/session_reload.rs:497`, a comment naming a fixed flake), and `rg -n 'flak|leak|sleep' core/src/events` → 6 lines, all `SessionAsleep` plus the `events follow` loop's `thread::sleep` (`core/src/events/mod.rs:181`), none a flake/leak counter. A flake is fixed only when a human sees it. (b) **leaks/orphans** outside a live run: `/tmp` is 83G; 378 `cpd-test-*` = 394M, 99 `tmp.*` + 1 `.tmp*` = 227M, 284 sockets in `/tmp/tmux-1000`, 9 `pi-check*`, and `/tmp/sp-* /tmp/dc-* /tmp/hn-*` = 63G; the Gate check cannot see any of them. Evidence that a killed run does leak: `docs/research/hygiene.md` R5 (310 → 320 `.tmp*` under `timeout -s KILL`), not reproduced here. (c) **sleeps**: the ratchet allows 79 files / 469 waits (182 Rust, 287 pi); the raw text is larger — `rg -c 'thread::sleep|tokio::time::sleep|sleep ' cli/tests core engine tui` sums to 319, `sleep [0-9]` in Rust sources to 76, and `setTimeout` in `pi/test` to 15 in 6 files. (d) **errors**: `cpd events list --kind error` returns 206 in the last 30 days, top `distill_invalid` 80, `gh_failed` 60, `cleanup_failed` 15; these are product errors, and no mechanism counts a test "ending in an error" beyond nextest's exit code.
+- **Proposal:** record the one metric that is missing — a `flake` Event (`Kind::Flake` in `core/src/events/kind.rs`) written by the Gate's open Job when a test that failed in the previous run passes in this one (`scripts/gate-run.sh` writes its failed test ids to `$CPD_HOME/run/test-failures.json`; the next run diffs), pinned by a new `cli/tests/tooling/gate_run.rs` test — and extend `scripts/gate-run.sh` with a machine-wide sweep (`/tmp/cpd-test-*`, `/tmp/tmp.*` and `/tmp/tmux-<uid>/*` sockets whose server is gone and that are older than a day), run by the engine's doctor, pinned in `cli/tests/tooling/harness.rs`. Size M. The sleep and error parts need `none needed`: the static ratchet already fails a new sleep and bounds the debt, and nextest's exit code already fails an erroring test.
+- **Verified:**
+  - `timeout 30 node --test pi/test/no-fixed-sleeps.test.ts` → `# tests 3`, `# pass 3`, `# fail 0`.
+  - `timeout 60 rg -c 'thread::sleep|tokio::time::sleep|sleep ' cli/tests core engine tui | awk -F: '{s+=$NF} END {print s}'` → `319` (per dir `246/52/9/12`); `timeout 60 rg -c 'thread::sleep' cli/tests core engine tui | awk -F: '{s+=$NF} END {print s}'` → `111`; `timeout 60 rg -n 'sleep [0-9]' cli/tests core engine tui --glob '*.rs' | wc -l` → `76`.
+  - `timeout 60 rg -c 'setTimeout' pi/test | awk -F: '{s+=$NF} END {print s}'` → `15`; `timeout 60 rg -l 'setTimeout' pi/test | wc -l` → `6`.
+  - `timeout 60 grep -cv '^#\|^$' pi/test/sleep-allow.txt` → `79`; `... | awk '{s+=$2} END{print s}'` → `469` (pi `287`, Rust `182`).
+  - `timeout 120 du -sh /tmp` → `83G`.
+  - `timeout 60 find /tmp -maxdepth 1 -name 'cpd-test-*' | wc -l` → `378`; `timeout 120 du -sch /tmp/cpd-test-* | tail -1` → `394M`.
+  - `timeout 60 find /tmp -maxdepth 1 -name 'tmp.*' | wc -l` → `99`; `-name '.tmp*'` → `1`; `timeout 120 du -sch /tmp/tmp.* | tail -1` → `227M`.
+  - `timeout 60 ls /tmp/tmux-1000 | wc -l` → `284`; `timeout 60 find /tmp -maxdepth 1 -name 'pi-check*' | wc -l` → `9`.
+  - `timeout 120 du -sch /tmp/sp* /tmp/dc* /tmp/hn* | tail -1` → `63G`.
+  - `timeout 60 rg -n 'flak' core cli engine scripts docs/research/hygiene.md | wc -l` → `6` (source hit `cli/tests/session/session_reload.rs:497`); `timeout 60 rg -n 'retries' .config/nextest.toml` → exit 1, `0` lines.
+  - `timeout 60 rg -n 'flak|leak|sleep' core/src/events | wc -l` → `6` (`kind.rs:114,189`, `typed.rs:369,370,545`, `mod.rs:181`; none is a leak or flake counter).
+  - `timeout 60 cpd events list --kind error --limit 500 | jq -r '.events | length'` → `206`; by code `80 distill_invalid, 60 gh_failed, 15 cleanup_failed, 9 store_busy, 9 tmux_failed, 7 spawn_failed, 7 tier_invalid, 5 title_failed, 4 store_too_new, 3 adapter_missing, 3 push_failed, 1 config_invalid, 1 plan_required, 1 pr_start_failed, 1 tier_not_allowed`; oldest `2026-10-15`, newest `2026-10-25`.
+  - `timeout 60 rg -n 'fail-fast|leak-timeout|slow-timeout' .config/nextest.toml` → `:19`, `:24`, `:33`, `:79`; `timeout 60 rg -n 'GATE_RUN|run_pids|^finish|tripwire.log' scripts/gate-run.sh` → `:27`, `:68`, `:88`, `:96`, `:117`.
 
 ### 29. Only authored code is tested
 
-- **Enforced by:** TBD
-- **Prose only:** TBD
-- **Gap:** TBD
-- **Proposal:** TBD
-- **Verified:** TBD
+- **Enforced by:**
+  - `guard` `scripts/tripwire/tmux:31-47` with the allowlist `scripts/tripwire/allow.txt` (124 entries, 9 tags): the Gate's last step runs with the tripwire first on `PATH` (`package.json:15`); a test not matching an allowlist prefix that runs real `tmux` gets `exit 127` and a `tripwire.log` line, and `scripts/gate-run.sh:96` fails the run. Verified live. Blind spot: `tmux` only — there is no `scripts/tripwire/git` and no `allow-git.txt`.
+  - `guard` `cli/tests/common/mod.rs:307` (`DENIED_TOOLS = ["gh","pi","curl","wget","ssh"]`, installed per env at `:751`, exit `97`): a test that reaches real `gh`, `pi`, `curl`, `wget` or `ssh` without installing a fake fails. Blind spot: `git` and `tmux` are absent from the list, and `env.fake(name, body)` (`:1090`) can `exec` the real program.
+  - `test` the allowlist's own ratchet `pi/test/tripwire-allow.test.ts:17` (each line well formed, uniquely tagged with a live PR key) and `:27` (each prefix names an existing test module, checked against `cargo nextest list --workspace`): a debt line cannot be added without a tag, and the tag leaves with its migration. Blind spot: it ratifies the debt, it does not shrink it.
+  - `test` `cli/tests/tooling/tripwire_script.rs` (10 tests): allow/deny, prefix and binary-id matching, comment/blank lines, the log, the "no tmux behind the tripwire" case, the PATH lookup.
+  - `test` `pi/test/no-fixed-sleeps.test.ts:80` (the Rust half of the static check): the only static check that scans test code for a mock (time), listed here because time is one of the axiom's externals. Blind spot: time only.
+  - `gate` `scripts/pi-check.sh` (Gate step in `package.json:15`): the real pinned `pi`, the one named real external left in the Gate (`docs/implementing.md:182`).
+  - `none` for a real `git` spawn: no guard denies one; `git` is not in `DENIED_TOOLS`; there is no git tripwire and no fake git.
+- **Prose only:** `docs/implementing.md:130` ("Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network."); `scripts/tripwire/allow.txt:1-3` (a migration Job deletes its lines, "Never add a line for a hit"); `docs/research/tests-mock-design.md` §3 (the git one-way door, hs-d613: real git IS external and must be mocked) and §5 (the guard).
+- **Gap:** (a) **git** (external by hs-d613): 39 Rust test files invoke real git (`rg -l '\.git\(|git_repo\(|…'`), 735 `.git(` call sites in `cli/tests core/tests` plus 4 `Command::new("git")`, and `pi/test/mainguard.test.ts:26` runs real git (4 call sites). The product spawns it at `core/src/git/run.rs:57` and `core/src/context/distill.rs:434`; `core/src/policy/origin.rs:108` is test-only. No fake git exists (`ls cli/src/fakes` → `mod.rs`, `tmux`; `rg -l 'fake-git|CPD_TEST_GIT'` → 2 design docs). No mechanism stops the spawn. (b) **tmux**: 46 Rust test files call `env.tmux(`/`real_tmux`; 213 `env.tmux(` + 14 `real_tmux()` call sites + 2 `Command::new("tmux")`. The fake exists (`cli/src/fakes/tmux/`) but only 5 test files use it (`fake_tmux()`/`tmux_state()`, 9 sites); the 124-line allowlist still lists every real-tmux area, so today the tripwire denies nothing that already exists. (c) **gh/pi/network**: only the default deny shim; no test spawns `gh` or `pi` directly (`rg -n 'Command::new\("(gh|pi)"\)' cli/tests core/tests` → 0) and no test opens a socket (`rg -n 'TcpStream|TcpListener|UdpSocket|UnixStream' cli/tests core/tests engine` → 0). No evidence of a real network call.
+- **Proposal:** build a stateful `fake-git` (the design's Option A) reached through a `CPD_TEST_GIT` read in `core/src/git/run.rs:57`, and a `scripts/tripwire/git` with `allow-git.txt`; the 12 real `contract::` tests stay as permanent lines. Order of work (≤ 8 steps): 1. `fg-spike`: `cli/src/fakes/git/` state model plus the 12 fixture subcommands (`init add commit clone tag checkout merge for-each-ref config remote rev-parse update-ref`) and `worktree add`; abort if `merge-tree`/`rebase` do not model in 3 Jobs. 2. `fg-read`: read-only subcommands (`status diff cat-file ls-tree show log rev-list rev-parse config branch`). 3. `fg-merge`: `merge-base merge-tree rebase read-tree write-tree`. 4. `fg-wt`: `worktree branch remote push fetch ls-remote`. 5. `fg-env`: the `CPD_TEST_GIT` seam, a nextest setup script that exports it, `scripts/tripwire/git` + `allow-git.txt`, and the 12 contract tests as permanent lines. 6. migrate the core/engine/flow areas (`mu-git`, `en-t2`, `fl-g`, `fl-b`) and, for tmux, `m-session`, `m-engine`, `m-tui` against the existing `cli/src/fakes/tmux/`. 7. migrate `pr` and `tooling` (12 `pa-*`/`pb-*` Jobs, `tl-install`, `tl-scripts`) and, for tmux, `m-flow`, `m-tooling`. 8. `del-1`: delete `allow-git.txt` and the `git` branch, `scripts/tripwire/allow.txt`, `real_tmux()` and the `tmux-restart` group — the tripwire stays an unconditional deny. Size L overall; the git fake alone is M.
+- **Verified:**
+  - `timeout 60 rg -l '\.git\(|git_repo\(|keyed_repo\(|local_origin\(|github_origin\(|Command::new\("git"\)' cli/tests core/tests | wc -l` → `39`.
+  - `timeout 60 rg -c '\.git\(' cli/tests core/tests | awk -F: '{s+=$NF}END{print s}'` → `735`; `timeout 60 rg -l '\.git\(' cli/tests core/tests | wc -l` → `33`.
+  - `timeout 60 rg -n 'Command::new\("git"\)' cli/tests core/tests` → 4 lines (`pr/git_guard.rs:20`, `core/tests/{hooks_idle.rs:24,migrations.rs:462,repin.rs:96}`); `... core/src engine/src tui/src cli/src` → `core/src/git/run.rs:57`, `core/src/policy/origin.rs:108`, `core/src/context/distill.rs:434`.
+  - `timeout 60 rg -n 'execFileSync\("git"' pi/test` → `pi/test/mainguard.test.ts:26`; `timeout 60 rg -n '\bgit\(' pi/test/mainguard.test.ts | wc -l` → `4`.
+  - `timeout 60 rg -l '\bgit::' core/src engine/src tui/src cli/src | wc -l` → `25`; `timeout 60 rg -c '\bgit::' core/src engine/src tui/src cli/src | awk -F: '{s+=$NF}END{print s}'` → `130`.
+  - `timeout 60 rg -l 'env\.tmux\(|real_tmux' cli/tests | wc -l` → `46`; `timeout 60 rg -c 'env\.tmux\(' cli/tests | awk -F: '{s+=$NF}END{print s}'` → `213`; `timeout 60 rg -n 'real_tmux' cli/tests core engine tui | wc -l` → `19` (4 definitions, 1 import, 14 call sites).
+  - `timeout 60 rg -l 'fake_tmux\(\)|tmux_state\(\)' cli/tests` → 5 files; `timeout 60 rg -n 'fake_tmux\(\)|tmux_state\(\)' cli/tests | wc -l` → `9`.
+  - `timeout 60 grep -cv '^#\|^$' scripts/tripwire/allow.txt` → `124`.
+  - `timeout 60 rg -n 'DENIED_TOOLS' cli/tests/common/mod.rs` → `307`, `751`; `timeout 60 rg -n 'fn fake\(' cli/tests/common/mod.rs` → `1090`.
+  - `timeout 60 rg -n 'Command::new\("(gh|pi)"\)' cli/tests core/tests` → exit 1, `0` lines; `timeout 60 rg -n 'TcpStream|TcpListener|UdpSocket|UnixStream' cli/tests core/tests engine` → exit 1, `0` lines.
+  - `TMPDIR=/tmp/audit-hyg-trip NEXTEST_BINARY_ID=cpd::foo NEXTEST_TEST_NAME=bar::baz timeout 15 scripts/tripwire/tmux list-sessions` → `tripwire: real tmux called by cpd::foo bar::baz: tmux list-sessions`, exit `127` (no tmux started); the dir was removed after.
+  - `timeout 60 grep -c '#\[test\]' cli/tests/tooling/tripwire_script.rs` → `10`; `timeout 60 ls cli/src/fakes` → `mod.rs`, `tmux`.
+  - `timeout 60 rg -l 'fake-git|CPD_TEST_GIT' --glob '!node_modules' --glob '!target' .` → `docs/research/tests-mock-design.md`, `docs/research/tests-mock-flow-b.md` (2 docs, no code).
 
 ## Not verified
 
-TBD
+- Whether a live Worker prompt carries axioms 28 and 29: I read my own context and the source file (19 axioms); I did not read the pi loader, and I did not read another role's prompt.
+- The `/tmp` sizes, counts and socket counts are one host at one time and include leftovers of past audits and Jobs, not only tests; that any particular `/tmp/cpd-test-*` is a test's leak is unverified.
+- The 469 allowed waits and the 124 allowlist entries are the machine's own counts; whether each is genuinely a sleep (rather than `Instant::now` used for a legitimate time claim) is unverified.
+- The design's job counts (58 Jobs, 18 git-dependent Jobs, about 963 TypeScript tests, 12 contract tests) are claims of `docs/research/tests-mock-design.md`, not re-measured here.
+- The Manager's "about 658 real git test spawns": I measured 735 `.git(` call sites over 33 files plus 4 direct spawns; which pattern is the "spawns" count is unverified, and a call site inside a loop spawns more than once.
+- Whether every `thread::sleep` counted is in test code: the raw grep counts production code too (the ratchet's 469 is the machine's own, allowlisted count).
+- The `pi/test/sleep-allow.txt` one-time raise on `tui/src/plan/mod.rs` (15) and the two "new debt" lines: I read the reason text, I did not check whether the scan now limits itself to test modules.
