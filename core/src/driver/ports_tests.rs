@@ -637,3 +637,20 @@ fn an_idle_lead_is_forked_once_its_file_has_been_quiet_for_fork_quiet_seconds_of
     assert_eq!((fork.session.as_str(), fork.file), ("lead1", file));
     assert_eq!(fakes.clock.naps(), [Duration::from_secs(2); 3]);
 }
+
+// ---- The workflow-worktree model (hs-d680/hs-d682/hs-d683, `wlinear-tests`) ------------------------------------------
+
+#[test]
+fn a_linear_attempt_takes_the_workflow_worktree() {
+    todo!("wlinear-impl")
+}
+
+#[test]
+fn a_live_sibling_takes_an_attempt_worktree() {
+    todo!("wlinear-impl")
+}
+
+#[test]
+fn a_failed_linear_attempt_resets_the_lead_branch() {
+    todo!("wlinear-impl")
+}
