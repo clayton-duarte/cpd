@@ -6,6 +6,7 @@
 //! - [`distill`] E9: starts `cpd context distill` for a Context whose digest is behind;
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`sleep`] E13: puts finished Lead and Manager Sessions to sleep;
+//! - [`archive_leads`] E14: archives the done Plan of a Lead asleep past `timeouts.archive_sleep_seconds`;
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
 //! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
@@ -16,6 +17,7 @@
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
 mod archive;
+mod archive_leads;
 mod open;
 mod distill;
 mod engine;
