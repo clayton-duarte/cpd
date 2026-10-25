@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -95,6 +95,9 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// The tests a change reaches, and named tests (commands.md §27)
+    #[command(subcommand)]
+    Test(testsel::Command),
     /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
     Prune(prune::Args),
     /// Tag the commit that set the workspace version (commands.md §26.1)
@@ -169,13 +172,26 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
-        Command::Slot(a) => slot_exit(slot::run(a)),
+        Command::Slot(a) => transparent_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
+        Command::Test(c) => transparent_exit(testsel::exec(ports, c)),
         Command::Prune(a) => prune::command(a),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
         Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
+    }
+}
+
+/// `cpd slot` and `cpd test` are transparent to their command (commands.md §23, §27): they end the process with the
+/// command's exit status, and their own refusals are the error envelope on stderr. It never returns.
+fn transparent_exit(result: Result<u8, CpdError>) -> ! {
+    match result {
+        Ok(status) => std::process::exit(i32::from(status)),
+        Err(err) => {
+            eprint!("{}", cpd_core::output::to_line(&err));
+            std::process::exit(i32::from(err.exit().code()))
+        }
     }
 }
 
@@ -209,18 +225,6 @@ fn release_exit(result: Result<String, String>) -> ! {
         Err(line) => {
             eprintln!("{line}");
             std::process::exit(1)
-        }
-    }
-}
-
-/// `cpd slot` is transparent to its command (commands.md §23): it ends the process with the command's exit status, and
-/// its own refusals are the error envelope on stderr. It never returns.
-fn slot_exit(result: Result<u8, CpdError>) -> ! {
-    match result {
-        Ok(status) => std::process::exit(i32::from(status)),
-        Err(err) => {
-            eprint!("{}", cpd_core::output::to_line(&err));
-            std::process::exit(i32::from(err.exit().code()))
         }
     }
 }
