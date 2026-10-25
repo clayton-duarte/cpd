@@ -92,7 +92,10 @@ impl Fx {
     /// process is started and nothing external is run. Its drop fails the test when a program was called that no
     /// `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
     pub fn with_ports() -> Fx {
-        let mut fx = Fx::new();
+        let mut env = bare_with_store();
+        // The fake tmux has no socket: its directory is the env's own, never the shared `/tmp` a long root would give.
+        env.tmux_in_root = true;
+        let mut fx = Fx::with(env);
         fx.on_fake_ports = true;
         fx
     }
@@ -230,7 +233,8 @@ impl Fx {
 
     /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
     pub fn git_repo(&self, name: &str) -> PathBuf {
-        self.repo_of_universe(name).dir().to_path_buf()
+        self.repo_of_universe(name);
+        self.env.root().join("repos").join(name)
     }
 
     /// [`Fx::git_repo`] whose `origin` is `https://github.com/acme/<name>.git`, with `refs/remotes/origin/main`.
@@ -242,7 +246,7 @@ impl Fx {
         if !policy.exists() {
             self.env.repo_policy("acme", name, "");
         }
-        repo.dir().to_path_buf()
+        self.env.root().join("repos").join(name)
     }
 
     /// `url.<bare>.insteadOf = <the repo's GitHub URL>`: the GitHub URL resolves to the bare repo `bare`.
