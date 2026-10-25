@@ -56,6 +56,13 @@ fn attach_args(fx: &Fx) -> Vec<String> {
     ["-u", "-L", fx.env.tmux_socket(), "-f", "/dev/null", "attach", "-t", "cpd"].map(str::to_owned).to_vec()
 }
 
+/// The attach `bare` execs with `program`: `tmux` or the server's own binary. Its client has no `TMUX`, `TMUX_PANE`,
+/// `CPD_SESSION` or `CPD_ATTEMPT` (hs-d463).
+fn attach(fx: &Fx, program: &str) -> Launch {
+    let env_remove = ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec();
+    Launch { program: program.to_owned(), args: attach_args(fx), env_remove, ..Launch::default() }
+}
+
 /// Bare `cpd` in a terminal: what it wrote to stderr, after it ended in the attach that the `FakeSpawn` failed.
 fn in_a_terminal(fx: &Fx) -> String {
     let (result, stderr) = fx.with_stderr(|| bare(fx, RESTART));
@@ -155,7 +162,7 @@ fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
     let fx = terminal();
     assert_eq!(in_a_terminal(&fx), "");
 
-    assert_eq!(attached(&fx), [Launch { program: "tmux".into(), args: attach_args(&fx), env_remove: ["TMUX".into(), "TMUX_PANE".into()].to_vec(), ..Launch::default() }]);
+    assert_eq!(attached(&fx), [attach(&fx, "tmux")]);
     assert_eq!(view_pids_in(&fx).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     // The engine is started by the recorded `cpd watch --ensure` (its own session is `watch --ensure`'s).
     assert_eq!(ran(), [["cpd", "watch", "--ensure"]]);
@@ -407,7 +414,7 @@ fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_s
         assert_eq!(kill_server_calls(&fx), Vec::<String>::new(), "{what}");
         assert_eq!(fx.panes(), panes, "{what}");
         // The attach is by the server's own tmux: the installed one must not attach.
-        assert_eq!(attached(&fx), [Launch { program: older.program.display().to_string(), args: attach_args(&fx), env_remove: ["TMUX".into(), "TMUX_PANE".into()].to_vec(), ..Launch::default() }], "{what}");
+        assert_eq!(attached(&fx), [attach(&fx, &older.program.display().to_string())], "{what}");
         assert_eq!(stderr.lines().count(), 1, "{what}: {stderr}");
         assert!(
             stderr.contains("attaching with the server's own tmux") && stderr.contains("the restart happens once nothing is in the way"),
@@ -422,6 +429,7 @@ fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_s
 fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
     let fx = terminal();
     tui(&fx, &[]);
+    fs::create_dir_all(pending_file(&fx).parent().unwrap()).unwrap();
     fs::write(pending_file(&fx), r#"{"at":"t","server":"1.0","installed":"9.9","failed":{"at":"t","code":"tmux_failed","reason":"it broke.","reported":true}}"#).unwrap();
     let stderr = in_a_terminal(&fx);
     assert_eq!(kill_server_calls(&fx), Vec::<String>::new());
