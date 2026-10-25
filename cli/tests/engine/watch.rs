@@ -682,6 +682,7 @@ fn a_stuck_job_wakes_its_context_manager() {
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
 const NO_WORKERS: &str = "workers 0/3 · 0 waiting · 1 queued";
+const ONE_WORKER: &str = "workers 1/3 · 0 waiting · 1 queued";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.
@@ -700,6 +701,34 @@ impl Fx {
 }
 
 #[test]
+fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
+    let fx = fx("");
+    fx.tmux_server();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &ago(1));
+
+    let engine = fx.start();
+    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+    assert_eq!(fx.option("@cpd_workers_short"), "1/3·0·1");
+    assert_eq!(fx.option("@cpd_workers_width"), "", "the engine sets no width: tmux measures the text");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "", "the same with the short form");
+
+    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
+    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
+    // sets nothing at a tick where the text did not change.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.workers(), "by hand");
+
+    // A change sets it.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
+    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
 fn the_engine_counts_waiting_and_queued_jobs() {
     let fx = fx("concurrency = 1");
     fx.tmux_server();
@@ -714,8 +743,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     let long = "workers 1/1 · 1 waiting · 3 queued";
     wait_until("@cpd_workers", || fx.workers() == long);
     assert_eq!(fx.option("@cpd_workers_short"), "1/1·1·3");
-    assert_eq!(fx.option("@cpd_workers_width"), "36", "the long form and a pill's two caps");
-    assert_eq!(fx.option("@cpd_workers_short_width"), "9", "the same with the short form");
+    assert_eq!(fx.option("@cpd_workers_width"), "", "the engine sets no width: tmux measures the text");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "", "the same with the short form");
     engine.stop();
     drop(lock);
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));

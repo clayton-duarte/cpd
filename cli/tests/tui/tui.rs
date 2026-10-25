@@ -135,7 +135,7 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|legend]",
         "#[range=user|logs]",
         "#[align=right]",
-        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
         "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}",
         "#{R:\u{2500},",
     ] {
@@ -1045,8 +1045,6 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     for (option, value) in [
         ("@cpd_workers", "workers 6/6 · 4 waiting · 9 queued"),
         ("@cpd_workers_short", "6/6·4·9"),
-        ("@cpd_workers_width", "36"),
-        ("@cpd_workers_short_width", "9"),
     ] {
         tmux_out(&env, &["set", "-g", option, value]);
     }
