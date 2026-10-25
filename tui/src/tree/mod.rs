@@ -85,7 +85,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ratatui::DefaultTerminal;
+use std::io::Write;
+
+use ratatui::Terminal;
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event};
 use crate::pump::{self, Pump, Schedule, Signal};
 use time::OffsetDateTime;
@@ -93,9 +96,10 @@ use time::OffsetDateTime;
 use super::background::Background;
 use super::pace::{self, Reads};
 use super::runner::kept;
-use super::view_ports::{frame_now, snooze_over, wall_ms};
+use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, snooze_over, wall_ms};
 use super::{Capture, run_view_on};
 use super::read;
+use cpd_core::clock;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -124,51 +128,76 @@ struct Read {
     snapshot: Option<Result<(Option<OffsetDateTime>, read::Tree), CpdError>>,
 }
 
-pub(super) fn run(ports: &Ports) -> Result<Output, CpdError> {
-    run_view_on(
-        ports,
-        "tree",
-        Capture::MouseAndFocus,
-        || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let snooze_end = read::snooze_end(&mut store)?;
-            let mut view = View::new(read::tree(&mut store)?, false);
-            // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
-            view.set_merging(crate::merge::marker::live(&home, &read::open_pulls(&mut store).unwrap_or_default()));
-            let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
-            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            let runner = Arc::new(Runner::new(home.clone(), &config));
-            // the reads after them run on the reader thread, with a store of its own (R4)
-            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-            Ok((home, view, (reader, snooze_end), poll, runner))
-        },
-        |ctx, (home, view, reader, poll, runner)| Ok(event_loop(ctx.ports, &mut ctx.terminal, &home, view, reader, poll, &runner)?),
-    )
+/// What the view reads before it draws: the home, the first snapshot's view, the reader (and when the first snooze ends),
+/// the poll and the runner of the commands.
+type Opened = (CpdHome, View, (Arc<Mutex<pace::Owned<read::Follow>>>, Option<OffsetDateTime>), Duration, Arc<Runner>);
+
+/// The first read: a failure is the command's error, with the screen untouched.
+fn open(ports: &Ports) -> Result<Opened, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let now = clock::timestamp(ports.clock.utc());
+    let snooze_end = read::snooze_end_at(&mut store, Some(&now))?;
+    let mut view = View::new(read::tree_at(&mut store, Some(&now))?, false);
+    // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
+    view.set_merging(crate::merge::marker::live(&home, &read::open_pulls(&mut store).unwrap_or_default()));
+    let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let runner = Arc::new(Runner::new(home.clone(), &config, ports));
+    // the reads after them run on the reader thread, with a store of its own (R4)
+    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+    Ok((home, view, (reader, snooze_end), poll, runner))
 }
 
-fn event_loop(
+pub(super) fn run(ports: &Ports) -> Result<Output, CpdError> {
+    run_view_on(ports, "tree", Capture::MouseAndFocus, || open(ports), |ctx, opened| Ok(event_loop(ctx, opened, Driven::No)?))
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn. The loop is driven by
+/// `input` (nothing is read on a thread, nothing waits in real time) and watches no directory: it polls.
+pub fn run_on<B: Backend, W: Write>(
     ports: &Ports,
-    terminal: &mut DefaultTerminal,
-    home: &CpdHome,
-    mut view: View,
-    (reader, mut snooze_end): (Arc<Mutex<pace::Owned<read::Follow>>>, Option<OffsetDateTime>),
-    poll: Duration,
-    runner: &Arc<Runner>,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    run_view_with(ports, tty, out, terminal, input, "tree", Capture::MouseAndFocus, || open(ports), |ctx, opened| Ok(event_loop(ctx, opened, Driven::Yes)?))
+}
+
+/// Whether the loop is driven by the [`Ctx`]'s input ([`run_on`]) or reads the terminal on a thread and watches the store's directory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Driven {
+    Yes,
+    No,
+}
+
+fn event_loop<B: Backend>(
+    ctx: &mut Ctx<B>,
+    (home, mut view, (reader, mut snooze_end), poll, runner): Opened,
+    driven: Driven,
 ) -> std::io::Result<()> {
+    let ports = ctx.ports;
+    let (runner, home) = (&runner, &home);
     let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
     let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
     let epoch = ports.clock.now();
-    let pump = Pump::new(event::read);
-    // the store's directory is watched once; a watcher that cannot start is said in the error row, and the schedule polls
-    let (_watch, watch_error, mut schedule) = match read::watch::Watch::start(home.root(), pump.waker()) {
-        Ok(watch) => (Some(watch), None, Schedule::new(ports.clock.now(), pump::SAFETY)),
-        Err(why) => (
-            None,
-            Some(format!("no commit watcher: {}; polling every {} ms", why.message(), poll.as_millis())),
-            Schedule::new(ports.clock.now(), poll),
-        ),
+    let pump = if driven == Driven::Yes { Pump::undriven() } else { Pump::new(event::read) };
+    // the store's directory is watched once; a watcher that cannot start is said in the error row, and the schedule polls.
+    // A driven loop (a test's) watches nothing, says nothing of it and polls.
+    let (_watch, watch_error, mut schedule) = if driven == Driven::Yes {
+        (None, None, Schedule::new(ports.clock.now(), poll))
+    } else {
+        match read::watch::Watch::start(home.root(), pump.waker()) {
+            Ok(watch) => (Some(watch), None, Schedule::new(ports.clock.now(), pump::SAFETY)),
+            Err(why) => (
+                None,
+                Some(format!("no commit watcher: {}; polling every {} ms", why.message(), poll.as_millis())),
+                Schedule::new(ports.clock.now(), poll),
+            ),
+        }
     };
     // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll (of the Events or of the
     // engine's lock) at the next poll. All are shown (runner::kept): the footer says the snapshot's error, else the
@@ -231,6 +260,7 @@ fn event_loop(
             // a merge starts and ends with no Event: its marker, hs-d495, is read on each poll), or on `force`, or after a
             // failed snapshot
             let (shared, home) = (Arc::clone(&reader), home.clone());
+            let now_text = clock::timestamp(ports.clock.utc());
             let (engine_shown, merging_shown) = (view.tree.engine_running, view.merging().clone());
             let retry = snapshot_error.is_some() || kind.force || snooze_over(ports, snooze_end);
             reads.request(move || {
@@ -244,19 +274,21 @@ fn event_loop(
                     || engine.as_ref().is_ok_and(|on| *on != engine_shown)
                     || merging.as_ref().is_ok_and(|m| *m != merging_shown);
                 let snapshot = due.then(|| {
-                    pace::Owned::read(&shared, |store, _| read::snooze_end(store).and_then(|end| Ok((end, read::tree(store)?))))
+                    pace::Owned::read(&shared, |store, _| {
+                        read::snooze_end_at(store, Some(&now_text)).and_then(|end| Ok((end, read::tree_at(store, Some(&now_text))?)))
+                    })
                 });
                 Read { poll: Polled { changes, engine, merging }, snapshot }
             });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
         // lines go to the log, never to the terminal or the frame; a log that cannot be written is a dialog.
-        let lines = view.watch_engine(ports.clock.now(), &mut |action| actions::call(action), &mut || runner.live_managers());
+        let lines = view.watch_engine(ports.clock.now(), &mut |action| actions::call_with(&*ports.runner, action), &mut || runner.live_managers());
         for line in lines {
             show(log.line(&line), &mut popups, runner);
         }
         // the folds file follows every change of the folds (a write only when they changed)
-        if let Some(line) = view.save_folds() {
+        if let Some(line) = view.save_folds_with(ports) {
             show(log.line(&line), &mut popups, runner);
         }
         let (frame, second) = (frame_now(ports), unix_second(ports));
@@ -265,7 +297,7 @@ fn event_loop(
         // the Inbox items' ages are redrawn every second, from `opened_at`
         redraw |= wants.second && second != drawn_second;
         if redraw {
-            let (drawn, written) = trace.draw(epoch, &log.file, frame, || terminal.draw(|f| view.draw(f, frame)).map(drop));
+            let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw_at(f, frame, ports.clock.utc())));
             drawn?;
             if let Err(why) = written {
                 show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
@@ -274,7 +306,15 @@ fn event_loop(
         }
         let wall_ms = wall_ms(ports);
         let now = ports.clock.now();
-        let event = match pump.wait(pump::wake(now, wall_ms, &wants, schedule.deadline(now))) {
+        let wake = pump::wake(now, wall_ms, &wants, schedule.deadline(now));
+        let signal = match driven {
+            Driven::No => pump.wait(wake),
+            Driven::Yes => {
+                let busy = schedule.is_out() || actions.busy() || popups.busy();
+                pump.wait_driven(ports, &mut *ctx.input, wake, busy)
+            }
+        };
+        let event = match signal {
             Signal::Input(event) => event,
             Signal::InputFailed(why) => return Err(why),
             Signal::Commit => {
@@ -306,7 +346,7 @@ fn event_loop(
             Effect::Ask(question) => {
                 // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
                 // shows the item picked, not the menu, behind the popup.
-                let (drawn, written) = trace.draw(epoch, &log.file, frame, || terminal.draw(|f| view.draw(f, frame)).map(drop));
+                let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw_at(f, frame, ports.clock.utc())));
                 drawn?;
                 if let Err(why) = written {
                     show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);

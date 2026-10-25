@@ -5,8 +5,14 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::Event;
 
+use crate::view_ports::Input;
+use cpd_core::ports::Ports;
+
 pub const FRAME: Duration = Duration::from_millis(crate::palette::FRAME_MS);
 pub const SAFETY: Duration = Duration::from_secs(2);
+
+/// What a driven loop with nothing due polls its input for.
+const IDLE: Duration = Duration::from_secs(60);
 
 pub enum Signal {
     Input(Event),
@@ -57,8 +63,31 @@ impl Pump {
             .expect("spawn the input thread");
         Pump { send, recv }
     }
+    /// A pump with no input thread: the loop that owns it waits through [`Pump::wait_driven`], on the input it is given.
+    pub fn undriven() -> Pump {
+        let (send, recv) = mpsc::channel();
+        Pump { send, recv }
+    }
     pub fn waker(&self) -> Waker {
         Waker { send: self.send.clone() }
+    }
+    /// [`Pump::wait`] for a loop that is driven: no input thread, and no real time. A signal a background job posted is
+    /// returned at once. While work is `busy` the wait blocks until it posts its signal (the work ends by itself, in no
+    /// time of the clock's). Else nothing is under way: `input` is polled for the time left until `until` (a poll that
+    /// finds nothing naps it on the `ports`' clock and says so), so the input decides what happens next.
+    pub fn wait_driven(&self, ports: &Ports, input: &mut dyn Input, until: Option<Instant>, busy: bool) -> Signal {
+        if let Ok(signal) = self.recv.try_recv() {
+            return signal;
+        }
+        if busy {
+            return self.recv.recv().unwrap_or(Signal::Due);
+        }
+        let wait = until.map_or(IDLE, |at| at.saturating_duration_since(ports.clock.now()));
+        match input.poll(wait) {
+            Err(e) => Signal::InputFailed(e),
+            Ok(false) => Signal::Due,
+            Ok(true) => input.read().map_or_else(Signal::InputFailed, Signal::Input),
+        }
     }
     pub fn wait(&self, until: Option<Instant>) -> Signal {
         // The pump holds a `Sender` itself, so the channel never disconnects.
@@ -116,6 +145,10 @@ impl Schedule {
     }
     pub fn done(&mut self) {
         self.out = false;
+    }
+    /// Whether a read is out: its result is still to come.
+    pub fn is_out(&self) -> bool {
+        self.out
     }
     pub fn deadline(&self, now: Instant) -> Option<Instant> {
         if self.out {

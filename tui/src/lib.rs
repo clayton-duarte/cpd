@@ -109,7 +109,7 @@ mod no_notes;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;
-mod tree;
+pub mod tree;
 mod viewlog;
 pub mod widgets;
 pub mod worker;
