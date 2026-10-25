@@ -10,9 +10,14 @@ use std::ffi::OsString;
 
 use clap::Parser;
 use cpd::cli::{Cli, Command};
+use cpd_core::config::Config;
 use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
+use cpd_core::store::Store;
+use cpd_engine::watch::restart;
 use cpd_tui::{Restart, RestartOutcome};
 use serde_json::{Value, json};
 
@@ -24,12 +29,29 @@ thread_local! {
 }
 
 /// The tmux restart of an engine that is never reached from the cockpit's own server.
-const NO_RESTART: Restart = Restart {
+pub const NO_RESTART: Restart = Restart {
     failed: |_| Ok(None),
     clear: |_| Ok(()),
     mark: |_, _, _| Ok(false),
     now: |_, _, _| Ok(RestartOutcome::NotNeeded),
 };
+
+/// The engine's restart, as `cpd` hands it to the cockpit (`cli/src/cli.rs` `RESTART`): the engine's own `restart::*`, on
+/// the ports of the test (the server's version is the route's; the pending file is a file of the test's home).
+pub const RESTART: Restart = Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
+
+fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe()))
+}
+
+fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<RestartOutcome, CpdError> {
+    Ok(match restart::restart(home, config, store, &mut |_| ())? {
+        restart::Outcome::NotNeeded => RestartOutcome::NotNeeded,
+        restart::Outcome::Running => RestartOutcome::Running,
+        restart::Outcome::Busy(why) => RestartOutcome::Busy(why),
+        restart::Outcome::Restarted { reopened } => RestartOutcome::Restarted { reopened },
+    })
+}
 
 fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
     run_command_on(&Ports::current(), argv)
@@ -52,9 +74,43 @@ pub fn ran() -> Vec<Vec<String>> {
 
 /// `cpd tui <args>` as the command tree parses it, run on the ports of `fx`; its result.
 pub fn tui_result(fx: &Fx, args: &[&str]) -> Result<Output, CpdError> {
+    tui_on(&fx.fakes.ports, args)
+}
+
+/// [`tui_result`] on `ports`.
+fn tui_on(ports: &Ports, args: &[&str]) -> Result<Output, CpdError> {
     let argv = ["cpd", "tui"].iter().chain(args).map(OsString::from);
     let Cli { command: Some(Command::Tui(args)) } = Cli::try_parse_from(argv).expect("cpd tui parses") else { unreachable!("cpd tui is the Tui command") };
-    Ports::scope(&fx.fakes.ports, || cpd_tui::run_with(&fx.fakes.ports, args, cpd::cli::version(), run_command, run_command_on, NO_RESTART))
+    Ports::scope(ports, || cpd_tui::run_with(ports, args, cpd::cli::version(), run_command, run_command_on, RESTART))
+}
+
+/// Bare `cpd` in a terminal, on the ports of `fx`: the follow-ups, then the attach, which the `FakeSpawn` records
+/// (`fx.fakes.spawn.launches()`) and fails with `faked exec`, so the result is that error (the engine's `watch --ensure`
+/// is recorded, [`ran`]). With `restart` as the engine's restart.
+pub fn bare(fx: &Fx, restart: Restart) -> Result<Output, CpdError> {
+    Ports::scope(&fx.fakes.ports, || cpd_tui::bare(cpd::cli::version(), run_command, restart))
+}
+
+/// The `cpd tui` the engine's restart runs once the server is killed (`restart::rebuild_cockpit`): it runs the program
+/// that started this process (`started_as`, the test binary here), so the route of that name answers `tui` by running the
+/// cockpit in this process, on the ports of the call. Needs `cpd_core::host::exe::record_start()` first.
+pub fn route_the_restarts_cpd_tui(fx: &Fx) {
+    let exe = cpd_core::host::exe::started_as().expect("record_start ran");
+    let name = exe.file_name().expect("the test binary has a name").to_string_lossy().into_owned();
+    let _ = (*fx.fakes.runner).clone().route(&name, std::sync::Arc::new(CpdTui));
+}
+
+/// The `cpd tui` of a restart, in this process.
+struct CpdTui;
+
+impl Handler for CpdTui {
+    fn handle(&self, call: &Call) -> Reply {
+        assert_eq!(call.args, ["tui"], "the restart runs `cpd tui` and nothing else");
+        match tui_on(&Ports::current(), &[]) {
+            Ok(Output::Success(fields)) => Reply::ok(&format!("{}\n", Value::Object(fields))),
+            other => Reply::exit(3, "", &format!("{other:?}\n")),
+        }
+    }
 }
 
 /// `cpd tui <args>`: the JSON it prints; panics on an error or on a command that owns its stdout.

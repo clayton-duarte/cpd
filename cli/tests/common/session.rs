@@ -59,6 +59,53 @@ impl Handler for FakePi {
     }
 }
 
+/// What the store knew of each Session as its pane got the go signal: `set -p -t <pane> @cpd_session <id>` (the signal
+/// the wrapper's `session run` waits for, then its pi reports). Recorded as the call is about to be answered, from the
+/// store's own file on a second read-only connection: `(pane, id, tmux_pane of the Session's row)`.
+pub struct GoSignals(Arc<Mutex<Vec<(String, String, Option<String>)>>>);
+
+impl GoSignals {
+    /// Starts recording on the `tmux` of `fx`'s `FakeRunner`.
+    pub fn record(fx: &Fx) -> GoSignals {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let db = fx.env.cpd_home().join("cpd.db");
+        // A matcher that never matches: the rule only looks, the fake server goes on to answer.
+        let _ = (*fx.fakes.runner).clone().on(
+            "tmux",
+            move |call| {
+                let a = &call.args;
+                if let [.., t, pane, key, id] = a.as_slice()
+                    && t == "-t"
+                    && key == "@cpd_session"
+                    && !id.is_empty()
+                {
+                    let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("open the store");
+                    let row = conn.query_row("SELECT tmux_pane FROM sessions WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0)).expect("the Session's row");
+                    log.lock().unwrap_or_else(PoisonError::into_inner).push((pane.clone(), id.clone(), row));
+                }
+                false
+            },
+            Reply::ok(""),
+        );
+        GoSignals(seen)
+    }
+
+    /// The pane `session` was given the go signal on, and the `tmux_pane` the store had for it at that moment.
+    pub fn pane_and_store(&self, session: &str) -> (String, Value) {
+        let seen = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let (pane, _, row) = seen.iter().find(|(_, id, _)| id == session).unwrap_or_else(|| panic!("{session} never got @cpd_session: {seen:?}"));
+        (pane.clone(), json!(row))
+    }
+
+    /// The pane got `@cpd_session` only once the store recorded the pane (contract §6.4): a report that lands before
+    /// the store has the pane writes a row with no pane that the engine then stops (hs-d238).
+    pub fn assert_the_store_had_the_pane(&self, session: &str) {
+        let (pane, recorded) = self.pane_and_store(session);
+        assert_eq!(recorded, json!(pane), "pane {pane} got @cpd_session {session} while the store's tmux_pane for it was {recorded}");
+    }
+}
+
 /// The `$CPD_HOME` of `env`.
 pub fn home(env: &TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
