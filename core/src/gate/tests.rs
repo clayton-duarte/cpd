@@ -67,6 +67,19 @@ impl Fx {
         finish(&self.fakes.ports, ID, status)
     }
 
+    /// A process of the run `id` that a test left: `zsh -c sleep 120`, a child of pid 1 (`init`), whose environment holds
+    /// `GATE_RUN` and `environment`.
+    fn left_by_a_test(&self, id: &str, init: &str, environment: &[(&str, &str)]) -> Pid {
+        let mut env_set = vec![("GATE_RUN".to_owned(), id.to_owned())];
+        env_set.extend(environment.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+        let launch = Launch { program: "zsh".into(), args: vec!["-c".into(), "sleep 120".into()], env_set, ..Launch::default() };
+        let pid = self.fakes.ports.spawn.spawn(&launch).unwrap();
+        self.fakes.spawn.set_cmdline(pid, "zsh -c sleep 120");
+        self.fakes.spawn.set_parent(pid, Pid(1));
+        self.fakes.spawn.set_cmdline(Pid(1), init);
+        pid
+    }
+
     /// A process of the run `id`, as a command of the run would leave it: a tmux server.
     fn process(&self, id: &str) -> Pid {
         let launch = Launch {
@@ -253,4 +266,48 @@ fn the_tripwire_log_empty_or_absent_leaves_the_run_unchanged() {
 
     assert_eq!(absent, Finished { status: 0, report: String::new() });
     assert_eq!(empty, Finished { status: 0, report: String::new() });
+}
+
+// The three tests of pi/test/gate-run.test.ts (the Gate leak check as a shell script, a fake `ps` and a fake /proc),
+// which the Rust leak check replaced: the run's processes are `FakeSpawn`'s, and a leak ends the run with status 64.
+
+const TEST_NAME: &str = "tui::tui_merge::the_confirm_closes_the_view_at_once";
+
+#[test]
+fn a_leftover_process_is_reported_with_the_nextest_test_name_of_its_environment_and_its_parent_chain_ps_e_macos() {
+    let fx = Fx::new();
+    let pid = fx.left_by_a_test(ID, "/sbin/launchd", &[("NEXTEST_TEST_NAME", TEST_NAME), ("NEXTEST_BINARY_ID", "cpd::tui")]);
+
+    let done = fx.finish(0);
+
+    assert_eq!(done.status, 64, "{done:?}");
+    assert!(done.report.contains("left 1 things behind"), "{done:?}");
+    assert!(done.report.contains(&format!("  process {} (ppid 1) zsh -c sleep 120\n", pid.0)), "{done:?}");
+    assert!(done.report.contains(&format!("    NEXTEST_TEST_NAME={TEST_NAME}\n")), "{done:?}");
+    assert!(done.report.contains("    parents: 1 /sbin/launchd\n"), "{done:?}");
+}
+
+#[test]
+fn a_leftover_process_is_reported_with_the_nextest_test_name_of_its_environment_and_its_parent_chain_proc_linux() {
+    let fx = Fx::new();
+    let pid = fx.left_by_a_test(ID, "/sbin/init", &[("NEXTEST_TEST_NAME", TEST_NAME), ("NEXTEST_BINARY_ID", "cpd::tui")]);
+
+    let done = fx.finish(0);
+
+    assert_eq!(done.status, 64, "{done:?}");
+    assert!(done.report.contains("left 1 things behind"), "{done:?}");
+    assert!(done.report.contains(&format!("  process {} (ppid 1) zsh -c sleep 120\n", pid.0)), "{done:?}");
+    assert!(done.report.contains(&format!("    NEXTEST_TEST_NAME={TEST_NAME}\n")), "{done:?}");
+    assert!(done.report.contains("\n    parents: 1 /sbin/init\n"), "{done:?}");
+}
+
+#[test]
+fn a_leftover_process_whose_environment_has_no_nextest_test_name_says_so_instead_of_naming_a_test() {
+    let fx = Fx::new();
+    fx.left_by_a_test(ID, "/sbin/init", &[]);
+
+    let done = fx.finish(0);
+
+    assert_eq!(done.status, 64, "{done:?}");
+    assert!(done.report.contains("NEXTEST_TEST_NAME=(not in its environment"), "{done:?}");
 }
