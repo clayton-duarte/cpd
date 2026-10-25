@@ -1785,7 +1785,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(22)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations` and `incident`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(23)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident` and `incident_plans`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1818,6 +1818,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
         // `incident` made a table, and it is empty.
         assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
+        // `incident-plans` made another, and it is empty too.
+        assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");

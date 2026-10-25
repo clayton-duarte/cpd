@@ -11,6 +11,9 @@
 //! (no `txns` row), and again inside its write transaction, so that what it
 //! writes is what it checked.
 
+#[cfg(test)]
+mod incident_tests;
+
 mod add;
 mod approve;
 pub(crate) mod cancel;

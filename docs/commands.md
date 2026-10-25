@@ -1683,6 +1683,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 | the PR's status is still `dispatch` at the transaction (another `pr open` committed first) | `cas_lost` | 3 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing: the Gate does not run there (hs-d243; `dirty_target` is no longer a refusal of this command).
 
@@ -1798,6 +1799,7 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required fo
 | the gate worktree's `pre-start` passes; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
 | the Gate passes on the rebased Lead Branch (§7.3, §7.6 `pr rebase` step 8); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
@@ -2073,6 +2075,7 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 | the Gate passes (§7.3, as `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-merge.log` | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 | the push is rejected and the remote tip does not contain G (the remote moved: a `pr rebase` pushed, or someone else); `details.stderr` is git's stderr; the Lead runs `pr rebase` | `push_rejected` | 3 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
@@ -4645,32 +4648,43 @@ Idempotent: no; every call writes a new file.
 
 ## 25. `incident`
 
-Incident mode (hs-d634, user decision hs-d634): machine-wide pause on most scheduling and requeue of running Attempts. One Manager-only command and one that any caller may read.
+Incident mode (hs-d643, user decision hs-d643; supersedes hs-d634): Plan-scoped hold on scheduling. One Manager-only command to start and end, one any caller may read. A Manager starts with one or more Plans (no machine-wide mode).
 
 ### 25.1 `incident start`
 
 ```
-cpd incident start --reason <text>
+cpd incident start --plan <id> [--plan <id>...] --reason <text> [--until-pr <plan>/<key>]
 ```
 
 | Flag | Meaning |
 |---|---|
+| `--plan <id>` | required, repeatable at least once; names an existing Plan in this Context |
 | `--reason <text>` | required; 1 or more characters, explanation of the incident |
+| `--until-pr <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
+| at least one `--plan` is present | `usage` | 2 |
 | `--reason` is present and at least 1 character | `usage` | 2 |
+| no `--plan` argument, or every one names an existing Plan in the store | `plan_not_found` | 4 |
+| `--until-pr` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
+| `--until-pr` is absent, or its value's Plan is one of the named Plans | `until_pr_not_incident` | 3 |
+| `--until-pr` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
-Effects: one transaction; insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event. The incident table is registered in `history_tables` (no_delete 0).
+Effects: one transaction; insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
 
-Output:
+Output examples:
 
 ```json
-{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress"}}
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
 ```
 
-Idempotent: yes; incident mode already on returns `"changed": false` with the existing row (same reason or changed reason, unchanged `started_at` and `by`).
+```json
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
+```
+
+Idempotent: yes; incident mode already on returns `"changed": false` with the existing row (same Plans, same reason or changed reason; unchanged `started_at` and `by`).
 
 ### 25.2 `incident end`
 
@@ -4682,7 +4696,7 @@ cpd incident end
 |---|---|---|
 | `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
 
-Effects: one transaction; delete the `incident` row; append `incident-ended` Event.
+Effects: one transaction; delete the `incident` row and every row in `incident_plans`; append `incident-ended` Event with `data` including `cause: "manual"` and `by` the Manager Session id.
 
 Output:
 
@@ -4711,7 +4725,13 @@ Output when off:
 Output when on:
 
 ```json
-{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress"}}
+{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+```
+
+Output when on with auto-end:
+
+```json
+{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
 ```
 
 Idempotent: yes; read-only.
