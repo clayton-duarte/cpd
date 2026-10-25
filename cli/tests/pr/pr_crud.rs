@@ -1,10 +1,6 @@
 //! `pr add`, `pr edit` and `pr cancel` (commands.md §9.4–§9.6, contract §2.3,
 //! §3.8, §5.2) and the plan fingerprint with the PRs: in-process on `Fx::with_ports()` (the fake git route, the fake
 //! `gh`), against a temporary `$CPD_HOME`, and a Plan written straight into the database.
-//!
-//! The five tests of the legacy Lead Branch (`add_moves_the_legacy_lead_branch_of_a_merged_pr`, ...) stay on the
-//! built binary and real git until PR `mr-pr-3` migrates them (they need a bare origin that the route does not
-//! model yet): their fixture is [`Exec`].
 
 use crate::common;
 
@@ -13,9 +9,9 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use common::fx::Fx;
-use common::{Run, TestEnv, write_executable};
+use common::{Run, TestEnv};
 use cpd_core::home::CpdHome;
-use cpd_core::host::runner::Reply;
+use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::PlanId;
 use cpd_core::plan::plan_fingerprint;
 use cpd_core::store::Store;
@@ -177,61 +173,6 @@ impl Crud {
         let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
         let pr = shown["prs"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap().clone();
         json!([pr["base"], pr["base_pr"], pr["needs"]])
-    }
-
-    /// [`common::refused`], and nothing written.
-    fn refused(&self, run: &Run, code: &str, exit: i32, writes: (i64, i64)) -> Value {
-        let error = common::refused(run, code, exit);
-        assert_eq!(self.writes(), writes, "{code} wrote something");
-        error
-    }
-}
-
-/// The built binary against a temporary `$CPD_HOME` and real git: what the legacy-branch tests still need.
-struct Exec {
-    env: TestEnv,
-    pay: PathBuf,
-}
-
-fn exec(phase: &str) -> Exec {
-    let env = TestEnv::new();
-    let pay = env.keyed_repo("pay").canonicalize().unwrap();
-    env.repo_policy("acme", "pay", TESTS_TABLE);
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    env.sql(&plan_sql(phase));
-    Exec { env, pay }
-}
-
-impl Exec {
-    /// `cpd pr <args> --plan pay-1`; a `pr add` that added a PR is followed by the cancelling of its stub drafts.
-    fn pr(&self, args: &[&str]) -> Run {
-        let mut all = vec!["pr"];
-        all.extend(args);
-        all.extend(["--plan", "pay-1"]);
-        let run = self.env.cpd(&all);
-        if args.first() == Some(&"add") && run.exit == 0 {
-            let out = run.json();
-            if out.get("already").is_none() {
-                for job in out["pr"]["jobs"].as_array().unwrap() {
-                    let job = job.as_str().unwrap();
-                    self.env.cpd(&["job", "cancel", job, "--reason", "a stub of the template", "--plan", "pay-1"]).ok();
-                }
-            }
-        }
-        run
-    }
-
-    /// `pr add <key> --repo <repo> --title "Change <key>" --shape config <extra…>`.
-    fn add(&self, key: &str, repo: &PathBuf, extra: &[&str]) -> Run {
-        let title = format!("Change {key}");
-        let mut args = vec!["add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
-        args.extend(extra);
-        self.pr(&args)
-    }
-
-    fn writes(&self) -> (i64, i64) {
-        (self.env.query("SELECT count(*) FROM txns"), self.env.query("SELECT count(*) FROM events"))
     }
 
     /// [`common::refused`], and nothing written.
@@ -736,28 +677,26 @@ fn add_to_an_archived_plan_is_archived() {
 /// Plan `pay-1` in `done` with one PR `old` on the legacy Lead Branch `cpd/pay-1`: the repo `pay`
 /// has a bare `origin` with that branch, and a second worktree has it checked out.
 struct Legacy {
-    fx: Exec,
+    fx: Crud,
     origin: PathBuf,
     lead: PathBuf,
     sha: String,
 }
 
 fn legacy(status: &str) -> Legacy {
-    let fx = exec("done");
+    let fx = crud("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
-    fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.local_origin(&fx.pay, &origin);
-    fx.env.git(&fx.pay, &["push", "-q", "origin", "main"]);
-    fx.env.git(&fx.pay, &["fetch", "-q", "origin"]);
+    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.local_origin(&fx.pay, &origin);
+    fx.git(&fx.pay, &["push", "-q", "origin", "main"]);
+    fx.git(&fx.pay, &["fetch", "-q", "origin"]);
     let lead = fx.env.root().join("repos/pay.pay-1");
-    fx.env.git(&fx.pay, &["worktree", "add", "-q", "-b", "cpd/pay-1", lead.to_str().unwrap(), "main"]);
-    fx.env.git(&lead, &["config", "user.name", "cpd test"]);
-    fx.env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
-    fs::write(lead.join("api.txt"), "api\n").unwrap();
-    fx.env.git(&lead, &["add", "-A"]);
-    fx.env.git(&lead, &["commit", "-q", "-m", "api"]);
-    fx.env.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
-    let sha = fx.env.git(&lead, &["rev-parse", "HEAD"]);
+    fx.git(&fx.pay, &["worktree", "add", "-q", "-b", "cpd/pay-1", lead.to_str().unwrap(), "main"]);
+    fx.git(&lead, &["config", "user.name", "cpd test"]);
+    fx.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
+    fx.commit_file(&lead, "api.txt", "api\n", "api");
+    fx.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
+    let sha = fx.git(&lead, &["rev-parse", "HEAD"]);
     fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 1, 'u', 'T', 0, '{status}', 'none', 'none', 't', iif('{status}' = 'merged', 't', NULL), 't');
@@ -777,10 +716,10 @@ fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     let out = fx.add("fix", &fx.pay, &[]).ok();
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/fix");
 
-    assert_eq!(fx.env.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
-    assert_eq!(fx.env.git(&fx.pay, &["branch", "--list", "cpd/pay-1"]), "", "gone locally");
-    assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "", "gone on origin");
-    assert_eq!(fx.env.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1/old", "the worktree follows");
+    assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
+    assert_eq!(fx.git(&fx.pay, &["branch", "--list", "cpd/pay-1"]), "", "gone locally");
+    assert_eq!(fx.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "", "gone on origin");
+    assert_eq!(fx.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1/old", "the worktree follows");
     let branches: Vec<String> =
         fx.env.query::<String>("SELECT group_concat(key || '=' || lead_branch) FROM (SELECT * FROM prs ORDER BY key)").split(',').map(str::to_owned).collect();
     assert_eq!(branches, ["fix=cpd/pay-1/fix", "old=cpd/pay-1/old"]);
@@ -793,20 +732,25 @@ fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
 #[test]
 fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
     let Legacy { fx, origin, sha, .. } = legacy("merged");
-    fx.env.git(&fx.pay, &["branch", "-m", "cpd/pay-1", "cpd/pay-1/old"]);
-    assert_ne!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
+    fx.git(&fx.pay, &["branch", "-m", "cpd/pay-1", "cpd/pay-1/old"]);
+    assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
 
     fx.add("fix", &fx.pay, &[]).ok();
-    assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "");
-    assert_eq!(fx.env.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
+    assert_eq!(fx.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "");
+    assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
     assert_eq!(fx.env.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1/old");
 }
 
 #[test]
 fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
-    let Legacy { fx, origin, .. } = legacy("merged");
-    let hook = origin.join("hooks/pre-receive");
-    write_executable(&hook, "#!/bin/sh\necho no >&2\nexit 1\n");
+    let Legacy { fx, .. } = legacy("merged");
+    // The origin's `pre-receive` hook declines the delete (git's own, on the remote: scripted, not a script in a repo).
+    let declined = "remote: no\nTo origin\n ! [remote rejected] cpd/pay-1 (pre-receive hook declined)\nerror: failed to push some refs to 'origin'\n";
+    let _ = (*fx.fakes.runner).clone().once(
+        "git",
+        |call: &Call| call.args.windows(3).any(|w| w == ["push", "origin", "--delete"]),
+        Reply::exit(1, "", declined),
+    );
     let writes = fx.writes();
     let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "push_failed", 1, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
@@ -822,8 +766,8 @@ fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
     let writes = fx.writes();
     let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "branch_exists", 3, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
-    assert_eq!(fx.env.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1");
-    assert_ne!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
+    assert_eq!(fx.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1");
+    assert_ne!(fx.git(&origin, &["branch", "--list", "cpd/pay-1"]), "");
 }
 
 // ---------- pr edit ----------
@@ -1063,14 +1007,16 @@ fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
 
 #[test]
 fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
-    let Legacy { fx, .. } = legacy("merged");
-    let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["edit", "old", "--title", "History"]), "pr_ended", 3, writes);
-    assert_eq!(error["details"]["status"], "merged");
-    // With another flag it is the same refusal: `--title` is checked first.
-    fx.refused(&fx.pr(&["edit", "old", "--title", "History", "--no-needs"]), "pr_ended", 3, writes);
-
-    let fx = exec("plan");
+    {
+        let Legacy { fx, .. } = legacy("merged");
+        let writes = fx.writes();
+        let error = fx.refused(&fx.pr(&["edit", "old", "--title", "History"]), "pr_ended", 3, writes);
+        assert_eq!(error["details"]["status"], "merged");
+        // With another flag it is the same refusal: `--title` is checked first.
+        fx.refused(&fx.pr(&["edit", "old", "--title", "History", "--no-needs"]), "pr_ended", 3, writes);
+    }
+    // The first env is gone (an `Fx` is one per process at a time) before the second.
+    let fx = crud("plan");
     fx.add("gone", &fx.pay, &[]).ok();
     fx.pr(&["cancel", "gone"]).ok();
     let writes = fx.writes();
