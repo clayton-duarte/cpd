@@ -4,11 +4,14 @@
 
 use std::collections::HashSet;
 
+use cpd_core::ids::ContextId;
+use cpd_core::session::{Role, State};
 use ratatui::text::Line;
 
-use super::fixture::archived;
+use super::fixture::{archived, session, WHEN};
 use super::rows;
 use crate::palette;
+use crate::read::Place;
 
 /// The plain text of a row's line, styles ignored.
 fn text(line: &Line<'_>) -> String {
@@ -17,7 +20,14 @@ fn text(line: &Line<'_>) -> String {
 
 #[test]
 fn an_archived_manager_is_a_muted_row_in_its_contexts_archived_section() {
-    let tree = archived();
+    let mut tree = archived();
+    // The manager test builds its own archived Manager: the shared `fixture::archived()` stays manager-free,
+    // so the frozen scroll golden is untouched.
+    let mut manager = session("m-zeta", "zeta-manager", State::Idle, None, Place::None);
+    manager.role = Role::Manager;
+    manager.context = ContextId::parse("zeta").unwrap();
+    manager.archived_at = Some(WHEN.into());
+    tree.contexts.iter_mut().find(|c| c.id.as_str() == "zeta").unwrap().archived_managers.push(manager);
     let path = vec!["zeta".to_owned(), "m-zeta".to_owned()];
     // `zeta` unfolded: its title row and its closing row are both open.
     let mut opened = HashSet::new();

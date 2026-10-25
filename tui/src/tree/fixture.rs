@@ -160,11 +160,6 @@ pub fn archived() -> Tree {
         }
         let mut zeta = context("zeta", vec![zp]);
         zeta.archived_at = Some(WHEN.into());
-        let mut manager = session("m-zeta", "zeta-manager", State::Idle, None, Place::None);
-        manager.role = Role::Manager;
-        manager.context = ContextId::parse("zeta").unwrap();
-        manager.archived_at = Some(WHEN.into());
-        zeta.archived_managers.push(manager);
         t.contexts.push(zeta);
         t
     }
