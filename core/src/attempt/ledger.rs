@@ -365,7 +365,11 @@ fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
         |r| r.get(0),
     )?;
     if never_started {
-        return Ok(Some(attempt.tier));
+        return Ok(Some(ladder.catalog.step_up(attempt.tier).unwrap_or(attempt.tier)));
+    }
+    // hs-n465, hs-d632: the catalog refuses the Attempt's Tier: step to the next valid Worker Tier at or above it, never propagate `tier_invalid`.
+    if !ladder.catalog.is_valid(attempt.tier) {
+        return Ok(ladder.catalog.step_up(attempt.tier));
     }
     if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);

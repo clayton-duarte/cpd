@@ -699,6 +699,38 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
 }
 
+/// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
+/// `S` supports 0,1,3,5). E2 ends it and requeues the Job at the next valid Tier in the Worker
+/// range at or above its effort (`S3`), never wedging with `tier_invalid` and leaving it `starting`.
+#[test]
+fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // A live Attempt holds the only slot, so E3 does not start the next one after E2 queues `api`.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_running("api", "starting", &ago(1));
+
+    let engine = fx.start();
+    wait_until("api ended", || fx.attempt("api-a1").0 == "ended");
+    engine.stop();
+
+    assert_ne!(fx.attempt("api-a1").0, "starting", "the Attempt stayed starting");
+    assert_eq!(fx.job_status("api"), "queued");
+    let retry = fx.events("attempt-retry");
+    assert_eq!(retry.len(), 1, "{retry:?}");
+    assert_eq!(
+        (retry[0].1.as_deref(), retry[0].2.as_deref(), &retry[0].3["cause"], &retry[0].3["next_tier"]),
+        (Some("api"), Some("api-a1"), &json!("crashed"), &json!("S3"))
+    );
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
+}
+
 /// `attempt-status` check Events of `<key>-a1`: `(at, "start" | "end")`, in order.
 fn check_events(fx: &Fx, key: &str, edges: &[(&str, &str)]) {
     for (at, edge) in edges {
@@ -827,6 +859,37 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
     assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
+    // Its driver runs detached; the Worker exits at once, so it ends crashed.
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+}
+
+/// hs-n465, hs-d632: a stored Job whose Tier the catalog refuses (`S2` when `S` supports
+/// 0,1,3,5) is started at the next valid Tier in the Worker range at or above its effort
+/// (`S3`), never wedging with `tier_invalid`.
+#[test]
+fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // The work session as tui leaves it, with remain-on-exit (§6.1).
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job_on("S2", "repo", "api", &[], "");
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+
+    let started = fx.events("attempt-started");
+    assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S3", "origin": "ladder"}))]);
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a1'"), "S3");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
     // Its driver runs detached; the Worker exits at once, so it ends crashed.
     wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
 }
