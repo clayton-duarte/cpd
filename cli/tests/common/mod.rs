@@ -46,7 +46,9 @@ use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
 
+pub mod engine;
 pub mod fx;
+pub mod healthy;
 pub mod screen;
 pub mod session;
 

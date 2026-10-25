@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
 use super::resolve::{machine_file, owners_dir, repos_dir};
-use super::domain::{BUILD, FEEDBACK_CHECKS, GATE, LIST, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
+use super::domain::{BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -157,12 +157,16 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         PolicyKey::Owner(o) => (o.as_str(), None),
         PolicyKey::Repo(o, n) => (o.as_str(), Some(n.as_str())),
     };
-    Ok(Output::success(json!({
+    let mut out = json!({
         "key": {"owner": owner, "repo": repo},
         "role": role,
         "files": files,
         "policy": policy,
-    })))
+    });
+    if !resolved.warnings.is_empty() {
+        out["warnings"] = json!(resolved.warnings);
+    }
+    Ok(Output::success(out))
 }
 
 /// The typed keys of `domain` with value and source; a key the winning file leaves out has
@@ -173,10 +177,11 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
         serde_json::to_value(v).expect("a policy value serializes")
     }
     let entries: Vec<(&str, Value)> = match domain {
-        Domain::Pr => vec![
-            (GATE, value(&resolved.policy.pr.gate)),
-            (FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks)),
-        ],
+        Domain::Gates => {
+            let g = &resolved.policy.gate;
+            vec![(MERGE, value(&g.merge)), (GATE_PR, value(&g.pr))]
+        }
+        Domain::Pr => vec![(FEEDBACK_CHECKS, value(&resolved.policy.pr.feedback.checks))],
         Domain::Hooks => {
             let h = &resolved.policy.hooks;
             vec![(PRE_START, value(&h.pre_start)), (PRE_COMMIT, value(&h.pre_commit)), (PRE_MERGE, value(&h.pre_merge))]
