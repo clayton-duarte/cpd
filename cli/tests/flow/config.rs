@@ -1,16 +1,18 @@
 //! `cpd config` and `cpd tiers` (commands.md §14.2, §14.3; contract §8, §9):
-//! a temporary `$CPD_HOME`, and a fake pi install. The `config` tests and the pi-lookup refusals of `tiers` run in
-//! this process (`Fx`); the `tiers` tests that run a scripted `node` or wait on a migration run the built binary
-//! (`TestEnv`), until the runner and clock seams exist.
+//! a temporary `$CPD_HOME`, and a fake pi install. Every test runs in this process (`Fx`); `node` is a reply of the
+//! `FakeRunner` and a migration in progress waits on the `ManualClock`. One test, `tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown`,
+//! stays on the built binary and the real `node`: it runs pi's own module API (OS behaviour of an external).
 
 use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::io::ErrorKind;
+use std::time::Duration;
 
 use common::fx::Fx;
 use common::{CPD, Run, TestEnv, write_executable};
+use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
@@ -557,10 +559,10 @@ fn real_node() -> std::path::PathBuf {
 }
 
 /// A fake pi install with its agent directory at the test root: `bin/pi` (on
-/// `PATH`), `install/current-version` and a release whose two entry points are
-/// the given sources. Returns the release's entry points.
+/// `PATH`; an empty executable file, which `cpd` only locates and never runs), `install/current-version` and a
+/// release whose two entry points are the given sources. Returns the release's entry points.
 fn install_pi(env: &TestEnv, version: &str, coding_agent_js: &str, pi_ai_js: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    env.fake_pi("exit 0");
+    write_executable(&env.bin().join("pi"), "");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install").join("current-version"), format!("{version}\n")).unwrap();
     let scope = env.root().join("install/releases").join(version).join("node_modules/@earendil-works");
@@ -610,13 +612,31 @@ fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
 
 const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","minimal","low"],"H":["off","low","medium","high"],"G":["off","minimal","low","medium","high"]}"#;
 
+/// The levels pi's fake modules ([`FAKE_PI_AI`]) report for the models of [`TIERS_CONFIG`]: `p/m-low` has off, minimal,
+/// low and medium, the others every level.
+const FAKE_MODULES_LEVELS_JSON: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium"],"G":["off","minimal","low","medium","high","xhigh","max"]}"#;
+
+/// The catalog module's answer, as `node` prints it.
+fn levels(json: &str) -> Reply {
+    Reply::ok(&format!("{json}\n"))
+}
+
+/// An `Fx` on the fake ports with `config` written and pi installed (version `1.2.0`, no module sources: `node` is scripted).
+fn tiers_fx(config: &str) -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_config(config);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx
+}
+
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
-    symlink(real_node(), env.bin().join("node")).unwrap();
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    install_pi(&fx.env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
+    // What pi's modules report (`FAKE_PI_AI`), as the scripted `node` prints it; the real `node` is the smoke below.
+    fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(
         out,
         json!({
@@ -634,11 +654,11 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    let (coding_agent, pi_ai) = install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    let (coding_agent, pi_ai) = install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.2.0");
     // `minimal` is dropped; the levels map to efforts by position.
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
@@ -647,9 +667,9 @@ fn tiers_runs_the_catalog_module_from_argv() {
     assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
 
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
-    let calls = env.calls("node");
+    let calls = fx.calls("node");
     assert_eq!(calls.len(), 1);
-    let argv = &calls[0];
+    let argv = &calls[0].args;
     assert_eq!(argv[0], "--input-type=module");
     assert_eq!(argv[1], "-e");
     assert!(argv[2].contains("ModelRuntime.create({ allowModelNetwork: false })"), "the embedded module");
@@ -670,48 +690,40 @@ fn tiers_runs_the_catalog_module_from_argv() {
 /// The config of the tests that print G's default model: no `tiers.G`.
 const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n";
 
-/// hs-d562: G has no effort levels: the module's levels for G are ignored and `efforts` is empty.
 #[test]
 fn tiers_prints_g_without_an_effort() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG_DEFAULT_G);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
-    assert_eq!(env.calls("node")[0].last().unwrap(), "G=github-copilot/gemini-3.8-flash");
+    assert_eq!(fx.calls("node")[0].args.last().unwrap(), "G=github-copilot/gemini-3.8-flash");
+    // An `Fx` holds the process-wide lock: the first goes before the second.
+    drop(fx);
 
-    let env = TestEnv::new();
-    env.write_config(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
+    let fx = tiers_fx(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
 }
 
-/// hs-d562: pi not having G's model is `tier_model_unknown`, with G in `details.missing`.
 #[test]
 fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off"],"G":null}'"#);
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":["off"],"H":["off"],"G":null}"#));
+    let run = fx.cpd(&["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "tier_model_unknown");
     assert_eq!(run.exit, 1);
     assert_eq!(err["details"]["missing"], json!([{"letter": "G", "model": "p/m-g"}]));
 }
 
-/// hs-d562: G is never cached (no migration): a cache holding O, S and H rows only still serves, G from the config.
 #[test]
 fn a_cache_written_before_g_still_serves_the_catalog() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG_DEFAULT_G);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    // Only the cold call has a reply: a second call of node would be unscripted and fail the test.
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -719,45 +731,24 @@ fn a_cache_written_before_g_still_serves_the_catalog() {
         ],
         "G is never cached"
     );
-    env.fake("node", "echo 'node must not run' >&2; exit 1");
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
     assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
-    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
-}
-
-/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
-/// marker in the file) and releases it after `hold`. Returns once the lock is held.
-fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
-    use nix::fcntl::{Flock, FlockArg};
-    use std::io::Write;
-    let locks = env.cpd_home().join("locks");
-    fs::create_dir_all(&locks).unwrap();
-    let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
-    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
-    lock.write_all(marker.to_string().as_bytes()).unwrap();
-    std::thread::spawn(move || {
-        std::thread::sleep(hold);
-        let _ = lock.set_len(0);
-        drop(lock);
-    })
+    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
 }
 
 /// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
-/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end.
+/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end. The migration is held until
+/// 1500 ms of the `ManualClock`'s time have passed, which the waiter's own retries pass.
 #[test]
 fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
-    let env = TestEnv::new();
-    env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let release = migrating_for(&env, Duration::from_millis(1500));
-    let start = Instant::now();
-    let run = cpd_isolated(&env, &["tiers"]);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    let mut fx = Fx::with_ports();
+    fx.env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    fx.hold_store_migration(Duration::from_millis(1500));
+    let run = fx.cpd_capturing_stderr(&["tiers"]);
+    let waited = fx.fakes.clock.elapsed();
     assert_eq!(run.ok()["pi_version"], "1.2.0");
     assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
     assert_eq!(run.stderr.matches("waiting for cpd pid").count(), 1, "{run:?}");
@@ -766,48 +757,48 @@ fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
 /// `cpd config` reads only the config files: a migration in progress does not delay it, and it says nothing.
 #[test]
 fn config_does_not_wait_for_a_migration() {
-    let env = TestEnv::new();
-    env.write_config(MINIMAL);
-    let release = migrating_for(&env, Duration::from_millis(3000));
-    let start = Instant::now();
-    let run = env.cpd(&["config"]);
-    let waited = start.elapsed();
+    let mut fx = Fx::with_ports();
+    fx.env.write_config(MINIMAL);
+    fx.hold_store_migration(Duration::from_millis(3000));
+    let run = fx.cpd_capturing_stderr(&["config"]);
     run.ok();
-    // time-claim: `cpd config` does not wait for a 3 s migration; no per-poll signal from a command that never polls.
+    // `cpd config` does not wait for a 3 s migration: it never naps, so the virtual time has not moved.
+    let waited = fx.fakes.clock.elapsed();
     assert!(waited < Duration::from_millis(2500), "waited {waited:?}");
+    assert_eq!(fx.fakes.clock.naps(), Vec::<Duration>::new());
     assert_eq!(run.stderr, "");
-    release.join().unwrap();
 }
 
 #[test]
 fn tiers_prefers_pis_own_node_over_node_on_path() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", "echo 'the node on PATH must not run' >&2; exit 1");
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
 
-    // ~/.local/share/pi-node/current/bin/node, as pi's launcher looks for it.
-    let pi_node = env.home().join(".local/share/pi-node/current/bin");
-    fs::create_dir_all(&pi_node).unwrap();
-    let script = format!("#!/bin/sh\necho '{ALL_LEVELS_JSON}'\n");
-    write_executable(&pi_node.join("node"), &script);
-    cpd_isolated(&env, &["tiers"]).ok();
-    assert!(env.calls("node").is_empty());
+    // ~/.local/share/pi-node/current/bin/node, as pi's launcher looks for it (the runner is scripted: the file is
+    // only found, never run).
+    let pi_node = fx.env.home().join(".local/share/pi-node/current/bin/node");
+    fs::create_dir_all(pi_node.parent().unwrap()).unwrap();
+    write_executable(&pi_node, "");
+    fx.cpd(&["tiers"]).ok();
+    let calls = fx.calls("node");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].program, pi_node.to_str().unwrap(), "pi's node ran, not `node` on PATH");
     // The catalog is cached now; forget it so the next call reads pi again.
     for suffix in ["", "-wal", "-shm"] {
-        let _ = fs::remove_file(env.cpd_home().join(format!("cpd.db{suffix}")));
+        let _ = fs::remove_file(fx.env.cpd_home().join(format!("cpd.db{suffix}")));
     }
 
     // XDG_DATA_HOME moves it.
-    let xdg = env.root().join("xdg");
-    let xdg_node = xdg.join("pi-node/current/bin");
-    fs::create_dir_all(&xdg_node).unwrap();
-    write_executable(&xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n");
-    let out = env.command(CPD).arg("tiers").env("PATH", env.bin()).env("XDG_DATA_HOME", &xdg).output().unwrap();
-    let run = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() };
+    let xdg = fx.env.root().join("xdg");
+    let xdg_node = xdg.join("pi-node/current/bin/node");
+    fs::create_dir_all(xdg_node.parent().unwrap()).unwrap();
+    write_executable(&xdg_node, "");
+    fx.fake_once("node", Reply::exit(1, "", "xdg node ran\n"));
+    let run = fx.cpd_with(fx.env.root(), &["tiers"], &[("XDG_DATA_HOME", xdg.to_str().unwrap())]);
     let err = run.error();
     assert_eq!(err["code"], "catalog_failed");
     assert!(err["details"]["stderr"].as_str().unwrap().contains("xdg node ran"));
+    assert_eq!(fx.calls("node")[1].program, xdg_node.to_str().unwrap(), "the node under XDG_DATA_HOME ran");
 }
 
 #[test]
@@ -850,12 +841,13 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    let env = &fx.env;
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
     fs::create_dir_all(agent.join("bin")).unwrap();
-    write_executable(&agent.join("bin/pi"), "#!/bin/sh\nexit 0\n");
+    write_executable(&agent.join("bin/pi"), "");
     fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");
@@ -864,58 +856,53 @@ fn tiers_finds_pi_through_a_symlink() {
         fs::write(release.join(package).join("dist/index.js"), "").unwrap();
     }
     fs::write(agent.join("install/current-version"), "3.0.0\n").unwrap();
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["pi_version"], "3.0.0");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "3.0.0");
 }
 
 #[test]
 fn tiers_catalog_failures_are_catalog_failed() {
-    let cases: &[(&str, &str)] = &[
-        ("node exits non-zero", "echo 'boom: cannot import' >&2; exit 3"),
-        ("node prints nothing", "exit 0"),
-        ("node prints text", "echo 'not json'"),
-        ("node prints a JSON array", "echo '[]'"),
-        ("node omits a Tier", r#"echo '{"O":["off"],"S":["off"],"G":["off"]}'"#),
-        ("a level pi does not have", r#"echo '{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}'"#),
-        ("a model with no usable level", r#"echo '{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}'"#),
-        ("levels that are not text", r#"echo '{"O":[1],"S":["off"],"H":["off"],"G":["off"]}'"#),
+    let cases: Vec<(&str, Reply)> = vec![
+        ("node exits non-zero", Reply::exit(3, "", "boom: cannot import\n")),
+        ("node prints nothing", Reply::ok("")),
+        ("node prints text", Reply::ok("not json\n")),
+        ("node prints a JSON array", levels("[]")),
+        ("node omits a Tier", levels(r#"{"O":["off"],"S":["off"],"G":["off"]}"#)),
+        ("a level pi does not have", levels(r#"{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}"#)),
+        ("a model with no usable level", levels(r#"{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}"#)),
+        ("levels that are not text", levels(r#"{"O":[1],"S":["off"],"H":["off"],"G":["off"]}"#)),
     ];
     // One env: a failure caches nothing, so each case runs node again.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    for (n, (name, body)) in cases.iter().enumerate() {
-        env.fake("node", body);
-        let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    for (n, (name, reply)) in cases.into_iter().enumerate() {
+        fx.fake_once("node", reply);
+        let run = fx.cpd(&["tiers"]);
         assert_eq!(run.error()["code"], "catalog_failed", "{name}");
         assert_eq!(run.exit, 1, "{name}");
-        assert_eq!(env.calls("node").len(), n + 1, "{name}: node ran");
+        assert_eq!(fx.calls("node").len(), n + 1, "{name}: node ran");
     }
 
     // The failing node's exit and stderr are in `details`.
-    env.fake("node", "echo 'boom: cannot import' >&2; exit 3");
-    let err = cpd_isolated(&env, &["tiers"]).error();
+    fx.fake_once("node", Reply::exit(3, "", "boom: cannot import\n"));
+    let err = fx.cpd(&["tiers"]).error();
     assert_eq!(err["details"]["exit"], 3);
     assert!(err["details"]["stderr"].as_str().unwrap().contains("boom: cannot import"));
 }
 
 #[test]
 fn tiers_without_any_node_is_catalog_failed() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(Reply::io(ErrorKind::NotFound));
+    let run = fx.cpd(&["tiers"]);
     assert_eq!(run.error()["code"], "catalog_failed");
     assert_eq!(run.exit, 1);
 }
 
 #[test]
 fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null,"G":["off"]}'"#);
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":null,"G":["off"]}"#));
+    let run = fx.cpd(&["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "tier_model_unknown");
     assert_eq!(run.exit, 1);
@@ -964,15 +951,15 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
-    let env = TestEnv::empty();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert!(!env.cpd_home().join("cpd.db").exists());
-    cpd_isolated(&env, &["tiers"]).ok();
-    assert_eq!(env.calls("node").len(), 1);
+    let fx = Fx::with_ports_empty();
+    fx.env.write_config(TIERS_CONFIG);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert!(!fx.env.cpd_home().join("cpd.db").exists());
+    fx.cpd(&["tiers"]).ok();
+    assert_eq!(fx.calls("node").len(), 1);
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -980,42 +967,37 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
         ]
     );
     // One transaction, made through the store's write API, which records it.
-    assert_eq!(txn_commands(&env), ["migrate", "tiers"]);
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers"]);
 }
 
 #[test]
 fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let cold = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    let cold = fx.cpd(&["tiers"]);
     cold.ok();
-    // Nothing runs node now: the cache alone answers, identically.
-    env.fake("node", "echo 'node must not run' >&2; exit 1");
-    let warm = cpd_isolated(&env, &["tiers"]);
+    // Nothing runs node now (a second call would be unscripted): the cache alone answers, identically.
+    let warm = fx.cpd(&["tiers"]);
     assert_eq!(warm.stdout, cold.stdout);
-    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
-    assert_eq!(txn_commands(&env), ["migrate", "tiers"], "the warm call wrote nothing");
+    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers"], "the warm call wrote nothing");
 }
 
 #[test]
 fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
 
-    install_pi(&env, "1.3.0", "", "");
-    env.fake("node", r#"echo '{"O":["off","low"],"S":["off","low"],"H":["off"],"G":["off"]}'"#);
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    install_pi(&fx.env, "1.3.0", "", "");
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low"],"H":["off"],"G":["off"]}"#));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0]));
     // The table is append-only (§4.4): the new version's rows join the old ones.
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -1025,52 +1007,45 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
             row("1.3.0", "S", "p/m-sonnet", "[0,1]"),
         ]
     );
-    assert_eq!(txn_commands(&env), ["migrate", "tiers", "tiers"]);
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers", "tiers"]);
 
-    // And the new version is warm.
-    env.fake("node", "exit 1");
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["pi_version"], "1.3.0");
+    // And the new version is warm: node has no reply left, a call of it would be unscripted.
+    assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "1.3.0");
 }
 
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
 
-    env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    fx.env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
-    assert_eq!(env.calls("node").len(), 2);
-    assert!(cached_rows(&env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
+    assert_eq!(fx.calls("node").len(), 2);
+    assert!(cached_rows(&fx.env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
     // The unchanged models' rows are kept, not duplicated or rewritten.
-    assert_eq!(cached_rows(&env).len(), 4);
+    assert_eq!(cached_rows(&fx.env).len(), 4);
 }
 
 #[test]
 fn tiers_does_not_cache_a_failed_catalog() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"],"G":["off"]}'"#);
-    assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
-    assert_eq!(cached_rows(&env), []);
-    assert_eq!(txn_commands(&env), ["migrate"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":["off"],"G":["off"]}"#));
+    assert_eq!(fx.cpd(&["tiers"]).error()["code"], "tier_model_unknown");
+    assert_eq!(cached_rows(&fx.env), []);
+    assert_eq!(txn_commands(&fx.env), ["migrate"]);
 }
 
 #[test]
 fn tiers_is_idempotent() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let first = cpd_isolated(&env, &["tiers"]);
-    let second = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    let first = fx.cpd(&["tiers"]);
+    let second = fx.cpd(&["tiers"]);
     first.ok();
     assert_eq!(first.stdout, second.stdout);
-    assert_eq!(env.calls("node").len(), 1);
+    assert_eq!(fx.calls("node").len(), 1);
 }
 
 #[test]
