@@ -26,6 +26,7 @@ pub mod driver;
 pub mod events;
 pub mod git;
 pub mod host;
+pub mod host_repair;
 pub mod inbox;
 pub mod job;
 pub mod merge;

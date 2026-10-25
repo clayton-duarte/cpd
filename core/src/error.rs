@@ -214,6 +214,8 @@ error_codes! {
     SecretExists = "secret_exists" => Refused,
     SecretNotSignedIn = "secret_not_signed_in" => Refused,
     OwnerInUse = "owner_in_use" => Refused,
+    HostApprovalRequired = "host_approval_required" => Refused,
+    NotAManager = "not_a_manager" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
