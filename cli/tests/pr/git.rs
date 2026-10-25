@@ -16,13 +16,12 @@ use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::ports::Ports;
 use cpd_core::git::{
-    GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
+    Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
     discard_worktree, push_commit, remove_merged_attempt, lead_branch, lead_worktree_path, tamper_check,
     touched_protected,
 };
-use cpd_core::git::gate::Slots;
-use cpd_core::home::{CpdHome, Hook};
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::home::Hook;
+use cpd_core::ids::{AttemptId, PlanId};
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
@@ -1079,232 +1078,11 @@ fn rule_s_on_an_up_to_date_lead_worktree_is_done_and_touches_nothing() {
     m.assert_at_tip_and_clean(&tip);
 }
 
-// ------------------------------------------------------- gate worktree
-
-fn key() -> PrKey {
-    PrKey::parse("api").unwrap()
-}
-
-/// The `pre-start` and `pre-merge` pipelines of `wt` (written as a `.config/wt.toml` was).
-struct Pipes {
-    pre_start: Pipeline,
-    pre_merge: Pipeline,
-}
-
-fn pipes(wt: &str) -> Pipes {
-    Pipes { pre_start: pipeline(wt, Hook::PreStart), pre_merge: pipeline(wt, Hook::PreMerge) }
-}
-
-fn gate_hooks<'a>(fx: &Fx, lead_branch: &'a str, pipes: &'a Pipes) -> GateHooks<'a> {
-    GateHooks {
-        pre_start_commands: &pipes.pre_start,
-        pre_merge_commands: &pipes.pre_merge,
-        lead_branch,
-        base: "main",
-        pre_start: setup_in(fx, "pr-api.pre-start.log"),
-        pre_merge: setup_in(fx, "pr-api.pre-merge.log"),
-        slots: Slots::new(&CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(), 2),
-    }
-}
-
-/// A Lead worktree whose tip `G` carries a `.config/wt.toml` that would fail every hook: the Gate ignores it.
-/// Returns `(repo, lead, G)`.
-fn gated(fx: &Fx) -> (PathBuf, cpd_core::git::Created, String) {
-    let repo = fx.git_repo("pay");
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(fx, "lead.log"))).unwrap();
-    fx.commit_file(&lead.path, ".config/wt.toml", "pre-start = \"exit 9\"\npre-merge = \"exit 9\"\n", "edit .config/wt.toml");
-    let g = fx.git(&lead.path, &["rev-parse", "HEAD"]);
-    (repo, lead, g)
-}
-
-fn worktrees(fx: &Fx, repo: &Path) -> String {
-    fx.git(repo, &["worktree", "list", "--porcelain"])
-}
-
-/// What a hook's `sh` found when it ran: its command, its directory, and the gate worktree's `HEAD` and the
-/// worktrees of the repo at that moment.
-#[derive(Debug, PartialEq)]
-struct Seen {
-    command: String,
-    cwd: PathBuf,
-    head: Head,
-    worktrees: usize,
-}
-
-/// The hooks' `sh`: answers by command, and records what the universe looked like when it was called.
-struct Observe {
-    universe: Arc<Mutex<Universe>>,
-    seen: Arc<Mutex<Vec<Seen>>>,
-    reply: Box<dyn Fn(&str) -> Reply + Send + Sync>,
-}
-
-impl Handler for Observe {
-    fn handle(&self, call: &Call) -> Reply {
-        let cwd = call.cwd.clone().expect("a hook runs in a directory");
-        let command = call.args[1].clone();
-        let (head, worktrees) = {
-            let u = self.universe.lock().unwrap();
-            let id = u.repo_of(&cwd).expect("the hook's directory is a worktree of a repo");
-            (u.head(&cwd), u.worktrees(id).len())
-        };
-        let reply = (self.reply)(&command);
-        self.seen.lock().unwrap().push(Seen { command, cwd, head, worktrees });
-        reply
-    }
-}
-
-#[test]
-fn the_gate_runs_pre_start_then_pre_merge_in_a_detached_worktree_at_g_and_removes_it() {
-    let fx = Fx::with_ports();
-    let wt = "pre-start = \"touch started; echo {{ branch }} {{ base }} {{ worktree_path }} > start.txt\"\n\
-              pre-merge = \"test -f started && echo {{ branch }} {{ target }} > merge.txt\"\n";
-    let (repo, lead, g) = gated(&fx);
-    let pipes = pipes(wt);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let observe = Observe { universe: fx.universe.clone(), seen: seen.clone(), reply: Box::new(|_| Reply::ok("")) };
-    let _ = (*fx.fakes.runner).clone().route("sh", Arc::new(observe));
-
-    let gated = fx.scoped(|| gate(&repo, &plan(), &key(), &g, &gate_hooks(&fx, &lead.branch, &pipes))).unwrap();
-
-    assert_eq!(gated, Ok(()));
-    let w = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
-    assert_eq!(w, repo.parent().unwrap().join(format!("pay.pay-4521.api.gate-{}", std::process::id())));
-    let w_real = repo.parent().unwrap().canonicalize().unwrap().join(w.file_name().unwrap());
-    // Both hooks ran, in this order, with `sh` in the gate worktree, which was detached at G and one of the repo's worktrees.
-    let seen = seen.lock().unwrap();
-    let at_g = Head::Detached(Oid::new(&g));
-    assert_eq!(
-        *seen,
-        [
-            Seen {
-                command: format!("touch started; echo cpd/pay-4521 main {} > start.txt", w_real.display()),
-                cwd: w_real.clone(),
-                head: at_g.clone(),
-                worktrees: 3,
-            },
-            Seen { command: "test -f started && echo cpd/pay-4521 main > merge.txt".to_owned(), cwd: w_real, head: at_g, worktrees: 3 },
-        ]
-    );
-    assert!(!w.exists(), "the gate worktree is removed");
-    assert!(!worktrees(&fx, &repo).contains(".gate-"));
-    let universe = fx.universe.lock().unwrap();
-    let id = universe.repo_of(&repo).expect("the repo is in the universe");
-    assert!(universe.config_entries(id, &[]).iter().all(|(key, _)| !key.starts_with("branch.")), "no .git/config write");
-}
-
-#[test]
-fn a_failing_pre_start_refuses_the_gate_without_pre_merge_and_removes_the_worktree() {
-    let fx = Fx::with_ports();
-    let wt = "pre-start = \"echo no setup; exit 4\"\npre-merge = \"touch pre-merge-ran\"\n";
-    let (repo, lead, g) = gated(&fx);
-    let pipes = pipes(wt);
-    let hooks = gate_hooks(&fx, &lead.branch, &pipes);
-    let _ = (*fx.fakes.runner).clone().route(
-        "sh",
-        Arc::new(Sh(Box::new(|command| {
-            if command.starts_with("echo no setup") { Reply::exit(4, "no setup\n", "") } else { Reply::ok("") }
-        }))),
-    );
-
-    let refused = fx.scoped(|| gate(&repo, &plan(), &key(), &g, &hooks)).unwrap().unwrap_err();
-
-    assert_eq!(refused.hook, Hook::PreStart);
-    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 4 });
-    assert_eq!(refused.tail.as_deref(), Some("no setup"));
-    assert_eq!(refused.log, hooks.pre_start.log);
-    let commands: Vec<_> = fx.calls("sh").iter().map(|call| call.args[1].clone()).collect();
-    assert_eq!(commands, ["echo no setup; exit 4"], "pre-merge did not run");
-    assert!(!worktrees(&fx, &repo).contains(".gate-"));
-}
-
-#[test]
-fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
-    let fx = Fx::with_ports();
-    let (repo, lead, g) = gated(&fx);
-    let pipes = pipes("pre-merge = \"echo red; exit 6\"\n");
-    let hooks = gate_hooks(&fx, &lead.branch, &pipes);
-    fx.fake("sh", Reply::exit(6, "red\n", ""));
-
-    let refused = fx.scoped(|| gate(&repo, &plan(), &key(), &g, &hooks)).unwrap().unwrap_err();
-
-    assert_eq!(refused.hook, Hook::PreMerge);
-    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
-    assert_eq!(refused.tail.as_deref(), Some("red"));
-    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The test slot").
-    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "gate: slot 0 taken after 0 s\nred\n");
-    assert!(!worktrees(&fx, &repo).contains(".gate-"));
-}
+// ------------------------------------------------------------ deadline (contract §1.2, §7)
 
 /// strerror(0): "Success" on Linux, "Undefined error: 0" on macOS.
 fn strerror_zero() -> &'static str {
     if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" }
-}
-
-#[test]
-fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
-    let fx = Fx::with_ports();
-    let (repo, _lead, g) = gated(&fx);
-    let setup_adds = git_calls(&fx, is_worktree_add).len();
-    // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
-    fail_git(&fx, 3, is_worktree_add, &format!("fatal: failed to read .git/worktrees/adding/commondir: {}\n", strerror_zero()));
-
-    let added = fx.scoped(|| GateWorktree::add(&repo, &plan(), &key(), &g));
-
-    let gate = added.unwrap();
-    assert!(gate.path().exists());
-    assert_eq!(git_calls(&fx, is_worktree_add).len() - setup_adds, 4, "three rounds on the race, the fourth added");
-    assert_retry_naps(&fx, 3);
-    // A partial worktree a failed round left is removed before the next round.
-    let removals = fx.calls("git").iter().filter(|c| c.args.windows(2).any(|w| w == ["worktree", "remove"])).count();
-    assert_eq!(removals, 3);
-    fx.scoped(|| gate.remove()).unwrap();
-    // Any other failure is not retried.
-    let err = fx.scoped(|| GateWorktree::add(&repo, &plan(), &key(), "no-such-commit")).unwrap_err();
-    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
-    assert_eq!(git_calls(&fx, is_worktree_add).len() - setup_adds, 5, "one more add, not retried");
-    assert_retry_naps(&fx, 3);
-}
-
-/// A process the `FakeSpawn` started: running, with the pid it gave.
-fn started(fx: &Fx) -> Pid {
-    fx.fakes.spawn.spawn(&Launch { program: "cpd".to_owned(), ..Launch::default() }).unwrap()
-}
-
-/// The pid of a process the `FakeSpawn` started and ended.
-fn ended_pid(fx: &Fx) -> u32 {
-    let pid = started(fx);
-    fx.fakes.spawn.exit(pid, 0);
-    pid.0
-}
-
-#[test]
-fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
-    let fx = Fx::with_ports();
-    let (repo, _lead, g) = gated(&fx);
-    let dead = ended_pid(&fx);
-    let live_pid = started(&fx).0;
-    let add = |key: &PrKey, pid: u32| {
-        let path = gate_worktree_path(&repo, &plan(), key, pid).unwrap();
-        fx.git(&repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", "cpd gate", path.to_str().unwrap(), &g]);
-        path
-    };
-    let leftover = add(&key(), dead);
-    let other_pr = add(&PrKey::parse("web").unwrap(), dead);
-    let live = add(&key(), live_pid);
-    assert!(worktrees(&fx, &repo).contains("locked cpd gate"));
-
-    let removed = fx.scoped(|| sweep_gate_worktrees(&repo, &plan(), &key())).unwrap();
-
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert_eq!(removed[0].file_name(), leftover.file_name());
-    assert!(!leftover.exists());
-    assert!(other_pr.exists(), "another PR's leftover is its own sweep's");
-    assert!(live.exists(), "a live pid's gate worktree is left alone");
-    // A locked leftover whose directory is gone is swept too.
-    fs::remove_dir_all(&other_pr).unwrap();
-    assert_eq!(fx.scoped(|| sweep_gate_worktrees(&repo, &plan(), &PrKey::parse("web").unwrap())).unwrap().len(), 1);
-    fx.git(&repo, &["worktree", "remove", "--force", "--force", live.to_str().unwrap()]);
-    assert!(!worktrees(&fx, &repo).contains(".gate-"));
 }
 
 #[test]
@@ -1329,8 +1107,6 @@ fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
     // Rerunning is safe.
     fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
 }
-
-// ------------------------------------------------------------ deadline (contract §1.2, §7)
 
 // ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
 //

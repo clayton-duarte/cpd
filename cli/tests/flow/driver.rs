@@ -3,7 +3,11 @@
 //! the hooks and `gh` as replies of the `FakeRunner`. The Worker is the test's own closure, called after the driver's `n`th poll: it
 //! does what pi would do in its pane (commit, `cpd attempt submit`), or its pi ends, on the same thread, with no process and no wait.
 //!
-//! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt goes straight to the merge.
+//! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
+//! goes straight to the merge. `attempt submit` runs no quick check and no Gate;
+//! the merge (A8) runs `gate.merge` (the repo's `pre-commit`) for every non-review
+//! Job and `gate.pr` (the repo's `pre-merge`) for an `open`/`update` Job, while the
+//! Attempt is still `merging` (the tree shows it yellow). Contract §7.4 step 6, hs-d679.
 //!
 //! The `dispatch_refuses_*` tests refuse before any worktree, window or process exists: they run the command tree
 //! in this process (`Fx`, [`Rows`]) against rows alone, with no repo, no tmux server and no fake pi.
