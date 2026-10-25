@@ -473,3 +473,5 @@ mod tests {
 #[cfg(test)]
 #[path = "action_d550.rs"]
 mod d550;
+#[cfg(test)]
+mod dialog_tests;
