@@ -319,7 +319,7 @@ fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
 /// `cpd watch --restart-tmux` (internal): the restart, started detached by the engine; its output
 /// is `run/tmux-restart.log`. Exits 0 when it did nothing (not needed, not safe, another run).
 pub(super) fn detached() -> Result<cpd_core::output::Output, CpdError> {
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let mut log = |line: &str| {
         let _ = writeln!(std::io::stderr(), "{} cpd tmux restart: {line}", now());
     };

@@ -188,7 +188,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
-    let Env { home, config, store } = match opened {
+    let Env { home, config, store, .. } = match opened {
         Ok(env) => env,
         Err(e) => {
             leave_infra(&home, &plan, &id, &e);

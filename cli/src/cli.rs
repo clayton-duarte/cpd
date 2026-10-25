@@ -11,6 +11,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host_repair as host;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
 use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
@@ -93,8 +94,14 @@ pub enum Command {
     Host(host::Command),
 }
 
-/// Parses `argv` and runs the command.
+/// Parses `argv` and runs the command on the real ports.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_with(&Ports::real(), argv)
+}
+
+/// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
+/// the Jobs that convert them to `Env::open_with` land.
+pub fn run_with(_ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     run_on(argv, cpd_tui::on_a_terminal())
 }
 

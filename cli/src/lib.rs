@@ -18,8 +18,6 @@ pub fn main_with(argv: impl IntoIterator<Item = OsString>, stdout: &mut impl Wri
 }
 
 /// Runs `argv` on `ports` and writes its result to `out`; returns the exit code. The thin mains call it.
-///
-/// The commands do not read `ports` yet: the Jobs that thread it through them come after this one.
-pub fn run_with(_ports: &cpd_core::ports::Ports, argv: impl IntoIterator<Item = OsString>, mut out: &mut dyn Write) -> ExitCode {
-    cpd_core::output::emit(cli::run(argv), &mut out)
+pub fn run_with(ports: &cpd_core::ports::Ports, argv: impl IntoIterator<Item = OsString>, mut out: &mut dyn Write) -> ExitCode {
+    cpd_core::output::emit(cli::run_with(ports, argv), &mut out)
 }

@@ -53,7 +53,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// `cpd job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let catalog = load_catalog(&config)?;
     let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
     let started = start(&mut store, &ctx, &plan, &args.key)?;

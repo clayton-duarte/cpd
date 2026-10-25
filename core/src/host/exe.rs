@@ -9,7 +9,6 @@ use std::ffi::OsStr;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -67,30 +66,22 @@ pub enum Refusal {
     Known,
 }
 
-/// The executable path recorded when this process started (hs-d151, fix 3).
-static STARTED_AS: OnceLock<PathBuf> = OnceLock::new();
-
 /// Records the path of this process's executable (`std::env::current_exe`).
 /// Call it first thing in `main`: once an install replaces the file,
 /// `current_exe()` reads `<path> (deleted)` on Linux. The first record wins.
 /// If the path cannot be found nothing is recorded, and starting a driver
 /// fails loud ([`started_as`]); other commands do not need it.
+/// The record is what `ProcessSpawn::self_exe` answers (`host::spawn`).
 pub fn record_start() {
     if let Ok(path) = std::env::current_exe() {
-        record_start_as(path);
+        super::spawn::record_start_as(path);
     }
-}
-
-fn record_start_as(path: PathBuf) {
-    let _ = STARTED_AS.set(path);
 }
 
 /// The path recorded at process start: what a driver is started from, the
 /// installed file there now. An error if nothing was recorded.
 pub fn started_as() -> Result<&'static Path, CpdError> {
-    STARTED_AS.get().map(PathBuf::as_path).ok_or_else(|| {
-        CpdError::new(ErrorCode::SpawnFailed, "The path of cpd's own executable was not recorded at process start (`current_exe` failed).")
-    })
+    super::spawn::recorded()
 }
 
 /// The path of this process's executable and its identity when the process started.
@@ -208,8 +199,8 @@ mod tests {
     #[test]
     fn started_as_is_the_recorded_path_not_current_exe() {
         assert!(started_as().is_err(), "nothing recorded yet");
-        record_start_as(PathBuf::from("/recorded/cpd"));
-        record_start_as(PathBuf::from("/second/cpd"));
+        crate::host::spawn::record_start_as(PathBuf::from("/recorded/cpd"));
+        crate::host::spawn::record_start_as(PathBuf::from("/second/cpd"));
         assert_eq!(started_as().unwrap(), Path::new("/recorded/cpd"));
         assert_ne!(started_as().unwrap(), std::env::current_exe().unwrap());
     }

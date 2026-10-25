@@ -15,7 +15,6 @@ use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use nix::sys::signal::{self, kill};
 use nix::unistd::Pid as NixPid;
 
-use super::exe;
 use super::priority::idle_prefix;
 use crate::error::{CpdError, ErrorCode};
 
@@ -62,6 +61,21 @@ pub trait Spawn: Send + Sync {
     fn kind(&self) -> &'static str {
         "other"
     }
+}
+
+/// The executable path recorded when this process started (hs-d151, fix 3): the one `ProcessSpawn::self_exe` answers.
+static RECORDED: OnceLock<PathBuf> = OnceLock::new();
+
+/// Records `path` as cpd's own executable; the first record wins.
+pub(super) fn record_start_as(path: PathBuf) {
+    let _ = RECORDED.set(path);
+}
+
+/// The recorded path, or `spawn_failed` when `record_start` found none.
+pub(super) fn recorded() -> Result<&'static std::path::Path, CpdError> {
+    RECORDED.get().map(PathBuf::as_path).ok_or_else(|| {
+        CpdError::new(ErrorCode::SpawnFailed, "The path of cpd's own executable was not recorded at process start (`current_exe` failed).")
+    })
 }
 
 /// The real one: `Command`, `setsid`, `kill(2)`, `/proc` or `libproc`, `exec`.
@@ -247,7 +261,7 @@ impl Spawn for ProcessSpawn {
     }
 
     fn self_exe(&self) -> Result<PathBuf, CpdError> {
-        exe::started_as().map(PathBuf::from)
+        recorded().map(PathBuf::from)
     }
 
     fn kind(&self) -> &'static str {
