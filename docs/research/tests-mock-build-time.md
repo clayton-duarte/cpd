@@ -67,4 +67,50 @@ Load must not matter, so the primary metric is **CPU time**, `user + sys` from `
 
 ## 5. Shared warm CARGO_TARGET_DIR, sccache only, `.noindex` (Job gb-2)
 
-**Status: skeleton; measurements in progress.**
+**Decision: the shared `CARGO_TARGET_DIR` is NOT applied; `scripts/cargo.sh` is unchanged.** It wins by far on time (245 s to 15 s) but it returns wrong results: a worktree whose sources differ from the last build in the shared dir can be served that other build as `Fresh` (section 5.4, reproduced). Make it work comes before make it fast. The `.noindex` name does what it promises (5.5) and is a free win for any target dir that lives outside a hidden directory.
+
+Labels: *measured* = read from a command's output in this session; *inferred* = my reading.
+
+### 5.1 Method (measured)
+
+Machine: 14 cores, load 3-80 from other Workers and Gates during the session (wall times move 2x with the load; **CPU time `user+sys` of `/usr/bin/time -l` does not**, 102-106 s in every cold run). Each "worktree" is a `git archive HEAD` copy under `~/.cache/gb2-measure/wN` (a real worktree would be the same for cargo: files with a fresh mtime; copies, so no real worktree was created or touched), built with `CARGO_TARGET_DIR=<dir> scripts/cargo.sh build --tests --workspace` (the Gate's build, `RUSTC_WRAPPER=sccache` set by the script, one shared sccache server that was already running, its cache at the 10 GiB maximum). Everything was removed afterwards.
+
+### 5.2 Cold build, fresh worktree (measured)
+
+| Run | Target dir | Load at start | Wall | user + sys | Result |
+|---|---|---|---|---|---|
+| B (sccache only) `base2` | fresh, plain name | 21 | 230.7 s | 87.6 + 16.9 = 104.4 s | the baseline of today |
+| B `base3` | fresh, plain name | 8.5 | 245.2 s | 86.7 + 16.8 = 103.4 s | |
+| B `spot-plain` | fresh, plain name | 5.5 | 504.2 s | 86.2 + 16.1 = 102.3 s | wall doubled by the load (11 to 23), CPU did not |
+| A, first build, fills the shared dir `shared-first` | `shared.noindex`, empty | 21 | 246.8 s | 88.9 + 17.0 = 105.9 s | same as B: the first build of a machine is cold |
+| **A, fresh worktree, warm shared dir** `shared-warm2` | `shared.noindex`, warm | 3.2 | **14.6 s** (cargo: 14.10 s) | 58.1 + 16.2 = 74.3 s | **94 % less wall than B (245 s)**, 29 % less CPU |
+| A, same again, two worktrees at once (5.3) | `shared.noindex`, warm | 11 | 14.7 s and 14.8 s | 74.2 s and 0.1 s | |
+
+Reuse (measured, `cargo` output): in the warm shared dir only the 4 workspace crates and the test binaries are rebuilt (`Compiling cpd-core`, `cpd-tui`, `cpd-engine`, `cpd`); every third-party crate, build script (bundled SQLite included) and proc macro is `Fresh`. A cold dir recompiles all of them: sccache cannot help there, because it does not cache the crate types `bin` (build scripts) and `proc-macro`, nor incremental compilations (`sccache --show-stats`, non-cacheable reasons at the end of the session: `crate-type` 1239, `incremental` 496, `missing input` 351, `-o` 90). *Inferred:* that is why a cold build costs ~100 CPU-s with sccache at 70-79 % hits (Cache hits barely moved during my cold builds: +2 to +140 of ~140-320 executed per build, 1386 misses in total at the end).
+
+(B) sccache alone **is** the baseline in the first rows: it does not make a cold dir cheap.
+
+### 5.3 Two builds at once into the shared dir (measured)
+
+Two different "worktrees" (`w7`, `w8`, one extra comment line each in `cli/src/main.rs`), started together into the warm shared dir. Both print `Blocking waiting for file lock on package cache`; `w8` also `Blocking waiting for file lock on build directory`. `w7` built (14.51 s); `w8` waited for it and finished at the same second (14.80 s wall, 0.05 s user: it compiled nothing). So **the wait is the whole build of the first**; two Gates at once never build in parallel in one dir. With load 20-80 that serialises Gates machine-wide. The measured case is mild (each build alone is ~15 s warm).
+
+### 5.4 Wrong results (measured, reproduced)
+
+Cargo's `-C metadata` and fingerprint dir names do not contain the worktree path: the shared dir held **11** `cpd-core-*` fingerprint dirs after builds of 10 differently-located trees, the same as a single-tree dir (11). So two worktrees are **the same unit**, not distinct ones (the premise "fingerprints key on the package path" is false). Freshness is then decided by file mtimes (a source newer than the last build's start is dirty), not by content.
+
+Reproduction: a tree `w10` whose `cli/src/main.rs` differs from the shared dir's last build (it prints `GB2-MARKER-W10` at start) and whose files are older than that build (`touch -t 202401010000`), built with the same command: `Finished dev ... in 0.11 s`, the warnings of the earlier build replayed, and `strings target/debug/cpd | grep -c GB2-MARKER-W10` = **0**. The binary the tests of `w10` would run is another worktree's. The same happened, silently, with `w8` above (different content, 0.05 s of CPU).
+
+How it happens in practice (*inferred*): Worker W2 edits `F` at 10:00; Gate or Worker W1 builds into the shared dir at 10:05; W2 builds at 10:10: `F` is older than W1's build, so cargo reuses W1's `F`. Parallel Workers and Gates make this the normal case, and the failure is a green test of code that was never compiled. No timing of the shared dir justifies that.
+
+### 5.5 `.noindex` and Spotlight (measured)
+
+Cold build into a plain name (`~/gb2-spot/target-plain`) against `target.noindex` in the same place, run one after the other, mds/mdworker CPU sampled every 3 s (`ps -axo pcpu,command | awk '/mdworker|mds/{s+=$1} END{print s}'`) during the build and 90 s after it:
+
+- Spotlight index (`mdfind -onlyin <dir> 'kMDItemFSName == "*.d"'`): **190** files of `target-plain`, **0** of `target.noindex`. So macOS skips a `.noindex` dir (previously `unverified`: now measured on this macOS).
+- mds CPU sums: plain mean 79.7 %, max 281 %; `.noindex` mean 72.2 %, max 167.5 %. The machine's baseline from other worktrees' `target/` dirs is 72-87 % before either build (`mds-before`), so the difference sits inside the noise of one pair of runs (*inferred*: the two builds' own indexing share is the 8 % mean / 113 % peak difference; not proven).
+- A directory under `~/.cache` was not indexed in either name (`mdfind` found 0 `.d` files of `~/.cache/gb2-measure/t-base3` and of `shared.noindex`): *inferred* a hidden parent is skipped too, so the proposed `$HOME/.cache/cpd-target.noindex` is covered either way. `rg -n 'cache|CARGO_TARGET_DIR' scripts docs` finds no existing cpd build cache dir (`~/.cache/cpd-preview` for preview builds only, `docs/ui-preview.md`).
+
+### 5.6 What stays open
+
+- The 44 plain `target/` dirs of the worktrees are what Spotlight indexes today. A `.noindex` name for *per-worktree* targets would remove that load without sharing: cargo has no `target` name setting, but `CARGO_TARGET_DIR` per worktree (for example `$HOME/.cache/cpd-target.noindex/<worktree-name>`) would give it. *Unmeasured* here, not applied (no win on build time: cold again), and the owner of the Gate environment, not this Job, would have to set it.
+- The cost of cold builds is the CPU of build scripts and proc macros that sccache cannot cache; a sound way to reuse them is a per-worktree dir seeded by an APFS clone (`cp -cR`) of a warm dir holding only third-party artefacts. *Untested idea*: the seed must not carry workspace-crate artefacts (the same mtime hazard).
