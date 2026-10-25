@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use common::fx::Fx as Ip;
 use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
+use cpd_core::clock::Clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
@@ -2594,54 +2595,281 @@ fn watch_check_writes_no_row_and_no_event_passing_or_failing() {
     assert_eq!(s.env.query::<i64>("SELECT count(*) FROM events"), before.iter().find(|(t, _)| t == "events").unwrap().1);
 }
 
-// ---- E9's retry with a smaller batch (contract §3.7 E9; FX4; hs-d549, hs-d551) ----
+// ---- E9: the distill runs (contract §3.7 E9; FX4; hs-d549, hs-d551, hs-d592 R2, R5) ----
+//
+// E9 starts `<exe> context distill` through `Spawn`: the `FakeSpawn` records the launch, and the test runs it through `run_with`
+// ([`Children::run_pending`], as the engine naps) with a `pi` route that answers the distiller. The quiet period and the ticks are
+// virtual time.
 
-/// `count` old notes `m1-n<first>`.. in force of Context `ctx`, the newest hours old: the quiet period is over.
-fn old_notes(fx: &Fx, first: i64, count: i64) {
-    use cpd_core::context::{By, Draft, Record};
-    use cpd_core::ids::{ContextId, RecordId};
-
-    let context = ContextId::parse("ctx").unwrap();
-    for n in first..first + count {
-        let record = Record {
-            id: RecordId::parse(&format!("m1-n{n}")).unwrap(),
-            at: ago(600 - n),
-            by: By { session: None, plan: None },
-            text: format!("Note number {n}."),
-            draft: Draft::Note,
-        };
-        fx.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
-    }
-}
-
-/// A fake pi that logs the number of records of the batch it is given, and curates it when that is at most `fits`
-/// (the model "cannot handle" a bigger batch: it answers no JSON line).
-fn pi_handling_at_most(fx: &Fx, fits: u32) {
-    fx.env.fake_pi(&common::pi_says(&format!(
-        "n=$(grep -c '^\\[' batch.md)\necho $n >> \"$HOME/batches\"\nif [ $n -le {fits} ]; then\n{}\nelse\necho 'I cannot do this.'\nfi",
-        common::CURATES_ALL
-    )));
+/// An engine home for E9: the routes of [`engine`], and the distiller (`pi`) curating every record of its batch, noting each
+/// batch's size in the returned list. `fits` is the biggest batch it can handle: a bigger one gets no JSON line ("the model cannot
+/// do this"), which fails the run.
+fn distilling(config_extra: &str, fits: u32) -> (Ip, Arc<Mutex<Vec<u32>>>) {
+    let fx = engine(config_extra);
+    let sizes = Arc::new(Mutex::new(Vec::new()));
+    let seen = sizes.clone();
+    fx.route_fn("pi", move |call| {
+        let batch = fs::read_to_string(call.cwd.as_ref().expect("pi runs in the digest directory").join("batch.md")).unwrap();
+        let n = u32::try_from(batch.lines().filter(|l| l.starts_with('[')).count()).unwrap();
+        seen.lock().unwrap().push(n);
+        Reply::ok(&common::engine::pi_stream(&if n <= fits { common::engine::curates_all(&batch) } else { "I cannot do this.".to_owned() }))
+    });
+    (fx, sizes)
 }
 
 /// The batch sizes pi saw, in order, a run of equal ones (the ladder's steps of one run) counted once.
-fn batch_sizes(fx: &Fx) -> Vec<u32> {
-    let text = fs::read_to_string(fx.env.home().join("batches")).unwrap_or_default();
-    let mut sizes: Vec<u32> = text.lines().map(|l| l.trim().parse().unwrap()).collect();
+fn batch_sizes(sizes: &Mutex<Vec<u32>>) -> Vec<u32> {
+    let mut sizes = sizes.lock().unwrap().clone();
     sizes.dedup();
     sizes
 }
 
+/// `count` old notes `m1-n<first>`.. in force of Context `ctx`, the newest hours old at the clock's `now`: the quiet period is over.
+fn old_notes_at(home: &Path, now: OffsetDateTime, first: i64, count: i64) {
+    use cpd_core::context::{By, Draft, Record};
+    use cpd_core::ids::{ContextId, RecordId};
+
+    let context = ContextId::parse("ctx").unwrap();
+    let mut store = Store::open(&CpdHome::resolve(Some(home.into()), None).unwrap(), 5000).unwrap();
+    for n in first..first + count {
+        let record = Record {
+            id: RecordId::parse(&format!("m1-n{n}")).unwrap(),
+            at: cpd_core::clock::timestamp(now - time::Duration::minutes(600 - n)),
+            by: By { session: None, plan: None },
+            text: format!("Note number {n}."),
+            draft: Draft::Note,
+        };
+        store.write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+    }
+}
+
+fn old_notes(fx: &Ip, first: i64, count: i64) {
+    old_notes_at(&fx.env.cpd_home(), fx.fakes.clock.utc(), first, count);
+}
+
+/// What a step of a running engine reads: a read-only connection to the store, and the `pi` calls so far. `Send + Sync`, so a step owns it.
+struct Probe {
+    conn: Mutex<Connection>,
+    runner: Arc<FakeRunner>,
+}
+
+impl Probe {
+    fn new(fx: &Ip) -> Arc<Probe> {
+        let db = fx.env.cpd_home().join("cpd.db");
+        let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        Arc::new(Probe { conn: Mutex::new(conn), runner: fx.fakes.runner.clone() })
+    }
+
+    fn count(&self, sql: &str) -> i64 {
+        self.conn.lock().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn curations(&self) -> i64 {
+        self.count("SELECT count(*) FROM record_curations")
+    }
+
+    fn pi_calls(&self) -> usize {
+        self.runner.calls().iter().filter(|call| call.program.ends_with("pi")).count()
+    }
+}
+
+/// Runs the engine on virtual time until `step` says so; it is given the virtual time passed since the run began, once per nap,
+/// after the `cpd` children E9 started have run.
+fn drive(fx: &Ip, mut step: impl FnMut(Duration) -> bool + Send + 'static) {
+    let mut children = fx.children();
+    let clock = (*fx.fakes.clock).clone();
+    let from = clock.elapsed();
+    fx.watch_steps(move |_| {
+        children.run_pending();
+        step(clock.elapsed() - from)
+    })
+    .unwrap();
+}
+
+/// [`drive`] for `d` of virtual time: whole ticks of the engine.
+fn drive_for(fx: &Ip, d: Duration) {
+    drive(fx, move |elapsed| elapsed >= d);
+}
+
+/// [`drive`] until `cond` holds, then for `then` more of virtual time (whole ticks in which something wrong could still start).
+fn drive_until(fx: &Ip, mut cond: impl FnMut() -> bool + Send + 'static, then: Duration) {
+    let mut at = None;
+    drive(fx, move |elapsed| {
+        if at.is_none() && cond() {
+            at = Some(elapsed);
+        }
+        at.is_some_and(|at| elapsed >= at + then)
+    });
+}
+
+/// No curation anywhere: no pi call, no `record_curations` row, no `context-curated` or `error` Event.
+fn assert_nothing_curated(probe: &Probe) {
+    assert_eq!(probe.pi_calls(), 0, "pi was called");
+    assert_eq!(probe.curations(), 0);
+    assert_eq!(probe.count("SELECT count(*) FROM events WHERE kind = 'context-curated'"), 0);
+    assert_eq!(probe.count("SELECT count(*) FROM events WHERE kind = 'error'"), 0);
+}
+
+const SECOND: Duration = Duration::from_secs(1);
+
 #[test]
 fn e9_retries_a_failed_run_with_the_next_smaller_batch() {
-    let fx = fx_bare("");
+    let (fx, sizes) = distilling("", 15);
     old_notes(&fx, 1, 60);
-    pi_handling_at_most(&fx, 15);
-    let engine = fx.start();
-    common::wait_until_for("a batch of 15 curated", Duration::from_secs(30), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") >= 15);
-    engine.stop();
-    assert_eq!(batch_sizes(&fx)[..3], [60, 30, 15], "a failed state is retried with 30, then 15 (the model gets a smaller batch)");
+    let probe = Probe::new(&fx);
+    drive_until(&fx, move || probe.curations() >= 15, Duration::ZERO);
+    assert_eq!(batch_sizes(&sizes)[..3], [60, 30, 15], "a failed state is retried with 30, then 15 (the model gets a smaller batch)");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 15);
+}
+
+/// E9 (contract §3.7, §4.6; hs-d551): a backlog of uncurated records is curated one batch of at most 60 per run, the next
+/// tick starting the next run.
+#[test]
+fn e9_curates_the_backlog_one_batch_per_run() {
+    let (fx, sizes) = distilling("", 60);
+    // 125 records in force, the newest hours old: the quiet period is over.
+    old_notes(&fx, 1, 125);
+    let probe = Probe::new(&fx);
+    // The whole backlog curated, then three more ticks in which a fourth run could start.
+    drive_until(&fx, move || probe.curations() == 125, 3 * SECOND);
+    assert_eq!(*sizes.lock().unwrap(), [60, 60, 5], "one batch per run");
+    assert_eq!(fx.calls("pi").len(), 3);
+    assert_eq!(fx.events("context-curated").len(), 3);
+}
+
+#[test]
+fn e9_stops_after_a_failed_run_of_batch_1() {
+    let (fx, sizes) = distilling("", 0);
+    old_notes(&fx, 1, 70);
+    let probe = Probe::new(&fx);
+    let seen = sizes.clone();
+    let (mut began, mut calls) = (None, None);
+    drive(&fx, move |elapsed| {
+        if began.is_none() && seen.lock().unwrap().contains(&1) {
+            began = Some(elapsed);
+        }
+        let Some(began) = began else { return false };
+        if calls.is_none() && elapsed >= began + 5 * SECOND {
+            calls = Some(probe.pi_calls());
+        }
+        if let Some(calls) = calls {
+            assert_eq!(probe.pi_calls(), calls, "the engine stopped trying: the state did not change");
+        }
+        elapsed >= began + 15 * SECOND
+    });
+    assert_eq!(batch_sizes(&sizes), [60, 30, 15, 5, 1], "one run per batch size, and none after batch 1 failed");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
+}
+
+#[test]
+fn e9_starts_again_at_60_when_the_state_changes() {
+    let (fx, sizes) = distilling("", 0);
+    old_notes(&fx, 1, 70);
+    let home = fx.env.cpd_home();
+    let clock = (*fx.fakes.clock).clone();
+    let seen = sizes.clone();
+    let (mut began, mut added) = (None, false);
+    drive(&fx, move |elapsed| {
+        if began.is_none() && seen.lock().unwrap().contains(&1) {
+            began = Some(elapsed);
+        }
+        let Some(began) = began else { return false };
+        if !added && elapsed >= began + 5 * SECOND {
+            // A new record changes the state: the next run is at 60 again.
+            old_notes_at(&home, clock.utc(), 71, 1);
+            added = true;
+        }
+        batch_sizes(&seen).len() > 5
+    });
+    assert_eq!(batch_sizes(&sizes)[..6], [60, 30, 15, 5, 1, 60]);
 }
 
 // ---- E9 and the curation floor (hs-d592 R2, R5) ----
 
+#[test]
+fn e9_skips_an_archived_context() {
+    let (fx, _) = distilling("context_curation_min_records = 5", 60);
+    old_notes(&fx, 1, 30);
+    fx.env.sql("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'ctx';");
+    drive_for(&fx, 4 * SECOND);
+    assert_nothing_curated(&Probe::new(&fx));
+}
+
+#[test]
+fn e9_skips_a_context_under_the_floor_until_it_reaches_it() {
+    let (fx, _) = distilling("context_curation_min_records = 5", 60);
+    old_notes(&fx, 1, 4);
+    let probe = Probe::new(&fx);
+    let home = fx.env.cpd_home();
+    let clock = (*fx.fakes.clock).clone();
+    let (mut added, mut done) = (false, None);
+    drive(&fx, move |elapsed| {
+        if !added {
+            if elapsed >= 4 * SECOND {
+                assert_nothing_curated(&probe);
+                old_notes_at(&home, clock.utc(), 5, 1);
+                added = true;
+            }
+            return false;
+        }
+        if done.is_none() && probe.curations() == 5 {
+            done = Some(elapsed);
+        }
+        done.is_some_and(|at| elapsed >= at + 3 * SECOND)
+    });
+    assert!(!fx.calls("pi").is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 5);
+    assert_eq!(fx.events("context-curated").len(), 1);
+}
+
+#[test]
+fn e9_reads_the_floor_from_config_toml_at_every_tick() {
+    let (fx, _) = distilling("context_curation_min_records = 100", 60);
+    old_notes(&fx, 1, 30);
+    let probe = Probe::new(&fx);
+    let path = fx.env.cpd_home().join("config.toml");
+    let mut rewritten = false;
+    drive(&fx, move |elapsed| {
+        if !rewritten {
+            if elapsed >= 4 * SECOND {
+                assert_nothing_curated(&probe);
+                // rewrite the floor, every other line kept, with the engine running
+                let text = fs::read_to_string(&path).unwrap();
+                assert!(text.contains("context_curation_min_records = 100"), "{text}");
+                fs::write(&path, text.replace("context_curation_min_records = 100", "context_curation_min_records = 25")).unwrap();
+                rewritten = true;
+            }
+            return false;
+        }
+        probe.curations() == 30
+    });
+    assert_eq!(fx.events("context-curated").len(), 1);
+}
+
+/// The test kit's [`Children`](common::fx::Children): a launch the `FakeSpawn` recorded runs once, through `run_with`, its output
+/// goes to the launch's log and its pid ends with the command's exit code.
+#[test]
+fn a_recorded_launch_runs_once_in_process_and_its_pid_ends_with_the_exit_code() {
+    use cpd_core::host::spawn::{Launch, Spawn};
+    use std::os::unix::process::ExitStatusExt;
+
+    let fx = engine("");
+    let log = fx.env.root().join("child.log");
+    let launch = |args: &[&str]| Launch {
+        program: common::engine::ENGINE_EXE.to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        stdout_to: Some(log.clone()),
+        ..Launch::default()
+    };
+    let ok = fx.fakes.spawn.spawn(&launch(&["events", "list"])).unwrap();
+    let refused = fx.fakes.spawn.spawn(&launch(&["context", "distill", "--context", "nope"])).unwrap();
+    assert!(fx.fakes.spawn.alive(ok) && fx.fakes.spawn.alive(refused), "a recorded launch runs until the test runs it");
+
+    let mut children = fx.children();
+    let done = children.run_pending();
+    assert_eq!(done.iter().map(|(_, code)| *code).collect::<Vec<_>>(), [0, 4]);
+    assert_eq!(fx.fakes.spawn.try_wait(ok).unwrap().unwrap().into_raw(), 0);
+    assert_eq!(fx.fakes.spawn.try_wait(refused).unwrap().unwrap().code(), Some(4));
+    assert_eq!(fs::read_to_string(&log).unwrap().lines().count(), 2, "each command's JSON line is in the log");
+    assert!(children.run_pending().is_empty(), "a launch runs once");
+}

@@ -33,9 +33,9 @@ use nix::unistd::{dup, dup2_stdin, dup2_stdout};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
-use cpd_core::host::spawn::Launch;
+use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
-use cpd_core::ports::Fakes;
+use cpd_core::ports::{Fakes, Ports};
 
 use super::{Run, TestEnv};
 
@@ -388,18 +388,81 @@ impl Fx {
     /// Runs `cpd <args>` in `cwd` with `set` added to and `remove` taken out of its environment, on the ports of this
     /// `Fx`; the environment and the directory are put back after.
     fn run(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
+        if self.on_fake_ports {
+            return run_in_process(&self.fakes.ports, cwd, args, set, remove);
+        }
         let _scope = Scope::enter(cwd, set, remove);
         let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
         let mut stdout = Vec::new();
-        let code = if self.on_fake_ports {
-            cpd::run_with(&self.fakes.ports, argv, &mut stdout)
-        } else {
-            cpd::main_with(argv, &mut stdout)
-        };
-        // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
-        // `print!` on the process's, which nobody can read back here.
-        assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
-        Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+        let code = cpd::main_with(argv, &mut stdout);
+        finish(args, code, stdout)
+    }
+
+    /// The `cpd` children the engine starts on this `Fx`'s `FakeSpawn`, which the test runs itself: [`Children`].
+    pub fn children(&self) -> Children {
+        Children { ports: self.fakes.ports.clone(), spawn: self.fakes.spawn.clone(), run: 0 }
+    }
+}
+
+/// `cpd <args>` in `cwd` with `set` added to and `remove` taken out of the environment, on `ports`, through `run_with`; the
+/// environment and the directory are put back after.
+fn run_in_process(ports: &Ports, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
+    let _scope = Scope::enter(cwd, set, remove);
+    let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
+    let mut stdout = Vec::new();
+    let code = cpd::run_with(ports, argv, &mut stdout);
+    finish(args, code, stdout)
+}
+
+/// The [`Run`] of `cpd <args>` that wrote `stdout` and ended with `code`.
+fn finish(args: &[&str], code: ExitCode, stdout: Vec<u8>) -> Run {
+    // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
+    // `print!` on the process's, which nobody can read back here.
+    assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
+    Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+}
+
+/// The first pid a `FakeSpawn` hands out (`FIRST_FAKE_PID` of core/src/host/spawn.rs): its nth start is `FIRST_PID + n`.
+const FIRST_PID: u32 = 1000;
+
+/// The detached `cpd` children an engine started on the `FakeSpawn` (E9's distill run), run by the test through `run_with`:
+/// the fake only records a launch and starts nothing. Holds what it needs by value, so a `Send` closure of
+/// [`Fx::watch_steps`] can own it and run the children as the engine naps.
+pub struct Children {
+    ports: Ports,
+    spawn: Arc<FakeSpawn>,
+    /// How many launches ran already.
+    run: usize,
+}
+
+impl Children {
+    /// Runs each launch recorded since the last call, in order, as [`Fx::run_launch`] does (its `env_set`, `env_remove` and
+    /// `cwd` around the call, put back after), appends what the command wrote to the launch's `stdout_to` (the log the
+    /// real child writes to) and marks its pid exited with the command's exit code: the engine's next sweep sees it end.
+    /// Returns the launches run, with their exit codes. Every launch must be a `spawn` of the `FakeSpawn`, not an `exec`.
+    pub fn run_pending(&mut self) -> Vec<(Launch, i32)> {
+        let launches = self.spawn.launches();
+        let total = launches.len();
+        let mut done = Vec::new();
+        for (index, launch) in launches.into_iter().enumerate().skip(self.run) {
+            let pid = Pid(FIRST_PID + u32::try_from(index).expect("a few launches"));
+            assert!(self.spawn.alive(pid), "launch {index} ({}) is not a running spawn of pid {}", launch.program, pid.0);
+            let cwd = launch.cwd.clone().unwrap_or_else(|| std::env::current_dir().expect("the current directory"));
+            let set: Vec<_> = launch.env_set.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
+            let remove: Vec<_> = launch.env_remove.iter().map(String::as_str).collect();
+            let args: Vec<_> = launch.args.iter().map(String::as_str).collect();
+            let run = run_in_process(&self.ports, &cwd, &args, &set, &remove);
+            let code = run.exit;
+            if let Some(log) = &launch.stdout_to {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(log).expect("open the child's log");
+                file.write_all(run.stdout.as_bytes()).expect("write the child's log");
+            }
+            self.spawn.exit(pid, code);
+            done.push((launch, code));
+        }
+        self.run = total;
+        done
     }
 }
 

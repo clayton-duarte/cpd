@@ -281,6 +281,34 @@ impl Fx {
     }
 }
 
+/// What a `pi --mode json` one-shot run prints (shapes recorded from pi 1.3.0, as [`super::PI_REPLY`]): a stream whose final
+/// assistant message holds `answer`.
+pub fn pi_stream(answer: &str) -> String {
+    let message = json!({"type": "message_end", "message": {
+        "role": "assistant",
+        "content": [{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": answer}],
+        "usage": {"input": 2, "output": 4, "cacheRead": 100, "cacheWrite": 631, "reasoning": 1, "totalTokens": 737,
+                  "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0.25}},
+        "stopReason": "stop",
+    }});
+    format!(
+        "{}\n{}\n{message}\n{}\n",
+        json!({"type": "session", "version": 3, "id": "x", "timestamp": "2026-10-19T01:59:25.851Z", "cwd": "/"}),
+        json!({"type": "agent_start"}),
+        json!({"type": "agent_settled", "aborted": false})
+    )
+}
+
+/// The distiller's answer that curates every record of `batch_md` (the Context's `batch.md`): one valid JSON line per block,
+/// with no retirement and no doc candidate ([`super::CURATES_ALL`] in Rust).
+pub fn curates_all(batch_md: &str) -> String {
+    batch_md
+        .lines()
+        .filter_map(|line| line.strip_prefix('[')?.split_once(']'))
+        .map(|(id, _)| json!({"id": id, "topic": "t", "short": format!("s {id}"), "retire": null, "doc": false}).to_string() + "\n")
+        .collect()
+}
+
 /// `cpd` run by `run_with` on the ports it holds.
 struct CpdRoute {
     ports: Ports,
