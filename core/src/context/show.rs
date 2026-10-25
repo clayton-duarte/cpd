@@ -4,10 +4,9 @@
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Record, ShowArgs, digest, render};
+use super::{curated, ContextRow, Record, ShowArgs, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::config::Config;
 use crate::ids::{ContextId, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
@@ -16,9 +15,6 @@ use crate::store::Store;
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let Env { config, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
-    if args.digest {
-        return show_digest(&config, &mut store, &id);
-    }
     if let Some(topic) = &args.topic {
         return show_topic(&mut store, &id, topic);
     }
@@ -62,21 +58,11 @@ fn retired_labels(conn: &rusqlite::Connection, context: &ContextId) -> Result<re
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// `context show --digest` (§3.3): the digest cpd renders now, and no record.
-fn show_digest(config: &Config, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
-    let (row, digest) = store.read(|conn| Ok((ContextRow::require(conn, context)?, digest::render(conn, context, config.context_recent_days)?)))?;
-    Ok(Output::success(json!({
-        "context": {"id": row.id, "title": row.title, "jira": row.jira},
-        "digest": {"bytes": digest.text.len(), "records": digest.records},
-        "markdown": digest.text,
-    })))
-}
-
 /// `context show --topic <t>` (§3.3): every curated record in force of the topic, oldest first.
 fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Output, CpdError> {
-    let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, context)?, digest::by_topic(conn, context, topic)?)))?;
+    let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, context)?, curated::by_topic(conn, context, topic)?)))?;
     if found.is_empty() {
-        let topics = store.read(|conn| digest::topics(conn, context))?;
+        let topics = store.read(|conn| curated::topics(conn, context))?;
         return Err(CpdError::new(ErrorCode::TopicNotFound, format!("Context {context} has no curated record of topic {topic}."))
             .with("context", context.as_str())
             .with("topic", topic)

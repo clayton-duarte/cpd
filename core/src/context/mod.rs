@@ -16,13 +16,13 @@ mod archive;
 mod delete;
 mod contexts;
 pub mod curation;
-pub mod digest;
+pub mod curated;
 pub mod distill;
 pub mod engine;
 pub mod inforce;
 mod list;
 pub(crate) mod legacy;
-mod manager;
+pub(crate) mod manager;
 mod owner;
 mod pending;
 mod record;
@@ -200,9 +200,6 @@ pub struct ShowArgs {
     /// Print this one record in full
     #[arg(long, value_name = "id", conflicts_with = "since")]
     record: Option<RecordId>,
-    /// Print the digest cpd renders now, and no record
-    #[arg(long, conflicts_with_all = ["since", "record", "topic"])]
-    digest: bool,
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,

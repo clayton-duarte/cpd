@@ -277,15 +277,14 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest] [--topic <t>]
+cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
-| `--digest` | print the Context's digest (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--topic` (`usage`) |
-| `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--digest` (`usage`) |
+| `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
 
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor, and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
@@ -302,13 +301,7 @@ Effects: none. Output: the Context, its records in index order, and `markdown`, 
 
 Idempotent: read-only.
 
-**`--digest`** (hs-d194, D6; rewritten by hs-d549, hs-d551; FX6, FX8). **Built by cpd on demand, with no model and no file** (contract §4.6 "The Context digest"): the relevant curated records in force, as short forms by topic, then the topic list with counts. Relevant: the records whose `at` is within the last `context_recent_days` days (contract §8.2; default 1), the open questions, and the records cited by id in the text of a brief of a Plan that is not done, archived or deleted. The text is `## <topic>` (topics ordered by their newest relevant record, newest first) with `- [<id>] <short>` lines, then `## Topics` with `- <topic> (<n>)`, `n` the records in force of that topic; at most 32768 bytes (FX6), the oldest relevant lines dropped first, ending with `and <k> older: cpd context show --context <context> --topic <t>` per topic lost. FX8: `digest` output fields are `{bytes, records}` only, and the text is `markdown`. A Context with no curated record in force is not an error: `markdown` is empty and `records` 0 (the uncurated records are read with `context show`; `cpd context distill` curates them, §3.12).
 
-```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
- "digest": {"bytes": 4120, "records": 37},
- "markdown": "## engine\n- [hs-d7] one engine per machine …\n\n## Topics\n- engine (12)\n…"}
-```
 
 **`--topic <t>`** (FX5 of hs-d549, hs-d551): prints every curated record in force of the topic `<t>` (the exact topic string of `record_curations`), oldest first, one per line `- [<id>] <short>`; the way to read what the digest leaves out. `markdown` is those lines and `records` the list `{id, short}`. FX5: an unknown topic (no curated record in force has that topic) is refused `topic_not_found` (exit 4, `details: {context, topic, topics}`, the topics in use). Read-only.
 
@@ -318,7 +311,28 @@ Idempotent: read-only.
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-### 3.4 `context decide`, `context note`, `context ask`
+### 3.4 `context search`
+
+```
+cpd context search <query> [--context <id>]
+```
+
+Searches the Context's curated records by topic and short form against the query string (hs-d655: on-demand retrieval). The Context is `--context`, else the selected Plan's (§1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+| Flag | Meaning |
+|---|---|
+| `<query>` | search string to match against topics and short forms of curated records |
+
+Effects: none. Output: records with curated topics or short forms matching the query, in topic order, then index order. `markdown` renders results; `records` is the list of matching `{id, topic, short}` entries.
+
+Idempotent: read-only.
+
+### 3.5 `context decide`, `context note`, `context ask`
 
 ```
 cpd context decide <text> [--supersedes <record>] [--context <id>]
@@ -346,7 +360,7 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-### 3.5 `context answer`
+### 3.6 `context answer`
 
 ```
 cpd context answer <question> <text> [--context <id>]
@@ -367,11 +381,11 @@ Effects: the record write with kind `answer` (letter `a`) and `question` = `<que
 
 Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
 
-### 3.6 `context sync`
+### 3.7 `context sync`
 
 Removed by Plan manager B1 (hs-a1): Contexts are machine-local; records live in the database. The command is now unknown (`usage`, exit 2); engine E6 is removed with it (contract §3.7).
 
-### 3.7 `context rename`
+### 3.8 `context rename`
 
 ```
 cpd context rename <id> --title <text>
@@ -391,7 +405,7 @@ Effects: an unchanged title: `"already": true`, nothing written. Otherwise **row
 
 Idempotent: yes.
 
-### 3.8 `context archive`
+### 3.9 `context archive`
 
 ```
 cpd context archive <id>
@@ -416,7 +430,7 @@ Effects, in this order (all or nothing):
 
 `closed` lists the panes closed in step 2. Idempotent: yes; a Context that is archived already (and whose cascade has nothing to archive) returns `"already": true`, writes nothing and closes nothing.
 
-### 3.9 `context unarchive`
+### 3.10 `context unarchive`
 
 ```
 cpd context unarchive <id>
@@ -436,7 +450,7 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 
 `archived` lists the objects changed (their `archived_at` is now null); `closed` is always empty. Idempotent: yes; nothing archived: `"already": true`, nothing written.
 
-### 3.10 `context manager`
+### 3.11 `context manager`
 
 ```
 cpd context manager [--context <c>] [--by-user]
@@ -467,7 +481,7 @@ The command never moves the chat slot (hs-d103); `session open <manager>` does (
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
 
-### 3.11 `context pending`
+### 3.12 `context pending`
 
 ```
 cpd context pending [--context <c>] [--markdown]
@@ -506,13 +520,13 @@ With `--markdown` the output is the same data as markdown: `# Pending work in <c
 
 Idempotent: yes; it only reads.
 
-### 3.12 `context distill`
+### 3.13 `context distill`
 
 ```
 cpd context distill [--context <c>] [--batch <n>]
 ```
 
-Curates one batch of the Context's records (contract §4.6 "The distiller curates" and "The distill run", hs-d549, hs-d551, replacing the digest-writing run of hs-d194 D1–D5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated): at most **N uncurated records** in force (FX4: N is `--batch` from 1 to 60, default 60, at most 49152 bytes of their text in batch.md, hs-d549, hs-d551) get a topic and a short form (for machines), and the run may propose retirements and flag documentation candidates, written by one-shot pi and **checked structurally by cpd**, with each line validated independently so invalid lines do not fail the whole output (GXD1). It writes no digest: the digest is rendered by cpd on demand, with no model (§3.3 `--digest`). Engine E9 starts it detached when the Context has uncurated records in force and the newest of them is 10 minutes old, or 20 or more exist (contract §3.7); one batch per run, so a backlog (751 records for `building-cpd`) is curated by one run per tick. When a run for a state (the highest uncurated seq and count) fails (distill_invalid only when no line passes, distill_failed after the whole ladder, or a crash), E9 starts the next run for the same state with the next smaller batch (60 → 30 → 15 → 5 → 1, FX4) and records the batch size with the state; after batch 1 fails, it stops until the state changes (a success curates at least one record, GXD1, or a new record) or the engine restarts (contract §3.7 E9). Anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
+Curates one batch of the Context's records (contract §4.6 "The distiller curates" and "The distill run", hs-d549, hs-d551, replacing the digest-writing run of hs-d194 D1–D5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated): at most **N uncurated records** in force (FX4: N is `--batch` from 1 to 60, default 60, at most 49152 bytes of their text in batch.md, hs-d549, hs-d551) get a topic and a short form (for machines), and the run may propose retirements and flag documentation candidates, written by one-shot pi and **checked structurally by cpd**, with each line validated independently so invalid lines do not fail the whole output (GXD1). The curations are read by `context show --topic` for discovery and retrieval. Engine E9 starts it detached when the Context has uncurated records in force and the newest of them is 10 minutes old, or 20 or more exist (contract §3.7); one batch per run, so a backlog (751 records for `building-cpd`) is curated by one run per tick. When a run for a state (the highest uncurated seq and count) fails (distill_invalid only when no line passes, distill_failed after the whole ladder, or a crash), E9 starts the next run for the same state with the next smaller batch (60 → 30 → 15 → 5 → 1, FX4) and records the batch size with the state; after batch 1 fails, it stops until the state changes (a success curates at least one record, GXD1, or a new record) or the engine restarts (contract §3.7 E9). Anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -554,7 +568,7 @@ Failures, after the lock is taken. Each appends **one** `error` Event `{source: 
 
 Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
-### 3.13 `context owner`
+### 3.14 `context owner`
 
 ```
 cpd context owner <login> [--context <c>]
@@ -586,7 +600,7 @@ Effects: **rows and Events**, one transaction with the checks and the UPDATE on 
 
 Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
 
-### 3.14 `context delete`
+### 3.15 `context delete`
 
 ```
 cpd context delete <id> [--yes]
@@ -634,7 +648,7 @@ Idempotent: yes; a Context already deleted returns `"already": true` and writes 
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `context_delete.rs` expects no Session with `context = <id>`, but the Leads' rows stay (tombstoned Plans reference them), and `plan_rows` as under `plan delete` counts the Leads and the Plans' `plan-deleted` Events; the Manager and every other Session are what is gone.
 
-### 3.15 `context curation` (internal)
+### 3.16 `context curation` (internal)
 
 ```
 cpd context curation [--context <c>] [--limit <n>]
@@ -664,7 +678,7 @@ Effects: none. Output: `retire`, the first n `pending` rows of `record_retiremen
 
 Idempotent: read-only.
 
-### 3.16 `context retire` (internal)
+### 3.17 `context retire` (internal)
 
 ```
 cpd context retire [--context <c>] [--approve <id,...>] [--reject <id,...>]
@@ -695,7 +709,7 @@ Effects: **one transaction**, all or nothing (a refusal writes nothing). **Rows:
 
 Idempotent: no. A rerun finds the rows decided and is refused `curation_not_pending`.
 
-### 3.17 `context docs` (internal)
+### 3.18 `context docs` (internal)
 
 ```
 cpd context docs [--context <c>] [--send <id,...>] [--dismiss <id,...>]
@@ -759,10 +773,11 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
-3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the Context (contract §4.6 "Consumers", hs-d194 D6):
-   - **the digest** (§3.3 `--digest`: the relevant short forms by topic, then the topic list; built by cpd, no model; hs-d549, hs-d551), then the **uncurated** records in force raw, oldest first, at most 20, rendered as `context show` renders them (briefs short), then, when more exist, `and <K> more: cpd context show --context <c>`, then the pointer line `cpd context show --since <seq>`; `cpd context show --topic <t>` reads the rest of a topic;
-
-   The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
+3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
+   ```
+   Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
+   ```
+   The Lead gets on-demand access to the Context through these commands. The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
 5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2).
 
@@ -3299,7 +3314,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_recent_days` `1` (hs-d549, hs-d551: the days of curated records the digest takes as relevant; an integer >= 1), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",

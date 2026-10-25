@@ -51,7 +51,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "lead_tier": "O2",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
-            "context_recent_days": 1,
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "H3",
@@ -201,7 +200,6 @@ machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
 test_concurrency = 64
-context_recent_days = 3650
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
@@ -1063,27 +1061,6 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     );
 }
 
-/// Contract §8.2 (hs-d549, hs-d551): `context_recent_days`, default 1, an integer >= 1.
-#[test]
-fn context_recent_days_defaults_to_1_and_refuses_0() {
-    let fx = Fx::new();
-    let out = config_with(&fx, MINIMAL).ok();
-    assert_eq!(out["config"]["context_recent_days"], 1, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "default", "{out}");
-
-    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 7, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "file", "{out}");
-
-    for bad in ["0", "-1", "1.5", "\"2\""] {
-        let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = {bad}\n"));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{bad}");
-        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
-        assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
-    }
-}
-
 /// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
 #[test]
 fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
@@ -1105,16 +1082,3 @@ fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integ
     }
 }
 
-/// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
-#[test]
-fn context_recent_days_above_3650_is_refused() {
-    let fx = Fx::new();
-    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
-
-    let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3651\n"));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid", "{err}");
-    assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
-}
