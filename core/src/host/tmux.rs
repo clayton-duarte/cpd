@@ -26,6 +26,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
@@ -519,6 +520,12 @@ impl Tmux {
         self
     }
 
+    /// This server, whose `kill-server` waits on `clock` instead of the real time.
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Tmux {
+        let _ = clock;
+        todo!("Tmux::with_clock: kill_server naps and reads the deadline on the Clock")
+    }
+
     pub fn socket(&self) -> &str {
         &self.socket
     }
@@ -990,6 +997,12 @@ pub fn installed_version() -> Result<String, CpdError> {
             .with("exit", out.status.code())
             .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
+}
+
+/// [`installed_version`], the call run by `runner`.
+pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
+    let _ = runner;
+    todo!("installed_version_with: `tmux -u -V` through the Runner")
 }
 
 /// Whether a failed call's stderr is tmux saying that no server runs: its

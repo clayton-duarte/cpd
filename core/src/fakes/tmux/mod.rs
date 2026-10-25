@@ -6,9 +6,11 @@ pub mod cmds;
 pub mod ctl;
 pub mod format;
 pub mod hooks;
+pub mod route;
 pub mod state;
 pub mod target;
 
+pub use route::TmuxRoute;
 pub use state::{KeyLog, Pane, SessionRow, State, WindowRow};
 
 use crate::host::runner::{Runner, SystemRunner};
@@ -93,6 +95,13 @@ impl FakeTmux {
         let session: i64 = s(&db, "SELECT min(id) FROM sessions", []).expect("FakeTmux::add_client: the server has no session");
         db.execute("INSERT INTO clients (name, session, width, height) VALUES (?1, ?2, ?3, ?4)", (name, session, w, h))
             .expect("FakeTmux::add_client");
+    }
+    /// What a `display-popup` call answers: `answer` gets the popup's argv (the subcommand name first) and returns the
+    /// text of the outcome file the popup's command would write to the path its `--out=` names, or `None` for no
+    /// file. The file is written before the call returns. Without it no popup writes a file (the real no-answer path).
+    pub fn on_popup(&self, answer: impl Fn(&[String]) -> Option<String> + Send + Sync + 'static) {
+        let _ = answer;
+        todo!("FakeTmux::on_popup")
     }
     /// The text `capture-pane -p` prints for `pane` (`%n`).
     pub fn set_screen(&self, pane: &str, text: &str) {
@@ -819,6 +828,8 @@ mod gaps_tests;
 mod kit;
 #[cfg(test)]
 mod nested_tests;
+#[cfg(test)]
+mod route_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]
