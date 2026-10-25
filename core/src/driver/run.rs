@@ -759,6 +759,21 @@ impl Driver {
     }
 }
 
+/// A9 for a linear Attempt (hs-d680/hs-d682/hs-d683, `wlinear-tests`): its branch is the PR's Lead Branch, so a
+/// failed or cancelled Attempt puts the Lead Branch back to the `base_sha` it started from (`git -C <workflow
+/// worktree> reset --hard <base_sha>`), discarding what the Attempt left, and the workflow worktree is kept.
+///
+/// Stub for the red tests of Job `wlinear-tests`; Job `wlinear-impl` implements it and calls it from
+/// [`Driver::cleanup`] when a linear Attempt ends failed or cancelled.
+pub(super) fn reset_linear_lead_branch(
+    lead_worktree: &std::path::Path,
+    lead_branch: &str,
+    base_sha: &str,
+) -> Result<(), CpdError> {
+    let _ = (lead_worktree, lead_branch, base_sha);
+    todo!("wlinear-impl: reset the Lead Branch of a failed linear Attempt to its base_sha")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

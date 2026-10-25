@@ -28,16 +28,19 @@ use super::stall::Watch;
 use super::worker::{kill_attempt_window_with, retry_kill_with, wait_for_lead_with};
 use crate::attempt::ledger;
 use crate::clock::{Clock, ManualClock};
-use crate::config::Config;
+use crate::config::{Catalog, Config, TierModel};
 use crate::error::{CpdError, ErrorCode};
+use crate::fakes::git::{GitRoute, Head, Repo, Universe};
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::pi::PiDirs;
 use crate::host::runner::{Call, Reply};
 use crate::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use crate::host::{PaneId, Tmux};
-use crate::ids::{AttemptId, PlanId};
+use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::ports::{Fakes, Ports};
+
+use super::{StartCtx, start_with};
 use crate::store::Store;
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -640,17 +643,148 @@ fn an_idle_lead_is_forked_once_its_file_has_been_quiet_for_fork_quiet_seconds_of
 
 // ---- The workflow-worktree model (hs-d680/hs-d682/hs-d683, `wlinear-tests`) ------------------------------------------
 
+/// A temporary store holding Plan `pay`, its PR `api` (`cpd/pay/api`, workflow worktree `/repos/r.lead`) and the
+/// queued Jobs `a` and `b`; `live` seeds a running Attempt `a-a1` of Job `a` (a live sibling).
+struct StartRig {
+    _dir: tempfile::TempDir,
+    home: CpdHome,
+    store: Store,
+}
+
+fn start_rig(live: bool) -> StartRig {
+    let dir = tempfile::tempdir().unwrap();
+    let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let placeholder = "f".repeat(64);
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/repos/r.lead', 'O3', 'working', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
+                   VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
+                   VALUES ('pay', 'api', '/repos/r', 'main', 'dispatch', 'cpd/pay/api', '/repos/r.lead', 't', cpd_txn(), 't');
+                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{placeholder}', cpd_txn(), 't'),
+                          ('pay', 'api', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, '{placeholder}', cpd_txn(), 't');",
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    // The Fingerprint of §2.3, computed from the stored row.
+    let plan = PlanId::parse("pay").unwrap();
+    let jobs = store.read(|conn| crate::plan::jobs::load(conn, &plan)).unwrap();
+    let fingerprints: Vec<(String, String)> = jobs.iter().map(|j| (j.key.clone(), crate::plan::locked_fingerprint(j))).collect();
+    store
+        .write("fixture", |tx| {
+            for (key, fingerprint) in &fingerprints {
+                tx.execute("UPDATE jobs SET fingerprint = ?2 WHERE plan = 'pay' AND key = ?1", rusqlite::params![key, fingerprint])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+    if live {
+        store
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
+                     VALUES ('pay', 'a-a1', 'a', 1, 'S2', 'ladder', 'running', 'cpd/pay--a-a1', '/repos/r.pay--a-a1', 4242, 't')",
+                    [],
+                )?;
+                tx.execute("UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'a'", [])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+    StartRig { _dir: dir, home, store }
+}
+
+/// A catalog the starter can climb without pi.
+fn catalog() -> Catalog {
+    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![1, 2, 3] };
+    Catalog { pi_version: "1.0.0".to_owned(), o: model("o/m"), s: model("s/m"), h: model("h/m"), g: TierModel { model: "g/m".to_owned(), efforts: vec![] } }
+}
+
+/// Starts the next Attempt of Job `key` of Plan `pay`, through the fake spawn.
+fn start_attempt(rig: &mut StartRig, fakes: &Fakes, key: &str) {
+    fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
+    let config = config();
+    let catalog = catalog();
+    let ctx = StartCtx { home: &rig.home, config: &config, catalog: &catalog, command: "test" };
+    start_with(&fakes.ports, &mut rig.store, &ctx, &PlanId::parse("pay").unwrap(), &JobKey::parse(key).unwrap()).unwrap();
+}
+
+/// The `(branch, worktree)` the starter recorded for Attempt `id`.
+fn allocated(rig: &mut StartRig, id: &str) -> (String, String) {
+    rig.store
+        .read(|conn| Ok(conn.query_row("SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .unwrap()
+}
+
 #[test]
 fn a_linear_attempt_takes_the_workflow_worktree() {
-    todo!("wlinear-impl")
+    let mut rig = start_rig(false);
+    let fakes = Fakes::new();
+    start_attempt(&mut rig, &fakes, "a");
+    assert_eq!(
+        allocated(&mut rig, "a-a1"),
+        ("cpd/pay/api".to_owned(), "/repos/r.lead".to_owned()),
+        "the first live Attempt of the PR reuses the workflow worktree on its Lead Branch"
+    );
 }
 
 #[test]
 fn a_live_sibling_takes_an_attempt_worktree() {
-    todo!("wlinear-impl")
+    let mut rig = start_rig(false);
+    let fakes = Fakes::new();
+    start_attempt(&mut rig, &fakes, "a");
+    assert_eq!(
+        allocated(&mut rig, "a-a1"),
+        ("cpd/pay/api".to_owned(), "/repos/r.lead".to_owned()),
+        "the first live Attempt of the PR is linear"
+    );
+    start_attempt(&mut rig, &fakes, "b");
+    assert_eq!(
+        allocated(&mut rig, "b-a1"),
+        ("cpd/pay--b-a1".to_owned(), "/repos/r.pay--b-a1".to_owned()),
+        "a second live sibling gets its own worktree and branch"
+    );
 }
 
 #[test]
 fn a_failed_linear_attempt_resets_the_lead_branch() {
-    todo!("wlinear-impl")
+    let fakes = Fakes::new();
+    let mut universe = Universe::new(fakes.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
+    let route = Arc::new(GitRoute::new(universe.clone()));
+    let _ = (*fakes.runner).clone().with_git(&route);
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let repo = Repo::init(&universe, &root.join("r"));
+    repo.write("f.txt", "base\n");
+    let base = repo.commit("base");
+    let lead = "cpd/pay/api";
+    repo.branch(lead);
+    // A failed linear Attempt left a commit on the Lead Branch, ahead of its `base_sha`.
+    {
+        let mut u = universe.lock().unwrap();
+        let blob = u.blob(repo.id(), b"failed\n");
+        let tree = u.tree(repo.id(), &[("f.txt", &blob)]);
+        let commit = u.commit(repo.id(), &tree, &[base.clone()], "the failed Attempt");
+        u.set_ref(repo.id(), &format!("refs/heads/{lead}"), &commit, "commit: failed");
+    }
+    let worktree = root.join("r.lead");
+    universe.lock().unwrap().add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
+    let ports = Ports { clock: fakes.ports.clock.clone(), runner: fakes.ports.runner.clone(), spawn: fakes.ports.spawn.clone() };
+    let result = Ports::scope(&ports, || super::run::reset_linear_lead_branch(&worktree, lead, base.as_str()));
+    assert!(result.is_ok(), "the reset failed: {result:?}");
+    assert_eq!(
+        universe.lock().unwrap().ref_oid(repo.id(), &format!("refs/heads/{lead}")),
+        Some(base),
+        "a failed linear Attempt resets the Lead Branch to its base_sha"
+    );
 }
