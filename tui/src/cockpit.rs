@@ -392,7 +392,7 @@ fn run_action(name: Option<&str>, pull: Option<&str>, client: &str, run_command:
         }
         (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
         (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
-        (Action::Host, None) => return host_click::run(&home, &config, &tmux, client),
+        (Action::Host, None) => return super::host_click::run(&home, &config, &tmux, client, run_command),
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
