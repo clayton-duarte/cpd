@@ -22,11 +22,12 @@ use crate::policy::{Gate, Policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::ports::Ports;
 
 const COMMAND: &str = "pr rebase";
 
@@ -181,7 +182,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     // C4.
     let out = git::run::run(&lead, &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat())?;
     if out.code != 0 {
-        let files = unmerged(&SystemRunner, &lead)?;
+        let files = unmerged(&*Ports::current().runner, &lead)?;
         if !files.is_empty() {
             return Err(stopped(&id, &key, &lead, branch, files));
         }
@@ -248,7 +249,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let old = git::run::rev_parse(lead, "HEAD")?;
     let out = git::run::run(lead, &[NO_EDITOR.as_slice(), &["rebase", &onto]].concat())?;
     if out.code != 0 {
-        let mut files = unmerged(&SystemRunner, lead)?;
+        let mut files = unmerged(&*Ports::current().runner, lead)?;
         if files.is_empty() && in_progress(lead)? {
             files = listed;
         }
@@ -314,7 +315,7 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
 /// Whether a rebase is in progress in the Lead worktree (rule S step 0): `rebase-merge` or
 /// `rebase-apply` in its git dir.
 fn in_progress(lead: &Path) -> Result<bool, CpdError> {
-    in_progress_with(&SystemRunner, lead)
+    in_progress_with(&*Ports::current().runner, lead)
 }
 
 /// [`in_progress`] on `runner` (a test passes a `FakeRunner`).
@@ -335,7 +336,7 @@ fn git_path(runner: &dyn Runner, lead: &Path, name: &str) -> Result<std::path::P
 /// The tip the stopped rebase started from, S (`rebase-merge/orig-head`, `rebase-apply/orig-head`).
 fn orig_head(lead: &Path) -> Result<String, CpdError> {
     for name in ["rebase-merge/orig-head", "rebase-apply/orig-head"] {
-        if let Ok(sha) = std::fs::read_to_string(git_path(&SystemRunner, lead, name)?) {
+        if let Ok(sha) = std::fs::read_to_string(git_path(&*Ports::current().runner, lead, name)?) {
             return Ok(sha.trim().to_owned());
         }
     }
@@ -352,7 +353,7 @@ fn unmerged(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
 /// (`git diff --name-only HEAD`) with a conflict marker line at column 0. `=======` alone is
 /// not one (a Markdown underline); it counts with a `<<<<<<<` line, which counts by itself.
 fn unresolved(lead: &Path) -> Result<Vec<String>, CpdError> {
-    unresolved_with(&SystemRunner, lead)
+    unresolved_with(&*Ports::current().runner, lead)
 }
 
 /// [`unresolved`] on `runner` (a test passes a `FakeRunner`).
@@ -448,7 +449,7 @@ fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
 /// Whether origin's `reference` contains `sha`, as rule P checks (§7.4): its tip `X`
 /// (`git ls-remote`) is in the local object store and `sha` is an ancestor of it, or it.
 fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
-    remote_contains_with(&SystemRunner, lead, reference, sha)
+    remote_contains_with(&*Ports::current().runner, lead, reference, sha)
 }
 
 /// [`remote_contains`] on `runner` (a test passes a `FakeRunner`).
@@ -570,7 +571,7 @@ fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdErro
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict, after
 /// `git rebase --abort`; `None` when it rebased.
 fn rebase_onto(worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    rebase_onto_with(&SystemRunner, worktree, onto)
+    rebase_onto_with(&*Ports::current().runner, worktree, onto)
 }
 
 /// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`).

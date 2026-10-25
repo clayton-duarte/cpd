@@ -28,7 +28,7 @@ use crate::home::CpdHome;
 use crate::host::deadline::Failed as RunFailed;
 use crate::host::pi;
 use crate::host::deadline;
-use crate::host::runner::{Call, Runner, SystemRunner};
+use crate::host::runner::{Call, Runner};
 use crate::ids::{ContextId, RecordId};
 use crate::lock;
 use crate::output::Output;
@@ -427,7 +427,7 @@ impl Run<'_> {
             )?;
             Ok(stmt.query_map([self.context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })?;
-        grep_hits_with(&SystemRunner, &repos, batch)
+        grep_hits_with(&*Ports::current().runner, &repos, batch)
     }
 
     /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`.

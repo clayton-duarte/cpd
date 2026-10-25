@@ -16,7 +16,8 @@ use serde_json::Value;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -184,7 +185,7 @@ fn gh_failed(message: String, stderr: &str) -> CpdError {
 /// request that GitHub cannot find (or whose repo is no `owner/name`) is `None`; any other error of the call, or
 /// an answer without `data`, is `gh_failed`, never "no pull requests". An empty `refs` makes no call.
 pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
-    github_lookup_with(&SystemRunner, home, refs)
+    github_lookup_with(&*Ports::current().runner, home, refs)
 }
 
 /// [`github_lookup`] on `runner`.

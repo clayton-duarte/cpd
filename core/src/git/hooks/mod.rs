@@ -23,7 +23,7 @@ use super::worktree::{list, worktree_of_branch};
 use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
-use crate::host::runner::SystemRunner;
+use crate::ports::Ports;
 
 pub use def::{HookCommand, Pipeline, parse_value};
 pub use exec::is_withheld;
@@ -196,7 +196,7 @@ fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)]
             return HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None };
         }
     };
-    let done = exec::run_with(&SystemRunner, blocks, cwd, timeout, env, file, TAIL_LINES);
+    let done = exec::run_with(&*Ports::current().runner, blocks, cwd, timeout, env, file, TAIL_LINES);
     let tail = Some(done.tail.join("\n"));
 
     let written = match done.log_error {

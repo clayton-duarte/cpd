@@ -180,7 +180,7 @@ pub struct StartArgs {
     plan: PlanArg,
 }
 
-/// Runs `command`. Only `view` reads `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+/// Runs `command`. Only `view` takes `ports` as an argument; the others reach them through `Ports::current()` (`cli::run_with` scopes them).
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Add(args) => add::add(args),

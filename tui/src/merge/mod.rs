@@ -268,7 +268,7 @@ pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option
 /// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
 /// exists, the action does nothing but log `merge already running`.
 pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
-    action_with(&Ports::real(), home, tmux, pull, client, &run_command)
+    action_with(&Ports::current(), home, tmux, pull, client, &run_command)
 }
 
 /// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
