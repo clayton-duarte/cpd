@@ -5,19 +5,23 @@
 
 use super::STATUS_FORMAT;
 
+/// The incident pill's label; `Incident Mode: ` is 15 cells (contract §6.1, hs-d640).
+const LABEL: &str = "Incident Mode: ";
+
 /// The width `@cpd_incident` adds to the right group while set: one join, two caps and
-/// ` Incident Mode: ` plus the value's cells (contract §6.1, the right group).
+/// `Incident Mode: ` plus the value's cells (contract §6.1, the right group).
 const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
 
-/// The incident pill is guarded by `@cpd_incident`, reads ` Incident Mode: ` followed by the
-/// option's value, is colour 9 and its text is reversed and italic, and it stands first in the
-/// right group, before the workers pill.
+/// The incident pill is guarded by `@cpd_incident`, reads `Incident Mode: ` immediately followed
+/// by the option's value (15 cells, no leading space), is colour 9 and its text is reversed and
+/// italic, and it stands first in the right group, before the workers pill.
 #[test]
-fn the_incident_pill_is_red_italic_and_first_in_the_right_group() {
+fn the_incident_pill_shows_the_elapsed_time_first_in_the_right_group() {
     let f: &str = &STATUS_FORMAT;
     assert_eq!(f.matches("Incident Mode").count(), 1, "one incident pill: {f}");
-    let label = f.find(" Incident Mode: ").expect("the incident pill's label");
-    assert!(f[label..].starts_with(" Incident Mode: #{@cpd_incident}"), "the label reads the option: {f}");
+    assert!(f.contains("Incident Mode: #{@cpd_incident}"), "the label reads the option: {f}");
+    assert!(!f.contains(" Incident Mode: "), "the label is 15 cells with no leading space: {f}");
+    let label = f.find("Incident Mode: ").expect("the incident pill's label");
     // The branch of the pill: the plain `#{?@cpd_incident` conditional that opens it.
     let guard = f[..label].rfind("#{?@cpd_incident").expect("the pill is guarded by @cpd_incident");
     assert!(f[guard..label].contains("#{?@cpd_incident"), "the label sits in the @cpd_incident branch: {}", &f[guard..label]);
@@ -33,9 +37,19 @@ fn the_incident_pill_is_red_italic_and_first_in_the_right_group() {
 }
 
 /// The fill count and `long_fits!()` subtract the incident pill's width while
-/// `@cpd_incident` is set, exactly as they subtract the version pill's.
+/// `@cpd_incident` is set, exactly as they subtract the version pill's. That width follows the
+/// duration-based text: one join, two caps and the 15-cell label (`18`), plus the value's cells.
 #[test]
-fn the_incident_pill_shortens_the_status_fill() {
+fn the_incident_pill_width_follows_the_duration() {
+    let f: &str = &STATUS_FORMAT;
+    assert_eq!(LABEL.chars().count(), 15, "the label is 15 cells");
+    assert!(f.contains("Incident Mode: #{@cpd_incident}"), "the pill's text carries the label and the duration: {f}");
+    assert!(!f.contains(" Incident Mode: "), "the label has no leading space: {f}");
+    let cells = LABEL.chars().count() + 3;
+    assert!(
+        INCIDENT_WIDTH.contains(&format!(",{cells}}}")),
+        "the width is one join, two caps and the 15-cell label: {INCIDENT_WIDTH}"
+    );
     let fill = fill_count!();
     assert!(fill.contains(INCIDENT_WIDTH), "the fill count subtracts the incident width: {fill}");
     assert!(long_fits!().contains(INCIDENT_WIDTH), "long_fits subtracts the incident width: {}", long_fits!());
