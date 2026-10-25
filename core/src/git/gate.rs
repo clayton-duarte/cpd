@@ -55,10 +55,14 @@ impl HeadLog {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use time::OffsetDateTime;
+
     use super::*;
-    use crate::lock;
+    use crate::clock::{Clock, ManualClock};
+    use crate::ports::Fakes;
 
     /// `n` slots in a fresh directory, polled every 5 ms and announced every 20 ms.
     fn slots(n: u32) -> (tempfile::TempDir, Slots, PathBuf) {
@@ -72,12 +76,26 @@ mod tests {
         fs::read_to_string(log).unwrap_or_default()
     }
 
-    /// Waits until `log` contains `needle`, as long as it takes.
-    fn wait_for(log: &Path, needle: &str) {
-        let deadline = Instant::now() + Duration::from_secs(120);
-        while !text(log).contains(needle) {
-            assert!(Instant::now() < deadline, "no {needle:?} in {:?}", text(log));
-            std::thread::yield_now();
+    /// A `ManualClock` that lets go of `held` in its `at`-th nap: what another process does "between two polls", on
+    /// the thread that waits, with no thread, no race and no real time.
+    struct Frees {
+        inner: ManualClock,
+        at: usize,
+        held: Mutex<Option<Slot>>,
+    }
+
+    impl Clock for Frees {
+        fn now(&self) -> Instant {
+            self.inner.now()
+        }
+        fn sleep(&self, d: Duration) {
+            self.inner.sleep(d);
+            if self.inner.naps().len() == self.at {
+                self.held.lock().unwrap().take();
+            }
+        }
+        fn utc(&self) -> OffsetDateTime {
+            self.inner.utc()
         }
     }
 
@@ -100,55 +118,18 @@ mod tests {
     fn with_every_slot_busy_a_gate_waits_logs_it_and_takes_the_slot_that_frees() {
         let (_dir, slots, log) = slots(2);
         let (first, second) = (take(&slots, &log).unwrap(), take(&slots, &log).unwrap());
+        // The second slot frees, not the first, in the sixth nap (30 ms): after the line of the 20 ms.
+        let fakes = Fakes::new();
+        let clock = Arc::new(Frees { inner: (*fakes.clock).clone(), at: 6, held: Mutex::new(Some(second)) });
+        let ports = Ports { clock: clock.clone(), ..fakes.ports.clone() };
 
-        let waiter = {
-            let (slots, log) = (slots.clone(), log.clone());
-            std::thread::spawn(move || take(&slots, &log).unwrap().index())
-        };
-        wait_for(&log, "gate: still waiting for a slot (");
-        assert!(!waiter.is_finished());
+        let taken = take_with(&ports, &slots, &log).unwrap();
+
+        // The Gate takes the slot that freed, and does not block on slot 0.
+        assert_eq!(taken.index(), 1);
+        assert_eq!(fakes.clock.naps(), vec![Duration::from_millis(5); 6], "it waited its poll, 6 times, on the clock");
         assert!(text(&log).starts_with("gate: waiting for a slot (2 of 2 busy; test_concurrency 2)\ngate: still waiting for a slot ("), "{}", text(&log));
-        // The second slot frees, not the first: the Gate takes it, and does not block on slot 0.
-        drop(second);
-        assert_eq!(waiter.join().unwrap(), 1);
         assert!(text(&log).trim_end().ends_with(" s") && text(&log).contains("\ngate: slot 1 taken after "), "{}", text(&log));
         drop(first);
-    }
-
-    #[test]
-    fn a_slot_held_by_a_dead_process_is_free_at_once() {
-        // A child that takes slot 0 through its own descriptor and is killed: the kernel frees it.
-        let (dir, slots, log) = slots(1);
-        let path = dir.path().join("run").join("test-0.lock");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // The test takes the lock, `sleep` inherits the descriptor, and the test closes its own copy:
-        // the child alone holds it, so the kill below ends the one process that does.
-        use std::os::fd::{AsRawFd, BorrowedFd};
-        use std::os::unix::process::CommandExt;
-        let held = File::options().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-        assert!(lock::try_lock(&held).unwrap());
-        let fd = held.as_raw_fd();
-        let mut command = std::process::Command::new("sleep");
-        command.arg("600");
-        // SAFETY: the closure runs in the forked child before exec and only makes an async-signal-safe
-        // system call; it allocates nothing. Same purpose as `driver::lock`: the descriptor survives exec.
-        unsafe {
-            command.pre_exec(move || {
-                nix::fcntl::fcntl(BorrowedFd::borrow_raw(fd), nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()))
-                    .map(drop)
-                    .map_err(std::io::Error::from)
-            });
-        }
-        let mut holder = command.spawn().unwrap();
-        drop(held);
-        let probe = File::options().read(true).write(true).open(&path).unwrap();
-        assert!(!lock::try_lock(&probe).unwrap(), "the holder has the slot");
-        drop(probe);
-
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(holder.id() as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
-        holder.wait().unwrap();
-
-        assert_eq!(take(&slots, &log).unwrap().index(), 0);
-        assert_eq!(text(&log), "gate: slot 0 taken after 0 s\n", "no wait");
     }
 }

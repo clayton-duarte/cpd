@@ -92,7 +92,6 @@ cpd::tui tui_history::  # m-tui-r: view driven through a pane
 cpd::tui tui_titles::  # m-tui-r: view driven through a pane
 cpd-core context::  # m-units: unit tests that may start a real tmux
 cpd-core driver::  # m-units: unit tests that may start a real tmux
-cpd-core git::  # m-units: unit tests that may start a real tmux
 cpd-core host::  # m-units: unit tests that may start a real tmux
 cpd-core lock::  # m-units: unit tests that may start a real tmux
 cpd-core merge::  # m-units: unit tests that may start a real tmux
