@@ -31,6 +31,20 @@ fn seed(env: &TestEnv, id: &str, kind: &str, minutes: u32, text: &str) {
     ));
 }
 
+/// Inserts every record of `rows` (id, kind, minutes, text) in ONE transaction and one [`TestEnv::store`]: the same
+/// rows as [`seed`] one at a time, at a fraction of the cost (each `Store::open` migrates and checks the schema).
+fn seed_all(env: &TestEnv, rows: &[(String, &str, u32, &str)]) {
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(id, kind, minutes, text)| {
+            format!(
+                "('{CTX}', '{id}', '{kind}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{minutes} minutes'), 'm1', '{text}')"
+            )
+        })
+        .collect();
+    env.sql(&format!("INSERT INTO context_records (context, id, kind, at, machine, text) VALUES {}", values.join(", ")));
+}
+
 const DAY: u32 = 24 * 60;
 
 fn curate(env: &TestEnv, rows: &[(&str, &str, &str)]) {
@@ -141,11 +155,10 @@ fn the_digest_groups_short_forms_by_topic_and_lists_every_topic() {
 fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
     let env = fx();
     // 400 recent records of one topic, each line 130+ bytes: far over 32 768 bytes. Record n is n minutes old... n=1 newest.
-    let mut rows = Vec::new();
-    for n in 1..=400u32 {
-        seed(&env, &format!("m1-n{n}"), "note", n, "x");
-    }
+    let seeded: Vec<(String, &str, u32, &str)> = (1..=400u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
+    seed_all(&env, &seeded);
     let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
+    let mut rows = Vec::new();
     for n in 1..=400usize {
         rows.push((format!("m1-n{n}"), shorts[n - 1].clone()));
     }
@@ -271,9 +284,8 @@ fn show_topic_refuses_an_unknown_topic_with_the_topics_in_use() {
 #[test]
 fn the_pointer_line_names_the_context() {
     let env = fx();
-    for n in 1..=400u32 {
-        seed(&env, &format!("m1-n{n}"), "note", n, "x");
-    }
+    let seeded: Vec<(String, &str, u32, &str)> = (1..=400u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
+    seed_all(&env, &seeded);
     let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
     let rows: Vec<(String, &str)> = (1..=400usize).map(|n| (format!("m1-n{n}"), shorts[n - 1].as_str())).collect();
     let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, s)| (id.as_str(), "alpha", *s)).collect();
@@ -290,9 +302,8 @@ fn the_pointer_line_names_the_context() {
 fn the_digest_never_exceeds_32_kb_even_when_the_topic_list_is_long() {
     let env = fx();
     // 900 topics of 40 bytes: the list is `- <topic> (1)` lines, about 50 bytes each, 45 kB.
-    for n in 1..=900u32 {
-        seed(&env, &format!("m1-n{n}"), "note", n, "x");
-    }
+    let seeded: Vec<(String, &str, u32, &str)> = (1..=900u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
+    seed_all(&env, &seeded);
     let topics: Vec<String> = (1..=900u32).map(|n| format!("topic-{n:04}-{}", "a".repeat(26))).collect();
     let rows: Vec<(String, &str)> = (1..=900usize).map(|n| (format!("m1-n{n}"), topics[n - 1].as_str())).collect();
     let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, t)| (id.as_str(), *t, "short")).collect();
