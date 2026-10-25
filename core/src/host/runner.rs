@@ -59,7 +59,7 @@ impl Runner for SystemRunner {
             let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
             cmd.stderr(file);
         }
-        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some())
+        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some(), call.tool == HOOK_TOOL)
     }
 }
 
