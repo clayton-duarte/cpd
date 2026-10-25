@@ -30,6 +30,13 @@ pub type RunFn<'a> = &'a dyn Fn(Vec<std::ffi::OsString>) -> Result<Output, CpdEr
 pub trait Input {
     fn poll(&mut self, wait: Duration) -> io::Result<bool>;
     fn read(&mut self) -> io::Result<Event>;
+
+    /// For a driven loop with work under way (a command that runs): whether an event is there now. The loop that is
+    /// driven waits for its work to end, in no time of the clock's, so a scripted input says no, the default. An input that
+    /// says it can, takes the loop on reading events while the work runs.
+    fn ready_while_busy(&mut self) -> io::Result<bool> {
+        Ok(false)
+    }
 }
 
 /// The facts of the terminal a view must not read from the process: whether there is one, and its raw mode.

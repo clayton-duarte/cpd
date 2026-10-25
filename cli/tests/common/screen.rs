@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cpd_core::clock::Clock;
@@ -223,14 +223,19 @@ impl Input for Script {
 }
 
 /// A `TestBackend` shared with the test: `Display::terminal()` is the terminal a view draws on, and `screen()` reads what
-/// it drew last, also while the view still runs (from a [`Step::Do`]).
+/// it drew last, also while the view still runs (from a [`Step::Do`], or from the test while a view on another thread waits
+/// for its input).
 #[derive(Clone)]
-pub struct Display(Rc<RefCell<TestBackend>>);
+pub struct Display(Arc<Mutex<TestBackend>>);
 
 impl Display {
     /// A `width` x `height` display.
     pub fn new(width: u16, height: u16) -> Display {
-        Display(Rc::new(RefCell::new(TestBackend::new(width, height))))
+        Display(Arc::new(Mutex::new(TestBackend::new(width, height))))
+    }
+
+    fn backend(&self) -> std::sync::MutexGuard<'_, TestBackend> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A terminal that draws on this display.
@@ -240,7 +245,7 @@ impl Display {
 
     /// The screen as it is drawn now.
     pub fn screen(&self) -> Screen {
-        Screen::from_buffer(self.0.borrow().buffer())
+        Screen::from_buffer(self.backend().buffer())
     }
 }
 
@@ -251,34 +256,34 @@ impl Backend for Display {
     where
         I: Iterator<Item = (u16, u16, &'a BufferCell)>,
     {
-        self.0.borrow_mut().draw(content)
+        self.backend().draw(content)
     }
     fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().hide_cursor()
+        self.backend().hide_cursor()
     }
     fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().show_cursor()
+        self.backend().show_cursor()
     }
     fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.0.borrow_mut().get_cursor_position()
+        self.backend().get_cursor_position()
     }
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.0.borrow_mut().set_cursor_position(position)
+        self.backend().set_cursor_position(position)
     }
     fn clear(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().clear()
+        self.backend().clear()
     }
     fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.0.borrow_mut().clear_region(clear_type)
+        self.backend().clear_region(clear_type)
     }
     fn size(&self) -> Result<Size, Self::Error> {
-        self.0.borrow().size()
+        self.backend().size()
     }
     fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        self.0.borrow_mut().window_size()
+        self.backend().window_size()
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().flush()
+        self.backend().flush()
     }
 }
 
@@ -312,11 +317,11 @@ impl Tty for FakeTty {
 
 /// A writer whose bytes the test reads while the code under test holds a clone of it.
 #[derive(Clone, Default)]
-pub struct Bytes(Rc<RefCell<Vec<u8>>>);
+pub struct Bytes(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Bytes {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.borrow_mut().extend_from_slice(buf);
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -327,6 +332,6 @@ impl Write for Bytes {
 impl Bytes {
     /// Everything written so far.
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.borrow().clone()
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }

@@ -73,14 +73,18 @@ impl Pump {
     }
     /// [`Pump::wait`] for a loop that is driven: no input thread, and no real time. A signal a background job posted is
     /// returned at once. While work is `busy` the wait blocks until it posts its signal (the work ends by itself, in no
-    /// time of the clock's). Else nothing is under way: `input` is polled for the time left until `until` (a poll that
+    /// time of the clock's), unless `input` says an event is there meanwhile. Else nothing is under way: `input` is polled for the time left until `until` (a poll that
     /// finds nothing naps it on the `ports`' clock and says so), so the input decides what happens next.
     pub fn wait_driven(&self, ports: &Ports, input: &mut dyn Input, until: Option<Instant>, busy: bool) -> Signal {
         if let Ok(signal) = self.recv.try_recv() {
             return signal;
         }
         if busy {
-            return self.recv.recv().unwrap_or(Signal::Due);
+            return match input.ready_while_busy() {
+                Err(e) => Signal::InputFailed(e),
+                Ok(true) => input.read().map_or_else(Signal::InputFailed, Signal::Input),
+                Ok(false) => self.recv.recv().unwrap_or(Signal::Due),
+            };
         }
         let wait = until.map_or(IDLE, |at| at.saturating_duration_since(ports.clock.now()));
         match input.poll(wait) {
