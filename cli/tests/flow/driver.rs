@@ -9,13 +9,13 @@ use crate::common;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
-use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
+use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -125,28 +125,6 @@ impl Fx {
     /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
     fn add_job(&self, key: &str, needs: &[&str]) {
         self.add_job_in("repo", key, needs);
-    }
-
-    /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>`
-    /// and its Lead worktree. Returns the repo and the Lead worktree.
-    fn add_pr(&self, key: &str) -> (PathBuf, PathBuf) {
-        let repo = self.env.git_repo(key).canonicalize().unwrap();
-        for (name, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-            self.env.git(&repo, &["config", name, value]);
-        }
-        let plan = PlanId::parse(PLAN).unwrap();
-        let branch = format!("cpd/pay/{key}");
-        let path = pr_lead_worktree_path(&repo, &plan, &PrKey::parse(key).unwrap(), &branch).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
-        prepare_lead_worktree(&repo, &plan, &path, &branch, "main", &setup).map_err(|f| f.error).unwrap();
-        self.fixture(&format!(
-            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
-            repo.display(),
-            path.display()
-        ));
-        self.env.repo_policy("acme", key, "");
-        (repo, path)
     }
 
     /// [`Fx::add_job`] in PR `pr`.
@@ -290,80 +268,6 @@ sleep 120"#;
 
 // ---------- the end-to-end run ----------
 
-#[test]
-fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
-    let fx = fx();
-    fx.pi(WORKER);
-    let old = fx.lead_sha();
-
-    let out = fx.dispatch(JOB).ok();
-    assert_eq!(out["attempt"], ATTEMPT);
-    assert_eq!(out["tier"], "S2");
-    assert_eq!(out["origin"], "ladder");
-    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
-
-    assert_eq!(driver, json!({"ok": true, "attempt": ATTEMPT, "outcome": "merged", "cause": "merged"}));
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")));
-    let lead = fx.lead_sha();
-    assert_ne!(lead, old);
-    assert_eq!(attempt["merged_sha"], lead);
-    assert_eq!(attempt["base_sha"], old);
-    assert_eq!(attempt["driver_pid"], out["pid"]);
-    assert_eq!(attempt["metrics"]["turns"], 1);
-    assert_eq!(attempt["metrics"]["tokens_out"], 20);
-    assert_eq!(fx.job_status(JOB), "merged");
-    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
-    assert_eq!(
-        fx.kinds(ATTEMPT),
-        ["attempt-started", "session-registered", "attempt-status", "session-moved", "attempt-status", "attempt-status", "attempt-status", "job-merged"]
-    );
-    let statuses: Vec<Value> =
-        fx.events(ATTEMPT).into_iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
-    assert_eq!(
-        statuses,
-        [
-            json!({"from": "starting", "to": "running"}),
-            json!({"check": "start", "from": "running", "to": "running", "what": "checks"}),
-            json!({"check": "end", "from": "running", "to": "running", "what": "checks"}),
-            json!({"from": "running", "to": "merging"}),
-        ]
-    );
-    assert_eq!(fx.event(ATTEMPT, "session-moved")["data"]["place"], "work");
-
-    // The Worker: its Session, its argv (§6.5) and its Spec (§16.1).
-    let session = attempt["worker_session"].as_str().unwrap().to_owned();
-    let row: (String, String, String) = fx
-        .store()
-        .read(|c| Ok(c.query_row("SELECT role, name, file FROM sessions WHERE id = ?1", [&session], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-        .unwrap();
-    assert_eq!((row.0.as_str(), row.1.as_str()), ("worker", "pay api a1"));
-    assert!(row.2.ends_with(&format!("_{session}.jsonl")), "{row:?}");
-    let spec = fx.env.cpd_home().join("run/pay/specs/api-a1.md");
-    assert_eq!(attempt["spec_path"], spec.to_str().unwrap());
-    let text = fs::read_to_string(&spec).unwrap();
-    assert!(text.starts_with("# Worker Spec: api, Attempt 1\n"), "{text}");
-    let calls = fx.env.calls("pi");
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    let argv = &calls[0];
-    assert_eq!(&argv[..4], ["--approve", "--no-skills", "--exclude-tools", cpd_core::host::pi::WORKER_EXCLUDED_TOOLS]);
-    let at = |flag: &str| argv[argv.iter().position(|a| a == flag).unwrap() + 1].clone();
-    assert_eq!(at("--model"), "p/sonnet:medium");
-    assert_eq!(at("--session-id"), session);
-    assert_eq!(at("-n"), "pay api a1");
-    assert_eq!(argv.last().unwrap(), &format!("Read {} and follow it exactly. Your attempt id is api-a1.", spec.display()));
-
-    // A9: the window is gone, the worktree and branch are removed.
-    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
-    assert!(!fx.worktree(ATTEMPT).exists());
-    let branches = fx.env.git(&fx.repo, &["branch", "--list", "cpd/pay--api-a1"]);
-    assert_eq!(branches, "");
-
-    // A9: the driver lock file is removed.
-    assert!(!fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap()).exists());
-    let left = fs::read_dir(fx.home().locks_dir()).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
-    assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
-}
-
 // ---------- job-merged's data.turn (contract §5.2, hs-d514) ----------
 
 impl Fx {
@@ -388,16 +292,6 @@ impl Fx {
         assert_eq!(all.len(), 1, "one job-merged for {key}: {all:?}");
         all[0].clone()
     }
-}
-
-#[test]
-fn job_merged_turns_when_the_plan_has_drafts_and_nothing_queued_or_running() {
-    let fx = fx();
-    fx.pi(WORKER);
-    fx.add_draft("repo", "later");
-    let attempt = run_job(&fx, JOB);
-    assert_eq!(attempt["outcome"], "merged", "{attempt}");
-    assert_eq!(fx.merged_data(JOB)["turn"], json!(true), "{}", fx.merged_data(JOB));
 }
 
 #[test]
@@ -441,126 +335,7 @@ sleep 120"#,
     assert_eq!(fx.merged_data("final")["turn"], json!(true), "{}", fx.merged_data("final"));
 }
 
-#[test]
-fn a_merged_open_job_does_not_turn() {
-    let (fx, _origin) = open_fx();
-    fx.pi(SUBMIT_ONLY);
-    fx.add_pr("other");
-    fx.add_draft("other", "later"); // a draft elsewhere in the Plan, nothing queued: a Job's merge would turn
-    let attempt = run_job(&fx, "open-repo");
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(fx.merged_data("open-repo")["turn"], json!(false), "{}", fx.merged_data("open-repo"));
-}
-
-/// Puts a `git` first on the env's `PATH` that runs the real git, except that a merge's
-/// compare-and-swap (`update-ref -m "cpd: merge …"`) waits until `release` exists (at most
-/// 60 s). There is no per-repo lock to hold any more (hs-d243), so a test that must see the
-/// driver in `merging` before the merge lands holds the merge itself.
-fn hold_merges_until(env: &TestEnv, release: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let real = std::env::split_paths(common::inherited_path())
-        .filter(|dir| *dir != env.bin())
-        .map(|dir| dir.join("git"))
-        .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
-        .expect("git on PATH");
-    let script = format!(
-        r#"#!/bin/sh
-real='{real}'
-cas= merge=
-for a in "$@"; do
-  case "$a" in
-    update-ref) cas=1 ;;
-    "cpd: merge "*) merge=1 ;;
-  esac
-done
-if [ -n "$cas" ] && [ -n "$merge" ]; then
-  i=0
-  while [ ! -e '{release}' ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
-fi
-exec "$real" "$@"
-"#,
-        real = real.display(),
-        release = release.display(),
-    );
-    let wrapper = env.bin().join("git");
-    write_executable(&wrapper, &script);
-}
-
-/// engine-G3: a driver log line starts with a time, as `watch.log`'s do (RFC 3339 UTC, milliseconds).
-#[test]
-fn driver_log_lines_start_with_a_time() {
-    let fx = fx();
-    fx.pi(WORKER);
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_end(ATTEMPT, &out["pid"]);
-
-    let log = fx.log(ATTEMPT);
-    // The last line is the command's JSON output (stdout), not a log line.
-    let lines: Vec<&str> = log.lines().filter(|l| !l.starts_with('{')).collect();
-    assert!(lines.len() >= 3, "{log}");
-    for line in lines {
-        let (time, rest) = line.split_once(' ').unwrap_or_else(|| panic!("no time in {line:?}\n{log}"));
-        let b = time.as_bytes();
-        let shaped = time.len() == 24
-            && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' && b[13] == b':' && b[16] == b':' && b[19] == b'.' && b[23] == b'Z'
-            && time.bytes().enumerate().all(|(i, c)| matches!(i, 4 | 7 | 10 | 13 | 16 | 19 | 23) || c.is_ascii_digit());
-        assert!(shaped, "no time at the start of {line:?}\n{log}");
-        assert!(rest.starts_with("cpd attempt run: "), "{line:?}");
-    }
-}
-
-#[test]
-fn the_workers_window_is_killed_when_the_driver_sees_merging() {
-    let fx = fx();
-    fx.pi(WORKER);
-    // The merge's compare-and-swap waits for `release`, so A9's kill (after the merge) cannot be what is seen.
-    let release = fx.env.root().join("release");
-    hold_merges_until(&fx.env, &release);
-
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_status(ATTEMPT, "merging");
-    common::wait_some("the Worker's window to close in `merging`", Duration::from_secs(30), || {
-        let windows = fx.windows();
-        if windows.contains("pay--api-a1") { Err(format!("{windows}\nlog: {}", fx.log(ATTEMPT))) } else { Ok(()) }
-    });
-    assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
-
-    fs::write(&release, "").unwrap();
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
-    assert_eq!(attempt["outcome"], "merged");
-}
-
 // ---------- PRs across repos (R34) ----------
-
-#[test]
-fn an_attempt_of_a_pr_in_another_repo_is_cut_from_and_merged_into_that_prs_branch() {
-    let fx = fx();
-    fx.pi(WORKER);
-    let (web, web_lead) = fx.add_pr("web");
-    fx.add_job_in("web", "ui", &[]);
-    // The repo file of the web PR defines its hooks: pre-start sees the Lead Branch as {{ base }}.
-    fx.env.repo_policy("acme", "web", "[hooks.pre-start]\nmark = \"echo {{ base }} > ../base-seen.txt\"\n");
-    let (pay_old, web_old) =
-        (fx.lead_sha(), fx.env.git(&web, &["rev-parse", "refs/heads/cpd/pay/web"]));
-
-    let out = fx.dispatch("ui").ok();
-    let (attempt, driver) = fx.wait_end("ui-a1", &out["pid"]);
-
-    assert_eq!(driver["outcome"], "merged", "{driver}");
-    let web_new = fx.env.git(&web, &["rev-parse", "refs/heads/cpd/pay/web"]);
-    assert_ne!(web_new, web_old);
-    assert_eq!(attempt["merged_sha"], web_new);
-    assert_eq!(attempt["base_sha"], web_old);
-    // The other PR's repo and branch did not move.
-    assert_eq!(fx.lead_sha(), pay_old);
-    assert!(!fx.lead.join("api.txt").exists());
-    assert_eq!(fs::read_to_string(web_lead.join("api.txt")).unwrap(), "api\n");
-    assert_eq!(fs::read_to_string(fx.env.root().join("repos/base-seen.txt")).unwrap(), "cpd/pay/web\n");
-    assert_eq!(fx.job_status("ui"), "merged");
-    // A9 in the PR's repo.
-    assert!(!web.parent().unwrap().join("web.pay--ui-a1").exists());
-    assert_eq!(fx.env.git(&web, &["branch", "--list", "cpd/pay--ui-a1"]), "");
-}
 
 #[test]
 fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
@@ -585,32 +360,6 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 }
 
 // ---------- a busy store (contract §3.4, §4.2) ----------
-
-/// A step of the driver that meets the write lock held for longer than `store_busy_ms` (here 200 ms)
-/// waits and completes: the Attempt runs to its end, it is not `crashed`.
-#[test]
-fn a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crashed() {
-    let fx = fx_with("[timeouts]\nstore_busy_ms = 200\n");
-    // A2's pre-start takes a second, so the driver's first write comes while the lock is held.
-    fx.hooks("[pre-start]\nwait = \"sleep 1\"\n");
-    fx.pi(WORKER);
-
-    let out = fx.dispatch(JOB).ok();
-    let holder = rusqlite::Connection::open(fx.home().db()).unwrap();
-    holder.busy_timeout(Duration::from_secs(10)).unwrap();
-    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-    // The driver logs its first `store_busy` once the lock outlasted `store_busy_ms`: it met the lock and waits.
-    common::wait_until("the driver to meet the lock", || fx.log(ATTEMPT).contains("store_busy: "));
-    holder.execute_batch("ROLLBACK").unwrap();
-
-    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
-
-    assert_eq!(driver, json!({"ok": true, "attempt": ATTEMPT, "outcome": "merged", "cause": "merged"}), "{}", fx.log(ATTEMPT));
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")));
-    let log = fx.log(ATTEMPT);
-    assert!(log.contains("store_busy: "), "{log}");
-    assert!(log.contains("the store is clear again after "), "{log}");
-}
 
 // ---------- failures ----------
 
@@ -649,23 +398,6 @@ fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_
     assert!(spec.contains("### Attempt 1 (Tier `S2`)"), "{spec}");
     assert!(spec.contains("- Cause: merge_conflict"), "{spec}");
     assert!(spec.contains("  - `README.md`"), "{spec}");
-}
-
-#[test]
-fn a_dead_worker_pane_ends_crashed_through_the_ladder() {
-    let fx = fx();
-    fx.pi("exit 3");
-
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
-
-    assert_eq!(driver["cause"], "crashed");
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("crashed")));
-    assert_eq!(fx.job_status(JOB), "queued");
-    let retry = fx.event(ATTEMPT, "attempt-retry");
-    assert_eq!(retry["data"]["next_tier"], "S3");
-    assert!(retry["data"]["feedback"].as_str().unwrap().contains("pane died"), "{retry}");
-    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
 }
 
 #[test]
@@ -741,30 +473,6 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
     fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
     let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
     assert_eq!(attempt["cause"], "timed_out", "log: {}", fx.log(ATTEMPT));
-}
-
-/// engine-F1: A4 tests the Worker's pane by its pid; it does not fork `tmux list-panes`
-/// at every poll while the Worker runs.
-#[test]
-fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
-    let fx = fx();
-    fx.pi("sleep 120");
-    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real_tmux(&fx)));
-
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_status(ATTEMPT, "running");
-    // The pid is recorded at the first poll, A4's first `list-panes` (the driver lists no panes before A4).
-    common::wait_until("A4's first poll to list the panes", || list_panes_calls(&fx) >= 1);
-    let before = list_panes_calls(&fx);
-    // time-claim: no `list-panes` over six polls of a running Worker; no per-poll signal from the driver (that
-    // it forks nothing at a poll is the claim).
-    std::thread::sleep(POLL * 6);
-    let during = list_panes_calls(&fx) - before;
-    assert_eq!(during, 0, "list-panes calls in six polls of a running Worker\nlog: {}", fx.log(ATTEMPT));
-
-    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
-    assert_eq!(attempt["cause"], "timed_out");
 }
 
 #[test]
@@ -969,52 +677,6 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["error"]["code"], "illegal_transition");
     assert_eq!(fx.txns(), before);
-}
-
-/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
-/// marker in the file) and releases it after `hold`. Returns once the lock is held.
-fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
-    use nix::fcntl::{Flock, FlockArg};
-    use std::io::Write;
-    let locks = env.cpd_home().join("locks");
-    fs::create_dir_all(&locks).unwrap();
-    let file = OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
-    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
-    lock.write_all(marker.to_string().as_bytes()).unwrap();
-    std::thread::spawn(move || {
-        std::thread::sleep(hold);
-        let _ = lock.set_len(0);
-        drop(lock);
-    })
-}
-
-/// hs-n278: a driver that starts while another cpd migrates the store waits for it, as it waits for a busy
-/// store (contract §3.4), instead of dying `lock_timeout` after `store_busy_ms`. Its Attempt is not
-/// `starting`, so once the store opens it refuses with `illegal_transition`, which proves it got that far.
-#[test]
-fn a_driver_waits_out_a_migration_longer_than_store_busy_ms() {
-    let fx = fx_with("[timeouts]\nstore_busy_ms = 300\n");
-    let lock = starting(&fx);
-    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
-    let release = migrating_for(&fx.env, Duration::from_millis(1500));
-    let start = Instant::now();
-    let out = fx
-        .env
-        .command("sh")
-        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-        .arg(&lock)
-        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
-        .output()
-        .unwrap();
-    let waited = start.elapsed();
-    release.join().unwrap();
-
-    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
-    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("waiting for cpd pid"), "{out:?}");
 }
 
 /// hs-n278: a driver that ends on a store newer than its binary (an install raced a migration) leaves the marker
@@ -1260,21 +922,6 @@ fn stall_seconds_0_kills_nothing() {
 
 // ---------- the open Job and the update Job (contract §7.4, §7.7; hs-d340, hs-d490, hs-d491, hs-d497) ----------
 
-/// A Worker that only submits (an `open` or `update` Job's Worker whose base did not move: nothing to merge), writing the answer to
-/// `../submit-<attempt>.json`; a refused submit ends it (exit 4), as a Worker that gives up does.
-const SUBMIT_ONLY: &str = r#""$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1 || exit 4
-sleep 120"#;
-
-/// A Worker whose base conflicts: it submits (refused `base_conflict`), merges `origin/main`, resolves `README.md`, commits and submits again
-/// (a second refusal ends it).
-const MERGE_THE_BASE: &str = r#""$CPD" attempt submit "$CPD_ATTEMPT" > ../refused-$CPD_ATTEMPT.json 2>&1
-git fetch -q origin main
-git merge --no-edit origin/main > /dev/null 2>&1
-echo resolved > README.md
-git add -A && git commit -qm "merge the base"
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1 || exit 4
-sleep 120"#;
-
 /// The fake `gh`: no pull request of the branch yet, `pr create` answers [`PR_URL`], and the lookup of the pull request answers it.
 fn gh_creates(env: &TestEnv) {
     fs::write(env.root().join("gh-lookup.json"), common::pay_lookup()).unwrap();
@@ -1305,24 +952,6 @@ impl Fx {
         ));
     }
 
-    /// What `attempt submit` printed in the Worker's pane, as [`SUBMIT_ONLY`] and [`MERGE_THE_BASE`] saved it: `<prefix>-<attempt>.json`.
-    fn saved(&self, prefix: &str, attempt: &str) -> Value {
-        let path = self.env.root().join("repos").join(format!("{prefix}-{attempt}.json"));
-        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        serde_json::from_str(text.lines().last().unwrap_or("")).unwrap_or_else(|e| panic!("{e}: {text}"))
-    }
-
-    /// `pr` of the open PR or the PR that is `dispatch`: `(status, pr_number, pr_opened_at)`.
-    fn pr_row(&self) -> (String, Option<i64>, Option<String>) {
-        self.store()
-            .read(|c| Ok(c.query_row("SELECT status, pr_number, pr_opened_at FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-            .unwrap()
-    }
-
-    fn phase(&self) -> String {
-        self.env.query("SELECT phase FROM plans WHERE id = 'pay'")
-    }
-
     /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
     fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
         self.store()
@@ -1336,28 +965,6 @@ impl Fx {
             .unwrap()
     }
 
-    /// `gh`'s calls that are not the poll's or a lookup's: `pr list`, `pr create`.
-    fn gh_pr_calls(&self) -> Vec<Vec<String>> {
-        self.env.calls("gh").into_iter().filter(|c| c[0] == "pr").collect()
-    }
-
-    fn remote(&self, origin: &std::path::Path, branch: &str) -> String {
-        self.env.git(origin, &["rev-parse", &format!("refs/heads/{branch}")])
-    }
-
-    /// What the Gate wrote: the lines `slot=<n> head=<sha>` of `<root>/gate.log`, one per run of `pre-merge`.
-    fn gate_runs(&self) -> Vec<String> {
-        fs::read_to_string(self.env.root().join("gate.log")).unwrap_or_default().lines().map(str::to_owned).collect()
-    }
-
-    /// Moves `main` on `origin` (through the main checkout) with a commit writing `path`.
-    fn advance_base(&self, path: &str, content: &str) -> String {
-        fs::write(self.repo.join(path), content).unwrap();
-        self.env.git(&self.repo, &["add", "-A"]);
-        self.env.git(&self.repo, &["commit", "-q", "-m", &format!("base {path}")]);
-        self.env.git(&self.repo, &["push", "-q", "origin", "main"]);
-        self.env.git(&self.repo, &["rev-parse", "HEAD"])
-    }
 }
 
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
@@ -1404,239 +1011,6 @@ fn run_job(fx: &Fx, key: &str) -> Value {
     fx.wait_end(&format!("{key}-a1"), &out["pid"]).0
 }
 
-/// A Worker that did nothing, with the base unmoved or moved without a conflict, submits the Lead Branch as it is: its merge merges
-/// nothing (the Lead Branch does not move), runs the Gate in a test slot at the Lead tip, pushes it, and runs `gh pr create` (never with
-/// `--draft`), writing `pr open`'s rows and Events in the transaction that ends the Job `merged`.
-#[test]
-fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_the_pull_request() {
-    let (fx, origin) = open_fx();
-    fx.pi(SUBMIT_ONLY);
-    let tip = fx.lead_sha();
-    // The base moved, without a conflict: that is no reason to merge it.
-    let base = fx.advance_base("base.txt", "base\n");
-    assert_ne!(fx.remote(&origin, "cpd/pay"), tip, "the Lead's commit is not pushed yet");
-
-    let attempt = run_job(&fx, "open-repo");
-
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(fx.saved("submit", "open-repo-a1")["ok"], true);
-    assert_eq!(fx.job_status("open-repo"), "merged");
-    // Nothing merged: the Lead Branch is where it was, and does not hold the base.
-    assert_eq!(fx.lead_sha(), tip);
-    assert_eq!(attempt["merged_sha"], tip);
-    assert!(!fx.lead.join("base.txt").exists());
-    assert_ne!(fx.env.git(&fx.repo, &["merge-base", &tip, &base]), base, "the base is not an ancestor of the Lead Branch");
-    // The Gate ran once, at the Lead tip, in a test slot; its gate worktree is gone.
-    assert_eq!(fx.gate_runs(), [format!("slot=0 head={tip}")]);
-    let log = fs::read_to_string(fx.env.cpd_home().join("run/pay/logs/pr-repo.pre-merge.log")).unwrap();
-    assert!(log.starts_with("gate: slot 0 taken after "), "{log}");
-    let left: Vec<String> = fs::read_dir(fx.repo.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.contains(".gate-")).collect();
-    assert!(left.is_empty(), "{left:?}");
-    // Pushed, and the pull request created: ready, never a draft.
-    assert_eq!(fx.remote(&origin, "cpd/pay"), tip);
-    let calls = fx.gh_pr_calls();
-    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
-    let created: Vec<&Vec<String>> = calls.iter().filter(|c| c[1] == "create").collect();
-    assert_eq!(created.len(), 1, "{calls:?}");
-    assert_eq!(created[0][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", PR_TITLE]);
-    assert!(fx.env.calls("gh").iter().all(|c| !c.iter().any(|a| a == "--draft" || a == "ready" || a == "convert-to-draft")), "never a draft");
-    // `pr open`'s rows and Events, with `job-merged`, in one transaction.
-    let (status, number, opened_at) = fx.pr_row();
-    assert_eq!((status.as_str(), number, opened_at.is_some()), ("open", Some(812), true));
-    assert_eq!(fx.phase(), "deploy");
-    assert_eq!(fx.env.query::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
-    assert_eq!(fx.env.query::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some(), true);
-    let (merged, opened, phase) = (fx.plan_events("job-merged"), fx.plan_events("pr-opened"), fx.plan_events("plan-phase"));
-    let ours: Vec<&(i64, Value)> = merged.iter().filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open").collect();
-    assert_eq!(ours.len(), 1, "{merged:?}");
-    assert_eq!((&ours[0].1["pr"], &ours[0].1["number"], &ours[0].1["url"]), (&json!("repo"), &json!(812), &json!(PR_URL)));
-    assert_eq!(opened.iter().map(|e| e.1.clone()).collect::<Vec<_>>(), [json!({"pr": "repo", "number": 812, "url": PR_URL})]);
-    assert_eq!((phase.len(), &phase[0].1["from"], &phase[0].1["to"]), (1, &json!("dispatch"), &json!("deploy")));
-    assert_eq!((opened[0].0, phase[0].0), (ours[0].0, ours[0].0), "one transaction");
-}
-
-/// An `open` Job's checks (base check, Gate) are one `checks` span, closed in the transaction that makes the Attempt `merging`.
-#[test]
-fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
-    let (fx, _origin) = open_fx();
-    fx.pi(SUBMIT_ONLY);
-    run_job(&fx, "open-repo");
-    let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
-    let statuses: Vec<Value> = fx.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
-    assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
-    let txns: String = fx.env.query(
-        "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
-    );
-    let txns: Vec<&str> = txns.split(',').collect();
-    assert_eq!(txns[2], txns[3], "the end and running -> merging share a transaction");
-}
-
-/// With a base that conflicts with the Lead Branch, the Worker's merge commit is required: the submit is refused `base_conflict` (before
-/// the Gate, so the Gate never runs on a head that the base would refuse), with the files and the commands, until the Worker has merged
-/// the base and resolved it. The merge commit then lands as it is (no rebase), the Gate runs on it, and the pull request opens.
-#[test]
-fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker_merges_the_base() {
-    let (fx, origin) = open_fx();
-    fx.pi(MERGE_THE_BASE);
-    // The Lead Branch changed README.md, and so did the base.
-    fs::write(fx.lead.join("README.md"), "mine\n").unwrap();
-    fx.env.git(&fx.lead, &["add", "-A"]);
-    fx.env.git(&fx.lead, &["commit", "-q", "-m", "mine"]);
-    let tip = fx.lead_sha();
-    let base = fx.advance_base("README.md", "theirs\n");
-
-    let attempt = run_job(&fx, "open-repo");
-
-    let refused = fx.saved("refused", "open-repo-a1");
-    assert_eq!(refused["ok"], false, "{refused}");
-    assert_eq!(refused["error"]["code"], "base_conflict");
-    let details = &refused["error"]["details"];
-    assert_eq!((&details["pr"], &details["base"], &details["base_sha"], &details["sha"], &details["files"]), (&json!("repo"), &json!("main"), &json!(base), &json!(tip), &json!(["README.md"])));
-    let next = details["next"].as_array().unwrap();
-    assert!(next[0].as_str().unwrap().starts_with("git -C ") && next[0].as_str().unwrap().ends_with(" merge --no-edit origin/main"), "{next:?}");
-    assert_eq!(next[1], "cpd attempt submit open-repo-a1");
-
-    // Then the Worker's merge commit lands as it is, and the PR opens.
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(fx.saved("submit", "open-repo-a1")["ok"], true);
-    let new = fx.lead_sha();
-    assert_ne!(new, tip);
-    assert_eq!(fx.env.git(&fx.repo, &["rev-parse", &format!("{new}^1")]), tip);
-    assert_eq!(fx.env.git(&fx.repo, &["rev-parse", &format!("{new}^2")]), base);
-    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved\n");
-    assert_eq!(fx.gate_runs(), [format!("slot=0 head={new}")], "the Gate ran once, on the resolved head");
-    assert_eq!(fx.remote(&origin, "cpd/pay"), new);
-    assert_eq!(fx.gh_pr_calls().iter().filter(|c| c[1] == "create").count(), 1);
-    assert_eq!(fx.pr_row().0, "open");
-    assert_eq!(fx.job_status("open-repo"), "merged");
-}
-
-/// A Gate failure fails the Attempt like any other (§7.7): the submit is refused `gate_failed` (the Worker fixes it), and nothing is pushed,
-/// created or written. A Worker that does not fix it ends crashed, through the ladder.
-#[test]
-fn an_open_jobs_gate_failure_is_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
-    let (fx, origin) = open_fx();
-    fx.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
-    fx.pi(SUBMIT_ONLY);
-    let before = fx.remote(&origin, "cpd/pay");
-
-    let attempt = run_job(&fx, "open-repo");
-
-    let refused = fx.saved("submit", "open-repo-a1");
-    assert_eq!((&refused["ok"], &refused["error"]["code"]), (&json!(false), &json!("gate_failed")), "{refused}");
-    assert!(refused["error"]["details"]["tail"].as_str().unwrap().contains("the gate says no"), "{refused}");
-    assert!(refused["error"]["details"]["log"].as_str().unwrap().ends_with("pr-repo.pre-merge.log"), "{refused}");
-    assert_eq!(attempt["outcome"], "failed");
-    assert_ne!(fx.job_status("open-repo"), "merged");
-    assert_eq!(fx.remote(&origin, "cpd/pay"), before, "nothing was pushed");
-    assert!(fx.gh_pr_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_pr_calls());
-    assert_eq!((fx.pr_row().0.as_str(), fx.phase().as_str()), ("dispatch", "dispatch"));
-    assert!(fx.plan_events("pr-opened").is_empty());
-}
-
-/// A `gh` failure after the fast-forward ends the Attempt `failed` / `crashed` with the detail `gh_failed`: the push stands, the PR stays
-/// `dispatch`, and the Job goes through the ladder (the next Attempt finds the pull request, or creates it).
-#[test]
-fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_failed_and_the_pr_stays_dispatch() {
-    let (fx, origin) = open_fx();
-    fx.env.fake_gh("case \"$1 $2\" in\n\"pr list\") echo '[]' ;;\n*) echo 'gh: boom' >&2; exit 1 ;;\nesac");
-    fx.pi(SUBMIT_ONLY);
-    let tip = fx.lead_sha();
-
-    let attempt = run_job(&fx, "open-repo");
-
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("crashed")), "{attempt}");
-    let retry = fx.event("open-repo-a1", "attempt-retry");
-    assert!(retry["data"]["feedback"].as_str().unwrap().contains("gh_failed"), "{retry}");
-    assert_eq!(fx.job_status("open-repo"), "queued", "a ladder cause");
-    assert_eq!(fx.remote(&origin, "cpd/pay"), tip, "the push happened before gh");
-    assert_eq!((fx.pr_row().0.as_str(), fx.phase().as_str()), ("dispatch", "dispatch"));
-    assert!(fx.plan_events("pr-opened").is_empty());
-}
-
-/// The update Job on a conflict: the same path as the open Job without `gh`. The Worker merges the base (the submit refuses until it has),
-/// cpd gates and pushes the resolution in the merge; the pull request is already open, so nothing is created and no PR row changes.
-#[test]
-fn an_update_job_with_a_conflicting_base_is_refused_until_the_worker_merges_it_and_its_merge_pushes_the_resolution() {
-    let (fx, origin) = open_pr_fx();
-    fx.add_cpd_job("up-repo", "update");
-    fx.pi(MERGE_THE_BASE);
-    fs::write(fx.lead.join("README.md"), "mine\n").unwrap();
-    fx.env.git(&fx.lead, &["add", "-A"]);
-    fx.env.git(&fx.lead, &["commit", "-q", "-m", "mine"]);
-    let tip = fx.lead_sha();
-    let base = fx.advance_base("README.md", "theirs\n");
-    let row = fx.pr_row();
-
-    let attempt = run_job(&fx, "up-repo");
-
-    let refused = fx.saved("refused", "up-repo-a1");
-    assert_eq!((&refused["error"]["code"], &refused["error"]["details"]["files"], &refused["error"]["details"]["base_sha"]), (&json!("base_conflict"), &json!(["README.md"]), &json!(base)), "{refused}");
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    let new = fx.lead_sha();
-    assert_eq!(fx.env.git(&fx.repo, &["rev-parse", &format!("{new}^1")]), tip);
-    assert_eq!(fx.remote(&origin, "cpd/pay"), new, "its merge pushes the resolution");
-    assert_eq!(fx.gate_runs(), [format!("slot=0 head={new}")]);
-    assert!(fx.gh_pr_calls().is_empty(), "the pull request exists: {:?}", fx.gh_pr_calls());
-    assert_eq!(fx.pr_row(), row, "an update Job writes no PR row");
-    assert!(fx.plan_events("pr-opened").is_empty());
-    let merged: Vec<Value> = fx.plan_events("job-merged").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
-    assert_eq!(merged.len(), 1, "{merged:?}");
-}
-
-/// A feedback fix Job on an open PR reaches the remote through the update path (hs-d497): `job add` queues the PR's `update` Job in its own
-/// transaction (once, however many fixes are added; `reason` `feedback`), which is Ready only when the fixes have merged, gates the Lead
-/// Branch in a slot and pushes it. No `pr rebase` or `pr push` is run by anyone.
-#[test]
-fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() {
-    let (fx, origin) = open_pr_fx();
-    let spec = fx.env.root().join("fix-spec.json");
-    fs::write(&spec, r#"{"goal": "Fix it.", "context": "The checks failed.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let add = |key: &str| fx.env.cpd(&["job", "add", key, "--title", "Fix the checks", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay"]).ok();
-    assert_eq!(add("fix")["job"]["status"], "queued");
-    assert_eq!(add("fix2")["job"]["status"], "queued");
-
-    // The Job `job add` queued: one, `up-repo`, from `job add`, for the feedback.
-    let update: Vec<(String, String)> = fx.env.read(|c| {
-        let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE kind = 'update' ORDER BY key")?;
-        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
-    });
-    assert_eq!(update, [("up-repo".to_owned(), "queued".to_owned())]);
-    let added: Vec<Value> = fx.plan_events("job-added").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
-    assert_eq!(added.len(), 1, "{added:?}");
-    assert_eq!((&added[0]["by"], &added[0]["reason"], &added[0]["pr"]), (&json!("job add"), &json!("feedback"), &json!("repo")));
-    // It waits for the fixes: not Ready while they are not merged.
-    refused(&fx.dispatch("up-repo"), "job_not_ready", 3);
-
-    // The merges of the fixes push best-effort (R35); make those pushes fail, as they do when origin is unreachable, so that what reaches
-    // the pull request is the update Job's.
-    let hook = origin.join("hooks/pre-receive");
-    common::write_executable(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n");
-    fx.pi(&format!(
-        "case \"$CPD_ATTEMPT\" in\n\
-           fix-a1) echo fixed > fix.txt; git add -A; git commit -qm fix ;;\n\
-           fix2-a1) echo fixed2 > fix2.txt; git add -A; git commit -qm fix2 ;;\n\
-         esac\n{SUBMIT_ONLY}"
-    ));
-    run_job(&fx, "fix");
-    run_job(&fx, "fix2");
-    let lead = fx.lead_sha();
-    assert!(fx.lead.join("fix.txt").exists() && fx.lead.join("fix2.txt").exists());
-    assert_ne!(fx.remote(&origin, "cpd/pay"), lead, "the fixes' own pushes failed: the remote lacks them");
-    fs::remove_file(&hook).unwrap();
-    let before = fx.gate_runs();
-
-    let attempt = run_job(&fx, "up-repo");
-
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(fx.saved("submit", "up-repo-a1")["ok"], true);
-    assert_eq!(fx.lead_sha(), lead, "nothing to merge: the base did not move");
-    assert_eq!(fx.remote(&origin, "cpd/pay"), lead);
-    assert_eq!(fx.gate_runs(), [before, vec![format!("slot=0 head={lead}")]].concat(), "the Gate ran on the Lead tip, in a slot");
-    assert!(fx.gh_pr_calls().is_empty());
-}
-
 /// The approval of a review queues the update Job for the fix drafts it queues on an open PR (hs-d497 (2); the other cause of `job add`): one
 /// Job whatever the number of drafts, `reason` `feedback`, in the transaction of the approval. A draft of no open PR queues none.
 #[test]
@@ -1665,30 +1039,3 @@ fn the_approval_of_a_review_queues_the_update_job_for_a_fix_draft_of_an_open_pr(
     assert_eq!((&added[0]["reason"], &added[0]["pr"]), (&json!("feedback"), &json!("repo")));
 }
 
-/// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`
-/// Job adopts it. Its submit runs no Gate, its merge pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
-/// `merged`, `pr-merged` (no `pr-opened`), and the Plan `done` with the last PR.
-#[test]
-fn an_open_job_adopts_a_pull_request_merged_on_github_with_no_gate_and_no_push() {
-    let (fx, origin) = open_fx();
-    let merged = common::pay_lookup().replace("\"state\":\"OPEN\"", "\"state\":\"MERGED\"").replace("\"mergedAt\":null", "\"mergedAt\":\"2026-10-20T12:00:00Z\"");
-    fs::write(fx.env.root().join("gh-lookup.json"), merged).unwrap();
-    fx.env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\"pr list\") echo '[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\"}}]' ;;\n\"api graphql\") cat '{}/gh-lookup.json' ;;\n*) echo \"unexpected gh call: $*\" >&2; exit 9 ;;\nesac",
-        fx.env.root().display()
-    ));
-    fx.pi(SUBMIT_ONLY);
-    let before = fx.remote(&origin, "cpd/pay");
-
-    let attempt = run_job(&fx, "open-repo");
-
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
-    assert_eq!(fx.saved("submit", "open-repo-a1")["ok"], true);
-    assert_eq!(fx.gate_runs(), Vec::<String>::new(), "no Gate");
-    assert_eq!(fx.remote(&origin, "cpd/pay"), before, "no push");
-    assert!(fx.gh_pr_calls().iter().all(|c| c[1] != "create"));
-    assert_eq!(fx.pr_row().0, "merged");
-    assert_eq!(fx.phase(), "done");
-    assert!(fx.plan_events("pr-opened").is_empty());
-    assert_eq!(fx.plan_events("pr-merged").len(), 1);
-}

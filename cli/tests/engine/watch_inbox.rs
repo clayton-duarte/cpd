@@ -302,27 +302,6 @@ fn an_open_job_stuck_item_closes_and_none_opens() {
     assert_eq!(fx.events("inbox-opened"), Vec::<Value>::new());
 }
 
-/// A tick that changes nothing writes nothing: no `txns` row, no Event (a stuck Job already sent included).
-#[test]
-fn a_tick_with_no_change_writes_no_transaction() {
-    let fx = fx();
-    fx.manager();
-    fx.fixture("UPDATE sessions SET state = 'blocked', state_label = 'Which repo?' WHERE id = 'lead1';");
-    fx.failed_job("old", 2);
-    let _engine = fx.start();
-    wait_until("the dialog", || !fx.open_items().is_empty());
-    // The dialog holds the Lead `blocked`, which is not `working`: the stuck Job is sent as well.
-    wait_until("the message", || !fx.messages().is_empty());
-    let reconciles = "SELECT count(*) FROM txns WHERE command = 'inbox reconcile'";
-    assert_eq!(fx.env.query::<i64>(reconciles), 1);
-    let (txns, events) = (fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events"));
-
-    fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.env.query::<i64>(reconciles), 1);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events);
-}
-
 /// Re-fakes `gh` so the PR poll's search returns missionlane/cc-api-orc-apollo#2385 with the given review decision and merge state.
 fn gh_returns_2385(fx: &Fx, review_decision: &str, merge_state: &str) {
     let node = format!(

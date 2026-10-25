@@ -38,7 +38,6 @@ cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_curation::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_delete::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_digest::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_distill::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_manager_by_user::  # m-flow: flow commands that may reach a real tmux
@@ -62,8 +61,6 @@ cpd::flow plan_show::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
-cpd::flow repo_cmds::a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
-cpd::flow repo_cmds::pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
 cpd::flow repo_config::pr_add_of_a_repo_without_a_file_is_repo_unconfigured  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
 cpd::flow review_close::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux

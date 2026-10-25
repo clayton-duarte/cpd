@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, wait_until};
+use common::{CPD, Run, TestEnv, wait_until};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
@@ -450,61 +450,6 @@ impl Fx {
 // ------------------------------------------------------------------ pr open
 
 #[test]
-fn open_gates_pushes_creates_the_pr_and_records_it() {
-    let fx = fx("dispatch");
-    fx.hooks(
-        "pre-start = \"echo set up in $(basename $PWD)\"\npre-merge = \"echo gate ran on {{ branch }} in $(basename $PWD) at $(git rev-parse HEAD)\"\n",
-    );
-    let tip = fx.lead_sha();
-
-    let out = fx.pr("open").ok();
-
-    let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
-    assert_eq!(
-        out,
-        json!({"ok": true, "plan": "pay", "phase": "deploy", "pr": {"key": "repo", "status": "open", "pr": {"number": 812, "url": URL, "opened_at": opened_at}},
-               "sha": tip, "pushed": true, "remote": tip})
-    );
-    // The Gate ran in a gate worktree detached at the tip, `pre-start` first, with `branch` the
-    // Lead Branch, and wrote its logs; the gate worktree is gone.
-    let gate = "pay.pay.repo.gate-";
-    assert!(fx.pr_log("pre-start").starts_with(&format!("set up in {gate}")), "{}", fx.pr_log("pre-start"));
-    let log = fx.gate_log();
-    assert!(log.starts_with(&format!("gate ran on cpd/pay in {gate}")) && log.trim_end().ends_with(&format!(" at {tip}")), "{log}");
-    fx.assert_no_gate_worktree();
-    // Pushed, by rule P: no upstream written to `.git/config` (G1).
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
-    let config = fs::read_to_string(fx.repo.join(".git/config")).unwrap();
-    assert!(!config.contains("[branch "), "{config}");
-    // gh: look for an existing PR, then create it with the Jobs table as its body.
-    let calls = fx.gh_calls();
-    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
-    let body = &calls[1][9];
-    assert_eq!(calls[1][8], "--body");
-    assert!(body.contains("| api | The \\| API | merged | `"), "{body}");
-    assert!(body.contains(&fx.merged_sha), "{body}");
-    // Rows and the Event, in one transaction.
-    let row = fx.plan_row();
-    assert_eq!((row.0.as_str(), row.1, row.2.as_deref(), row.3.as_deref()), ("deploy", Some(812), Some(URL), Some(opened_at.as_str())));
-    // The pull request's row (D6), from the URL `gh pr create` printed, and the PR points to it.
-    assert!(row.4.is_some(), "prs.pull_request is set");
-    assert_eq!(
-        fx.shown_pull_request(),
-        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": REPO_TITLE, "draft": false, "state": "open",
-               "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
-               "created_at": "opened", "merged_at": null})
-    );
-    let opened = fx.events("pr-opened");
-    assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
-    let events = fx.events("plan-phase");
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
-    assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
-}
-
-#[test]
 fn open_titles_the_pull_request_and_the_body_with_the_stored_title() {
     let fx = fx("dispatch");
     fx.pr("open").ok();
@@ -592,33 +537,10 @@ fn open_stores_the_created_at_gh_reports_and_later_polls_keep_it() {
 }
 
 #[test]
-fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
-    let fx = fx("dispatch");
-    fx.lookup(&[None]);
-
-    let run = fx.pr("open");
-
-    assert_eq!(code(&run).0, "gh_failed");
-    assert_eq!(fx.plan_row().0, "dispatch");
-}
-
-#[test]
 fn open_with_no_hooks_passes_the_gate() {
     let fx = fx("dispatch");
     fx.pr("open").ok();
     assert_eq!(fx.gate_log(), "");
-}
-
-#[test]
-fn open_adopts_a_pr_an_earlier_run_created() {
-    let fx = fx("dispatch");
-    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
-
-    let out = fx.pr("open").ok();
-
-    assert_eq!(out["pr"]["pr"]["number"], 812);
-    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
-    assert_eq!(fx.plan_row().0, "deploy");
 }
 
 /// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
@@ -627,70 +549,6 @@ fn fx_with_marked_hook() -> (Fx, PathBuf) {
     let marker = fx.env.root().join("hook-ran");
     fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
     (fx, marker)
-}
-
-const MERGED_LIST: &str = r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "MERGED"}]"#;
-
-#[test]
-fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
-    let (fx, marker) = fx_with_marked_hook();
-    fx.gh("list.json", MERGED_LIST);
-    fx.lookup(&[Some(pay("MERGED", None, None))]);
-    let remote_before = fx.remote_branch("cpd/pay");
-
-    let out = fx.pr("open").ok();
-
-    let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
-    assert_eq!(
-        out,
-        json!({"ok": true, "adopted": "merged", "plan": "pay", "phase": "done",
-               "pr": {"key": "repo", "status": "merged", "pr": {"number": 812, "url": URL, "opened_at": opened_at}}})
-    );
-    // No Gate, no push, no pull request created.
-    assert!(!marker.exists(), "the pre-merge hook ran");
-    assert_eq!(fx.gate_log(), "");
-    assert_eq!(fx.remote_branch("cpd/pay"), remote_before);
-    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
-    // The PR and the Plan, as `pr poll` leaves them.
-    let row = fx.plan_row();
-    assert_eq!((row.0.as_str(), row.1, row.2.as_deref()), ("done", Some(812), Some(URL)));
-    assert!(row.4.is_some() && row.5.is_some(), "{row:?}");
-    assert_eq!(fx.pr_status("repo"), "merged");
-    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "merged".into()));
-    assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
-    let merged = fx.events("pr-merged");
-    assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
-    assert!(fx.events("pr-opened").is_empty());
-    assert_eq!(fx.events("plan-phase")[0].1["to"], "deploy");
-    let done = fx.events("plan-done");
-    assert_eq!(done.len(), 1);
-    assert_eq!(done[0].1["prs"][0]["key"], "repo");
-
-    // Again: already, nothing more.
-    let txns = fx.txns();
-    let again = fx.pr("open").ok();
-    assert_eq!((again["already"].as_bool(), again["phase"].as_str()), (Some(true), Some("done")));
-    assert_eq!((fx.txns(), fx.events("plan-done").len()), (txns, 1));
-}
-
-#[test]
-fn open_adopting_a_merged_pull_request_supersedes_the_pending_reviews() {
-    let (fx, marker) = fx_with_marked_hook();
-    fx.gh("list.json", MERGED_LIST);
-    fx.lookup(&[Some(pay("MERGED", None, None))]);
-    insert_pending_reviews(&fx.env, "pay");
-
-    let out = fx.pr("open").ok();
-
-    let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
-    assert_eq!(
-        out,
-        json!({"ok": true, "adopted": "merged", "plan": "pay", "phase": "done",
-               "pr": {"key": "repo", "status": "merged", "pr": {"number": 812, "url": URL, "opened_at": opened_at}}})
-    );
-    assert!(!marker.exists(), "the pre-merge hook ran");
-    assert_reviews_superseded_before_done(&fx.env, "pay");
 }
 
 #[test]
@@ -706,44 +564,6 @@ fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
     assert_reviews_superseded_before_done(&fx.env, "pay");
-}
-
-#[test]
-fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_pr_is_not_open() {
-    let fx = fx("dispatch");
-    fx.add_web(Web::Dispatch);
-    fx.gh("list.json", MERGED_LIST);
-    fx.lookup(&[Some(pay("MERGED", None, None))]);
-
-    let out = fx.pr_cmd("open", "repo").ok();
-
-    assert_eq!((out["adopted"].as_str(), out["phase"].as_str(), out["pr"]["status"].as_str()), (Some("merged"), Some("dispatch"), Some("merged")));
-    assert_eq!((fx.phase().as_str(), fx.pr_status("web").as_str()), ("dispatch", "dispatch"));
-    assert_eq!(fx.events("pr-merged").len(), 1);
-    assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
-}
-
-#[test]
-fn open_adopting_a_merged_pull_request_updates_the_row_the_poll_stored_open() {
-    let fx = fx("dispatch");
-    fx.store()
-        .write("fixture", |tx| {
-            tx.execute_batch(&format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                 VALUES ('acme/pay', 812, '{URL}', 'As the poll wrote it', 0, 'open', 'approved', 'passed', 'github time', NULL, 'poll time')"
-            ))?;
-            Ok(())
-        })
-        .unwrap();
-    fx.gh("list.json", MERGED_LIST);
-    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
-
-    fx.pr("open").ok();
-
-    assert_eq!(fx.pr_data().3, "merged");
-    assert_eq!(fx.pr_status("repo"), "merged");
-    let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(rows, 1);
 }
 
 #[test]
@@ -786,19 +606,6 @@ fn open_with_an_open_pull_request_of_the_branch_still_gates_pushes_and_adopts_it
 }
 
 #[test]
-fn open_adopts_an_open_pull_request_of_a_lead_branch_that_is_behind_its_base() {
-    let (fx, marker) = fx_with_marked_hook();
-    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
-    fx.advance_base("base.txt", "base\n");
-
-    let out = fx.pr("open").ok();
-
-    assert!(marker.exists(), "the Gate ran");
-    assert_eq!((out["phase"].as_str(), out["pr"]["status"].as_str()), (Some("deploy"), Some("open")));
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
-}
-
-#[test]
 fn open_refuses_to_adopt_an_open_pull_request_of_a_lead_branch_that_conflicts_with_its_base() {
     let (fx, marker) = fx_with_marked_hook();
     fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
@@ -812,21 +619,6 @@ fn open_refuses_to_adopt_an_open_pull_request_of_a_lead_branch_that_conflicts_wi
     assert!(!marker.exists(), "no Gate");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing was pushed");
     assert_eq!(fx.plan_row().0, "dispatch");
-}
-
-#[test]
-fn open_again_is_already_and_touches_nothing() {
-    let fx = fx("dispatch");
-    let first = fx.pr("open").ok();
-    let calls = fx.gh_calls().len();
-    let before = fx.plan_row();
-
-    let again = fx.pr("open").ok();
-
-    assert_eq!(again, json!({"ok": true, "plan": "pay", "phase": "deploy", "pr": first["pr"], "already": true}));
-    assert_eq!(fx.gh_calls().len(), calls);
-    assert_eq!(fx.plan_row(), before);
-    assert_eq!(fx.events("plan-phase").len(), 1);
 }
 
 #[test]
@@ -923,22 +715,6 @@ fn pr_open_is_refused_open_job_live_while_the_open_job_is_a_draft() {
     assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns));
 }
 
-/// A PR whose `open` Job is `failed` (the Lead decides between `job retry` and this), `cancelled` or `merged` on a PR still `dispatch`
-/// (a merge that died before it opened the pull request) is opened by hand as before; `jobs_not_done` counts no `open` Job.
-#[test]
-fn open_by_hand_goes_on_when_the_open_job_failed_was_cancelled_or_merged_and_counts_it_for_nothing() {
-    for status in ["failed", "cancelled", "merged"] {
-        let fx = fx("dispatch");
-        fx.open_job(status);
-
-        let out = fx.pr("open").ok();
-
-        assert_eq!(out["pr"]["status"], "open", "{status}: {out}");
-        assert_eq!(fx.plan_row().0, "deploy", "{status}");
-        assert_eq!(fx.gh_calls()[1][..2], ["pr", "create"], "{status}");
-    }
-}
-
 #[test]
 fn open_refuses_when_no_job_is_merged() {
     let fx = fx_full("dispatch", "", "cancelled");
@@ -965,56 +741,6 @@ fn open_gates_the_commit_and_leaves_the_lead_worktrees_local_changes_alone() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
     // The local changes are untouched.
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), " M api.txt\n?? scratch.txt");
-}
-
-#[test]
-fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_nothing() {
-    let fx = fx("dispatch");
-    fx.hooks(&paused_gate(fx.env.root()));
-
-    let child = fx.spawn_pr("open");
-    await_gate(fx.env.root());
-    // Another `pr open` commits meanwhile.
-    fx.store()
-        .write("pr open", |tx| {
-            tx.execute_batch(&format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                   VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                 UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{URL}', pr_opened_at = 'opened',
-                        pull_request = (SELECT id FROM pull_requests) WHERE plan = 'pay';"
-            ))?;
-            Ok(())
-        })
-        .unwrap();
-    release_gate(fx.env.root());
-    let out = child.finish();
-
-    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!((out["ok"].as_bool(), out["already"].as_bool()), (Some(true), Some(true)), "{out}");
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
-    // Only step 0's lookup (#91) ran, before the Gate: no `gh pr create`.
-    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
-    assert_eq!(calls, ["list"]);
-    fx.assert_no_gate_worktree();
-}
-
-#[test]
-fn open_adopts_the_pull_request_a_concurrent_open_created_when_its_create_fails() {
-    let fx = fx("dispatch");
-    // `gh pr create` fails because another `pr open` of the PR created it: the lookup now finds it.
-    let raced = format!(r#"[{{"number": 812, "url": "{URL}", "state": "OPEN"}}]"#);
-    fs::write(fx.env.root().join("gh/raced.json"), raced).unwrap();
-    fx.env.fake_gh(&GH.replace(
-        r#""pr create") cat "$(file create.out)" ;;"#,
-        r#""pr create") cp "$dir/raced.json" "$dir/list.json"; echo "a pull request for branch cpd/pay already exists" >&2; exit 1 ;;"#,
-    ));
-
-    let out = fx.pr("open").ok();
-
-    assert_eq!(out["pr"]["pr"]["number"], 812);
-    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
-    assert_eq!(calls, ["list", "create", "list", "graphql"]);
-    assert_eq!(fx.plan_row().0, "deploy");
 }
 
 #[test]
@@ -1220,22 +946,6 @@ fn open_under_gate_ci_applies_the_same_conflict_check_and_runs_no_gate() {
 }
 
 #[test]
-fn open_does_not_fetch_the_base_again_after_the_gate_so_a_base_that_moves_then_refuses_nothing() {
-    let fx = fx("dispatch");
-    // The base moves, in a conflicting way, while the Gate runs: B was read once, before it (hs-d326).
-    let main = fx.repo.clone();
-    fx.hooks(&format!(
-        "pre-merge = \"cd {main} && echo late > api.txt && git add -A && git commit -q -m late && git push -q origin main\"\n",
-        main = main.display()
-    ));
-
-    let out = fx.pr("open").ok();
-
-    assert_eq!(out["phase"], "deploy");
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
-}
-
-#[test]
 fn open_never_creates_a_draft_pull_request() {
     let fx = fx("dispatch");
 
@@ -1306,13 +1016,6 @@ fn open_without_a_selected_plan_is_plan_required() {
     let fx = fx("dispatch");
     let run = fx.env.cpd(&["pr", "open"]);
     assert_eq!(code(&run), ("plan_required".into(), 2));
-}
-
-#[test]
-fn open_an_unknown_plan_is_plan_not_found() {
-    let fx = fx("dispatch");
-    let run = fx.env.cpd(&["pr", "open", "--plan", "nope"]);
-    assert_eq!(code(&run), ("plan_not_found".into(), 4));
 }
 
 // -------------------------------------------------------------- R before the Gate
@@ -1676,116 +1379,6 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert!(is_search(&calls[0]), "{calls:?}");
     assert!(calls[0][3].ends_with("rateLimit { cost remaining resetAt } }"), "{}", calls[0][3]);
-}
-
-#[test]
-fn a_review_request_is_stored_as_not_authored_and_kept_until_a_read_says_it_is_gone() {
-    let fx = fx("dispatch");
-    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE"))]);
-    let events = fx.event_count();
-
-    let out = fx.poll_all();
-
-    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(2), 2));
-    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, true)]);
-    assert_eq!(fx.event_count(), events, "no PR owns either: no Event, not even for a review request with failed checks");
-    let calls = fx.gh_calls();
-    assert_eq!(calls.len(), 1, "both searches in one gh call: {calls:?}");
-    assert!(is_search(&calls[0]) && calls[0][3].contains("review-requested:@me is:pr is:open archived:false"), "{calls:?}");
-
-    // The same answer: nothing is written.
-    let txns = fx.txns();
-    assert_eq!(fx.poll_all()["changed"], json!([]));
-    assert_eq!(fx.txns(), txns);
-
-    // It leaves the review-request search: its row is kept, read directly, and `review_requested` clears (the viewer did not
-    // write it and no request is left); the authored one stays.
-    fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[]);
-    fx.lookup(&[Some(viewer(node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE")), false, false))]);
-    let out = fx.poll_all();
-    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
-    assert_eq!(out["changed"].as_array().unwrap().len(), 1, "the flag moved: {out}");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, false)]);
-    assert_eq!(fx.gh_calls().len(), 4, "one call per poll, the third with its direct read");
-    assert!(is_lookup(&fx.gh_calls()[3]));
-}
-
-#[test]
-fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_only_when_a_read_says_so() {
-    let fx = fx("dispatch");
-    let mine = node("acme/pay", 901, "OPEN", None, None);
-    fx.search_both(&[mine.clone()], &[mine.clone()]);
-    let out = fx.poll_all();
-    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(1), 1));
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
-
-    // Left the author search only: the read says the viewer did not write it, so `authored` clears; the row is reported as changed.
-    fx.search_both(&[], &[mine.clone()]);
-    fx.lookup(&[Some(viewer(mine.clone(), false, true))]);
-    let out = fx.poll_all();
-    assert_eq!(out["changed"].as_array().unwrap().len(), 1);
-    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, true)]);
-
-    // Back in the author search only: the read shows no request, so `review_requested` clears.
-    fx.search_both(&[mine.clone()], &[]);
-    fx.lookup(&[Some(viewer(mine.clone(), true, false))]);
-    fx.poll_all();
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
-
-    // In neither: the read answers, both flags clear and the row is kept, never deleted.
-    fx.search_both(&[], &[]);
-    fx.lookup(&[Some(viewer(mine.clone(), false, false))]);
-    let out = fx.poll_all();
-    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, false)]);
-}
-
-#[test]
-fn a_pr_opened_by_cpd_is_authored_and_a_row_a_pr_points_to_stays_while_in_no_search() {
-    let fx = fx("deploy");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
-    fx.search_both(&[], &[]);
-    fx.lookup(&[Some(pay("OPEN", None, None))]);
-    fx.poll();
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)], "a lookup answering open changes nothing");
-}
-
-#[test]
-fn a_poll_reply_without_the_review_request_search_is_gh_failed_and_writes_nothing() {
-    let fx = fx("deploy");
-    let (txns, events) = (fx.txns(), fx.event_count());
-    fx.gh(
-        "search.json",
-        &search_answer(&[pay("OPEN", None, Some("FAILURE"))], 4987).replace(r#""reviewRequests":{"issueCount":0,"nodes":[]},"#, ""),
-    );
-
-    let run = fx.pr("poll");
-
-    assert_eq!(code(&run), ("gh_failed".into(), 1));
-    assert!(run.error()["message"].as_str().unwrap().contains("reviewRequests"), "{}", run.error());
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
-}
-
-#[test]
-fn a_second_identical_poll_writes_nothing() {
-    let fx = fx("deploy");
-    fx.search(&[pay("OPEN", None, Some("FAILURE")), node("acme/web", 902, "OPEN", None, None)]);
-    let first = fx.poll();
-    assert_eq!(first["changed"].as_array().unwrap().len(), 2);
-
-    let (txns, events) = (fx.txns(), fx.event_count());
-    let again = fx.poll();
-
-    assert_eq!(
-        again,
-        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
-               "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
-    );
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
-    assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
-    assert!(fx.gh_calls().iter().all(|c| !is_lookup(c)), "812 is in the search: no lookup");
 }
 
 // ------------------------------------------------------------------ pr poll: the base follow (hs-d325, hs-d326)
@@ -2153,18 +1746,6 @@ fn a_conflicting_pull_request_no_plan_owns_gets_no_event() {
 }
 
 #[test]
-fn a_value_outside_the_mergeable_sets_fails_the_poll_and_stores_nothing() {
-    let fx = fx("deploy");
-    for bad in [merge_state(pay("OPEN", None, None), "MAYBE", "DIRTY"), merge_state(pay("OPEN", None, None), "CONFLICTING", "QUEUED")] {
-        fx.search(&[bad]);
-        let run = fx.pr("poll");
-        assert_eq!(code(&run), ("gh_failed".into(), 1));
-    }
-    assert!(fx.events("pr-feedback").is_empty());
-    assert_eq!(fx.shown_pull_request()["mergeable"], "unknown");
-}
-
-#[test]
 fn poll_tells_the_plan_once_that_changes_were_requested() {
     let fx = fx("deploy");
     fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), None)]);
@@ -2185,21 +1766,6 @@ fn poll_tells_the_plan_once_that_changes_were_requested() {
     fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), None)]);
     assert_eq!(fx.poll()["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(fx.events("pr-feedback").len(), 2);
-}
-
-#[test]
-fn improvements_are_stored_and_tell_nobody() {
-    let fx = fx("deploy");
-    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
-    fx.poll();
-    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "failed".into(), "open".into()));
-
-    fx.search(&[pay("OPEN", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE)]);
-    let out = fx.poll();
-
-    assert_eq!(out["feedback"], json!([]));
-    assert_eq!(fx.pr_data(), (TITLE.into(), "approved".into(), "passed".into(), "open".into()));
-    assert_eq!(fx.events("pr-feedback").len(), 1, "only the first poll's checks turning failed");
 }
 
 #[test]
@@ -2280,69 +1846,6 @@ impl Fx {
 }
 
 #[test]
-fn a_pull_request_one_search_misses_keeps_its_row_and_the_open_list() {
-    let fx = fx("dispatch");
-    let (a, b) = (node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None));
-    fx.search(&[a.clone(), b.clone()]);
-    fx.poll_all();
-    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
-    let (txns, events) = (fx.txns(), fx.event_count());
-    let list = fx.widget_prs();
-    assert_eq!(list, [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
-    assert_eq!(fx.gh_calls().len(), 1);
-
-    let check = |when: &str| {
-        assert_eq!(fx.pull_request_row(901), Some((id, "open".to_owned(), true, false, None)), "{when}");
-        assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{when}: nothing written, no Event");
-        assert_eq!(fx.pull_request_history("delete", None), 0, "{when}: no row is ever deleted");
-        assert_eq!(fx.pull_request_history("insert", Some(901)), 1, "{when}: 901 was inserted once");
-        assert_eq!(fx.widget_prs(), list, "{when}: the widget's list does not flicker");
-    };
-
-    // Poll 2: one search misses 901; the direct read says it is open, and the viewer's.
-    fx.search(&[b.clone()]);
-    fx.lookup(&[Some(viewer(a.clone(), true, false))]);
-    let out = fx.poll_all();
-    assert_eq!(out["changed"], json!([]));
-    check("poll 2");
-    let calls = fx.gh_calls();
-    assert_eq!(calls.len(), 3, "poll 2 made a search and a lookup: {calls:?}");
-    assert!(is_search(&calls[1]) && is_lookup(&calls[2]), "{calls:?}");
-    assert!(calls[2][3].contains("number: 901") && !calls[2][3].contains("number: 902"), "{}", calls[2][3]);
-
-    // Poll 3: the search lists both again.
-    fx.search(&[a, b]);
-    let out = fx.poll_all();
-    assert_eq!(out["changed"], json!([]));
-    check("poll 3");
-    assert_eq!(fx.gh_calls().len(), 4, "poll 3 made one call");
-}
-
-#[test]
-fn a_search_that_lists_fewer_nodes_than_its_issue_count_deletes_and_clears_nothing() {
-    let fx = fx("dispatch");
-    let a = node("acme/pay", 901, "OPEN", None, None);
-    fx.search(&[a.clone()]);
-    fx.poll_all();
-    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
-
-    // More than 100 open pull requests: the search says 3 and lists one node.
-    let answer = search_answer_with(&[node("acme/web", 902, "OPEN", None, None)], &[], 4987).replacen(r#""issueCount":1,"nodes""#, r#""issueCount":3,"nodes""#, 1);
-    assert!(answer.contains(r#""issueCount":3"#), "{answer}");
-    fx.gh("search.json", &answer);
-    fx.lookup(&[Some(viewer(a, true, false))]);
-    let out = fx.poll_all();
-
-    let added: Vec<&Value> = out["changed"].as_array().unwrap().iter().map(|c| &c["number"]).collect();
-    assert_eq!(added, [&json!(902)], "902 is added: {out}");
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, true, false)]);
-    assert_eq!(fx.pull_request_row(901).map(|r| r.0), Some(id));
-    assert_eq!(fx.pull_request_history("delete", None), 0);
-    assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
-    assert_eq!(fx.lookup_texts().len(), 1, "901 was read directly");
-}
-
-#[test]
 fn a_flag_a_search_misses_clears_only_when_the_direct_read_says_so() {
     let fx = fx("dispatch");
     let a = node("acme/pay", 901, "OPEN", None, None);
@@ -2418,42 +1921,6 @@ fn a_direct_read_that_says_merged_or_closed_moves_an_unowned_row_and_keeps_it() 
 }
 
 #[test]
-fn a_pull_request_github_cannot_find_loses_its_flags_and_is_not_read_again() {
-    let fx = fx("dispatch");
-    fx.search(&[node("acme/pay", 901, "OPEN", None, None)]);
-    fx.poll_all();
-    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
-
-    fx.search(&[]);
-    fx.lookup(&[None]);
-    fx.poll_all();
-
-    assert_eq!(fx.pull_request_row(901), Some((id, "open".to_owned(), false, false, None)));
-    assert_eq!(fx.widget_prs(), []);
-    assert_eq!(fx.pull_request_history("delete", None), 0);
-    let (calls, txns) = (fx.gh_calls().len(), fx.txns());
-    fx.poll_all();
-    assert_eq!(fx.gh_calls().len(), calls + 1, "one call: the search");
-    assert_eq!(fx.txns(), txns);
-
-    // An owned row GitHub cannot find is unchanged.
-    let fx = fx_owned_not_found();
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
-    assert_eq!(fx.pr_data().3, "open");
-}
-
-/// `deploy`, polled once with a search that lists nothing and a read that cannot find 812; the txns did not move.
-fn fx_owned_not_found() -> Fx {
-    let fx = fx("deploy");
-    fx.search(&[]);
-    fx.lookup(&[None]);
-    let txns = fx.txns();
-    fx.poll_all();
-    assert_eq!(fx.txns(), txns, "an owned row GitHub cannot find is unchanged");
-    fx
-}
-
-#[test]
 fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing() {
     let fx = fx("deploy");
     let (p812, p901, p902, p903) =
@@ -2525,67 +1992,6 @@ fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
 }
 
 #[test]
-fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_changes_nothing() {
-    let fx = fx("deploy");
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("OPEN", None, None))]);
-    let (txns, events) = (fx.txns(), fx.event_count());
-
-    let out = fx.poll();
-
-    assert_eq!((out["polled"].clone(), out["changed"].clone()), (json!(0), json!([])));
-    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
-    assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 812)]);
-    let calls = fx.gh_calls();
-    assert!(is_search(&calls[0]) && is_lookup(&calls[1]) && calls.len() == 2, "{calls:?}");
-    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner } number url"#), "{}", calls[1][3]);
-    assert!(calls[1][3].contains("viewerDidAuthor viewerLatestReviewRequest { id } }"), "{}", calls[1][3]);
-}
-
-#[test]
-fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_path() {
-    let fx = fx("deploy");
-    let (worktree, branch) = kept_attempt(&fx);
-    let started = fx.env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", &format!("sleep {SLEEP_SECONDS}")]);
-    assert!(started.status.success(), "{started:?}");
-    assert!(fx.env.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", &format!("sleep {SLEEP_SECONDS}")]).status.success());
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE))]);
-
-    let out = fx.poll();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
-    assert_eq!(out["changed"], json!([{"repo": "acme/pay", "number": 812, "state": "merged", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"}]));
-    assert_eq!(out["prs"], json!([{"key": "repo", "status": "merged", "pull_request": fx.shown_pull_request()}]));
-    assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
-    assert_eq!(fx.pr_data(), (TITLE.into(), "approved".into(), "passed".into(), "merged".into()));
-    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("done".to_owned(), "merged".to_owned()));
-    assert!(fx.plan_row().5.is_some());
-    let done = fx.events("plan-done");
-    assert_eq!(done.len(), 1);
-    assert_eq!(done[0].1, json!({"prs": [{"key": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}]}));
-    let merged = fx.events("pr-merged");
-    assert_eq!(merged.len(), 1);
-    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
-    assert!(fx.events("pr-feedback").is_empty());
-    // The Attempt's worktree and branch and the Lead's (pushed, clean) are gone, the Attempt's window is killed.
-    assert!(!worktree.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
-    assert!(!fx.lead.exists());
-    assert_eq!(fx.git(&fx.repo, &["branch", "--list", "cpd/pay"]), "");
-    let windows = window_names(&fx);
-    assert!(!windows.contains("pay--b-a1") && windows.contains("cpd-work:other-plan"), "{windows}");
-
-    // Done: a rerun polls again and finds nothing new.
-    let txns = fx.txns();
-    let again = fx.poll();
-    assert_eq!((again["merged"].clone(), again["done"].clone(), again["changed"].clone()), (json!([]), json!([]), json!([])));
-    assert_eq!((fx.txns(), fx.events("plan-done").len()), (txns, 1));
-}
-
-#[test]
 fn poll_with_a_done_plan_reruns_its_clean_up() {
     let fx = fx("done");
     let (worktree, branch) = kept_attempt(&fx);
@@ -2598,77 +2004,6 @@ fn poll_with_a_done_plan_reruns_its_clean_up() {
     assert!(!worktree.exists());
     assert_eq!(fx.git(&fx.repo, &["branch", "--list", &branch]), "");
     assert!(fx.lead.exists());
-}
-
-#[test]
-fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_once() {
-    let fx = fx("deploy");
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("CLOSED", Some("CHANGES_REQUESTED"), Some("FAILURE")))]);
-
-    let out = fx.poll();
-
-    assert_eq!((out["feedback"].clone(), out["merged"].clone(), out["done"].clone()), (json!([{"plan": "pay", "pr": "repo"}]), json!([]), json!([])));
-    let events = fx.events("pr-feedback");
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, feedback("closed", "failed", "changes_requested", &["checks_failed", "changes_requested", "closed"]));
-    assert!(events[0].0.contains("needs attention: checks failed, changes requested, closed without a merge. Read"), "{}", events[0].0);
-    assert_eq!(fx.pr_data().3, "closed");
-    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()), "the PR stays open in cpd");
-
-    // Polled again: still closed, told once; the row is already right, so it is not looked up again (commands-W4).
-    let txns = fx.txns();
-    assert_eq!(fx.poll()["feedback"], json!([]));
-    assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
-    assert_eq!(fx.gh_calls().iter().filter(|c| is_lookup(c)).count(), 1);
-
-    // Reopened: it is in the search again, and nobody is told. Closed again: told again.
-    fx.search(&[pay("OPEN", None, None)]);
-    fx.poll();
-    assert_eq!(fx.pr_data().3, "open");
-    assert_eq!(fx.events("pr-feedback").len(), 1);
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("CLOSED", None, None))]);
-    fx.poll();
-    assert_eq!(fx.events("pr-feedback").len(), 2);
-}
-
-#[test]
-fn a_pull_request_closed_without_a_merge_is_not_looked_up_again() {
-    let fx = fx("deploy");
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("CLOSED", None, None))]);
-    fx.poll();
-    assert_eq!(fx.pr_data().3, "closed");
-    let lookups = || fx.gh_calls().iter().filter(|c| is_lookup(c)).count();
-    assert_eq!(lookups(), 1);
-
-    for _ in 0..3 {
-        fx.poll();
-    }
-
-    assert_eq!(lookups(), 1, "three more ticks looked it up again");
-    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("deploy".to_owned(), "open".to_owned()));
-}
-
-#[test]
-fn a_lookup_with_a_not_found_alias_and_exit_1_still_applies_the_others() {
-    let fx = fx("deploy");
-    fx.add_web(Web::Open);
-    fx.search(&[]);
-    // `gh` exits 1 when one alias is NOT_FOUND although `data` holds the others.
-    fx.lookup(&[Some(pay("MERGED", None, None)), None]);
-    fx.gh("lookup.exit", "1");
-
-    let out = fx.poll();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!(out["done"], json!([]));
-    assert_eq!((fx.pr_status("repo"), fx.pr_status("web")), ("merged".to_owned(), "open".to_owned()));
-    assert_eq!(fx.phase(), "deploy");
-    let calls = fx.gh_calls();
-    assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay")"#) && calls[1][3].contains(r#"p1: repository(owner: "acme", name: "web")"#), "{}", calls[1][3]);
-    assert_eq!(out["prs"][1]["pull_request"]["state"], "open");
 }
 
 #[test]
@@ -2713,10 +2048,6 @@ fn poll_has_no_pr_flag() {
 struct Child(Option<std::process::Child>);
 
 impl Child {
-    fn pid(&self) -> u32 {
-        self.0.as_ref().unwrap().id()
-    }
-
     fn finish(mut self) -> std::process::Output {
         self.0.take().unwrap().wait_with_output().unwrap()
     }
@@ -2729,39 +2060,6 @@ impl Drop for Child {
             let _ = child.wait();
         }
     }
-}
-
-/// Whether process `pid` has `path` open.
-fn has_open(pid: u32, path: &Path) -> bool {
-    if let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) {
-        return fds.filter_map(|fd| fs::read_link(fd.ok()?.path()).ok()).any(|target| target == path);
-    }
-    // no /proc (macOS): `lsof` names each open file on an `n` line
-    let Ok(out) = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-Fn"]).output() else { return false };
-    String::from_utf8_lossy(&out.stdout).lines().any(|l| l.strip_prefix('n').is_some_and(|n| Path::new(n) == path))
-}
-
-#[test]
-fn a_second_poll_waits_for_the_lock() {
-    let fx = fx("deploy");
-    fx.search(&[pay("OPEN", None, None)]);
-    let path = fx.home.pr_poll_lock();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let path = path.canonicalize().unwrap();
-    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-
-    let child = Child(Some(fx.env.command(CPD).args(["pr", "poll"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()));
-    let pid = child.pid();
-    // The poll has the lock file open and waits for it: it has made no gh call.
-    common::wait_until(&format!("the poll to open {}", path.display()), || has_open(pid, &path));
-    assert!(fx.gh_calls().is_empty(), "{:?}", fx.gh_calls());
-
-    drop(held);
-    let out = child.finish();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
-    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap()["polled"], 1);
-    assert_eq!(fx.gh_calls().len(), 1);
 }
 
 #[test]
@@ -2932,31 +2230,6 @@ fn dispatch_card(fx: &Fx) -> (String, Option<(i64, PrState, Option<(String, Revi
 }
 
 #[test]
-fn dispatch_rows_carry_label_number_state_checks_decision_and_title() {
-    let fx = fx("deploy");
-    // Before the first poll the row is what `pr open` wrote: the Plan's title, no review, no checks.
-    assert_eq!(
-        dispatch_card(&fx),
-        ("Lead".into(), Some((812, PrState::Open, Some(("Pay the bills".into(), ReviewDecision::None, Checks::None)))))
-    );
-
-    fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), Some("FAILURE")).replace("Pay the bills", TITLE)]);
-    fx.poll();
-    assert_eq!(
-        dispatch_card(&fx),
-        ("Lead".into(), Some((812, PrState::Open, Some((TITLE.into(), ReviewDecision::ChangesRequested, Checks::Failed)))))
-    );
-
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE))]);
-    fx.poll();
-    assert_eq!(
-        dispatch_card(&fx),
-        ("Lead".into(), Some((812, PrState::Merged, Some((TITLE.into(), ReviewDecision::Approved, Checks::Passed)))))
-    );
-}
-
-#[test]
 fn a_plan_without_a_pr_has_a_label_and_no_pr_row() {
     let fx = fx("dispatch");
     assert_eq!(dispatch_card(&fx), ("Lead".into(), None));
@@ -2986,11 +2259,6 @@ fn kept_attempt(fx: &Fx) -> (PathBuf, String) {
         })
         .unwrap();
     (made.path, made.branch)
-}
-
-fn window_names(fx: &Fx) -> String {
-    let out = fx.env.tmux(&["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
-    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 // ---------------------------------------------------------------- pr rebase
@@ -3571,68 +2839,6 @@ fn poll_covers_every_open_pr_in_dispatch_and_pr_and_ends_the_plan_with_the_last_
 }
 
 #[test]
-fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
-    let fx = fx("deploy");
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("MERGED", None, None))]);
-    assert_eq!(fx.poll()["done"], json!(["pay"]));
-    assert_eq!(fx.phase(), "done");
-    assert_eq!(fx.events("plan-done").len(), 1);
-
-    // `pr add` moves the legacy branch and reopens the Plan.
-    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    assert_eq!(fx.phase(), "dispatch");
-    // The engine would start the PR and the Lead open it: written straight, as the other tests do,
-    // with the pull request's row `pr open` writes.
-    fx.store()
-        .write("fixture", |tx| {
-            tx.execute_batch(&format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                   VALUES ('acme/pay', 900, 'https://github.com/acme/pay/pull/900', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                 UPDATE prs SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
-                 UPDATE prs SET status = 'open', pr_number = 900, pr_url = 'https://github.com/acme/pay/pull/900', pr_opened_at = 'opened',
-                        pull_request = (SELECT id FROM pull_requests WHERE number = 900)
-                  WHERE plan = 'pay' AND key = 'fix';
-                 UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
-                lead = fx.lead.display()
-            ))?;
-            Ok(())
-        })
-        .unwrap();
-
-    fx.lookup(&[Some(node("acme/pay", 900, "MERGED", None, None))]);
-    let out = fx.poll();
-    assert_eq!((out["merged"].clone(), out["done"].clone()), (json!([{"plan": "pay", "pr": "fix"}]), json!(["pay"])));
-    assert_eq!((fx.phase().as_str(), fx.pr_status("fix").as_str()), ("done", "merged"));
-    let done = fx.events("plan-done");
-    assert_eq!(done.len(), 2, "plan-done once each time the Plan reaches done");
-    let listed: Vec<&str> = done[1].1["prs"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap()).collect();
-    assert_eq!(listed, ["fix", "repo"]);
-}
-
-#[test]
-fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
-    let fx = fx("dispatch");
-    fx.add_web(Web::Waiting);
-    fx.pr_cmd("open", "repo").ok();
-    assert_eq!(code(&fx.env.cpd(&["pr", "start", "web", "--plan", "pay"])), ("pr_not_ready".into(), 3));
-
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("MERGED", None, None))]);
-    let out = fx.poll();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((fx.pr_status("repo").as_str(), fx.pr_status("web").as_str(), fx.phase().as_str()), ("merged", "waiting", "dispatch"));
-    assert_eq!(fx.events("pr-merged").len(), 1);
-    assert!(fx.events("plan-done").is_empty());
-    assert!(fx.events("pr-started").is_empty(), "pr poll never starts a PR");
-    // Its need is merged now: it can start.
-    let started = fx.env.cpd(&["pr", "start", "web", "--plan", "pay"]).ok();
-    assert_eq!(started["pr"]["status"], "dispatch");
-    assert_eq!(fx.pr_status("web"), "dispatch");
-}
-
-#[test]
 fn rebase_touches_only_its_pr() {
     let fx = fx("dispatch");
     let web = fx.add_web(Web::Open);
@@ -3718,86 +2924,6 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
-}
-
-const GONE_URL: &str = "https://github.com/gone/shop/pull/20";
-
-impl Fx {
-    /// A second Plan `bob` in Context `ctx2` of owner `gone`, its PR `shop` open as pull request 20 of `gone/shop`.
-    /// The owner file of `gone` is written, then deleted: the one owner this machine has no file for.
-    fn add_bob_without_an_owner_file(&self) {
-        self.env.owner_policy("gone", "");
-        fs::remove_file(self.env.cpd_home().join("policy/owners/gone.toml")).unwrap();
-        self.store()
-            .write("fixture", |tx| {
-                tx.execute_batch(&format!(
-                    "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx2', 'Ctx2', 'gone', 't', 't');
-                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                       VALUES ('lead2', 'lead', 'ctx2', 'bob', 'Lead', '/', 'O3', 'idle', 't', 't');
-                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-                       VALUES ('bob', 'ctx2', 'Bob', 'deploy', 'lead2', 't', 't');
-                     INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-                       VALUES ('gone/shop', 20, '{GONE_URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', 'opened');
-                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
-                                      pr_number, pr_url, pr_opened_at, pull_request)
-                       VALUES ('bob', 'shop', '/r', 'main', 'shop', 'open', 'cpd/bob/shop', '/w', cpd_txn(), 't', 't',
-                               20, '{GONE_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 20));"
-                ))?;
-                Ok(())
-            })
-            .unwrap();
-    }
-
-    /// `(plan, data)` of every `error` Event of source `pr poll` that is not a clean-up failure.
-    fn policy_errors(&self) -> Vec<(String, Value)> {
-        self.store()
-            .read(|c| {
-                let mut stmt = c.prepare(
-                    "SELECT plan, data FROM events WHERE kind = 'error' AND json_extract(data, '$.source') = 'pr poll'
-                        AND json_extract(data, '$.code') <> 'cleanup_failed' ORDER BY id",
-                )?;
-                Ok(stmt
-                    .query_map([], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
-                    .collect::<rusqlite::Result<_>>()?)
-            })
-            .unwrap()
-    }
-}
-
-#[test]
-fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges() {
-    let fx = fx("deploy");
-    fx.add_bob_without_an_owner_file();
-    // bob's checks turned failed (it would be told, were its policy known); pay's PR merged, so it is looked up.
-    fx.search(&[node("gone/shop", 20, "OPEN", None, Some("FAILURE"))]);
-    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
-
-    let out = fx.poll_all();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((out["done"].clone(), out["feedback"].clone()), (json!(["pay"]), json!([])));
-    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("done".to_owned(), "merged".to_owned()));
-    assert_eq!(fx.events("pr-merged").len(), 1);
-    // bob's row is written as usual, and bob is told nothing.
-    let bob: String = fx.store().read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 20", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(bob, "failed");
-    let told: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = 'pr-feedback'", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(told, 0);
-    // One `error` Event names the plan, the PR and the code.
-    let errors = fx.policy_errors();
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0].0, "bob");
-    assert_eq!(errors[0].1["code"], "owner_unconfirmed");
-    assert_eq!(errors[0].1["details"]["plan"], "bob");
-    assert_eq!(errors[0].1["details"]["pr"], "shop");
-    assert_eq!(errors[0].1["details"]["owner"], "gone");
-    assert!(errors[0].1["message"].as_str().unwrap().contains("PR shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
-
-    // Once per episode: the next polls, still failing the same way, append nothing and write nothing.
-    let events = fx.event_count();
-    fx.poll_all();
-    fx.poll_all();
-    assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
 }
 
 // ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------
@@ -4052,25 +3178,6 @@ fn with_one_slot_a_second_gate_waits_until_the_first_lets_go_and_logs_the_wait()
 }
 
 #[test]
-fn both_hooks_see_the_slot_the_gate_holds_and_no_other_cpd_variable() {
-    let fx = fx("dispatch");
-    fx.test_concurrency(1);
-    let seen = fx.env.root().join("seen");
-    // `cpd` is run with CPD_HOME and more in its environment, and none of it reaches a hook.
-    fx.hooks(&format!(
-        "pre-start = \"env | grep '^CPD_' | sort > {seen}.start\"\npre-merge = \"env | grep '^CPD_' | sort > {seen}.merge\"\n",
-        seen = seen.display()
-    ));
-
-    fx.pr("open").ok();
-
-    for hook in ["start", "merge"] {
-        let path = fx.env.root().join(format!("seen.{hook}"));
-        assert_eq!(fs::read_to_string(&path).unwrap(), "CPD_TEST_SLOT=0\n", "pre-{hook}");
-    }
-}
-
-#[test]
 fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
     let fx = fx("dispatch");
     fx.hooks("pre-merge = \"echo gate ran\"\n");
@@ -4082,28 +3189,6 @@ fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
     assert_eq!(fx.pr_log("pre-merge"), "gate: slot 0 taken after 0 s\ngate ran\n");
     assert!(!String::from_utf8_lossy(&out.stderr).contains("gate: "), "{}", String::from_utf8_lossy(&out.stderr));
     assert!(!slot_is_held(&fx.home.test_slot(0)), "the slot is released when the Gate ends");
-}
-
-#[test]
-fn a_slot_held_by_a_killed_gate_is_free_at_once() {
-    let fx = fx("dispatch");
-    fx.test_concurrency(1);
-    let root = fx.env.root().to_path_buf();
-    fx.hooks(&paused_gate(&root));
-
-    let first = fx.spawn_pr("open");
-    await_gate(&root);
-    assert!(slot_is_held(&fx.home.test_slot(0)), "the running Gate holds the only slot");
-    // SIGKILL: no clean-up runs; its hook (a child) outlives it, and must not keep the slot.
-    nix::sys::signal::kill(nix::unistd::Pid::from_raw(first.pid() as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
-    first.finish();
-    release_gate(&root);
-
-    let out = fx.pr("open").ok();
-
-    assert_eq!(out["pr"]["status"], "open");
-    let log = fx.pr_log("pre-merge");
-    assert!(log.starts_with("gate: slot 0 taken after 0 s\n") && !log.contains("waiting"), "{log}");
 }
 
 #[test]

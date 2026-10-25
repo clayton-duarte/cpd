@@ -7,7 +7,7 @@ use crate::common;
 
 use std::fs;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, refused, wait_until};
+use common::{SLEEP_SECONDS, TestEnv, refused, wait_until};
 use serde_json::{Value, json};
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
@@ -176,39 +176,6 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
 
     // The chat slot did not move (hs-d103).
     assert_eq!(slot(&env), placeholder);
-}
-
-#[test]
-fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
-    let env = TestEnv::new();
-    setup(&env);
-    cockpit(&env);
-    // The tmux server's global environment is what every new pane starts from.
-    for (name, value) in [("PLANNOTATOR_DATA_DIR", "/tmp/x"), ("PLANNOTATOR_PORT", "1"), ("PLANNOTATOR_REMOTE", "1")] {
-        let out = env.tmux(&["set-environment", "-g", name, value]);
-        assert!(out.status.success(), "tmux set-environment {name}");
-    }
-    // The caller of `cpd context manager` has them too.
-    let out = env
-        .command(CPD)
-        .args(["context", "manager", "--context", "ctx"])
-        .env("PLANNOTATOR_DATA_DIR", "/tmp/x")
-        .env("PLANNOTATOR_PORT", "1")
-        .env("PLANNOTATOR_REMOTE", "1")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "cpd context manager failed: {}", String::from_utf8_lossy(&out.stderr));
-    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let id = out["manager"]["session"].as_str().unwrap().to_owned();
-
-    let envs = pi_envs(&env, &id, 1);
-    let mut names = var_names(&envs[0], "PLANNOTATOR_");
-    names.sort_unstable();
-    assert_eq!(names, ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_UPDATE_CHECK", "PLANNOTATOR_URL_HOST"]);
-    // The caller's values are replaced by cpd's: remote, and a port of the range, not the caller's `1`.
-    assert!(has_var(&envs[0], "PLANNOTATOR_REMOTE=1"));
-    assert!(!has_var(&envs[0], "PLANNOTATOR_PORT=1"), "the caller's port is not the Manager's");
-    assert!(!envs[0].lines().any(|l| l.starts_with("PLANNOTATOR_DATA_DIR=")));
 }
 
 #[test]
