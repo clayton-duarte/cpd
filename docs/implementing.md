@@ -286,6 +286,7 @@ pub struct Launch { program, args, env_set, env_remove, cwd, setsid: bool, stdou
 **Virtual-time loops.** A loop that waits on the clock (`watch`, `events follow`, `ask`, a driver's poll) calls `clock.sleep`, so a test drives it with `ManualClock::advance` and never waits:
 - `watch::run(&ports, until)` runs the engine's ticks until `until` says stop, on the test's thread; the test steps it with `ManualClock::advance`, or calls one `Engine::tick`.
 - `events follow` and `ask` run through `run_with` on a thread; the test advances the `ManualClock` once per poll and joins the thread. The thread reads only the shared clock, so nothing is a race.
+- The engine's poll (E5) runs `<exe> pr poll` through the runner: `Fx::engine_routes_polling` makes that call `run_with` of the `Fx`'s ports on the poll's thread, and `Fx::route_fn("gh", |call| Reply)` is the `gh` it calls. The poll thread reads the clock when it ends, so a test that looks at a time between two polls holds the engine with `Fx::watch_gated`: its `step` waits at the engine's nap for what the hook, run on that read, signals. A test that only needs a lower bound (a poll never starts sooner than `end + pr_poll_seconds`) reads `ManualClock::elapsed` in the `gh` closure and needs no gate.
 - A held-open `attempt run`, `session run`, `context distill` or `pr rebase` is a `FakeRunner` reply that `takes` longer, or a `FakeSpawn` pid that has not exited.
 
 ### The fake tmux

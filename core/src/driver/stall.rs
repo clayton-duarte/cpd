@@ -16,11 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-#[cfg(test)]
-use crate::host::spawn::ProcessSpawn;
 use crate::host::spawn::{Pid as SpawnPid, Signal};
-#[cfg(test)]
-use crate::host::spawn::Spawn;
 use crate::ports::Ports;
 use serde_json::Value;
 
@@ -80,11 +76,6 @@ impl Watch {
     /// inside a tool call, kills pi's descendants and returns the driver-log
     /// line; None when there is nothing to do. While a check span is open
     /// (`span_open`, §7.7) nothing is killed and the quiet starts over.
-    #[cfg(test)]
-    pub fn check(&mut self, file: &Path, pi: u32, span_open: bool) -> Option<String> {
-        self.check_with(&Ports::real(), &descendants, file, pi, span_open)
-    }
-
     /// [`Watch::check`] on `ports`: the quiet of `file` is its modification time against `ports.clock.utc()`, the signals
     /// and the waits of `terminate_with` go to `ports.spawn` and naps of `ports.clock`, the command lines come from
     /// `ports.spawn.cmdline`, and `descendants` names pi's live descendants (the `/proc` or `libproc` walk, in production).
@@ -169,11 +160,15 @@ pub(crate) fn all_pids() -> Vec<u32> {
 
 /// Every live descendant of `root`, not `root` itself, in pid order.
 pub(crate) fn descendants(root: u32) -> Vec<u32> {
+    descendants_in(root, all_pids().into_iter().filter_map(|pid| stat(pid).map(|(ppid, state)| (pid, ppid, state))))
+}
+
+/// [`descendants`] over a table of `(pid, parent pid, state)`: a zombie is not a descendant, and nothing under it is
+/// reached through it.
+fn descendants_in(root: u32, procs: impl IntoIterator<Item = (u32, u32, char)>) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    for pid in all_pids() {
-        if let Some((ppid, state)) = stat(pid)
-            && state != 'Z'
-        {
+    for (pid, ppid, state) in procs {
+        if state != 'Z' {
             children.entry(ppid).or_default().push(pid);
         }
     }
@@ -187,12 +182,6 @@ pub(crate) fn descendants(root: u32) -> Vec<u32> {
     }
     found.sort_unstable();
     found
-}
-
-/// `pid`'s command line, as the real `Spawn` reads it.
-#[cfg(test)]
-fn cmdline(pid: u32) -> String {
-    ProcessSpawn.cmdline(SpawnPid(pid)).unwrap_or_default()
 }
 
 /// `SIGTERM` to `pids`, then `SIGKILL` to those still alive after
@@ -218,15 +207,13 @@ fn terminate_with(ports: &Ports, pids: &[u32]) -> Vec<u32> {
     left
 }
 
-/// [`terminate_with`] on the real ports.
-#[cfg(test)]
-fn terminate(pids: &[u32]) -> Vec<u32> {
-    terminate_with(&Ports::real(), pids)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::Clock;
+    use crate::driver::ports_tests::{modified_at, process};
+    use crate::host::spawn::Spawn;
+    use crate::ports::Fakes;
 
     const SESSION: &str = r#"{"type":"session"}"#;
     const CALL: &str = r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"x"},{"type":"toolCall","id":"c1","name":"bash"}],"stopReason":"toolUse"}}"#;
@@ -261,50 +248,63 @@ mod tests {
         assert!(!in_tool_call(&[SESSION, CALL, r#"{"type":"mess"#].join("\n")));
     }
 
-    /// A session file that has been inside a tool call for an hour, and a stand-in for pi: a shell with a child of its own.
-    fn stalled() -> (tempfile::TempDir, std::path::PathBuf, std::process::Child) {
+    /// A session file that has been inside a tool call for an hour of virtual time, and a stand-in for pi on the fake: a process
+    /// with a child of its own (the table the walk reads is `descendants_in`'s argument, not `/proc`).
+    fn stalled(fakes: &Fakes) -> (tempfile::TempDir, std::path::PathBuf, SpawnPid, SpawnPid) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("session.jsonl");
         std::fs::write(&file, [SESSION, CALL].join("\n")).unwrap();
-        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
-        std::fs::File::options().write(true).open(&file).unwrap().set_modified(hour_ago).unwrap();
-        let pi = std::process::Command::new("sh").args(["-c", "sleep 30 & wait"]).spawn().unwrap();
-        // Its child exists once `sh` has forked it.
-        for _ in 0..200 {
-            if !descendants(pi.id()).is_empty() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        (dir, file, pi)
+        modified_at(&file, fakes.clock.utc());
+        fakes.clock.advance(Duration::from_secs(3600));
+        let (pi, child) = (process(&fakes.spawn), process(&fakes.spawn));
+        fakes.spawn.set_cmdline(child, "sleep 30");
+        (dir, file, pi, child)
+    }
+
+    /// The process table of that stand-in: `sh` (pi) with the `sleep` it forked, and what is no descendant.
+    fn table(pi: SpawnPid, child: SpawnPid) -> Vec<(u32, u32, char)> {
+        vec![(pi.0, 1, 'S'), (child.0, pi.0, 'S'), (child.0 + 1000, 1, 'S')]
     }
 
     #[test]
     fn a_stall_is_killed_unless_a_check_span_is_open() {
-        let (_dir, file, mut pi) = stalled();
-        let child = descendants(pi.id());
-        assert_eq!(child.len(), 1, "{child:?}");
+        let fakes = Fakes::new();
+        let (_dir, file, pi, child) = stalled(&fakes);
+        let kids = |root: u32| descendants_in(root, table(pi, child));
+        assert_eq!(kids(pi.0), [child.0]);
         let mut watch = Watch::new(60);
-        assert_eq!(watch.check(&file, pi.id(), true), None, "an open span is not a stall");
-        assert!(ProcessSpawn.alive(SpawnPid(child[0])));
+        assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, true), None, "an open span is not a stall");
+        assert!(fakes.spawn.alive(child));
         // The span ended a moment ago: the quiet counts from the last tick that saw it, not from the file.
-        assert_eq!(watch.check(&file, pi.id(), false), None);
-        assert!(ProcessSpawn.alive(SpawnPid(child[0])));
+        assert_eq!(watch.check_with(&fakes.ports, &kids, &file, pi.0, false), None);
+        assert!(fakes.spawn.alive(child));
         // With no span ever seen, the same file is a stall.
-        let line = Watch::new(60).check(&file, pi.id(), false).expect("killed");
-        assert!(line.contains(&child[0].to_string()), "{line}");
-        pi.wait().unwrap();
+        let line = Watch::new(60).check_with(&fakes.ports, &kids, &file, pi.0, false).expect("killed");
+        assert!(line.contains(&child.0.to_string()), "{line}");
+        assert!(line.contains("(sleep 30)"), "{line}");
+        assert!(!fakes.spawn.alive(child), "the descendant was terminated");
+        assert!(fakes.spawn.alive(pi), "never pi itself");
     }
 
     #[test]
     fn descendants_are_found_and_the_root_is_not_one() {
-        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        let me = std::process::id();
-        let found = descendants(me);
-        assert!(found.contains(&child.id()), "{found:?}");
-        assert!(!found.contains(&me));
-        assert_eq!(cmdline(child.id()), "sleep 30");
-        assert!(terminate(&[child.id()]).is_empty());
-        child.wait().unwrap();
+        let fakes = Fakes::new();
+        let (root, child) = (process(&fakes.spawn), process(&fakes.spawn));
+        let (grandchild, zombie, stranger) = (2000, 2001, 2002);
+        let procs = vec![
+            (root.0, 1, 'S'),
+            (child.0, root.0, 'S'),
+            (grandchild, child.0, 'R'),
+            (zombie, root.0, 'Z'),
+            (stranger, 1, 'S'),
+        ];
+        let found = descendants_in(root.0, procs.clone());
+        assert_eq!(found, [child.0, grandchild], "the whole subtree, in pid order, with no zombie and no stranger");
+        assert!(!found.contains(&root.0));
+        assert_eq!(descendants_in(child.0, procs), [grandchild]);
+        fakes.spawn.set_cmdline(child, "sleep 30");
+        assert_eq!(fakes.spawn.cmdline(child).as_deref(), Some("sleep 30"));
+        assert!(terminate_with(&fakes.ports, &[child.0]).is_empty());
+        assert!(!fakes.spawn.alive(child));
     }
 }

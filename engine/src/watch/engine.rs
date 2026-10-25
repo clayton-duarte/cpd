@@ -327,7 +327,8 @@ pub(super) fn mark_restart() -> Result<Output, CpdError> {
         .and_then(|d| serde_json::from_str::<Value>(&d).ok())
         .and_then(|d| d["pid"].as_i64())
         .ok_or_else(|| CpdError::new(ErrorCode::WatchNotStarted, "No engine has started in this home."))?;
-    let marker = json!({"by": "install-cpd.sh", "at": clock::now(), "engine_pid": pid});
+    // The time of the ports in scope (`Ports::current`): the system's, or a test's `ManualClock`.
+    let marker = json!({"by": "install-cpd.sh", "at": clock::timestamp(Ports::current().clock.utc()), "engine_pid": pid});
     let io = |e: std::io::Error| CpdError::new(ErrorCode::Internal, format!("Cannot write {}: {e}.", marker_path(&home).display()));
     std::fs::create_dir_all(home.run_dir()).map_err(io)?;
     let tmp = home.run_dir().join(format!("install-restart.json.tmp.{}", std::process::id()));
