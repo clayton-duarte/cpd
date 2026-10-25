@@ -1424,6 +1424,8 @@ fn lock_refusals_change_nothing() {
 
     // pre-start fails: the worktree and branch are removed.
     fx.env.repo_policy("acme", "pay", "[hooks]\npre-start = \"echo setting up; exit 3\"\n");
+    // The hook is a shell run (external): its failing answer is scripted.
+    fx.fake("sh", Reply::exit(3, "setting up\n", ""));
     let error = refused(&lock(), "setup_failed", 1);
     assert_eq!(error["details"]["log"], home(&fx.env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
     assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));

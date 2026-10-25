@@ -109,7 +109,7 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_hook_with(&Ports::real(), hook, pipeline, worktree, operation, timeout, log)
+    run_hook_with(&Ports::current(), hook, pipeline, worktree, operation, timeout, log)
 }
 
 /// [`run_hook`] on `ports`: the git calls that build the template variables and the hooks themselves go through
@@ -156,7 +156,7 @@ pub fn run_hook_as(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(&Ports::real(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
+    run_with_branch(&Ports::current(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
