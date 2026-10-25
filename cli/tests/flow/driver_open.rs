@@ -13,8 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::fx::Fx;
+use cpd_core::clock::Clock;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, FakeRunner, Handler, Reply, Runner};
+use cpd_core::host::spawn::{Pid, Signal, Spawn};
 use cpd_core::ids::{AttemptId, PlanId};
 use serde_json::{Value, json};
 
@@ -198,22 +200,29 @@ impl Live {
         ));
     }
 
-    /// Dispatches Job `key`, runs its driver and returns the Attempt it ended and what `worker` returned: `worker` is the Worker's pi,
-    /// called once, in the driver's first poll, with the id of the Attempt.
-    fn run_job<W>(&self, key: &str, worker: impl FnOnce(&Live, &str) -> W) -> (Value, W) {
+    /// Dispatches Job `key` and runs its driver on this thread: `hook(self, id, n)` is called after the driver's `n`th nap (from 1),
+    /// where the Worker's pi acts. Returns the id of the Attempt and what the driver printed.
+    fn drive(&self, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
         let out = self.dispatch(key).ok();
         let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
         let launch = self.fx.take_launch(self.fx.fakes.spawn.launches().len() - 1);
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         let lock = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap());
         let _fd3 = self.fx.hand_over(fs::File::open(lock).unwrap());
+        let ran = self.fx.run_launch_with(&launch, |_, nap| hook(self, &id, nap));
+        assert_eq!(ran.exit, 0, "{}", ran.stdout);
+        (id, ran)
+    }
+
+    /// [`Live::drive`] with a Worker that acts once, in the driver's first poll: returns the Attempt it ended and what `worker`
+    /// returned. `worker` gets the id of the Attempt.
+    fn run_job<W>(&self, key: &str, worker: impl FnOnce(&Live, &str) -> W) -> (Value, W) {
         let (mut worker, mut did) = (Some(worker), None);
-        let ran = self.fx.run_launch_with(&launch, |_, nap| {
+        let (id, _) = self.drive(key, |live, id, nap| {
             if nap == 1 {
-                did = Some((worker.take().expect("the first nap is once"))(self, &id));
+                did = Some((worker.take().expect("the first nap is once"))(live, id));
             }
         });
-        assert_eq!(ran.exit, 0, "{}", ran.stdout);
         (self.attempt(&id), did.expect("the driver napped: the Worker ran"))
     }
 
@@ -536,4 +545,100 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_with_no_gate_and_no_push()
     assert_eq!(live.phase(), "done");
     assert!(live.plan_events("pr-opened").is_empty());
     assert_eq!(live.plan_events("pr-merged").len(), 1);
+}
+
+// ---------- the stall rule (§3.4 A4, hs-d195) ----------
+
+/// The pid of the process a tool call of the Worker's pi runs as: `sleep 600`, a child of the pane's process.
+const TOOL: &str = "sleep 600";
+
+/// A tool call of the Worker's pi whose result is `result` (a JSONL line, or nothing): the session file of the Worker, ending in a
+/// `bash` tool call, quiet for an hour of virtual time, and `TOOL` running under the pane's process. Returns the tool's pid.
+fn start_tool_call(live: &Live, result: &str) -> Pid {
+    let sid: String = live.query("SELECT id FROM sessions WHERE role = 'worker'");
+    let dir = live.fx.env.home().join(".pi/agent/sessions/w");
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("2026_{sid}.jsonl"));
+    let call = json!({"type": "message", "timestamp": "2026-10-14T21:00:05.000Z", "message": {"role": "assistant", "stopReason": "toolUse",
+        "content": [{"type": "text", "text": "run it"}, {"type": "toolCall", "id": "call_1", "name": "bash", "arguments": {"command": TOOL}}]}});
+    let mut text = format!("{}\n{call}\n", json!({"type": "session", "timestamp": "2026-10-14T21:00:00.000Z"}));
+    if !result.is_empty() {
+        text += &format!("{result}\n");
+    }
+    fs::write(&file, text).unwrap();
+    // Quiet for an hour: the file's time is an hour before the virtual now, which is where the driver reads the quiet from.
+    let hour_ago = std::time::SystemTime::from(live.fx.fakes.clock.utc()) - Duration::from_secs(3600);
+    fs::OpenOptions::new().write(true).open(&file).unwrap().set_modified(hour_ago).unwrap();
+    let pane = live.fx.tmux(&["list-panes", "-a", "-F", "#{window_name} #{pane_pid}"]);
+    let pane = String::from_utf8(pane.stdout).unwrap();
+    let pid: u32 = pane.lines().filter(|l| !l.starts_with("watch ") && !l.starts_with("main ")).find_map(|l| l.split(' ').nth(1)?.parse().ok()).expect("the Worker's pane");
+    live.fx.fakes.spawn.add_process(Pid(pid), TOOL)
+}
+
+/// The tool call of `start_tool_call` is not killed over `polls` polls of the driver after the one that found the Worker's session
+/// file, and the Attempt is stopped then.
+fn assert_not_killed(live: &Live, result: &str, polls: usize) {
+    let mut tool = None;
+    let (id, _) = live.drive("api", |live, _, nap| {
+        if nap == 1 {
+            tool = Some(start_tool_call(live, result));
+        }
+        // The driver has recorded the file at the first poll; from then on each poll applies the rule.
+        assert!(live.fx.fakes.spawn.alive(tool.unwrap()), "the tool call was killed at poll {nap}");
+        assert_eq!(live.fx.fakes.spawn.signals(), []);
+        if nap == polls {
+            live.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+        }
+    });
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
+}
+
+#[test]
+fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
+    let live = live("[timeouts]\nstall_seconds = 2");
+    let mut tool = None;
+    let mut seen = Vec::new();
+
+    let (id, _) = live.drive("api", |live, _, nap| match nap {
+        1 => tool = Some(start_tool_call(live, "")),
+        // The tool call is dead and pi lives on: its pane is there, and the Attempt keeps running, through the polls after the kill.
+        2..=5 => {
+            let tool = tool.unwrap();
+            assert!(!live.fx.fakes.spawn.alive(tool), "the tool call is still alive");
+            let status: String = live.query("SELECT status FROM attempts WHERE id = 'api-a1'");
+            let panes = live.fx.tmux(&["list-panes", "-a", "-F", "#{pane_dead}"]);
+            seen.push((status, String::from_utf8(panes.stdout).unwrap()));
+            if nap == 5 {
+                live.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+            }
+        }
+        _ => {}
+    });
+
+    let tool = tool.unwrap();
+    // The tool call got one SIGTERM, which it did not outlive, and no more however many polls came after: pi itself was never signalled.
+    assert_eq!(live.fx.fakes.spawn.signals(), [(tool, Signal::Term)]);
+    assert_eq!(seen.len(), 4);
+    for (status, panes) in seen {
+        assert_eq!(status, "running");
+        assert!(panes.lines().all(|l| l == "0"), "{panes:?}");
+    }
+    // The line the driver logs (the pid, its command line, the idle time, once) is `Watch::check_with`'s, asserted on the fakes in
+    // `driver::ports_tests::a_tool_call_quiet_for_the_limit_of_virtual_time_has_its_descendants_terminated`: the driver logs to stderr.
+    assert_eq!(live.attempt(&id)["cause"], "timed_out");
+    assert!(!live.events(&id).iter().any(|e| e["kind"] == "error"), "{:?}", live.events(&id));
+}
+
+#[test]
+fn a_tool_call_with_its_result_is_not_a_stall() {
+    let live = live("[timeouts]\nstall_seconds = 1");
+    // The file is quiet past stall_seconds, but the call has its result.
+    assert_not_killed(&live, r#"{"type":"message","message":{"role":"toolResult","toolCallId":"call_1","content":[{"type":"text","text":"done"}],"isError":false}}"#, 6);
+}
+
+#[test]
+fn stall_seconds_0_kills_nothing() {
+    let live = live("[timeouts]\nstall_seconds = 0");
+    // The file is quiet for an hour, inside a tool call: only stall_seconds = 0 keeps the call alive.
+    assert_not_killed(&live, "", 6);
 }

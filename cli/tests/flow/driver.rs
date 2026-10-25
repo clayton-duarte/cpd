@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use common::fx::Fx as InProcess;
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
+use common::{CPD, Run, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -851,129 +851,6 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
     let (attempt, _) = fx.wait_end("api-a2", &out["pid"]);
     assert_eq!(attempt["origin"], "retry");
     assert_eq!(fx.event("api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S3", "origin": "retry"}));
-}
-
-// ---------- the stall rule (§3.4 A4, hs-d195) ----------
-
-/// A Worker whose session file ends in a `bash` tool call, with `result` (a
-/// JSONL line, or nothing) after it, and whose tool call is a `sleep SLEEP_SECONDS`
-/// child of the fake pi. The file is backdated an hour, quiet for longer than any
-/// `stall_seconds` here: the stall rule's time holds at the driver's first look.
-/// The child's pid goes to `../stall-child.pid`. When the child
-/// dies, pi writes the tool's failure, leaves `../stall-survived` and stays.
-fn stalled_worker(result: &str) -> String {
-    format!(
-        r#"sid=""; prev=""
-for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
-mkdir -p "$HOME/.pi/agent/sessions/w"
-f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
-printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' > "$f"
-printf '%s\n' '{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","content":[{{"type":"text","text":"run it"}},{{"type":"toolCall","id":"call_1","name":"bash","arguments":{{"command":"sleep {SLEEP_SECONDS}"}}}}],"stopReason":"toolUse"}}}}' >> "$f"
-{result}
-touch -d '1 hour ago' "$f"
-sleep {SLEEP_SECONDS} &
-child=$!
-echo "$child" > ../stall-child.pid
-wait "$child"
-printf '%s\n' '{{"type":"message","message":{{"role":"toolResult","toolCallId":"call_1","content":[{{"type":"text","text":"Terminated"}}],"isError":true}}}}' >> "$f"
-: > ../stall-survived
-exec sleep {SLEEP_SECONDS}"#,
-        result = if result.is_empty() { String::new() } else { format!("printf '%s\\n' '{result}' >> \"$f\"") },
-    )
-}
-
-/// A tool result for `call_1`, the stalled worker's tool call.
-const CALL_1_RESULT: &str =
-    r#"{"type":"message","message":{"role":"toolResult","toolCallId":"call_1","content":[{"type":"text","text":"done"}],"isError":false}}"#;
-
-/// The pid the fake pi's tool call runs as, once it has started (at most 60 s).
-fn stall_child(fx: &Fx) -> nix::unistd::Pid {
-    let path = fx.env.root().join("repos/stall-child.pid");
-    let pid = common::wait_some("the fake pi to start its tool call", Duration::from_secs(60), || {
-        fs::read_to_string(&path).ok().and_then(|t| t.trim().parse().ok()).ok_or_else(|| format!("log: {}", fx.log(ATTEMPT)))
-    });
-    nix::unistd::Pid::from_raw(pid)
-}
-
-fn alive(pid: nix::unistd::Pid) -> bool {
-    nix::sys::signal::kill(pid, None).is_ok()
-}
-
-/// Ends the Attempt and its driver, and the tool call if it is still there.
-fn stop(fx: &Fx, out: &Value, child: nix::unistd::Pid) {
-    let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
-    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
-    fx.wait_end(ATTEMPT, &out["pid"]);
-}
-
-/// The tool call's child stays alive, and no stall is logged, for `polls` of the driver after it has found the
-/// Worker's session file (it records it: from then on each poll applies the stall rule).
-fn assert_not_killed(fx: &Fx, child: nix::unistd::Pid, polls: u32) {
-    common::wait_until("the driver to record the Worker's session file", || {
-        fx.env.query::<Option<String>>("SELECT file FROM sessions WHERE role = 'worker'").is_some()
-    });
-    // time-claim: the call is not killed over `polls` polls of the driver; no per-poll signal from the driver (a poll
-    // that kills nothing leaves nothing behind).
-    assert!(common::poll(POLL * polls, || (!alive(child)).then_some(())).is_none(), "the tool call was killed\nlog: {}", fx.log(ATTEMPT));
-    assert!(!fx.log(ATTEMPT).contains("stall"), "{}", fx.log(ATTEMPT));
-    assert_eq!(fx.attempt(ATTEMPT)["status"], "running");
-}
-
-#[test]
-fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
-    let fx = fx_with("[timeouts]\nstall_seconds = 2");
-    fx.pi(&stalled_worker(""));
-
-    let out = fx.dispatch(JOB).ok();
-    let child = stall_child(&fx);
-    let survived = fx.env.root().join("repos/stall-survived");
-    common::wait_some("pi to get its tool's failure and the kill to be logged", Duration::from_secs(60), || {
-        let log = fx.log(ATTEMPT);
-        if survived.exists() && log.contains("stall") { Ok(()) } else { Err(format!("log: {log}")) }
-    });
-
-    // The tool call is dead, pi lives on (it wrote the marker after the call
-    // ended, then stays), and the Attempt keeps running.
-    assert!(!alive(child), "the tool call is still alive");
-    assert_eq!(fx.attempt(ATTEMPT)["status"], "running");
-    let pane: String = fx.env.query("SELECT tmux_pane FROM sessions WHERE role = 'worker'");
-    let listed = fx.env.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"]);
-    assert!(String::from_utf8_lossy(&listed.stdout).lines().any(|l| l == format!("{pane} 0")), "{listed:?}");
-    // One line in the driver log: the pid, its command line and the idle time.
-    let log = fx.log(ATTEMPT);
-    let lines: Vec<&str> = log.lines().filter(|l| l.contains("stall")).collect();
-    assert_eq!(lines.len(), 1, "{log}");
-    assert!(lines[0].contains(&format!("{child} (sleep {SLEEP_SECONDS})")), "{log}");
-    assert!(lines[0].contains("idle"), "{log}");
-    assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
-
-    stop(&fx, &out, child);
-}
-
-#[test]
-fn a_tool_call_with_its_result_is_not_a_stall() {
-    let fx = fx_with("[timeouts]\nstall_seconds = 1");
-    fx.pi(&stalled_worker(CALL_1_RESULT));
-
-    let out = fx.dispatch(JOB).ok();
-    let child = stall_child(&fx);
-    // The file is quiet past stall_seconds (backdated), but the call has its result.
-    assert_not_killed(&fx, child, 6);
-
-    stop(&fx, &out, child);
-}
-
-#[test]
-fn stall_seconds_0_kills_nothing() {
-    let fx = fx_with("[timeouts]\nstall_seconds = 0");
-    fx.pi(&stalled_worker(""));
-
-    let out = fx.dispatch(JOB).ok();
-    let child = stall_child(&fx);
-    // The file is quiet for an hour, inside a tool call: only stall_seconds = 0 keeps the call alive.
-    assert_not_killed(&fx, child, 6);
-
-    stop(&fx, &out, child);
 }
 
 // ---------- the update Job ----------
