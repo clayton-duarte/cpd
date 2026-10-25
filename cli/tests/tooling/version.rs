@@ -18,99 +18,55 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const CLI_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
-/// `cli/build.rs`, compiled on its own by the `rustc` beside the cargo that built these tests.
-struct BuildScript {
-    env: TestEnv,
-    exe: PathBuf,
+/// `cli/build.rs`, included whole: its logic is the function `directives`, which the tests call. Its `main` (the
+/// environment and `println!`) is the one line of it the tests do not run.
+#[allow(dead_code)]
+#[path = "../../build.rs"]
+mod build_script;
+
+/// The `cargo:` lines the build script prints for `commit` (what `CPD_COMMIT` holds, `None` when it is unset).
+fn run(commit: Option<&str>) -> Vec<String> {
+    build_script::directives(commit, VERSION)
+        .into_iter()
+        .map(|line| line.strip_prefix("cargo::").or_else(|| line.strip_prefix("cargo:")).unwrap_or_else(|| panic!("not a directive: {line}")).to_owned())
+        .collect()
 }
 
-impl BuildScript {
-    /// Compiles the build script, and puts a fake `git` first on `PATH` that records its calls
-    /// and runs the real one.
-    fn new() -> BuildScript {
-        let env = TestEnv::empty();
-        let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .map(|dir| dir.join("git"))
-            .find(|p| p.is_file())
-            .expect("git on PATH");
-        env.fake("git", &format!("exec '{}' \"$@\"", git.display()));
-        let rustc = Path::new(env!("CARGO")).with_file_name("rustc");
-        let exe = env.root().join("build-script");
-        let build_rs = Path::new(CLI_DIR).join("build.rs");
-        let out = output(
-            std::process::Command::new(&rustc)
-                .args(["--edition", "2024", "--crate-name", "build_script_build", "-o"])
-                .arg(&exe)
-                .arg(&build_rs),
-        )
-        .unwrap_or_else(|e| panic!("run {}: {e}", rustc.display()));
-        assert!(out.status.success(), "rustc {}: {}", build_rs.display(), String::from_utf8_lossy(&out.stderr));
-        BuildScript { env, exe }
-    }
+/// The `CPD_VERSION` the build script sets for `cpd` (exactly one).
+fn cpd_version(commit: Option<&str>) -> String {
+    let directives = run(commit);
+    let versions: Vec<&str> = directives.iter().filter_map(|d| d.strip_prefix("rustc-env=CPD_VERSION=")).collect();
+    assert_eq!(versions.len(), 1, "one CPD_VERSION: {directives:?}");
+    versions[0].to_owned()
+}
 
-    /// Runs the build script as cargo would, in the package's directory (a git checkout, `git` on
-    /// `PATH`), with `CPD_COMMIT` set to `commit` or unset; returns its directives, the
-    /// `cargo:` or `cargo::` prefix removed.
-    fn run(&self, commit: Option<&str>) -> Vec<String> {
-        let out_dir = self.env.root().join("out");
-        fs::create_dir_all(&out_dir).unwrap();
-        let mut cmd = self.env.command(&self.exe);
-        cmd.current_dir(CLI_DIR)
-            .env("CARGO_MANIFEST_DIR", CLI_DIR)
-            .env("CARGO_PKG_VERSION", VERSION)
-            .env("CARGO_PKG_NAME", "cpd")
-            .env("OUT_DIR", &out_dir)
-            .env_remove("CPD_COMMIT");
-        if let Some(commit) = commit {
-            cmd.env("CPD_COMMIT", commit);
-        }
-        let out = output(&mut cmd).unwrap();
-        assert!(out.status.success(), "the build script failed: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout)
-            .unwrap()
-            .lines()
-            .filter_map(|line| line.strip_prefix("cargo::").or_else(|| line.strip_prefix("cargo:")))
-            .map(str::to_owned)
-            .collect()
-    }
-
-    /// The `CPD_VERSION` the build script sets for `cpd` (exactly one).
-    fn cpd_version(&self, commit: Option<&str>) -> String {
-        let directives = self.run(commit);
-        let versions: Vec<&str> = directives.iter().filter_map(|d| d.strip_prefix("rustc-env=CPD_VERSION=")).collect();
-        assert_eq!(versions.len(), 1, "one CPD_VERSION: {directives:?}");
-        versions[0].to_owned()
-    }
-
-    fn assert_git_never_ran(&self) {
-        assert_eq!(self.env.calls("git"), Vec::<Vec<String>>::new(), "the build script ran git");
-    }
+/// The build script starts no process, so it cannot run `git`: its source names no `Command`.
+fn assert_git_never_ran() {
+    let source = include_str!("../../build.rs");
+    assert!(!source.contains("Command") && !source.contains("process::"), "the build script ran git");
 }
 
 #[test]
 fn a_build_given_cpd_commit_reports_that_commit_not_the_checkout_s() {
-    let script = BuildScript::new();
-    assert_eq!(script.cpd_version(Some("abc1234")), format!("{VERSION}-abc1234"));
-    script.assert_git_never_ran();
+    assert_eq!(cpd_version(Some("abc1234")), format!("{VERSION}-abc1234"));
+    assert_git_never_ran();
 }
 
 #[test]
 fn a_build_given_no_commit_reports_dev_even_in_a_git_checkout() {
-    let script = BuildScript::new();
-    assert_eq!(script.cpd_version(None), format!("{VERSION}-dev"), "CPD_COMMIT unset");
-    assert_eq!(script.cpd_version(Some("")), format!("{VERSION}-dev"), "CPD_COMMIT empty");
-    script.assert_git_never_ran();
+    assert_eq!(cpd_version(None), format!("{VERSION}-dev"), "CPD_COMMIT unset");
+    assert_eq!(cpd_version(Some("")), format!("{VERSION}-dev"), "CPD_COMMIT empty");
+    assert_git_never_ran();
 }
 
 #[test]
 fn the_build_reruns_when_cpd_commit_changes_and_watches_no_git_file() {
-    let script = BuildScript::new();
-    let directives = script.run(Some("abc1234"));
+    let directives = run(Some("abc1234"));
     assert!(directives.iter().any(|d| d == "rerun-if-env-changed=CPD_COMMIT"), "{directives:?}");
     let git_watches: Vec<&String> =
         directives.iter().filter(|d| d.strip_prefix("rerun-if-changed=").is_some_and(|path| path.contains(".git"))).collect();
     assert!(git_watches.is_empty(), "a commit would rebuild cpd: {git_watches:?}");
-    script.assert_git_never_ran();
+    assert_git_never_ran();
 }
 
 #[test]
