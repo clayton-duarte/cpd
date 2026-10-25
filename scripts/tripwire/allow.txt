@@ -47,7 +47,6 @@ cpd::tooling fake_tmux::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling gate_run::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling harness::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling install_script::  # m-tooling: tooling test that may reach a real tmux
-cpd::tooling no_repo_lock::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::pr git_guard::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr git::  # m-pr-b: pr commands that may reach a real tmux

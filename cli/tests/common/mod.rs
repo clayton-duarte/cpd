@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cpd::cli::Cli;

@@ -20,7 +20,7 @@ const CLI_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 /// `cli/build.rs`, included whole: its logic is the function `directives`, which the tests call. Its `main` (the
 /// environment and `println!`) is the one line of it the tests do not run.
-#[allow(dead_code)]
+#[allow(dead_code)] // build.rs's `main` is the build's entry point, which no test calls
 #[path = "../../build.rs"]
 mod build_script;
 
