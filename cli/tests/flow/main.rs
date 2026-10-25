@@ -14,6 +14,8 @@ mod context_manager;
 mod context_manager_by_user;
 mod context_pending;
 mod context_pending_waiting;
+mod context_reindex;
+mod context_search;
 mod context;
 mod driver_idle;
 mod driver_reload;
