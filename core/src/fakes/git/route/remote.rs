@@ -87,7 +87,7 @@ pub(super) fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
 /// `fetch [<remote> [<branch>...]]`: the closure of each branch tip, and `refs/remotes/<remote>/<branch>`.
 /// Local branches, `HEAD` and the working tree are left alone.
 pub(super) fn fetch(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("fetch", args, &["-q"], &[])?;
+    let toks = scan("fetch", args, &["-q", "--quiet"], &[])?;
     let quiet = !flags(&toks).is_empty();
     let pos = positionals(&toks);
     let (name, branches) = pos.split_first().map_or(("origin", &[][..]), |(n, b)| (*n, b));

@@ -2834,8 +2834,8 @@ Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it p
 {"ok": true, "checked": ["config", "store", "tmux", "listing", "home"], "tmux": {"version": "3.8", "server": "running"}}
 ```
 
-`"server"` is `"running"` or `"none"`. `scripts/install-cpd.sh` runs it with the new binary before it stops anything (contract §3.7).
-**`--mark-restart` (internal; hs-d471).** What `scripts/install-cpd.sh` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
+`"server"` is `"running"` or `"none"`. `cpd install` runs it with the new binary before it stops anything (§14.4, contract §3.7).
+**`--mark-restart` (internal; hs-d471).** What `cpd install` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3328,6 +3328,32 @@ Effects: when `install/current-version` differs from the cached `pi_version`, on
 
 The `efforts` above are an illustration, not verified values. Idempotent: yes.
 
+### 14.4 `install`
+
+```
+cpd install --root <checkout>
+```
+
+Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary. The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
+
+Steps, in order (implementing.md "`cpd install`" has each with its message; contract §3.7 "The adapter swap" and "The install's engine order" fix the rules):
+
+1. **Preflight.** `~/.local/share/cpd/pi` is absent, a symlink or a directory; else refused.
+2. **The migration check.** `git fetch --quiet origin main` (a failed fetch refuses); every file of `core/src/store/migrations/` must be on `origin/main` with the same content; else refused, listing the names.
+3. **The verdict of the built binary.** `<target>/release/cpd --version` must succeed, carry a `store` field, and not say `store.opens` false; else refused with the refusal's message and the fix of its code. Nothing migrates.
+4. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
+5. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced and are older than 60 minutes, and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids, are removed (a failure only warns). Prints `installed <bin> and <link>` on stderr.
+6. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure`, and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
+7. **The tag.** `scripts/tag-version.sh` (docs/versioning.md): a failure warns with `tag-version:` and does not change the exit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--root` is given | `usage` | 2 |
+
+Every refusal (steps 1 to 3, nothing replaced), failure (steps 4 and 5) and failed follow-up (step 6) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
+
+Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success, and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; the error `code` of each refusal is the Job's choice, unverified: no merged code names it yet). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+
 ## 15. The pi adapter's protocol
 
 The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review in the Lead's chat, with plannotator for the full render on request (§15.5). It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
@@ -3335,7 +3361,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.1 Package and activation
 
 - **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`; host packages are `peerDependencies: "*"` (cpd 1 §15, kept). The skill `cpd-lead` is the cpd 2 skill.
-- **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `scripts/install-cpd.sh`. (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
+- **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `cpd install` (§14.4). (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
 - **Activation:** at pi's `session_start`, only when `ctx.mode` is `tui` and `CPD_SESSION` is set. Change from cpd 1: cpd 1 activated in any herdr or tmux pane (`HERDR_ENV`, `TMUX_PANE`); now cpd marks its own panes with `CPD_SESSION` (§6.5), so a pi the User starts by hand is left alone.
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
@@ -3473,7 +3499,7 @@ Rejected alternatives: one shared review server (cpd would have to run plannotat
 
 ### 15.6 Reload after an install
 
-Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `scripts/install-cpd.sh` the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
+Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `cpd install` (§14.4) the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
 
 **Detection.** At `session_start` the adapter records the identity `(dev, ino, mtimeMs)` of its own directory (`dirname` of `pi/lib/`, from `import.meta.url`; contract §8 `pi_adapter`) with `statSync`. An `unref`'d timer polls it every 5 seconds (a constant of the adapter, not a config key) and is cleared at `session_shutdown`. The install replaces the directory as a whole (`rm -rf`, `mv`), so a new package has a new identity. `ENOENT` is the install in progress, not a change: the poll waits. A different identity of an existing directory is an install. The cpd binary is not watched (it changes first, before the directory is complete). The adapter runs only in `tui` mode (§15.1), so no other mode polls.
 
