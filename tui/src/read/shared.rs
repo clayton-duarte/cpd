@@ -142,17 +142,22 @@ impl JobCounts {
         self.draft + self.queued + self.running + self.merging + self.failed + self.merged + self.cancelled
     }
 
-    /// The first counter's status and count: the drafts when there are any, in any phase, else the queued Jobs. The
-    /// one place the draft-or-queued decision is made.
-    pub fn first(&self) -> (JobStatus, usize) {
-        if self.draft > 0 { (JobStatus::Draft, self.draft) } else { (JobStatus::Queued, self.queued) }
+    /// The tree's four counters (hs-d636, commands.md §13.2): planned (the drafts and the queued), active (the running
+    /// and the merging), failed and done (the merged). Cancelled Jobs are not counted.
+    pub fn counters(&self) -> [usize; 4] {
+        [self.draft + self.queued, self.running + self.merging, self.failed, self.merged]
     }
 
-    /// The tree's five counters (cpd-ui's `context.rs`): queued, or the drafts when there are any, in any phase,
-    /// running, merging, failed, merged. Cancelled Jobs are not counted.
-    pub fn counters(&self) -> [usize; 5] {
-        let (_, first) = self.first();
-        [first, self.running, self.merging, self.failed, self.merged]
+    /// The Job status and the merging flag that colour counter `index` (hs-d636): the planned role is the draft colour
+    /// while the Plan has any draft, else the queued colour; the active role is the review colour while any of its Jobs
+    /// lands (checking or merging). The one place the draft-or-queued decision is made.
+    pub fn counter_role(&self, index: usize) -> (JobStatus, bool) {
+        match index {
+            0 => (if self.draft > 0 { JobStatus::Draft } else { JobStatus::Queued }, false),
+            1 => (JobStatus::Running, self.merging > 0),
+            2 => (JobStatus::Failed, false),
+            _ => (JobStatus::Merged, false),
+        }
     }
 }
 

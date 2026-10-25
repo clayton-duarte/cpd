@@ -1254,8 +1254,8 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
     }
     let counters = row(&buf, find(&buf, "counters row").1);
-    assert!(counters.contains("1⋅1⋅2⋅0⋅3"), "{counters}");
-    assert!(counters.contains("queued⋅running⋅landing⋅failed⋅merged"), "{counters}");
+    assert!(counters.contains("1⋅1⋅1⋅1"), "{counters}");
+    assert!(counters.contains("planned⋅active⋅failed⋅done"), "{counters}");
 }
 
 #[test]
