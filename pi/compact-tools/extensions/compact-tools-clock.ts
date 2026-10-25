@@ -33,6 +33,9 @@ function reschedule(): void {
 	timer.unref?.();
 }
 
+/** Set whether the pane has focus; a compiling stub replaced by the implementation Job. */
+export function setClockFocused(_focused: boolean): void {}
+
 /** Subscribe until disposed. No timer survives the last subscriber. */
 export function onTick(listener: () => void, period = TICK_MS): () => void {
 	if (!Number.isFinite(period) || period <= 0) throw new RangeError("Animation period must be positive and finite");
