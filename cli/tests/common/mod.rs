@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Parser;
 use cpd::cli::Cli;
@@ -547,25 +547,18 @@ pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) ->
         let _ = pipe.write_all(stdin);
         // Dropping the pipe closes it: the child sees EOF.
     }
-    let until = Instant::now() + deadline;
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output();
+    let done = poll(deadline, || child.try_wait().transpose());
+    match done {
+        Some(status) => {
+            status?;
+            child.wait_with_output()
         }
-        if Instant::now() >= until {
+        None => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"));
+            Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"))
         }
-        std::thread::sleep(Duration::from_millis(5));
     }
-}
-
-/// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
-/// (a session file nobody wrote to for a while): set the time, do not sleep until it has passed.
-pub fn backdate(path: &Path, by: Duration) {
-    let file = fs::OpenOptions::new().write(true).open(path).expect("open the file to backdate");
-    file.set_modified(std::time::SystemTime::now() - by).expect("set the modification time");
 }
 
 /// How long [`wait_until`] and [`wait_screen`] wait: the one wait policy of the suite, long
