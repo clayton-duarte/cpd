@@ -35,7 +35,7 @@ use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::host::spawn::Launch;
 use cpd_core::host::tmux::SERVER_OPTIONS;
-use cpd_core::ports::Fakes;
+use cpd_core::ports::{Fakes, Ports};
 
 use super::{Run, TestEnv};
 
@@ -158,6 +158,13 @@ impl Fx {
             assert!(self.fakes.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time");
             self.advance(TICK);
         }
+    }
+
+    /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
+    /// wrapper reads the ambient ports (`git::run`, `tamper`, `sync_lead`, the gate). A thread `f` spawns captures
+    /// `fx.fakes.ports.clone()` and scopes it itself.
+    pub fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
+        Ports::scope(&self.fakes.ports, f)
     }
 
     /// The `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).

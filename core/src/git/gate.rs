@@ -15,7 +15,7 @@ pub use crate::slot::{Slot, Slots};
 ///   output is appended;
 /// - the lines of a Gate that waited are on stderr too; the line of a Gate that found a slot free is in `log` only.
 pub fn take(slots: &Slots, log: &Path) -> Result<Slot, CpdError> {
-    take_with(&Ports::real(), slots, log)
+    take_with(&Ports::current(), slots, log)
 }
 
 /// [`take`] with `ports.clock` for the elapsed time and the polls' naps ([`Slots::take_with`]).

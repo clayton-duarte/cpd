@@ -156,7 +156,7 @@ pub fn run_hook_as(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(&Ports::real(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
+    run_with_branch(&Ports::current(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
