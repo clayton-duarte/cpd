@@ -20,6 +20,7 @@ mod pill_sites;
 mod npm_fresh;
 mod preview_script;
 mod run_with;
+mod smoke;
 mod slot;
 mod tag_script;
 mod test_changed_script;
