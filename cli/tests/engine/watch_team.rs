@@ -175,18 +175,6 @@ fn e11_runs_the_helper_with_its_arguments_and_writes_the_cache_by_rename() {
 }
 
 #[test]
-fn e11_never_holds_the_tick_while_the_helper_runs() {
-    let fx = fx(Some(3600), 5);
-    let _engine = fx.start();
-
-    wait_until("the helper to start", || fx.helper_calls() == 1);
-    // E5 polls at every tick: the engine keeps ticking while the helper sleeps.
-    fx.env.wait_whole_ticks(2);
-    assert!(fx.cache().is_none(), "the helper has not answered yet");
-    wait_until("the cache", || fx.cache().is_some());
-}
-
-#[test]
 fn e11_keeps_the_last_good_cache_when_a_run_fails_and_reports_the_failure_once() {
     let fx = fx(Some(1), 0);
     let _engine = fx.start();

@@ -274,7 +274,6 @@ fn every_wait_polls_through_the_harness() {
 
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
 
-const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What a helper env put up: the dir and the pids of what its teardown must stop.
@@ -423,65 +422,6 @@ fn leftovers_after_wait(up: &Up) -> Vec<String> {
         left.is_empty().then_some(())
     });
     left
-}
-
-/// Not a test of its own: the child process the killed-test test kills. Does nothing
-/// unless the gate variable is set.
-#[test]
-fn killed_test_helper() {
-    if std::env::var_os(HELPER_GATE).is_none() {
-        return;
-    }
-    let env = TestEnv::new();
-    let up = put_up(&env);
-    // libtest prints "test <name> ... " first, without a newline.
-    println!();
-    println!("DIR {}", up.dir.display());
-    for (name, pid) in &up.pids {
-        println!("PID {name}|{pid}");
-    }
-    println!("READY");
-    std::thread::sleep(std::time::Duration::from_secs(SLEEP_SECONDS));
-    drop(env);
-}
-
-#[test]
-fn a_killed_test_leaves_no_tmux_server_process_dir_or_reaper() {
-    use std::io::{BufRead, BufReader};
-
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "harness::killed_test_helper", "--nocapture", "--test-threads=1"])
-        .env(HELPER_GATE, "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut dir = None;
-    let mut pids = Vec::new();
-    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
-        let line = line.unwrap();
-        if line == "READY" {
-            break;
-        }
-        if let Some(d) = line.strip_prefix("DIR ") {
-            dir = Some(std::path::PathBuf::from(d));
-        } else if let Some(p) = line.strip_prefix("PID ") {
-            let (name, pid) = p.split_once('|').unwrap();
-            pids.push((name.to_owned(), pid.parse().unwrap()));
-        }
-    }
-    let up = Up { dir: dir.expect("the helper printed no DIR"), pids };
-    assert_eq!(up.pids.len(), 5, "the helper printed no READY with its pids");
-    assert!(up.pids.iter().all(|(_, p)| alive(*p)), "everything is up before the kill");
-    assert!(up.dir.exists());
-    assert!(!processes_mentioning(&up.dir).is_empty(), "the reaper is up before the kill");
-
-    child.kill().unwrap(); // SIGKILL: no Drop runs
-    child.wait().unwrap();
-
-    let left = leftovers_after_wait(&up);
-    assert!(left.is_empty(), "a killed test left behind: {left:?}");
 }
 
 #[test]

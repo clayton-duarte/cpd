@@ -85,7 +85,7 @@ The parent shared by two or more Plans: the shared knowledge between Plans that 
 _Avoid_: project, folder, epic
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
 
 **Context store**:
@@ -240,10 +240,16 @@ _Avoid_: done, completed
 A two-character code naming the model and effort an agent runs at, e.g. `O3` for the Lead or `S1` for a coding Worker.
 _Avoid_: level, profile
 
+## Axioms
+
+**Axiom** (new, hs-d607, hs-d610):
+One of the cpd creator's core rules, applied everywhere and encoded into how cpd works and behaves: to every Context, owner, repo, role and tool. The one source is the global AGENTS.md of the pi that runs cpd (on hs `~/.pi/agent/AGENTS.md`, repo `clayton-duarte/pi-config`), which pi injects into every agent it launches without `--no-context-files`: the Manager, the Lead, the Worker and, since hs-d611, the Distiller. cpd reads no axiom: there is no config key and no record kind, and with no AGENTS.md cpd runs unchanged. An Axiom is not a decision (a dated choice about one Context's work, which a newer decision supersedes, hs-d358), not a note (a fact) and not a Policy (how one owner or repo works, per Scope, with typed keys). A decision, note, Policy, skill, Spec or doc may specialise an axiom but never restate or contradict it: it points to the axiom by its title. An axiom changes only when its creator edits the source.
+_Avoid_: principle, convention, philosophy, rule
+
 ## Policies
 
 **Policy** (changed, hs-d9, hs-d12):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. cpd reads nothing from a repo's tree. `cpd policy show` prints one.
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
 _Avoid_: rules, settings, profile, config
 
 **Domain** (new, hs-d288):

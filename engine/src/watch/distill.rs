@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::engine::{Engine, stopping};
+use super::engine::{Engine, incident_holds, stopping};
 use super::record_detached;
 use super::report::{About, Step};
 use cpd_core::config::Config;
@@ -38,6 +38,10 @@ fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
 const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL ORDER BY id";
 
 pub(super) fn run(engine: &mut Engine) {
+    if incident_holds(engine, Step::E9) {
+        engine.log.line("E9: holding: incident mode is on");
+        return;
+    }
     let contexts = engine.store.read(|conn| {
         let mut stmt = conn.prepare(LIVE)?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;

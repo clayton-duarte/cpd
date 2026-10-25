@@ -286,7 +286,7 @@ impl<'a> Pane<'a> {
     }
 
     /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅0⋅1⋅2`) every frame reads as
+    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅1⋅2`) every frame reads as
     /// the first: a test cannot know which one it catches. Elsewhere a glyph is what it is: the last frame is the needs-you dot.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
@@ -294,7 +294,7 @@ impl<'a> Pane<'a> {
         let text: String = text
             .lines()
             .map(|l| {
-                if l.trim_end().ends_with("1⋅1⋅0⋅1⋅2") {
+                if l.trim_end().ends_with("1⋅1⋅1⋅2") {
                     l.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c }).collect()
                 } else {
                     l.to_owned()
@@ -536,14 +536,14 @@ fn the_tree_of_a_prepared_store() {
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
-        row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        row(&format!("├─{IDLE} sketch"), "2"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ╰─{NEEDS_YOU} ship·f-bl"),
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
-        row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        row(&format!("╰─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
+        row(&format!("├─{NEEDS_YOU} rel"), "1"),
+        format!(" ╰─{STOPPED} old"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
         " ╰\u{F0B2A}".to_owned(),
@@ -1657,7 +1657,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
     assert!(popups(&env)[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", popups(&env)[0]);
-    assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
+    assert!(popups(&env)[0].contains(&"-B".to_owned()), "{:?}", popups(&env)[0]);
     // a review request: the url is copied, and the log says how to open it
     pane.click(10, row_of("acme/web#5 review requested"));
     copied(2, "https://x.io/review");

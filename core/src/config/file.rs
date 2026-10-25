@@ -136,6 +136,8 @@ pub struct Timeouts {
     pub pi_stop_seconds: u32,
     /// A finished Lead or Manager is put to sleep after this (§3.7 E13).
     pub sleep_seconds: u32,
+    /// An asleep Lead or Manager is archived after this (§3.7 E14, hs-d630).
+    pub archive_sleep_seconds: u32,
 }
 
 /// `watch.tick_seconds`: a decimal of at least 0.1 (§3.7, §8.2), kept in whole milliseconds.
@@ -282,7 +284,7 @@ impl Config {
         let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
         let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
-        let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+        let open_tier = r.get("open_tier", Tier::parse("S1").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             tier.check_worker().map_err(|e| e.message().to_owned())?;
             Ok(tier)
@@ -325,6 +327,7 @@ impl Config {
             stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
             pi_stop_seconds: positive(&mut r, "timeouts.pi_stop_seconds", 10)?,
             sleep_seconds: positive(&mut r, "timeouts.sleep_seconds", 3600)?,
+            archive_sleep_seconds: positive(&mut r, "timeouts.archive_sleep_seconds", 86400)?,
         };
         let watch = Watch {
             tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,

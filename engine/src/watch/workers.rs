@@ -17,6 +17,8 @@ use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
 use cpd_core::error::CpdError;
+use cpd_core::incident::is_on;
+use rusqlite::OptionalExtension;
 
 /// The options the status line draws: the long form, the short form, and the width in cells of
 /// the workers' pill, with its two caps, in the long form and in the short form.
@@ -24,6 +26,9 @@ const LONG: &str = "@cpd_workers";
 const SHORT: &str = "@cpd_workers_short";
 const WIDTH: &str = "@cpd_workers_width";
 const SHORT_WIDTH: &str = "@cpd_workers_short_width";
+
+/// The global option carrying the incident pill's text while incident mode is on (contract §6.1).
+const INCIDENT: &str = "@cpd_incident";
 
 /// The cells of a pill's two caps, which the status line's format draws around each text.
 const CAPS: usize = 2;
@@ -77,8 +82,8 @@ impl Counts {
 
 pub(super) fn run(engine: &mut Engine) {
     let limit = engine.config.concurrency;
-    let read = engine.store.read(|conn| Counts::read(conn, limit));
-    let counts = match read {
+    let read = engine.store.read(|conn| Ok((Counts::read(conn, limit)?, incident(conn)?)));
+    let (counts, incident) = match read {
         Ok(read) => read,
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
@@ -86,8 +91,12 @@ pub(super) fn run(engine: &mut Engine) {
     // The status line draws each text in a pill.
     let right = |workers: usize| (workers + CAPS).to_string();
     let (width, short_width) = (right(counts.width()), right(counts.short_width()));
-    // What was last set: the four values, one string (no value holds a newline).
-    let state = format!("{long}\n{short}\n{width}\n{short_width}");
+    // What was last set: the four workers values and the incident value, one string (no value holds a newline).
+    let incident_state = match &incident {
+        Some(reason) => format!("on:{reason}"),
+        None => "off".to_string(),
+    };
+    let state = format!("{long}\n{short}\n{width}\n{short_width}\n{incident_state}");
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
@@ -101,8 +110,14 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a width that belongs to another text.
-    let args = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
-        .map(str::to_owned);
+    let mut args: Vec<String> = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
+        .map(str::to_owned)
+        .to_vec();
+    args.push(";".to_string());
+    match &incident {
+        Some(reason) => args.extend(["set", "-g", INCIDENT, reason].map(str::to_owned)),
+        None => args.extend(["set", "-gu", INCIDENT].map(str::to_owned)),
+    }
     let set: Result<String, CpdError> = engine.tmux.run(&args);
     match set {
         Ok(_) => {
@@ -111,6 +126,16 @@ pub(super) fn run(engine: &mut Engine) {
         }
         Err(e) => failed(engine, &e),
     }
+}
+
+/// The `@cpd_incident` text while incident mode is on (contract §6.1): the one `incident` row's `reason`, or `1`
+/// when a row exists but its reason cannot be read. `None` while off.
+fn incident(conn: &rusqlite::Connection) -> Result<Option<String>, CpdError> {
+    if !is_on(conn) {
+        return Ok(None);
+    }
+    let reason = conn.query_row("SELECT reason FROM incident WHERE id = 1", [], |r| r.get::<_, String>(0)).optional()?;
+    Ok(Some(reason.unwrap_or_else(|| "1".to_string())))
 }
 
 /// A tmux call of the step failed: nothing is remembered (a restarted server starts without the

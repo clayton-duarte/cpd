@@ -134,6 +134,7 @@ error_codes! {
     Broadcast = "broadcast" => Refused,
     Duplicate = "duplicate" => Refused,
     NoManager = "no_manager" => Refused,
+    ManagerOnly = "manager_only" => Refused,
     UserOnly = "user_only" => Refused,
     CurationNotPending = "curation_not_pending" => Refused,
     ManagerMissing = "manager_missing" => Refused,

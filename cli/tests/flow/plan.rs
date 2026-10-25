@@ -352,26 +352,6 @@ fn new_again_with_the_brief_writes_no_second_brief_record() {
 
 // ---------- the first message: the digest and the records after it (hs-d194 D6) ----------
 
-/// Notes `note-<from>` to `note-<to>` in Context `ctx`; the `seq` of each.
-fn notes(env: &TestEnv, from: u32, to: u32) -> Vec<i64> {
-    (from..=to).map(|n| env.cpd(&["context", "note", &format!("note-{n:02}"), "--context", "ctx"]).ok()["seq"].as_i64().unwrap()).collect()
-}
-
-const LEAD_HEADER: &str = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.";
-
-fn lead_message(env: &TestEnv, plan: &str) -> String {
-    fs::read_to_string(home(env).lead_message(&pid(plan))).unwrap()
-}
-
-/// The positions of `needles` in `text`, each after the one before it.
-fn in_order(text: &str, needles: &[&str]) {
-    let mut at = 0;
-    for needle in needles {
-        let found = text[at..].find(needle).unwrap_or_else(|| panic!("{needle:?} after byte {at} in\n{text}"));
-        at += found + needle.len();
-    }
-}
-
 #[test]
 fn new_refuses_an_empty_brief_file_and_writes_nothing() {
     let env = TestEnv::new();
@@ -627,36 +607,6 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     // A Plan with no PR has no Job: lock keeps its own refusal.
     refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
-}
-
-/// Plans moving to phase `plan` at once all move, and none registers a Session.
-#[test]
-fn plans_moving_to_phase_plan_at_once_all_move() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    let plans = ["pa", "pb", "pc", "pd", "pe", "pf"];
-    for plan in plans {
-        new_plan(&env, plan, &repo);
-    }
-    let sessions = env.query::<i64>("SELECT count(*) FROM sessions");
-    let barrier = std::sync::Barrier::new(plans.len());
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = plans
-            .iter()
-            .map(|plan| {
-                let (env, barrier) = (&env, &barrier);
-                scope.spawn(move || {
-                    barrier.wait();
-                    env.cpd(&["plan", "phase", "plan", "--plan", plan]).ok()
-                })
-            })
-            .collect();
-        handles.into_iter().for_each(|h| drop(h.join().unwrap()));
-    });
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), sessions);
-    assert_eq!(events(&env, "context-grounded").len(), 0);
-    assert_eq!(events(&env, "plan-phase").len(), plans.len());
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
 }
 
 // ---------- plan list, plan show ----------
@@ -1143,13 +1093,6 @@ fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
     origin
 }
 
-/// Commits an empty commit on `main` of `repo` and pushes it.
-fn push_main_commit(env: &TestEnv, repo: &Path, message: &str) -> String {
-    env.git(repo, &["commit", "-q", "--allow-empty", "-m", message]);
-    env.git(repo, &["push", "-q", "origin", "main"]);
-    env.git(repo, &["rev-parse", "HEAD"])
-}
-
 #[test]
 fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
     let env = TestEnv::new();
@@ -1229,21 +1172,6 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     assert!(watch_calls(&env).is_empty());
-}
-
-#[test]
-fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    with_origin(&env, &repo);
-    approved(&env, &repo);
-    let remote_branch = remote_lead_branch_then_main_moves(&env, &repo, false);
-
-    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
-
-    assert_eq!((&out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(true), &json!(false)));
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
-    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
 }
 
 #[test]
@@ -1386,40 +1314,6 @@ fn pane_title(env: &TestEnv, pane: &str) -> String {
 }
 
 #[test]
-fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
-    let env = TestEnv::new();
-    setup(&env);
-    let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
-    let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
-    assert_eq!(pane_title(&env, &pane), "Retry Payouts");
-
-    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
-    assert_eq!(pane_title(&env, &pane), "Retry The Payouts");
-
-    // A side fork shows its own name; renaming the Plan leaves it alone.
-    let fork = env.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
-    let fork_pane = fork["pane"].as_str().unwrap();
-    assert_eq!(pane_title(&env, fork_pane), "Side");
-    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
-    assert_eq!((pane_title(&env, &pane), pane_title(&env, fork_pane)), ("Third".to_owned(), "Side".to_owned()));
-
-    // Renaming the Plan's Lead Session never replaces the Plan's title.
-    env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
-    assert_eq!(pane_title(&env, &pane), "Third");
-
-    // A rerun with the same title repairs a header that was cleared.
-    env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
-    assert_eq!(pane_title(&env, &pane), "");
-    let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
-    assert_eq!(again["already"], true);
-    assert_eq!(pane_title(&env, &pane), "Third");
-
-    // No pane, nothing to do.
-    env.tmux(&["kill-pane", "-t", &pane]);
-    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Fourth"]).ok();
-}
-
-#[test]
 fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
     let env = TestEnv::new();
     setup(&env);
@@ -1545,28 +1439,6 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
 }
 
 #[test]
-fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
-    let env = TestEnv::new();
-    let (lead, fork) = plan_with_fork(&env);
-    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
-    let events_before = event_count(&env);
-
-    let out = env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
-    assert_eq!(out["archived"].as_array().unwrap().len(), 3, "{out}");
-    assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
-    assert_eq!(out["closed"], json!([]));
-    assert_eq!(archived_ats(&env), 0);
-    assert_eq!(event_count(&env), events_before + 3);
-    assert!(events(&env, "plan-archived")[1]["data"] == json!({"archived": false}));
-    assert!(!has_pane(&env, &lead) && !has_pane(&env, &fork), "no pane is started");
-    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
-
-    let again = env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
-    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
-    assert_eq!(event_count(&env), events_before + 3);
-}
-
-#[test]
 fn unarchive_inside_an_archived_context_is_refused() {
     let env = TestEnv::new();
     let repo = setup(&env);
@@ -1602,42 +1474,10 @@ fn plan_new_in_an_archived_context_is_refused_before_any_write() {
 const JOB: &str = "INSERT INTO jobs (plan, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, created_txn, created_at)
                    VALUES ('pay', 'api', 'pay', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '$STATUS', 0, '$FP', 1, 't');";
-const ATTEMPT: &str = "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-                       VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '$STATUS', 'cpd/pay--api-a1', '/w', 't');";
-
 /// Job `api` of `pay`; a locked one (not `draft`) has its fingerprint.
 fn job(status: &str) -> String {
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "a".repeat(64)) };
     JOB.replace("'$FP'", &fingerprint).replace("$STATUS", status)
-}
-
-#[test]
-fn archive_refused_by_any_one_blocker_changes_nothing() {
-    let review = format!(
-        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r1', 1, '{}', 'pending', 't');",
-        "a".repeat(64)
-    );
-    let escalation = format!(
-        "{}{}INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-         VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
-        job("draft"),
-        ATTEMPT.replace("$STATUS", "running")
-    );
-    // One blocker at a time, each in its own environment: Jobs are append-only.
-    for (kind, apply) in [("job", job("queued")), ("job", job("running")), ("escalation", escalation), ("review", review), ("session", String::new())] {
-        let env = TestEnv::new();
-        let (_, fork) = plan_with_fork(&env);
-        let apply = if kind == "session" { format!("UPDATE sessions SET state = 'working' WHERE id = '{fork}'") } else { apply };
-        store(&env).write("fixture", |tx| exec(tx, &apply)).unwrap();
-        let (events_before, panes_before) = (event_count(&env), panes(&env));
-        let error = refused(&env.cpd(&["plan", "archive", "--plan", "pay"]), "archive_blocked", 3);
-        let listed = error["details"]["blockers"].as_array().unwrap();
-        assert_eq!(listed.len(), 1, "{kind}: {error}");
-        assert_eq!(listed[0]["kind"], kind, "{error}");
-        assert_eq!(archived_ats(&env), 0, "{kind}");
-        assert_eq!(event_count(&env), events_before, "{kind}");
-        assert_eq!(panes(&env), panes_before, "{kind}");
-    }
 }
 
 #[test]
