@@ -12,6 +12,9 @@ use super::repo::{file_blob, work_files};
 use super::rev::{self, RevError, Selection, dwim_ref};
 use super::universe::{Head, Oid, RepoId, Universe, is_oid, norm_key};
 
+mod remote;
+use remote::{fetch, ls_remote, push};
+
 const ZEROS: &str = "0000000000000000000000000000000000000000";
 use crate::host::runner::{Call, Handler, Reply};
 
@@ -740,49 +743,6 @@ fn changed_between(a: &BTreeMap<String, Oid>, b: &BTreeMap<String, Oid>) -> BTre
 
 // ---- ls-remote ---------------------------------------------------------------------------------------
 
-fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("ls-remote", args, &["--heads", "--exit-code"], &[])?;
-    let flags = flags(&toks);
-    let pos = positionals(&toks);
-    let Some((remote, patterns)) = pos.split_first() else { return Err("ls-remote (arguments)".to_owned()) };
-    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
-    let configured = remote_urls(&c.u.config_entries(repo, &c.extra)).into_iter().find(|(n, _)| n == remote).map(|(_, u)| u);
-    let url = match configured {
-        Some(url) => url,
-        None if remote.contains('/') => (*remote).to_owned(),
-        None => {
-            return Ok(Out::fail(
-                128,
-                format!("fatal: '{remote}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n"),
-            ));
-        }
-    };
-    let url = c.u.resolve_url_with(repo, &url, &c.extra);
-    let Some(there) = c.u.repo_at(&url) else {
-        return Ok(Out::fail(128, format!("fatal: unable to access '{url}': Could not resolve host\n")));
-    };
-    let mut refs: Vec<(String, Oid)> = Vec::new();
-    if !flags.contains(&"--heads") {
-        let head = match c.u.head(&c.u.git_dir(there)) {
-            Head::Branch(b) => c.u.ref_oid(there, &format!("refs/heads/{b}")),
-            Head::Detached(oid) => Some(oid),
-        };
-        refs.extend(head.map(|o| ("HEAD".to_owned(), o)));
-    }
-    refs.extend(c.u.refs(there, "refs/heads/"));
-    if !flags.contains(&"--heads") {
-        refs.extend(c.u.refs(there, "refs/tags/"));
-    }
-    let shown: Vec<&(String, Oid)> = refs
-        .iter()
-        .filter(|(name, _)| patterns.is_empty() || patterns.iter().any(|p| name == p || name.ends_with(&format!("/{p}"))))
-        .collect();
-    if shown.is_empty() && flags.contains(&"--exit-code") {
-        return Ok(Out::silent(2));
-    }
-    Ok(Out::ok(shown.iter().map(|(n, o)| format!("{o}\t{n}\n")).collect::<String>()))
-}
-
 // ---- update-ref, branch, worktree, write-tree, read-tree -------------------------------------------
 
 fn update_ref(c: &mut Ctx, args: &[String]) -> Run {
@@ -1166,14 +1126,4 @@ fn remove_file(root: &Path, path: &str) {
     let mut file = root.join(path);
     let _ = std::fs::remove_file(&file);
     while file.pop() && file != root && std::fs::remove_dir(&file).is_ok() {}
-}
-
-// ---- fetch, push (stubs: PR port-git's Job git-remote) ---------------------------------------------------
-
-fn fetch(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("fetch")
-}
-
-fn push(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("push")
 }

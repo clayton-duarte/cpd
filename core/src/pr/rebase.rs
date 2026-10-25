@@ -22,7 +22,7 @@ use crate::policy::{Gate, Policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
-use crate::host::runner::Runner;
+use crate::host::runner::{Runner, SystemRunner};
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
@@ -438,17 +438,16 @@ fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
 /// Whether origin's `reference` contains `sha`, as rule P checks (§7.4): its tip `X`
 /// (`git ls-remote`) is in the local object store and `sha` is an ancestor of it, or it.
 fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
-    let listed = git::run::ok(lead, &["ls-remote", "origin", reference])?;
-    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
-    let Some(tip) = tip else { return Ok(false) };
-    let known = git::run::run(lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
-    Ok(known && git::run::run(lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
+    remote_contains_with(&SystemRunner, lead, reference, sha)
 }
 
-/// [`remote_contains`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-#[allow(dead_code)]
-pub(crate) fn remote_contains_with(_runner: &dyn Runner, _lead: &Path, _reference: &str, _sha: &str) -> Result<bool, CpdError> {
-    todo!("remote_contains_with")
+/// [`remote_contains`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
+    let listed = git::run::ok_with(runner, lead, &["ls-remote", "origin", reference])?;
+    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
+    let Some(tip) = tip else { return Ok(false) };
+    let known = git::run::run_with(runner, lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
+    Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
 }
 
 /// `error`, after removing the gate worktree; the removal's own failure is

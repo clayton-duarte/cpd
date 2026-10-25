@@ -6,11 +6,11 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
+use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_list};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
-use crate::host::runner::Runner;
+use crate::host::runner::{Runner, SystemRunner};
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -219,6 +219,12 @@ pub enum Push {
 /// when `X` is in the local object store and contains `sha`, the push is
 /// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
 pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    push_commit_with(&SystemRunner, lead_worktree, branch, sha)
+}
+
+/// [`push_commit`] on `runner` (a test passes a `FakeRunner`).
+pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    let (run, ok) = (|dir: &Path, args: &[&str]| run_with(runner, dir, args), |dir: &Path, args: &[&str]| ok_with(runner, dir, args));
     let reference = format!("refs/heads/{branch}");
     let refspec = format!("{sha}:{reference}");
     let args = ["push", "--porcelain", "origin", refspec.as_str()];
@@ -239,11 +245,6 @@ pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push
         }
     }
     Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
-}
-
-/// [`push_commit`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
-pub fn push_commit_with(_runner: &dyn Runner, _lead_worktree: &Path, _branch: &str, _sha: &str) -> Result<Push, CpdError> {
-    todo!("push_commit_with")
 }
 
 /// The line of `push --porcelain` for the pushed ref: `<flag>\t<from>:<to>\t<summary>`,
