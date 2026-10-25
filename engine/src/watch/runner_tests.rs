@@ -119,7 +119,20 @@ fn pi() -> PiInstall {
 }
 
 const NODE: &str = "/pi-node/bin/node";
-const EXTRA: &str = "pi_adapter = \"/adapter\"\n[inbox]\nteam_channel = \"C123ABC\"\nslack_user_id = \"U123ABC\"\n";
+/// An engine whose config names the team channel and a pi adapter directory (which must hold a `package.json`).
+fn engine() -> (Fx, tempfile::TempDir) {
+    let adapter = tempfile::tempdir().unwrap();
+    std::fs::write(adapter.path().join("package.json"), "{}").unwrap();
+    let extra = format!(
+        "pi_adapter = \"{}\"\n[inbox]\nteam_channel = \"C123ABC\"\nslack_user_id = \"U123ABC\"\n",
+        adapter.path().display()
+    );
+    (Fx::new(&extra), adapter)
+}
+
+fn script(adapter: &tempfile::TempDir) -> String {
+    adapter.path().join("lib").join("slack-channel.ts").display().to_string()
+}
 
 /// Starts the helper on `runner` and waits for its answer (a channel receive, no clock).
 fn helper(runner: &FakeRunner, fx: &Fx) -> Result<Value, Failure> {
@@ -129,7 +142,7 @@ fn helper(runner: &FakeRunner, fx: &Fx) -> Result<Value, Failure> {
 
 #[test]
 fn start_with_asks_the_runner_for_node_running_the_slack_helper_with_the_channel_and_the_user() {
-    let fx = Fx::new(EXTRA);
+    let (fx, adapter) = engine();
     let runner = fake("node", Reply::ok(&json!({"ok": true, "posts": [], "read": 0}).to_string()));
     helper(&runner, &fx).unwrap();
     let calls = runner.calls();
@@ -138,13 +151,13 @@ fn start_with_asks_the_runner_for_node_running_the_slack_helper_with_the_channel
     assert_eq!(calls[0].program, NODE);
     assert_eq!(
         calls[0].args,
-        ["/adapter/lib/slack-channel.ts", "--coding-agent", "/pi/agent/coding-agent.js", "--channel", "C123ABC", "--me", "U123ABC"]
+        [script(&adapter).as_str(), "--coding-agent", "/pi/agent/coding-agent.js", "--channel", "C123ABC", "--me", "U123ABC"]
     );
 }
 
 #[test]
 fn start_with_gives_the_helper_two_minutes_the_home_as_its_directory_and_pis_environment() {
-    let fx = Fx::new(EXTRA);
+    let (fx, _adapter) = engine();
     let runner = fake("node", Reply::ok(&json!({"ok": true}).to_string()));
     helper(&runner, &fx).unwrap();
     let call = &runner.calls()[0];
@@ -160,7 +173,7 @@ fn start_with_gives_the_helper_two_minutes_the_home_as_its_directory_and_pis_env
 
 #[test]
 fn start_with_answers_the_value_the_helper_printed_on_success() {
-    let fx = Fx::new(EXTRA);
+    let (fx, _adapter) = engine();
     let runner = fake("node", Reply::ok(&json!({"ok": true, "posts": [{"ts": "1"}], "read": 3}).to_string()));
     let value = helper(&runner, &fx).unwrap();
     assert_eq!(value["read"], 3);
@@ -169,7 +182,7 @@ fn start_with_answers_the_value_the_helper_printed_on_success() {
 
 #[test]
 fn start_with_answers_the_failure_the_helper_printed() {
-    let fx = Fx::new(EXTRA);
+    let (fx, _adapter) = engine();
     let printed = json!({"ok": false, "error": {"code": "slack_helper_failed", "message": "no token", "details": {}}}).to_string();
     let runner = fake("node", Reply::exit(1, &printed, ""));
     let failure = helper(&runner, &fx).unwrap_err();
@@ -179,7 +192,7 @@ fn start_with_answers_the_failure_the_helper_printed() {
 
 #[test]
 fn start_with_maps_a_helper_that_printed_no_result_to_spawn_failed() {
-    let fx = Fx::new(EXTRA);
+    let (fx, _adapter) = engine();
     let runner = fake("node", Reply::exit(3, "", "boom"));
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
@@ -190,18 +203,18 @@ fn start_with_maps_a_helper_that_printed_no_result_to_spawn_failed() {
 
 #[test]
 fn start_with_maps_a_node_that_cannot_start_to_spawn_failed_with_the_argv() {
-    let fx = Fx::new(EXTRA);
+    let (fx, adapter) = engine();
     let runner = fake("node", Reply::io(ErrorKind::NotFound));
     let failure = helper(&runner, &fx).unwrap_err();
     assert_eq!(failure.code, "spawn_failed");
-    assert!(failure.message.starts_with(&format!("Cannot run {NODE} /adapter/lib/slack-channel.ts ")), "{}", failure.message);
+    assert!(failure.message.starts_with(&format!("Cannot run {NODE} {} ", script(&adapter))), "{}", failure.message);
     assert_eq!(failure.details["argv"][0], NODE);
-    assert_eq!(failure.details["argv"][1], "/adapter/lib/slack-channel.ts");
+    assert_eq!(failure.details["argv"][1], script(&adapter).as_str());
 }
 
 #[test]
 fn start_with_maps_a_scripted_timeout_to_tool_timeout() {
-    let fx = Fx::new(EXTRA);
+    let (fx, _adapter) = engine();
     let clock = ManualClock::new();
     let runner = FakeRunner::new(clock.clone()).on("node", |_| true, Reply::ok("{}").takes(Duration::from_secs(500)));
     let failure = helper(&runner, &fx).unwrap_err();
