@@ -4,31 +4,34 @@
 //! its arguments, so the test reads what the step sends.
 
 use time::Duration;
-use time::OffsetDateTime;
+use cpd_core::clock::{Clock, ManualClock};
 use time::format_description::well_known::Rfc3339;
 
 use super::testkit::Fx;
 use super::workers;
 
-/// `now - ago` as the RFC 3339 `started_at` the incident row holds.
-fn started_before(ago: Duration) -> String {
-    (OffsetDateTime::now_utc() - ago).format(&Rfc3339).expect("a time formats as RFC 3339")
+/// `now - ago` on `clock` as the RFC 3339 `started_at` the incident row holds.
+fn started_before(clock: &ManualClock, ago: Duration) -> String {
+    (clock.utc() - ago).format(&Rfc3339).expect("a time formats as RFC 3339")
 }
 
-/// One run of the status option step on a fresh home with an `incident` row whose `started_at`
-/// is `started_at` (None: no row). Returns what the step sent to tmux.
-fn sent(started_at: Option<&str>) -> String {
+/// One run of the status option step on a fresh home, on a `ManualClock`, with an `incident` row that started `ago` before the
+/// clock's now (None: no row). Returns what the step sent to tmux.
+fn sent(ago: Option<Duration>) -> String {
+    let clock = ManualClock::new();
     let mut fx = Fx::new("");
+    fx.engine.ports.clock = std::sync::Arc::new(clock.clone());
     let runner = fx.on_fake_tmux();
     fx.tmux_server();
     let engine = &mut fx.engine;
-    if let Some(started_at) = started_at {
+    if let Some(ago) = ago {
+        let started_at = started_before(&clock, ago);
         engine
             .store
             .write("test", |tx| {
                 tx.execute(
                     "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, ?1, 'mgr', 'pager down', ?2)",
-                    rusqlite::params![started_at, tx.id()],
+                    rusqlite::params![&started_at, tx.id()],
                 )?;
                 Ok(())
             })
@@ -63,7 +66,7 @@ fn the_status_step_writes_the_elapsed_duration() {
         (Duration::days(2) + Duration::hours(4) + Duration::seconds(30), "2d 4h"),
     ];
     for (ago, want) in cases {
-        let on = sent(Some(&started_before(ago)));
+        let on = sent(Some(ago));
         assert!(on.contains("@cpd_incident"), "the option is named while incident mode is on: {on}");
         assert!(!on.contains("-gu @cpd_incident"), "it is set, not unset, while on: {on}");
         assert!(!on.contains("pager down"), "the option no longer carries the reason: {on}");

@@ -2,8 +2,6 @@
 //! finished and out of the User's view. Its pane is closed as `session close` does (pi stops, files kept), then one
 //! transaction sets `sessions.asleep_at` and appends `session-asleep`. A tick with nothing ready writes nothing.
 
-use time::OffsetDateTime;
-
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
@@ -76,7 +74,7 @@ pub(super) fn run(engine: &mut Engine) {
 }
 
 fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
-    let now = OffsetDateTime::now_utc();
+    let now = engine.ports.clock.utc();
     let cutoff = now - time::Duration::seconds(i64::from(engine.config.timeouts.sleep_seconds));
     let (now, cutoff) = (timestamp(now), timestamp(cutoff));
     engine.store.read(|conn| {
