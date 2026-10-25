@@ -1,12 +1,14 @@
 //! The cpd-rendered Context digest, `context show --digest` and `--topic`, and the first message (contract §4.6 "The
-//! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551), run as the built binary. Curations are
-//! written through `curation::propose`, as the distiller will.
+//! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551). The tests that start no pane run in
+//! this process (`Fx`), the others as the built binary. Curations are written through `curation::propose`, as the
+//! distiller will.
 
 use crate::common;
 
 use std::fs;
 
-use common::{SLEEP_SECONDS, TestEnv, WATCH_OK};
+use common::fx::Fx;
+use common::{Run, SLEEP_SECONDS, TestEnv, WATCH_OK};
 use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
@@ -21,6 +23,31 @@ fn fx() -> TestEnv {
     env.fake_cpd_panes(WATCH_OK);
     env.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
     env
+}
+
+/// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that start no pane (`plan new` does).
+fn fast() -> Fx {
+    let fx = Fx::new();
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
+    fx
+}
+
+/// `cpd <args>` in this process (`Fx`) or as the binary (`TestEnv`): the same call, the same [`Run`].
+trait Cpd {
+    fn cpd(&self, args: &[&str]) -> Run;
+}
+
+impl Cpd for Fx {
+    fn cpd(&self, args: &[&str]) -> Run {
+        Fx::cpd(self, args)
+    }
+}
+
+impl Cpd for TestEnv {
+    fn cpd(&self, args: &[&str]) -> Run {
+        TestEnv::cpd(self, args)
+    }
 }
 
 /// Inserts a record of `kind` written `minutes` minutes ago (the CLI cannot backdate a record).
@@ -55,11 +82,11 @@ fn curate(env: &TestEnv, rows: &[(&str, &str, &str)]) {
     propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &curations, &[]).unwrap();
 }
 
-fn digest(env: &TestEnv) -> Value {
+fn digest(env: &impl Cpd) -> Value {
     env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok()
 }
 
-fn topic(env: &TestEnv, t: &str) -> Value {
+fn topic(env: &impl Cpd, t: &str) -> Value {
     env.cpd(&["context", "show", "--context", CTX, "--topic", t]).ok()
 }
 
@@ -114,15 +141,15 @@ fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
 
 #[test]
 fn the_digest_groups_short_forms_by_topic_and_lists_every_topic() {
-    let env = fx();
-    seed(&env, "m1-n1", "note", 300, "a");
-    seed(&env, "m1-n2", "note", 180, "b");
-    seed(&env, "m1-n3", "note", 60, "c");
-    seed(&env, "m1-n4", "note", 120, "d");
-    seed(&env, "m1-n5", "note", 40 * DAY, "e");
-    seed(&env, "m1-n6", "note", 40 * DAY, "f");
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 300, "a");
+    seed(&fx.env, "m1-n2", "note", 180, "b");
+    seed(&fx.env, "m1-n3", "note", 60, "c");
+    seed(&fx.env, "m1-n4", "note", 120, "d");
+    seed(&fx.env, "m1-n5", "note", 40 * DAY, "e");
+    seed(&fx.env, "m1-n6", "note", 40 * DAY, "f");
     curate(
-        &env,
+        &fx.env,
         &[
             ("m1-n1", "engine", "engine one"),
             ("m1-n2", "store", "store two"),
@@ -133,7 +160,7 @@ fn the_digest_groups_short_forms_by_topic_and_lists_every_topic() {
         ],
     );
 
-    let out = digest(&env);
+    let out = digest(&fx);
     let md = markdown(&out);
     let (sections, topics) = md.split_once("## Topics\n").unwrap_or_else(|| panic!("a ## Topics section in\n{md}"));
     // topics by their newest relevant record, newest first; lines oldest first within a topic
@@ -153,19 +180,19 @@ fn the_digest_groups_short_forms_by_topic_and_lists_every_topic() {
 
 #[test]
 fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
-    let env = fx();
+    let fx = fast();
     // 400 recent records of one topic, each line 130+ bytes: far over 32 768 bytes. Record n is n minutes old... n=1 newest.
     let seeded: Vec<(String, &str, u32, &str)> = (1..=400u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
-    seed_all(&env, &seeded);
+    seed_all(&fx.env, &seeded);
     let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
     let mut rows = Vec::new();
     for n in 1..=400usize {
         rows.push((format!("m1-n{n}"), shorts[n - 1].clone()));
     }
     let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, s)| (id.as_str(), "alpha", s.as_str())).collect();
-    curate(&env, &rows);
+    curate(&fx.env, &rows);
 
-    let out = digest(&env);
+    let out = digest(&fx);
     let md = markdown(&out);
     assert!(md.len() <= 32_768, "{} bytes", md.len());
     assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
@@ -177,7 +204,7 @@ fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
     assert!(md.lines().any(|l| l == pointer), "{pointer:?} in the digest's tail: {}", &md[md.len().saturating_sub(300)..]);
     assert!(md.contains("## Topics\n- alpha (400)"), "the topic list is kept whole");
     // idempotent: the same records give the same text
-    assert_eq!(markdown(&digest(&env)), md);
+    assert_eq!(markdown(&digest(&fx)), md);
 }
 
 #[test]
@@ -207,17 +234,17 @@ fn first_message_lists_uncurated_records_raw_at_most_20() {
 
 #[test]
 fn show_topic_prints_every_curated_record_of_the_topic() {
-    let env = fx();
-    seed(&env, "m1-n1", "note", 40 * DAY, "a");
-    seed(&env, "m1-n2", "note", 30 * DAY, "b");
-    seed(&env, "m1-n3", "note", 20 * DAY, "c");
-    seed(&env, "m1-n4", "note", 10 * DAY, "d");
-    seed(&env, "m1-n5", "note", 5 * DAY, "e");
-    curate(&env, &[("m1-n1", "engine", "first"), ("m1-n2", "store", "other topic"), ("m1-n3", "engine", "second"), ("m1-n4", "engine", "superseded one")]);
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 40 * DAY, "a");
+    seed(&fx.env, "m1-n2", "note", 30 * DAY, "b");
+    seed(&fx.env, "m1-n3", "note", 20 * DAY, "c");
+    seed(&fx.env, "m1-n4", "note", 10 * DAY, "d");
+    seed(&fx.env, "m1-n5", "note", 5 * DAY, "e");
+    curate(&fx.env, &[("m1-n1", "engine", "first"), ("m1-n2", "store", "other topic"), ("m1-n3", "engine", "second"), ("m1-n4", "engine", "superseded one")]);
     // m1-n5 is uncurated; a later note supersedes m1-n4
-    env.cpd(&["context", "note", "Newer.", "--supersedes", "m1-n4", "--context", CTX]).ok();
+    fx.cpd(&["context", "note", "Newer.", "--supersedes", "m1-n4", "--context", CTX]).ok();
 
-    let out = topic(&env, "engine");
+    let out = topic(&fx, "engine");
     assert_eq!(out["topic"], "engine", "{out}");
     assert_eq!(out["records"], serde_json::json!([{"id": "m1-n1", "short": "first"}, {"id": "m1-n3", "short": "second"}]), "{out}");
     assert_eq!(markdown(&out), "- [m1-n1] first\n- [m1-n3] second", "oldest first, as the docs say");
@@ -266,32 +293,32 @@ fn manager_cockpit(env: &TestEnv) {
 /// hs-d558 FX5: a topic no curated record has ever used is refused, with the topics in use.
 #[test]
 fn show_topic_refuses_an_unknown_topic_with_the_topics_in_use() {
-    let env = fx();
-    seed(&env, "m1-n1", "note", 60, "a");
-    seed(&env, "m1-n2", "note", 50, "b");
-    curate(&env, &[("m1-n1", "engine", "one"), ("m1-n2", "store", "two")]);
+    let fx = fast();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+    seed(&fx.env, "m1-n2", "note", 50, "b");
+    curate(&fx.env, &[("m1-n1", "engine", "one"), ("m1-n2", "store", "two")]);
 
-    let run = env.cpd(&["context", "show", "--context", CTX, "--topic", "nothing"]);
+    let run = fx.cpd(&["context", "show", "--context", CTX, "--topic", "nothing"]);
     let err = run.error();
     assert_eq!(run.exit, 4, "{err}");
     assert_eq!(err["code"], "topic_not_found", "{err}");
     assert_eq!(err["details"], serde_json::json!({"context": CTX, "topic": "nothing", "topics": ["engine", "store"]}), "{err}");
     // a topic in use is still answered
-    assert_eq!(markdown(&topic(&env, "engine")), "- [m1-n1] one");
+    assert_eq!(markdown(&topic(&fx, "engine")), "- [m1-n1] one");
 }
 
 /// hs-d558 FX6: the pointer line names the Context.
 #[test]
 fn the_pointer_line_names_the_context() {
-    let env = fx();
+    let fx = fast();
     let seeded: Vec<(String, &str, u32, &str)> = (1..=400u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
-    seed_all(&env, &seeded);
+    seed_all(&fx.env, &seeded);
     let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
     let rows: Vec<(String, &str)> = (1..=400usize).map(|n| (format!("m1-n{n}"), shorts[n - 1].as_str())).collect();
     let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, s)| (id.as_str(), "alpha", *s)).collect();
-    curate(&env, &rows);
+    curate(&fx.env, &rows);
 
-    let md = markdown(&digest(&env));
+    let md = markdown(&digest(&fx));
     let kept = md.lines().filter(|l| l.starts_with("- [m1-n")).count();
     let pointer = format!("and {} older: cpd context show --context {CTX} --topic alpha", 400 - kept);
     assert!(md.lines().any(|l| l == pointer), "{pointer:?} in the digest's tail: {}", &md[md.len().saturating_sub(300)..]);
@@ -300,16 +327,16 @@ fn the_pointer_line_names_the_context() {
 /// hs-d558 FX6: even when the topic list alone is over 32 768 bytes, the digest is not.
 #[test]
 fn the_digest_never_exceeds_32_kb_even_when_the_topic_list_is_long() {
-    let env = fx();
+    let fx = fast();
     // 900 topics of 40 bytes: the list is `- <topic> (1)` lines, about 50 bytes each, 45 kB.
     let seeded: Vec<(String, &str, u32, &str)> = (1..=900u32).map(|n| (format!("m1-n{n}"), "note", n, "x")).collect();
-    seed_all(&env, &seeded);
+    seed_all(&fx.env, &seeded);
     let topics: Vec<String> = (1..=900u32).map(|n| format!("topic-{n:04}-{}", "a".repeat(26))).collect();
     let rows: Vec<(String, &str)> = (1..=900usize).map(|n| (format!("m1-n{n}"), topics[n - 1].as_str())).collect();
     let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, t)| (id.as_str(), *t, "short")).collect();
-    curate(&env, &rows);
+    curate(&fx.env, &rows);
 
-    let out = digest(&env);
+    let out = digest(&fx);
     let md = markdown(&out);
     assert!(md.len() <= 32_768, "{} bytes", md.len());
     assert_eq!(out["digest"]["bytes"], md.len(), "{out}");

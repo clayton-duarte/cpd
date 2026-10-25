@@ -1,5 +1,7 @@
 //! `cpd config` and `cpd tiers` (commands.md §14.2, §14.3; contract §8, §9):
-//! the built binary, a temporary `$CPD_HOME`, and a fake pi install.
+//! a temporary `$CPD_HOME`, and a fake pi install. The `config` tests and the pi-lookup refusals of `tiers` run in
+//! this process (`Fx`); the `tiers` tests that run a scripted `node` or wait on a migration run the built binary
+//! (`TestEnv`), until the runner and clock seams exist.
 
 use crate::common;
 
@@ -7,33 +9,34 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use common::fx::Fx;
 use common::{CPD, Run, TestEnv, write_executable};
 use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
 
-fn config_with(env: &TestEnv, text: &str) -> Run {
-    env.write_config(text);
-    env.cpd(&["config"])
+fn config_with(fx: &Fx, text: &str) -> Run {
+    fx.env.write_config(text);
+    fx.cpd(&["config"])
 }
 
 // ---------------------------------------------------------------- config
 
 #[test]
 fn config_missing_file_is_config_missing() {
-    let env = TestEnv::new();
-    let run = env.cpd(&["config"]);
+    let fx = Fx::new();
+    let run = fx.cpd(&["config"]);
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_missing");
-    assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
 }
 
 #[test]
 fn config_defaults_context_distill_tier_to_gx() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
-    assert_eq!(out["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
     assert_eq!(
         out["config"],
         json!({
@@ -88,23 +91,23 @@ fn config_defaults_context_distill_tier_to_gx() {
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
 #[test]
 fn config_defaults_loop_guard_turns_to_20_and_takes_a_positive_integer() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["loop_guard_turns"], 20, "{out}");
     assert_eq!(out["sources"]["loop_guard_turns"], "default", "{out}");
 
-    let out = config_with(&env, &format!("{MINIMAL}loop_guard_turns = 3\n")).ok();
+    let out = config_with(&fx, &format!("{MINIMAL}loop_guard_turns = 3\n")).ok();
     assert_eq!(out["config"]["loop_guard_turns"], 3, "{out}");
     assert_eq!(out["sources"]["loop_guard_turns"], "file", "{out}");
 }
 
 #[test]
 fn config_loop_guard_turns_zero_negative_or_not_an_integer_is_config_invalid() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     // 1 is the floor and is accepted.
-    assert_eq!(config_with(&env, &format!("{MINIMAL}loop_guard_turns = 1\n")).ok()["config"]["loop_guard_turns"], 1);
+    assert_eq!(config_with(&fx, &format!("{MINIMAL}loop_guard_turns = 1\n")).ok()["config"]["loop_guard_turns"], 1);
     for bad in ["0", "-1", "1.5", "\"20\""] {
-        let run = config_with(&env, &format!("{MINIMAL}loop_guard_turns = {bad}\n"));
+        let run = config_with(&fx, &format!("{MINIMAL}loop_guard_turns = {bad}\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
@@ -115,9 +118,9 @@ fn config_loop_guard_turns_zero_negative_or_not_an_integer_is_config_invalid() {
 /// Context decision 'Team review Inbox' (contract §8.2): the channel and the User's Slack id are set together.
 #[test]
 fn config_takes_the_team_review_keys() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let shown = config_with(
-        &env,
+        &fx,
         &format!("{MINIMAL}[watch]\nteam_review_seconds = 900\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"U04DB4MTUMR\"\nbot_reviewers = [\"ci-bot\"]\n"),
     )
     .ok();
@@ -130,8 +133,8 @@ fn config_takes_the_team_review_keys() {
 /// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
 #[test]
 fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
-    let env = TestEnv::new();
-    let shown = |text: &str| config_with(&env, &format!("{MINIMAL}{text}")).ok()["config"].clone();
+    let fx = Fx::new();
+    let shown = |text: &str| config_with(&fx, &format!("{MINIMAL}{text}")).ok()["config"].clone();
     let config = shown("[watch]\ntick_seconds = 0.2\n[timeouts]\npi_stop_seconds = 1\n");
     assert_eq!(config["watch"]["tick_seconds"], 0.2);
     assert_eq!(config["timeouts"]["pi_stop_seconds"], 1);
@@ -143,16 +146,16 @@ fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
 
 #[test]
 fn config_shows_a_custom_plannotator_range() {
-    let env = TestEnv::new();
-    let out = config_with(&env, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
     assert_eq!(out["config"]["plannotator_ports"], "20000-20000");
     assert_eq!(out["sources"]["plannotator_ports"], "file");
 }
 
 #[test]
 fn config_has_one_source_per_leaf_key() {
-    let env = TestEnv::new();
-    let out = config_with(&env, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[tiers]\nO = \"p/opus\"\n[timeouts]\nask_minutes = 10\n").ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[tiers]\nO = \"p/opus\"\n[timeouts]\nask_minutes = 10\n").ok();
 
     // The leaves of `config`, as dotted paths.
     fn leaves(prefix: &str, value: &Value, into: &mut Vec<String>) {
@@ -185,8 +188,8 @@ fn config_has_one_source_per_leaf_key() {
 
 #[test]
 fn config_accepts_every_key_with_a_value_at_its_boundary() {
-    let env = TestEnv::new();
-    let adapter = env.root().join("adapter");
+    let fx = Fx::new();
+    let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     let text = format!(
@@ -245,7 +248,7 @@ work_session = "w"
         adapter = adapter.display(),
         socket = "s".repeat(32),
     );
-    let out = config_with(&env, &text).ok();
+    let out = config_with(&fx, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
     assert_eq!(out["config"]["test_concurrency"], 64);
@@ -259,8 +262,8 @@ work_session = "w"
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
-    env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
-    assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
+    fx.env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
+    assert_eq!(fx.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
 }
 
 #[test]
@@ -384,23 +387,23 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[tmux]\ncockpit_session = \"cpd-work\"\n", "tmux.work_session"),
     ];
     // One env: `cpd config` reads the file and writes nothing, so each case sees only its own file.
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for (text, key) in bad {
-        let run = config_with(&env, text);
+        let run = config_with(&fx, text);
         let err = run.error();
         assert_eq!(run.exit, 1, "{text}");
         assert_eq!(err["code"], "config_invalid", "{text}: {err}");
         assert_eq!(err["details"]["key"], *key, "{text}: {err}");
-        assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
+        assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
     }
 }
 
 /// hs-d554: `open_tier` is a Worker Tier: H3 or S0-S3.
 #[test]
 fn config_refuses_an_open_tier_outside_the_worker_range() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for tier in ["H0", "H1", "H2", "S4", "S5", "O2"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");
         assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
@@ -411,9 +414,9 @@ fn config_refuses_an_open_tier_outside_the_worker_range() {
 /// hs-d562: an auxiliary run uses only `GX`.
 #[test]
 fn config_refuses_a_context_distill_tier_that_is_not_gx() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for tier in ["H0", "H4", "S1", "O2", "G0", "G5"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");
         assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
@@ -423,16 +426,16 @@ fn config_refuses_a_context_distill_tier_that_is_not_gx() {
             assert!(message.contains("GX") && message.contains("hs-d562"), "{message}");
         }
     }
-    let ok = config_with(&env, "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n").ok();
+    let ok = config_with(&fx, "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n").ok();
     assert_eq!(ok["config"]["context_distill_tier"], "GX");
 }
 
 /// hs-d562: a Lead or the Manager is never on G; `open_tier` is a Worker's Tier (hs-d554), and GX is not one.
 #[test]
 fn config_refuses_g_for_lead_manager_and_open_tier() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for key in ["lead_tier", "manager_tier", "open_tier"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{key}");
         assert_eq!(err["code"], "config_invalid", "{key}: {err}");
@@ -447,11 +450,11 @@ fn config_refuses_g_for_lead_manager_and_open_tier() {
 /// hs-d562: `tiers.G` has the shape of `tiers.O/S/H`.
 #[test]
 fn config_reads_a_tiers_g_model() {
-    let env = TestEnv::new();
-    let out = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
     assert_eq!(out["config"]["tiers"]["G"], "p/gemini");
     assert_eq!(out["sources"]["tiers.G"], "file");
-    let run = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
+    let run = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
@@ -460,9 +463,9 @@ fn config_reads_a_tiers_g_model() {
 
 #[test]
 fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let message = |text: &str| {
-        let run = config_with(&env, text);
+        let run = config_with(&fx, text);
         assert_eq!(run.exit, 1, "{text}");
         run.error()["message"].as_str().unwrap().to_owned()
     };
@@ -482,54 +485,54 @@ fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
 
 #[test]
 fn config_refuses_a_file_that_is_not_toml() {
-    let env = TestEnv::new();
-    let run = config_with(&env, "version = = 1\n");
+    let fx = Fx::new();
+    let run = config_with(&fx, "version = = 1\n");
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
-    assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
 }
 
 #[test]
 fn config_refuses_a_config_toml_it_cannot_read() {
-    let env = TestEnv::new();
-    fs::create_dir(env.cpd_home().join("config.toml")).unwrap();
-    let run = env.cpd(&["config"]);
+    let fx = Fx::new();
+    fs::create_dir(fx.env.cpd_home().join("config.toml")).unwrap();
+    let run = fx.cpd(&["config"]);
     assert_eq!(run.error()["code"], "config_invalid");
     assert_eq!(run.exit, 1);
 }
 
 #[test]
 fn config_leaves_cpd_1s_config_json_alone() {
-    let env = TestEnv::new();
-    fs::write(env.cpd_home().join("config.json"), "{\"machine\": \"cpd1\"}").unwrap();
-    assert_eq!(env.cpd(&["config"]).error()["code"], "config_missing");
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    fs::write(fx.env.cpd_home().join("config.json"), "{\"machine\": \"cpd1\"}").unwrap();
+    assert_eq!(fx.cpd(&["config"]).error()["code"], "config_missing");
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["machine"], "hs");
-    assert_eq!(fs::read_to_string(env.cpd_home().join("config.json")).unwrap(), "{\"machine\": \"cpd1\"}");
+    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.json")).unwrap(), "{\"machine\": \"cpd1\"}");
 }
 
 #[test]
 fn config_is_read_only_and_idempotent() {
-    let env = TestEnv::empty();
-    env.write_config(MINIMAL);
-    let first = env.cpd(&["config"]);
-    let second = env.cpd(&["config"]);
+    let fx = Fx::with(TestEnv::bare());
+    fx.env.write_config(MINIMAL);
+    let first = fx.cpd(&["config"]);
+    let second = fx.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
     first.ok();
     // `policy/` is the test env's own owner file (`TestEnv::new`), not something `cpd config` wrote.
     let names: Vec<_> =
-        fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
+        fs::read_dir(fx.env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
     assert_eq!(names, ["config.toml"]);
-    assert_eq!(fs::read_to_string(env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
+    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
 }
 
 #[test]
 fn config_with_a_bad_argument_is_usage() {
-    let env = TestEnv::new();
-    env.write_config(MINIMAL);
+    let fx = Fx::new();
+    fx.env.write_config(MINIMAL);
     for args in [&["config", "--surprise"][..], &["config", "extra"], &["tiers", "--surprise"], &["tiers", "extra"]] {
-        let run = env.cpd(args);
+        let run = fx.cpd(args);
         assert_eq!(run.error()["code"], "usage", "{args:?}");
         assert_eq!(run.exit, 2);
     }
@@ -537,9 +540,9 @@ fn config_with_a_bad_argument_is_usage() {
 
 #[test]
 fn an_empty_cpd_home_variable_is_usage() {
-    let env = TestEnv::new();
-    let out = env.command(CPD).arg("config").env("CPD_HOME", "").output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
+    let fx = Fx::new();
+    let run = fx.cpd_with(fx.env.root(), &["config"], &[("CPD_HOME", "")]);
+    assert_eq!(run.exit, 2);
 }
 
 // ----------------------------------------------------------------- tiers
@@ -589,6 +592,11 @@ export function getSupportedThinkingLevels(model) {
 "#;
 
 const TIERS_CONFIG: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\n";
+
+/// [`cpd_isolated`] in this process: `PATH` is the env's `bin/` alone for the one call.
+fn fx_isolated(fx: &Fx, args: &[&str]) -> Run {
+    fx.cpd_with(fx.env.root(), args, &[("PATH", fx.env.bin().to_str().expect("a UTF-8 path"))])
+}
 
 /// `cpd <args>` with `PATH` = the test's `bin/` only, so nothing real is found.
 fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
@@ -804,37 +812,37 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
 
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    fx.env.write_config(TIERS_CONFIG);
+    fx.env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
     assert_eq!(run.exit, 1);
-    assert!(env.calls("node").is_empty());
+    assert!(fx.env.calls("node").is_empty());
 }
 
 #[test]
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    env.fake_pi("exit 0");
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    fx.env.write_config(TIERS_CONFIG);
+    fx.env.fake_pi("exit 0");
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
     assert_eq!(run.exit, 1);
 
     // A version that is not a plain name.
-    install_pi(&env, "1.2.0", "", "");
+    install_pi(&fx.env, "1.2.0", "", "");
     for bad in ["", "..", "../x", "1 2"] {
-        fs::write(env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
-        let run = cpd_isolated(&env, &["tiers"]);
+        fs::write(fx.env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
+        let run = fx_isolated(&fx, &["tiers"]);
         assert_eq!(run.error()["code"], "pi_not_found", "{bad:?}");
     }
 
     // A release without its entry points.
-    install_pi(&env, "1.2.0", "", "");
-    fs::remove_file(env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
-    let run = cpd_isolated(&env, &["tiers"]);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fs::remove_file(fx.env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
+    let run = fx_isolated(&fx, &["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "pi_not_found");
     assert!(err["details"]["missing"].as_str().unwrap().ends_with("pi-ai/dist/index.js"));
@@ -927,11 +935,11 @@ fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
 
 #[test]
 fn tiers_checks_pi_before_the_catalog_and_config_before_both() {
-    let env = TestEnv::new();
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "config_missing");
-    env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
-    assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "config_invalid");
+    fx.env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
+    assert_eq!(fx_isolated(&fx, &["tiers"]).error()["code"], "config_invalid");
 }
 
 /// The `tier_catalog` rows in `$CPD_HOME/cpd.db`: `(pi_version, letter, model, efforts)`.
@@ -1067,9 +1075,9 @@ fn tiers_is_idempotent() {
 
 #[test]
 fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let out = config_with(
-        &env,
+        &fx,
         "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nopen_tier = \"H3\"\n",
     )
     .ok();
@@ -1083,17 +1091,17 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
 /// Contract §8.2 (hs-d549, hs-d551): `context_recent_days`, default 1, an integer >= 1.
 #[test]
 fn context_recent_days_defaults_to_1_and_refuses_0() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["context_recent_days"], 1, "{out}");
     assert_eq!(out["sources"]["context_recent_days"], "default", "{out}");
 
-    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
+    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
     assert_eq!(out["config"]["context_recent_days"], 7, "{out}");
     assert_eq!(out["sources"]["context_recent_days"], "file", "{out}");
 
     for bad in ["0", "-1", "1.5", "\"2\""] {
-        let run = config_with(&env, &format!("{MINIMAL}context_recent_days = {bad}\n"));
+        let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = {bad}\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
@@ -1104,17 +1112,17 @@ fn context_recent_days_defaults_to_1_and_refuses_0() {
 /// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
 #[test]
 fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["context_curation_min_records"], 25, "{out}");
     assert_eq!(out["sources"]["context_curation_min_records"], "default", "{out}");
 
-    let out = config_with(&env, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
+    let out = config_with(&fx, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
     assert_eq!(out["config"]["context_curation_min_records"], 7, "{out}");
     assert_eq!(out["sources"]["context_curation_min_records"], "file", "{out}");
 
     for bad in ["0", "-3", "2.5", "\"ten\"", "true"] {
-        let run = config_with(&env, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
+        let run = config_with(&fx, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
@@ -1125,11 +1133,11 @@ fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integ
 /// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
 #[test]
 fn context_recent_days_above_3650_is_refused() {
-    let env = TestEnv::new();
-    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
     assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
 
-    let run = config_with(&env, &format!("{MINIMAL}context_recent_days = 3651\n"));
+    let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3651\n"));
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid", "{err}");

@@ -1,8 +1,9 @@
 //! `attempt submit`, `attempt read`, `attempt show` and `attempt list`
 //! (commands.md §6.1–§6.3), run as the built binary against a temporary
-//! `$CPD_HOME` and temporary git repos. The Plan, its Jobs, Attempts and
-//! Sessions are fixtures written straight into the database; the commands
-//! under test are the only ones that write the rest.
+//! `$CPD_HOME` and temporary git repos; `attempt read`, `attempt show` and `attempt list` call no git and no hook,
+//! so their tests run the command tree in this process (`Fx`, [`Rows`]) against rows alone. The Plan, its Jobs,
+//! Attempts and Sessions are fixtures written straight into the database; the commands under test are the only ones
+//! that write the rest.
 
 use crate::common;
 
@@ -10,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use common::fx::Fx as InProcess;
 use common::{Run, TestEnv, refused};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -106,17 +108,6 @@ impl Fx {
         Store::open(&self.home, 5000).unwrap()
     }
 
-    /// Job `key` (`running`) with Attempt `<key>-a1` (`running`): its worktree cut from the
-    /// Lead Branch HEAD. Returns the worktree.
-    fn attempt(&self, key: &str) -> PathBuf {
-        self.attempt_as(key, "running")
-    }
-
-    /// [`Fx::attempt`] with the Attempt in `status`.
-    fn attempt_as(&self, key: &str, status: &str) -> PathBuf {
-        self.attempt_in(&Pr { key: "repo".into(), repo: self.repo.clone(), lead: self.lead.clone() }, key, status)
-    }
-
     /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>` and
     /// its Lead worktree. `files` are committed on the Lead Branch.
     fn add_pr(&self, key: &str, files: &[(&str, &str)]) -> Pr {
@@ -145,7 +136,7 @@ impl Fx {
         Pr { key: key.into(), repo, lead }
     }
 
-    /// [`Fx::attempt_as`] for a Job of `pr`.
+    /// A Job of `pr` with its Attempt `<key>-a1` in `status`: its worktree cut from the Lead Branch HEAD. Returns the worktree.
     fn attempt_in(&self, pr: &Pr, key: &str, status: &str) -> PathBuf {
         self.attempt_kind(pr, key, status, "work", None)
     }
@@ -227,11 +218,79 @@ impl Fx {
     fn events(&self, kind: &str) -> Vec<Value> {
         self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
+}
+
+// ---------- fixtures without git: the rows alone, for the commands that read the store ----------
+
+/// The `base_sha` of the Attempts of [`Rows`]: no repo exists to cut one from.
+const BASE: &str = "0123456789abcdef0123456789abcdef01234567";
+
+/// [`fixture`] without a repo, a worktree or a git process: the same rows (Context, Lead Session, Plan, PR `repo`,
+/// Job `api` and its Attempt `api-a1`, both `running`) written by SQL, in an [`InProcess`] env, whose commands run in
+/// this process. The paths the rows name (`repo`, `lead`, the Attempts' worktrees) do not exist.
+struct Rows {
+    fx: InProcess,
+    home: CpdHome,
+    /// The worktree of `api-a1`.
+    work: PathBuf,
+}
+
+fn rows() -> Rows {
+    let fx = InProcess::new();
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required.
+    fx.env.repo_policy("acme", "pay", "");
+    let repos = fx.env.root().join("repos");
+    fx.env.sql(&format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
+        repo = repos.join("pay").display(),
+        lead = repos.join("pay.pay").display()
+    ));
+    let mut rows = Rows { fx, home, work: PathBuf::new() };
+    rows.work = rows.attempt("api", "running");
+    rows
+}
+
+impl Rows {
+    /// Job `key` (`running`) with Attempt `<key>-a1` in `status`, without a worktree. Returns the worktree's path.
+    fn attempt(&self, key: &str, status: &str) -> PathBuf {
+        let work = self.fx.env.root().join("repos").join(format!("pay.pay--{key}-a1"));
+        self.fx.env.sql(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                               status, appended, fingerprint, created_txn, created_at, kind, review)
+             VALUES ('pay', 'repo', '{key}', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{f}', cpd_txn(), 't', 'work', 0);
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+             VALUES ('pay', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/pay--{key}-a1', '{work}', '{BASE}', 't');",
+            f = "f".repeat(64),
+            work = work.display()
+        ));
+        work
+    }
+
+    /// `cpd attempt <args> --plan pay`, in this process.
+    fn cpd(&self, args: &[&str]) -> Run {
+        let mut all = vec!["attempt"];
+        all.extend(args);
+        all.extend(["--plan", PLAN]);
+        self.fx.cpd(&all)
+    }
+
+    /// `cpd <args>` as given, in this process.
+    fn raw(&self, args: &[&str]) -> Run {
+        self.fx.cpd(args)
+    }
 
     /// Registers a Worker Session for `api-a1` whose file is `file` (`None`: not known yet).
     fn session(&self, file: Option<&Path>) {
         let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-        self.env.sql(&format!(
+        self.fx.env.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at)
                VALUES ('w1', 'worker', 'ctx', 'pay', 'api-a1', 'api-a1', {file}, '/', 'S2', 'working', 't', 't');
              UPDATE attempts SET worker_session = 'w1' WHERE id = 'api-a1';"
@@ -240,7 +299,7 @@ impl Fx {
 
     /// Writes a pi session file with `content`.
     fn session_file(&self, content: &str) -> PathBuf {
-        let path = self.env.root().join("session.jsonl");
+        let path = self.fx.env.root().join("session.jsonl");
         fs::write(&path, content).unwrap();
         path
     }
@@ -610,7 +669,7 @@ const SESSION: &str = concat!(
 
 #[test]
 fn read_prints_assistant_text_and_tool_calls_in_session_order() {
-    let fx = fixture(&[]);
+    let fx = rows();
     let file = fx.session_file(SESSION);
     fx.session(Some(&file));
     let out = fx.cpd(&["read", "api-a1"]).ok();
@@ -628,7 +687,7 @@ fn read_prints_assistant_text_and_tool_calls_in_session_order() {
 
 #[test]
 fn read_skips_a_partial_last_line_but_not_a_malformed_complete_one() {
-    let fx = fixture(&[]);
+    let fx = rows();
     let file = fx.session_file(&format!("{SESSION}{{\"type\":\"message\",\"mess"));
     fx.session(Some(&file));
     assert_eq!(fx.cpd(&["read", "api-a1"]).ok()["total"], 4);
@@ -642,14 +701,14 @@ fn read_skips_a_partial_last_line_but_not_a_malformed_complete_one() {
 
 #[test]
 fn read_needs_a_registered_session_with_an_existing_file() {
-    let fx = fixture(&[]);
+    let fx = rows();
     refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
     fx.session(None);
     refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
-    let gone = fx.env.root().join("gone.jsonl");
-    fx.env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
+    let gone = fx.fx.env.root().join("gone.jsonl");
+    fx.fx.env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
     let error = refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "w1");
 
@@ -662,17 +721,17 @@ fn read_needs_a_registered_session_with_an_existing_file() {
 
 #[test]
 fn show_returns_every_field_its_escalations_and_its_paths() {
-    let fx = fixture(&[]);
+    let fx = rows();
     let file = fx.session_file(SESSION);
     fx.session(Some(&file));
-    fx.env.sql(
+    fx.fx.env.sql(
         "UPDATE attempts SET spec_path = '/specs/api-a1.md', driver_pid = 4242, nudged = 1, metrics = '{\"turns\":3}' WHERE id = 'api-a1';
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
            VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 99, 't');",
     );
     let out = fx.cpd(&["show", "api-a1"]).ok();
     let attempt = &out["attempt"];
-    let base = fx.env.git(&fx.work, &["rev-parse", "HEAD"]);
+    let base = BASE;
     assert_eq!(
         *attempt,
         json!({
@@ -713,24 +772,24 @@ fn show_names_the_check_log_once_a_quick_check_has_run() {
 
 #[test]
 fn show_refuses_what_does_not_exist() {
-    let fx = fixture(&[]);
+    let fx = rows();
     refused(&fx.cpd(&["show", "api-a2"]), "attempt_not_found", 4);
-    refused(&fx.env.cpd(&["attempt", "show", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd(&["attempt", "show", "api-a1"]), "plan_required", 2);
+    refused(&fx.raw(&["attempt", "show", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.raw(&["attempt", "show", "api-a1"]), "plan_required", 2);
     refused(&fx.cpd(&["show", "nonsense"]), "invalid_attempt_id", 2);
 }
 
 // ---------- attempt list ----------
 
 /// Attempts `api-a1` (ended), `api-a2` (running), `web-a1` (running).
-fn listed() -> Fx {
-    let fx = fixture(&[]);
-    fx.env.sql(
+fn listed() -> Rows {
+    let fx = rows();
+    fx.fx.env.sql(
         "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 'u' WHERE id = 'api-a1';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'api-a2', 'api', 2, 'S3', 'retry', 'running', 'cpd/pay--api-a2', '/w2', 't2');",
     );
-    fx.attempt("web");
+    fx.attempt("web", "running");
     fx
 }
 
@@ -769,9 +828,9 @@ fn list_refuses_what_does_not_exist() {
     let fx = listed();
     refused(&fx.cpd(&["list", "--job", "ghost"]), "job_not_found", 4);
     refused(&fx.cpd(&["list", "--job", "Bad_Key"]), "invalid_job_id", 2);
-    refused(&fx.env.cpd(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd(&["attempt", "list"]), "plan_required", 2);
-    fx.env.sql(
+    refused(&fx.raw(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.raw(&["attempt", "list"]), "plan_required", 2);
+    fx.fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'repo', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );
