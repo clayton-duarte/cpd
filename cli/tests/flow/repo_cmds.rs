@@ -25,6 +25,7 @@ fn pr_env() -> TestEnv {
     env.fake_tmux();
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     env.write_tmux_config("");
+    env.fake_tmux();
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["plan", "new", "pl", "--context", "ctx", "--title", "Plan"]).ok();
     env
