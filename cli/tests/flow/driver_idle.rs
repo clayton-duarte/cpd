@@ -3,8 +3,6 @@
 //! the kernel applying `nice` is not our code, so the tests read what is: the `Launch` of the driver (`idle`) and the command of the
 //! Worker's pane, which start with `host::priority::idle_prefix()`.
 
-use crate::common;
-
 use cpd_core::host::priority::idle_prefix;
 use serde_json::Value;
 
