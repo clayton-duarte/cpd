@@ -122,7 +122,7 @@ fn closes(code: KeyCode) -> bool {
 
 /// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
 /// until a read succeeds ([`kept`]). Input, the wait and frames are the [`Ctx`]'s.
-pub(crate) fn show_with<B: Backend>(
+pub fn show_with<B: Backend>(
     ctx: &mut Ctx<B>,
     store: &mut Store,
     poll: Duration,
@@ -159,7 +159,7 @@ pub(crate) fn show_with<B: Backend>(
 
 /// `events` (the latest, oldest first), with the Event `id` before them when it is older than all of them. An `id`
 /// that no Event has leaves them as they are.
-fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
+pub fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
     if events.first().is_some_and(|e| e.id <= id) {
         return Ok(events);
     }

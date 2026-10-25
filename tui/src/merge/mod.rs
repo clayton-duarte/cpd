@@ -61,7 +61,7 @@ impl Pull {
         Pull::parse(subject.strip_prefix("pr:")?).ok()
     }
 
-    pub(crate) fn parse(text: &str) -> Result<Pull, String> {
+    pub fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
         let number = number.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(bad)?;
@@ -91,7 +91,7 @@ pub struct Args {
 
 /// What the User's key or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Action {
+pub enum Action {
     Merge,
     Cancel,
 }
@@ -227,10 +227,17 @@ pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     // The terminal is restored; the merge runs in the background, owned by the tmux server: this process ends now, and
     // the popup closes.
     let (action, socket) = ending.expect("the body ran");
-    if action == Action::Merge {
-        Tmux::new(socket).run(&start_args(&args.pull, &args.client))?;
-    }
+    finish(&Tmux::new(socket).with_runner(ports.runner.clone()), &args.pull, &args.client, action)?;
     Ok(Output::Owned)
+}
+
+/// What the view does once the User answered: a [`Action::Merge`] starts the merge in the background (`tmux run-shell -b`,
+/// see [`start_args`]), a [`Action::Cancel`] does nothing.
+pub fn finish(tmux: &Tmux, pull: &Pull, client: &str, action: Action) -> Result<(), CpdError> {
+    match action {
+        Action::Merge => tmux.run(&start_args(pull, client)).map(drop),
+        Action::Cancel => Ok(()),
+    }
 }
 
 /// Draws and takes input until the User confirms or cancels.
@@ -239,7 +246,7 @@ fn show<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::
 }
 
 /// [`show`] on a [`Ctx`]: input and frames are the context's.
-pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
     loop {
         let mut area = Rect::default();
         ctx.draw(|f| {

@@ -1,7 +1,7 @@
 //! `cpd tui view history` (commands.md §13.2, §17): the frame drawn over a prepared store and a fixture pi session
-//! file (on a `TestBackend`, in this process) and the refusals before drawing (`run_with`, in this process, `Fx`); the
-//! keys still run the built binary in a pane of a private tmux server (its terminal), where a test reads the screen
-//! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are unit-tested in `tui/src/history/` and
+//! file (on a `TestBackend`, in this process), the refusals before drawing (`run_with`, in this process, `Fx`) and the
+//! keys: the view loop (`cpd_tui::show_history_with`) in this process on a `SharedBackend`, the scripted input
+//! (`common::screen::Script`) and the `ManualClock`. Rendering and scrolling are unit-tested in `tui/src/history/` and
 //! `tui/src/worker/`.
 
 use crate::common;
@@ -9,8 +9,9 @@ use crate::common;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::screen::Screen;
-use common::{CPD, TestEnv};
+use common::screen::{Screen, Script, SharedBackend, Step};
+use common::TestEnv;
+use cpd_tui::view_ports::Ctx;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
@@ -61,66 +62,7 @@ fn session_file(env: &TestEnv) -> PathBuf {
     path
 }
 
-// ---------- the pane ----------
-
-const SESSION: &str = "history";
 const TOP: &str = "old lead (archived, read-only)";
-const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";
-
-struct Pane<'a> {
-    env: &'a TestEnv,
-}
-
-impl<'a> Pane<'a> {
-    /// Runs `cpd tui view history l1` in a `width` × `height` pane of the env's private tmux server.
-    fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
-        let out = env.tmux(&[
-            "-u",
-            "set-option",
-            "-g",
-            "remain-on-exit",
-            "on",
-            ";",
-            "new-session",
-            "-d",
-            "-s",
-            SESSION,
-            "-x",
-            &width.to_string(),
-            "-y",
-            &height.to_string(),
-            &format!("{CPD} tui view history l1"),
-        ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        Pane { env }
-    }
-
-    /// The screen, each row without trailing blanks, without the empty rows at the end.
-    fn screen(&self) -> Vec<String> {
-        let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
-        while rows.last().is_some_and(String::is_empty) {
-            rows.pop();
-        }
-        rows
-    }
-
-    fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    fn keys(&self, keys: &[&str]) {
-        let mut args = vec!["send-keys", "-t", SESSION];
-        args.extend(keys);
-        assert!(self.env.tmux(&args).status.success());
-    }
-
-    fn dead(&self) -> bool {
-        let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
-    }
-}
 
 // ---------- tests ----------
 
@@ -172,23 +114,38 @@ fn a_session_that_is_not_archived_says_read_only_only() {
 
 #[test]
 fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), true);
-    let pane = Pane::start(&env, 40, 4);
-    pane.wait("the end", |s| s.iter().any(|r| r.contains("󰘌 ok")));
-    pane.keys(&["g"]); // not a key
-    pane.keys(&["k", "k", "k", "k", "k", "k"]);
-    let screen = pane.wait("the top", |s| s.get(1).is_some_and(|r| r.contains("you")));
-    // the pane's last row (row 4) stays empty: only rows 1..3 are pinned
-    assert_eq!(screen[..3], [TOP, "16:33:44 you", "      Plan the API."]);
-    pane.keys(&["G"]);
-    pane.wait("the end again", |s| s.iter().any(|r| r.contains("󰘌 ok")));
-    pane.keys(&["q"]);
-    // the placeholder wraps in a 40-column pane
-    let screen = pane.wait("the placeholder", |s| s.join(" ").replace("  ", " ").contains(PLACEHOLDER));
-    assert!(!pane.dead(), "the pane stays, showing the placeholder: {screen:?}");
-    assert!(!screen.iter().any(|r| r.contains("read-only")), "the history is gone: {screen:?}");
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
+    let text = std::fs::read_to_string(&file).unwrap();
+    let screen = SharedBackend::new(40, 4);
+    let steps = vec![
+        Step::look(|s| assert!(s.contains("󰘌 ok"), "the end: {:?}", s.rows())),
+        Step::ch('g'), // not a key
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::look(|s| {
+            let rows = s.rows();
+            assert!(rows.get(1).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
+            // the pane's last row (row 4) stays empty: only rows 1..3 are pinned
+            assert_eq!(rows[..3], [TOP, "16:33:44 you", "      Plan the API."]);
+            assert_eq!(rows[3], "");
+        }),
+        Step::ch('G'),
+        Step::look(|s| assert!(s.contains("󰘌 ok"), "the end again: {:?}", s.rows())),
+        // q ends the loop, which `run` follows with the chat slot's placeholder
+        Step::ch('q'),
+    ];
+    let mut input = Script::new(&fx.fakes.clock, &screen, steps);
+    let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
+    cpd_tui::show_history_with(&mut ctx, "old lead", true, &text).unwrap();
+    drop(ctx);
+    assert_eq!(input.remaining(), 0, "the loop ended on q, the last step");
 }
 
 #[test]

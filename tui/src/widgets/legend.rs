@@ -320,7 +320,7 @@ fn closes(event: &Event, scroll: &mut Scroll) -> bool {
 }
 
 /// Draws the legend until a key that does not scroll, or a click: input and frames are the [`Ctx`]'s.
-pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>) -> std::io::Result<()> {
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>) -> std::io::Result<()> {
     let mut scroll = Scroll::default();
     loop {
         ctx.draw(|f| draw_scrolled(f, f.area(), &mut scroll))?;
