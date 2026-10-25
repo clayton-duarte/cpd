@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot, tag, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -92,6 +92,21 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// Tag the commit that set the workspace version (commands.md §26.1)
+    Tag,
+    /// The release plumbing (commands.md §26.2)
+    #[command(subcommand)]
+    Version(VersionCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum VersionCommand {
+    /// Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2)
+    Sync {
+        /// Print the version and write nothing
+        #[arg(long)]
+        print: bool,
+    },
 }
 
 /// Parses `argv` and runs the command on the real ports.
@@ -101,17 +116,17 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
 
 /// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
 /// the Jobs that convert them to `Env::open_with` land.
-pub fn run_with(_ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    run_on(argv, cpd_tui::on_a_terminal())
+pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_on(ports, argv, cpd_tui::on_a_terminal())
 }
 
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_on(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(Cli { command: Some(command) }) => dispatch(command),
+        Ok(Cli { command: Some(command) }) => dispatch(ports, command),
         Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
@@ -128,7 +143,7 @@ fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Ou
     }
 }
 
-fn dispatch(command: Command) -> Result<Output, CpdError> {
+fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Context(c) => context::run(c),
         Command::Plan(c) => plan::run(c),
@@ -152,6 +167,28 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
+        Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
+    }
+}
+
+/// The repository the release commands work in: the current directory.
+fn repo_root() -> Result<std::path::PathBuf, CpdError> {
+    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
+}
+
+/// `cpd tag` and `cpd version sync` print one plain line, not JSON (commands.md §26), and end the process: the line on
+/// stdout and exit 0, or the failure's line on stderr and exit 1. It never returns.
+fn release_exit(result: Result<String, String>) -> ! {
+    match result {
+        Ok(line) => {
+            println!("{line}");
+            std::process::exit(0)
+        }
+        Err(line) => {
+            eprintln!("{line}");
+            std::process::exit(1)
+        }
     }
 }
 
@@ -260,7 +297,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run_on(argv(words), false).expect_err("expected a failure")
+        run_on(&Ports::real(), argv(words), false).expect_err("expected a failure")
     }
 
     #[test]
