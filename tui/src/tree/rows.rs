@@ -110,22 +110,25 @@ struct Kids<'a> {
     archived: Vec<&'a PlanNode>,
     /// The forks that are archived or of an archived Plan, listed last (every fork when the Context is archived).
     strays: Vec<(&'a PlanNode, &'a SessionNode)>,
+    /// The archived Manager Sessions, listed after the strays (hs-d630, hs-d633).
+    managers: Vec<&'a SessionNode>,
 }
 
 impl Kids<'_> {
     /// The Context has rows its toggle shows and hides.
     fn has_archived(&self) -> bool {
-        !self.archived.is_empty() || !self.strays.is_empty()
+        !self.archived.is_empty() || !self.strays.is_empty() || !self.managers.is_empty()
     }
 }
 
 fn kids(c: &ContextNode) -> Kids<'_> {
+    let managers = c.archived_managers.iter().collect();
     if c.is_archived() {
-        return Kids { direct: Vec::new(), forks: Vec::new(), archived: c.plans.iter().collect(), strays: c.forks() };
+        return Kids { direct: Vec::new(), forks: Vec::new(), archived: c.plans.iter().collect(), strays: c.forks(), managers };
     }
     let (archived, direct): (Vec<&PlanNode>, Vec<&PlanNode>) = c.plans.iter().partition(|p| p.head.is_archived());
     let (strays, forks): (Vec<_>, Vec<_>) = c.forks().into_iter().partition(|(p, s)| p.head.is_archived() || s.is_archived());
-    Kids { direct, forks, archived, strays }
+    Kids { direct, forks, archived, strays, managers }
 }
 
 /// The row at `path`, `None` when the tree has none.
@@ -143,6 +146,9 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
     if let Some(plan) = k.direct.iter().chain(&k.archived).copied().find(|p| p.head.id.as_str() == next) {
         return Some(Row::Plan(context, plan));
     }
+    if let Some(s) = k.managers.iter().copied().find(|s| s.id.as_str() == next) {
+        return Some(Row::Manager(context, s));
+    }
     k.forks.iter().chain(&k.strays).find(|(_, s)| s.id.as_str() == next).map(|(p, s)| Row::Fork(context, p, s))
 }
 
@@ -150,9 +156,9 @@ impl<'a> Row<'a> {
     /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::Toggle | Row::Manager(..) => None,
+            Row::Context(_) | Row::Toggle => None,
             Row::Plan(_, p) => p.lead(),
-            Row::Fork(_, _, s) => Some(s),
+            Row::Fork(_, _, s) | Row::Manager(_, s) => Some(s),
         }
     }
 
@@ -171,7 +177,8 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.is_archived(),
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
-            Row::Manager(..) | Row::Toggle => false,
+            Row::Manager(c, s) => c.is_archived() || s.is_archived(),
+            Row::Toggle => false,
         }
     }
 
@@ -183,7 +190,8 @@ impl<'a> Row<'a> {
                 Row::Context(c) => c.manager_asleep,
                 Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
                 Row::Fork(_, _, s) => s.is_asleep(),
-                Row::Manager(..) | Row::Toggle => false,
+                Row::Manager(..) => true,
+                Row::Toggle => false,
             }
     }
 
@@ -202,6 +210,9 @@ impl<'a> Row<'a> {
     /// What a click on an archived Session, Plan or fork row does first: `unarchive` of the outermost archived object of
     /// the row (its Context, else its Plan, else the Session), and the Open of its Session. None when the row is not archived.
     pub fn resume(&self) -> Option<(Subject, Action)> {
+        if let Row::Manager(c, s) = *self {
+            return Some((Subject::Context(c.id.clone()), Action::Open(s.id.clone())));
+        }
         let (context, plan, session) = match *self {
             Row::Plan(c, p) => (c, p, p.lead()?),
             Row::Fork(c, p, s) => (c, p, s),
@@ -231,7 +242,8 @@ impl<'a> Row<'a> {
             Row::Context(c) => Some(c.id.to_string()),
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
-            Row::Manager(..) | Row::Toggle => None,
+            Row::Manager(_, s) => Some(s.id.as_str().chars().take(8).collect()),
+            Row::Toggle => None,
         }
     }
 
@@ -241,8 +253,8 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
-            Row::Fork(_, _, s) => session_label(s),
-            Row::Manager(..) | Row::Toggle => String::new(),
+            Row::Fork(_, _, s) | Row::Manager(_, s) => session_label(s),
+            Row::Toggle => String::new(),
         }
     }
 }
@@ -364,6 +376,12 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
     (s.id.to_string(), text)
 }
 
+/// An archived Manager's row text, one level under its Context: always muted, named by `session_label`.
+fn manager_row(s: &SessionNode, width: u16, frame: usize) -> (Id, Line<'static>) {
+    let text = row_text(RowText { session: Some(s), name: session_label(s), depth: 1, frame, counters_width: 0, muted: true }, width);
+    (s.id.to_string(), text)
+}
+
 /// A visible row of the tree: its identifier (a path) and what it says.
 pub struct FlatRow {
     pub path: Vec<Id>,
@@ -394,6 +412,7 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     if expanded {
         rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
+        rows.extend(k.managers.iter().map(|s| manager_row(s, width, frame)));
     }
     let last = rows.len().saturating_sub(1);
     let closes_in_a_row = !k.has_archived() && !rows.is_empty();

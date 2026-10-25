@@ -175,15 +175,22 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
         fill_dots(&inbox, &heads, &mut leads);
-        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
-        // the Manager's own items (hs-d215, hs-d217).
-        let managers: BTreeMap<ContextId, (Dot, Place, bool)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
-            .into_iter()
+        // Every Manager Session, live or archived (`core/src/context/manager.rs`). The live one fills the Context
+        // row's dot, a `●` only from the Manager's own items (hs-d215, hs-d217); each archived one goes into the
+        // Context's archived section, oldest first (hs-d630, hs-d633).
+        let all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
+        let managers: BTreeMap<ContextId, (Dot, Place, bool)> = all_managers
+            .iter()
+            .filter(|s| !s.is_archived())
             .map(|s| {
                 let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false);
-                { let asleep = s.is_asleep(); (s.context, (dot, s.place, asleep)) }
+                (s.context, (dot, s.place, s.is_asleep()))
             })
             .collect();
+        let mut archived_managers: BTreeMap<ContextId, Vec<SessionNode>> = BTreeMap::new();
+        for manager in all_managers.into_iter().filter(SessionNode::is_archived) {
+            archived_managers.entry(manager.context).or_default().push(manager);
+        }
 
         let mut stmt = conn
             .prepare("SELECT id, title, jira, archived_at FROM contexts WHERE deleted_at IS NULL ORDER BY id")?;
@@ -213,7 +220,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 open_questions: questions.remove(&cid).unwrap_or(0),
                 archived_at,
                 plans,
-                archived_managers: Vec::new(),
+                archived_managers: archived_managers.remove(&context).unwrap_or_default(),
                 id: context,
             });
         }
