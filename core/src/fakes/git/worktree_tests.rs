@@ -800,10 +800,12 @@ fn write_tree_with_unmerged_entries_is_exit_128_and_names_the_path() {
     let mut w = world();
     let repo = w.repo();
     let (base, ours, theirs) = w.u(|u| (u.blob(repo.id(), b"base\n"), u.blob(repo.id(), b"ours\n"), u.blob(repo.id(), b"theirs\n")));
+    // a conflicted index has the stages 1 to 3 of the path and no stage 0
     w.u(|u| {
-        u.stage(repo.dir(), "README.md", &base, 1);
-        u.stage(repo.dir(), "README.md", &ours, 2);
-        u.stage(repo.dir(), "README.md", &theirs, 3);
+        u.set_index(
+            repo.dir(),
+            vec![("README.md".to_owned(), base, 1), ("README.md".to_owned(), ours, 2), ("README.md".to_owned(), theirs, 3)],
+        )
     });
     let out = w.git(repo.dir(), &["write-tree"]);
     assert_eq!((out.code, out.stdout.as_str()), (128, ""));
