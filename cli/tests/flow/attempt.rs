@@ -136,7 +136,7 @@ impl Fx {
         Pr { key: key.into(), repo, lead }
     }
 
-    /// [`Fx::attempt_as`] for a Job of `pr`.
+    /// A Job of `pr` with its Attempt `<key>-a1` in `status`: its worktree cut from the Lead Branch HEAD. Returns the worktree.
     fn attempt_in(&self, pr: &Pr, key: &str, status: &str) -> PathBuf {
         self.attempt_kind(pr, key, status, "work", None)
     }
