@@ -1,32 +1,14 @@
-//! The tree's **Delete** menu item and its popup (commands.md §13.2; hs-d527). The menu runs in the test process on a
-//! `Tree` (`common/tree.rs`); the popup tests are end to end like the rest of `tui_tree.rs`: the built binary in a pane of a private tmux server over a prepared store, a fake `cpd` that records its command lines and a fake
-//! `tmux` that plays the dialog kit's popup. The tree runs `plan delete <id>` for the popup's list and, on `y`,
+//! The tree's **Delete** menu item and its popup (commands.md §13.2; hs-d527). The tests run in the test process on a
+//! `Tree` (`common/tree.rs`) over a prepared store, with the fake `cpd` that records its command lines and the fake tmux
+//! that plays the dialog kit's popup. The tree runs `plan delete <id>` for the popup's list and, on `y`,
 //! `plan delete <id> --yes`.
 
-use crate::common;
-
-use common::tree::{self as drive, Tree, engine, fx};
-use common::{CPD, TestEnv, sql};
+use crate::common::tree::{self as drive, Tree, engine, fx};
+use crate::common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
-use nix::fcntl::{Flock, FlockArg};
 
 // ---------- the prepared store ----------
-
-/// An env with its config and an engine running (`engine-down` is no row of the Inbox).
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    let path = env.cpd_home().join("locks/watch.lock");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    std::mem::forget(lock);
-    env
-}
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
@@ -96,110 +78,8 @@ fn put_to_sleep(env: &TestEnv) {
     );
 }
 
-// ---------- the pane ----------
-
-const SESSION: &str = "tree";
-
-struct Pane<'a> {
-    env: &'a TestEnv,
-}
-
-impl<'a> Pane<'a> {
-    fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
-        let out = env.tmux(&[
-            "-u", "set-option", "-g", "remain-on-exit", "on", ";", "new-session", "-d", "-s", SESSION, "-x", &width.to_string(), "-y", &height.to_string(),
-            &format!("{CPD} tui view tree"),
-        ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        Pane { env }
-    }
-
-    fn screen(&self) -> Vec<String> {
-        let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        String::from_utf8(out.stdout).unwrap().lines().map(|l| l.trim_end().to_owned()).collect()
-    }
-
-    fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    fn type_text(&self, text: &str) {
-        assert!(self.env.tmux(&["send-keys", "-t", SESSION, "-l", text]).status.success());
-    }
-
-    fn right_click(&self, column: u16, row: u16) {
-        for end in ['M', 'm'] {
-            self.type_text(&format!("\x1b[<2;{};{}{end}", column + 1, row + 1));
-        }
-    }
-
-    fn click(&self, column: u16, row: u16) {
-        for end in ['M', 'm'] {
-            self.type_text(&format!("\x1b[<0;{};{}{end}", column + 1, row + 1));
-        }
-    }
-
-    /// The row of the Plan `id` (its label is the id), once the tree shows it.
-    fn row_of(&self, id: &str) -> u16 {
-        let screen = self.wait(&format!("the row of {id}"), |s| s.iter().any(|r| r.contains(&format!(" {id}"))));
-        screen.iter().position(|r| r.contains(&format!(" {id}"))).unwrap() as u16
-    }
-
-    /// Right-clicks the Plan `id` and returns the screen with its menu open.
-    fn menu_of(&self, id: &str) -> Vec<String> {
-        let row = self.row_of(id);
-        self.right_click(8, row);
-        self.wait("the menu", |s| s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id ")))
-    }
-}
-
 fn has_item(screen: &[String], item: &str) -> bool {
     screen.iter().any(|r| r.contains(&format!("│ {item} ")))
-}
-
-fn fake_cpd(env: &TestEnv, reply: &str) {
-    env.fake("cpd", &format!("echo '{reply}'"));
-}
-
-fn calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd")
-}
-
-fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
-    common::wait_some(&format!("{n} calls of cpd"), common::WAIT, || {
-        let calls = calls(env);
-        if calls.len() >= n { Ok(calls) } else { Err(format!("got {calls:?}")) }
-    })
-}
-
-fn words(w: &[&str]) -> Vec<String> {
-    w.iter().map(|s| (*s).to_owned()).collect()
-}
-
-/// A fake tmux with a client whose `display-popup` writes the env's answer to the popup's `--out` file (`tui_tree.rs`'s).
-fn fake_dialogs(env: &TestEnv, confirmed: bool) {
-    std::fs::write(env.root().join("dialog-answer.json"), serde_json::json!({"confirmed": confirmed}).to_string()).unwrap();
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    env.fake(
-        "tmux",
-        &format!(
-            "case \"$*\" in\n *display-popup*) for _c; do :; done\n out=$(printf '%s' \"$_c\" | sed -n \"s/.*--out='\\([^']*\\)'.*/\\1/p\")\n cat '{answer}' > \"$out\";;\n *list-clients*) echo '100 200 60';;\n *) exec {real} \"$@\";;\nesac",
-            answer = env.root().join("dialog-answer.json").display(),
-            real = real.trim()
-        ),
-    );
-}
-
-/// The command each `display-popup` ran.
-fn popups(env: &TestEnv) -> Vec<String> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).map(|c| c.last().unwrap().clone()).collect()
-}
-
-fn wait_for_popups(env: &TestEnv, n: usize) -> Vec<String> {
-    common::wait_some(&format!("{n} popups"), common::WAIT, || {
-        let p = popups(env);
-        if p.len() >= n { Ok(p) } else { Err(format!("got {p:?}")) }
-    })
 }
 
 /// What `plan delete old` prints without `--yes`.
@@ -258,42 +138,47 @@ fn delete_item_only_on_archived_or_asleep_rows() {
 
 #[test]
 fn popup_lists_what_goes_and_n_keeps_it() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, PREVIEW);
-    fake_dialogs(&env, false); // the User answers N
-    let pane = Pane::start(&env, 60, 16);
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx.env);
+    drive::cpd_says(&fx, PREVIEW);
+    let dialogs = drive::dialogs(&fx);
+    dialogs.cancel(); // the User answers N
+    let mut tree = Tree::start(&fx, 60, 16);
 
-    let screen = pane.menu_of("old");
+    let screen = menu_of_plan(&mut tree, "old");
     let row = screen.iter().position(|r| r.contains("│ Delete ")).expect("Delete in the menu") as u16;
-    pane.click(10, row);
+    tree.click(10, row);
 
     // the popup's list is the preview's: the first call is the command without `--yes`
-    assert_eq!(wait_for_calls(&env, 1)[0], words(&["plan", "delete", "old"]), "the list comes from `plan delete <id>`");
-    let popup = &wait_for_popups(&env, 1)[0];
+    tree.until_that("the popup", |_| !dialogs.popups().is_empty());
+    assert_eq!(drive::calls(&fx)[0], drive::words(&["plan", "delete", "old"]), "the list comes from `plan delete <id>`");
+    let popup = &dialogs.popups()[0];
     assert!(popup.contains("dialog confirm"), "a y/N confirm popup: {popup}");
     assert!(popup.contains("Delete"), "{popup}");
     for count in ["47", "121", "3", "11", "342"] {
         assert!(popup.contains(count), "the popup lists the count {count}: {popup}");
     }
-    // N: nothing is deleted
-    // time-claim: no `--yes` follows an N; 0.5 s is more than the tree takes to run a command after a popup answer (the Y test needs under 0.2 s); a negative has no signal to wait for.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    assert_eq!(calls(&env), [words(&["plan", "delete", "old"])], "no `--yes` after N");
+    // N: nothing is deleted; the legend's popup comes after the view handled the answer
+    dialogs.settled(&mut tree);
+    assert_eq!(drive::calls(&fx), [drive::words(&["plan", "delete", "old"])], "no `--yes` after N");
 }
 
 #[test]
 fn y_deletes_the_plan() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, PREVIEW);
-    fake_dialogs(&env, true); // the User answers y
-    let pane = Pane::start(&env, 60, 16);
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx.env);
+    drive::cpd_says(&fx, PREVIEW);
+    let dialogs = drive::dialogs(&fx);
+    dialogs.confirm(); // the User answers y
+    let mut tree = Tree::start(&fx, 60, 16);
 
-    let screen = pane.menu_of("old");
+    let screen = menu_of_plan(&mut tree, "old");
     let row = screen.iter().position(|r| r.contains("│ Delete ")).expect("Delete in the menu") as u16;
-    pane.click(10, row);
+    tree.click(10, row);
 
-    assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "delete", "old"]), words(&["plan", "delete", "old", "--yes"])]);
-    assert_eq!(wait_for_popups(&env, 1).len(), 1, "one popup, before the delete");
+    tree.until_that("the delete with --yes", |_| drive::calls(&fx).len() >= 2);
+    assert_eq!(drive::calls(&fx), [drive::words(&["plan", "delete", "old"]), drive::words(&["plan", "delete", "old", "--yes"])]);
+    assert_eq!(dialogs.popups().len(), 1, "one popup, before the delete");
 }
