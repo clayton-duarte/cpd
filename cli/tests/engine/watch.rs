@@ -1177,7 +1177,7 @@ impl Fx {
     }
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S2),
+/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S1),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
 /// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
 #[test]
@@ -1199,13 +1199,13 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )?)
     });
-    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S2".into(), "repo".into(), 1, 0, false));
+    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S1".into(), "repo".into(), 1, 0, false));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0, "its needs are derived");
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!((&added[0].0, &added[0].1), (&Some("pay".to_owned()), &Some("open-repo".to_owned())));
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S2")));
+    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S1")));
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"), None);
@@ -1227,7 +1227,7 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
     let row: (String, i64, bool) = fx.env.read(|conn| {
         Ok(conn.query_row("SELECT tier, appended, fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
     });
-    assert_eq!(row, ("S2".into(), 1, true));
+    assert_eq!(row, ("S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
@@ -1454,7 +1454,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?)
     });
-    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S2".into(), 1, true));
+    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'up-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");

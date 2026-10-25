@@ -1595,7 +1595,7 @@ fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
             )?)
         })
         .unwrap();
-    assert_eq!(row, (format!("Bring the pull request up to date: {REPO_TITLE}"), "S2".into(), 1, true));
+    assert_eq!(row, (format!("Bring the pull request up to date: {REPO_TITLE}"), "S1".into(), 1, true));
     let dependencies: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM dependencies WHERE job = 'up-repo'", [], |r| r.get(0))?)).unwrap();
     assert_eq!(dependencies, 0);
     let added = fx.events("job-added");
