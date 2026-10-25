@@ -1,6 +1,6 @@
 # Tests deleted by the tripfix incident PR
 
-The User decided, after pro-d30, that there is no Gate or test limit and that every exec-based test that fails a Gate under load and is not caused by its PR's diff is deleted (incident of 2026-10-25, standing rule pro-d22). The in-process mig-* PRs of PR design bring each of these tests back on fakes, each in the area it belongs to.
+The User decided, after pro-d30, that there is no Gate or test limit and that every exec-based test that fails a Gate under load and is not caused by its PR's diff is deleted (incident of 2026-10-25, standing rule pro-d22). The in-process mig-* PRs of PR design bring each of these tests back on fakes, each in the area it belongs to. A second incident PR added 17 rows (the tests that failed the design, clk and lint-audit Gates under load).
 
 | binary | file | test |
 |---|---|---|
@@ -72,6 +72,7 @@ The User decided, after pro-d30, that there is no Gate or test limit and that ev
 | cpd::flow | cli/tests/flow/context.rs | archive_refused_by_any_one_blocker_changes_nothing |
 | cpd::flow | cli/tests/flow/context_delete.rs | deletes_the_context_its_plans_and_its_manager |
 | cpd::flow | cli/tests/flow/context_manager.rs | a_managers_pi_gets_no_plannotator_variable_from_its_callers |
+| cpd::flow | cli/tests/flow/context_manager.rs | a_stopped_manager_without_a_pane_is_started_again_on_its_file |
 | cpd::flow | cli/tests/flow/driver.rs | a_dead_worker_pane_ends_crashed_through_the_ladder |
 | cpd::flow | cli/tests/flow/driver.rs | a_dispatched_attempt_runs_its_worker_merges_and_ends_merged |
 | cpd::flow | cli/tests/flow/driver.rs | a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crashed |
@@ -213,7 +214,23 @@ The User decided, after pro-d30, that there is no Gate or test limit and that ev
 | cpd::pr | cli/tests/pr/pr.rs | open_fails_loud_when_gh_cannot_find_the_pull_request_it_created |
 | cpd::pr | cli/tests/pr/pr.rs | open_gates_pushes_creates_the_pr_and_records_it |
 | cpd::pr | cli/tests/pr/pr.rs | open_push_and_rebase_run_no_r_for_another_prs_orphaned_merge |
+| cpd::session | cli/tests/session/host.rs | a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout |
 | cpd::session | cli/tests/session/session_watchdog.rs | a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event |
 | cpd::session | cli/tests/session/session_watchdog.rs | a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone |
+| cpd::tooling | cli/tests/tooling/harness.rs | a_killed_test_leaves_no_tmux_server_process_dir_or_reaper |
 | cpd::tui | cli/tests/tui/bare.rs | when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches |
+| cpd::tui | cli/tests/tui/bare.rs | a_restart_records_the_pane_of_a_parked_session_before_it_gets_the_go_signal |
+| cpd::tui | cli/tests/tui/bare.rs | it_restarts_views_that_run_an_older_binary_once |
 | cpd::tui | cli/tests/tui/tui.rs | tui_marks_a_restart_of_an_older_tmux_server_pending_and_does_not_kill_it |
+| cpd::tui | cli/tests/tui/tui.rs | tui_adds_a_missing_chat_placeholder_to_an_existing_main |
+| cpd::tui | cli/tests/tui/tui.rs | tui_adds_a_missing_plan_view_to_an_existing_main |
+| cpd::tui | cli/tests/tui/tui.rs | tui_adds_a_missing_tree_to_an_existing_main |
+| cpd::tui | cli/tests/tui/tui.rs | tui_adds_a_missing_widgets_view_to_an_existing_main |
+| cpd::tui | cli/tests/tui/tui.rs | tui_adds_the_plan_view_and_the_chat_slot_when_both_are_missing |
+| cpd::tui | cli/tests/tui/tui.rs | tui_builds_main_in_a_cockpit_that_has_only_a_park_window |
+| cpd::tui | cli/tests/tui/tui.rs | tui_builds_the_cockpit_once_and_starts_the_engine |
+| cpd::tui | cli/tests/tui/tui.rs | tui_finishes_a_build_that_stopped_after_the_first_pane |
+| cpd::tui | cli/tests/tui/tui.rs | tui_keeps_a_lead_in_the_chat_slot_when_the_plan_view_is_missing |
+| cpd::tui | cli/tests/tui/tui.rs | tui_removes_an_old_statusbar_pane_then_resets_the_layout |
+| cpd::tui | cli/tests/tui/tui.rs | tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise |
+| cpd::tui | cli/tests/tui/tui.rs | tui_respawns_a_dead_pane_of_the_layout_in_place_and_sets_the_hook_again |

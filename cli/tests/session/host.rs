@@ -582,11 +582,6 @@ fn rerun_with_fake_tmux(env: &TestEnv, name: &str, vars: &[(&str, &str)]) {
     assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
 }
 
-/// Whether process `pid` is running (a zombie is not).
-fn running(pid: i32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
-}
-
 /// engine-W8 (§6.3 liveness): only tmux saying that no server runs means "no panes".
 /// Any other failure of `list-panes` and `list-sessions` is `tmux_failed`, so E2 and the
 /// driver never read a tmux hiccup as every pane gone.
@@ -619,39 +614,6 @@ fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
     // The real tmux with no socket file: "error connecting to <socket> (No such file or directory)".
     assert!(s.tmux.list_panes().unwrap().is_empty());
     assert!(!s.tmux.server_running().unwrap());
-}
-
-/// engine-W4: a tmux call that hangs (a fake `tmux` first on `PATH` that sleeps) is
-/// killed at its deadline with its whole process group, and fails `tool_timeout`. The
-/// deadline is shortened to 1 s by `CPD_TEST_DEADLINE_TMUX`, which a debug build reads
-/// from its environment, and the wrapper finds `tmux` on `PATH`: this test runs itself
-/// again in a child process born with both, so no other test sees them.
-#[test]
-fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
-    const NAME: &str = "a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
-    if std::env::var_os("CPD_TEST_DEADLINE_TMUX").is_none() {
-        let env = TestEnv::new();
-        let pidfile = env.root().join("sleep.pid");
-        env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
-        rerun_with_fake_tmux(&env, NAME, &[("CPD_TEST_DEADLINE_TMUX", "1")]);
-        // The sleeper would run SLEEP_SECONDS: its death is the group kill, not its own end.
-        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-        wait_until("the fake tmux's child to die", || !running(pid));
-        return;
-    }
-    // No TestEnv here: its teardown would run the hanging fake `tmux` first on this process's `PATH`. The fake
-    // ignores the socket and the tmpdir, and no real tmux runs.
-    let tmux = Tmux::with_tmpdir("cpd-test-deadline", std::env::temp_dir());
-    let started = std::time::Instant::now();
-    let err = tmux.server_running().unwrap_err();
-
-    // time-claim: the call returns at its 1 s deadline, not when the sleeper ends; no per-poll signal from the deadline.
-    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
-    assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
-    let d = err.details();
-    assert_eq!(d["tool"], "tmux");
-    assert_eq!(d["deadline_seconds"], 1);
-    assert_eq!(d["argv"], serde_json::json!(tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
 }
 
 // ---- Every tmux call is a UTF-8 client (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----
