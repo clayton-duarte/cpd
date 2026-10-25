@@ -1145,7 +1145,14 @@ CREATE TABLE incident (
   started_at    TEXT NOT NULL,
   started_by    TEXT NOT NULL,                  -- the Manager's Session id
   reason        TEXT NOT NULL CHECK (length(reason) >= 1),
-  started_txn   INTEGER NOT NULL REFERENCES txns(id)
+  started_txn   INTEGER NOT NULL REFERENCES txns(id),
+  until_plan    TEXT,                           -- migration `incident-plans` (hs-d643): the Plan of the auto-end PR, null unless `--until-pr`
+  until_pr      TEXT                            -- migration `incident-plans` (hs-d643): the auto-end PR key, null unless `--until-pr`
+) STRICT;
+
+CREATE TABLE incident_plans (                -- migration `incident-plans` (hs-d643): the Plans in the incident
+  plan        TEXT PRIMARY KEY REFERENCES plans(id),
+  started_txn INTEGER NOT NULL REFERENCES txns(id)
 ) STRICT;
 
 CREATE TABLE context_records (               -- the only store of Context records (§4.6)
