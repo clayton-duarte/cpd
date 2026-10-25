@@ -26,10 +26,7 @@ const BACKOFF_UNIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// explicitly urgent; every other Ready Job holds (the `concurrency + 1` urgent slot rule is
 /// unchanged).
 pub(super) fn incident_starts(conn: &Connection, plan: &PlanId, urgent: bool) -> bool {
-    // Stub for inc-v2-engine: the Plan is ignored, so only urgency lifts the hold until the
-    // Plan-scoped predicate is implemented.
-    let _ = plan;
-    urgent || !cpd_core::incident::is_on(conn)
+    urgent || !cpd_core::incident::is_held(conn, plan)
 }
 
 /// How long E3 waits after the last of `k` Attempts in a row whose driver never

@@ -162,9 +162,7 @@ pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
 /// the Plan is not in `incident_plans` (`cpd_core::incident::is_held`). A held Plan's PRs get no
 /// `open` Job and are not started.
 pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) -> bool {
-    // Stub for inc-v2-engine: machine-wide until the Plan-scoped hold is implemented.
-    let _ = plan;
-    cpd_core::incident::is_on(conn)
+    cpd_core::incident::is_held(conn, plan)
 }
 
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
