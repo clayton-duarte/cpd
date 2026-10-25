@@ -6,10 +6,11 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
+use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_list};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
+use crate::host::runner::{Runner, SystemRunner};
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -218,6 +219,12 @@ pub enum Push {
 /// when `X` is in the local object store and contains `sha`, the push is
 /// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
 pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    push_commit_with(&SystemRunner, lead_worktree, branch, sha)
+}
+
+/// [`push_commit`] on `runner` (a test passes a `FakeRunner`).
+pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    let (run, ok) = (|dir: &Path, args: &[&str]| run_with(runner, dir, args), |dir: &Path, args: &[&str]| ok_with(runner, dir, args));
     let reference = format!("refs/heads/{branch}");
     let refspec = format!("{sha}:{reference}");
     let args = ["push", "--porcelain", "origin", refspec.as_str()];
@@ -274,7 +281,12 @@ fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
 /// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
 /// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
 pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let merge = run(repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
+    merge_conflicts_with(&SystemRunner, repo, onto, sha)
+}
+
+/// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`).
+pub fn merge_conflicts_with(runner: &dyn Runner, repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let merge = run_with(runner, repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
     match merge.code {
         0 => Ok(None),
         // The tree's id, the conflicted files, a blank line, then git's messages.

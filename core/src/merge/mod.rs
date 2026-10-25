@@ -340,14 +340,19 @@ fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> 
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict (after
 /// `git rebase --abort`); `None` when it rebased.
 fn rebase(worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let out = run(worktree, &["rebase", onto])?;
+    rebase_with(&crate::host::runner::SystemRunner, worktree, onto)
+}
+
+/// [`rebase`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn rebase_with(runner: &dyn crate::host::runner::Runner, worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let out = git::run::run_with(runner, worktree, &["rebase", onto])?;
     if out.code == 0 {
         return Ok(None);
     }
-    let conflicts = git::run::ok(worktree, &["diff", "--name-only", "--diff-filter=U"])?;
+    let conflicts = git::run::ok_with(runner, worktree, &["diff", "--name-only", "--diff-filter=U"])?;
     let files: Vec<String> = conflicts.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
     // Best effort when no rebase is in progress; a failure to abort is reported below.
-    let abort = run(worktree, &["rebase", "--abort"])?;
+    let abort = git::run::run_with(runner, worktree, &["rebase", "--abort"])?;
     if files.is_empty() {
         return Err(CpdError::new(ErrorCode::GitFailed, format!("git rebase exited {} without a conflict.", out.code))
             .with("exit", out.code)

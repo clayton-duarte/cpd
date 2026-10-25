@@ -27,6 +27,7 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
+use crate::host::deadline::Failed as RunFailed;
 use crate::host::pi;
 use crate::host::deadline;
 use crate::host::runner::{Call, Runner, SystemRunner};
@@ -182,10 +183,10 @@ struct Run<'a> {
 
 /// One problem of an output: `{id?, line?, what}`.
 #[derive(Debug, Clone, PartialEq)]
-struct Problem {
-    id: Option<RecordId>,
-    line: Option<usize>,
-    what: String,
+pub(super) struct Problem {
+    pub(super) id: Option<RecordId>,
+    pub(super) line: Option<usize>,
+    pub(super) what: String,
 }
 
 impl Problem {
@@ -229,26 +230,26 @@ struct RawLine {
 }
 
 /// A checked output (GXD1): what [`propose_rejecting`] takes, and the lines it rejects.
-struct Checked {
-    curations: Vec<Curation>,
-    proposals: Vec<Proposal>,
-    rejected: Vec<Problem>,
+pub(super) struct Checked {
+    pub(super) curations: Vec<Curation>,
+    pub(super) proposals: Vec<Proposal>,
+    pub(super) rejected: Vec<Problem>,
 }
 
 /// The batch of a step with the data the checks need.
-struct Batch<'a> {
-    records: &'a [&'a Indexed],
+pub(super) struct Batch<'a> {
+    pub(super) records: &'a [&'a Indexed],
     /// The ids and `seq`s of every record in force of the Context (the batch and the known ones).
-    in_force: HashMap<RecordId, i64>,
+    pub(super) in_force: HashMap<RecordId, i64>,
     /// `docs.md`'s hits of each batch record.
-    hits: HashMap<RecordId, Vec<String>>,
+    pub(super) hits: HashMap<RecordId, Vec<String>>,
 }
 
 impl Batch<'_> {
     /// Checks `text` (contract §4.6 step 5) line by line (GXD1): a line that passes is accepted, one that fails is
     /// rejected and its record stays uncurated. A record missing from the output stays uncurated without a
     /// rejection; a line whose id is not a record of the batch is ignored; both lines of a repeated id are rejected.
-    fn check(&self, text: &str) -> Checked {
+    pub(super) fn check(&self, text: &str) -> Checked {
         let mut checked = Checked { curations: Vec::new(), proposals: Vec::new(), rejected: Vec::new() };
         let batch: HashMap<&RecordId, i64> = self.records.iter().map(|(seq, r)| (&r.id, *seq)).collect();
         let lines: Vec<(usize, &str)> = text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()).collect();
@@ -426,24 +427,7 @@ impl Run<'_> {
             )?;
             Ok(stmt.query_map([self.context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })?;
-        let mut hits = HashMap::new();
-        for (_, record) in batch {
-            let mut found = Vec::new();
-            for repo in &repos {
-                let out = Command::new("git")
-                    .args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"])
-                    .stdin(Stdio::null())
-                    .output()
-                    .map_err(|e| git_failed(repo, &e.to_string()))?;
-                // 1: no match.
-                if !out.status.success() && out.status.code() != Some(1) {
-                    return Err(git_failed(repo, String::from_utf8_lossy(&out.stderr).trim()));
-                }
-                found.extend(String::from_utf8_lossy(&out.stdout).lines().map(|path| format!("{repo}:{path}")));
-            }
-            hits.insert(record.id.clone(), found);
-        }
-        Ok(hits)
+        grep_hits_with(&SystemRunner, &repos, batch)
     }
 
     /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`.
@@ -631,6 +615,36 @@ pub fn runs_path(home: &CpdHome, context: &ContextId) -> PathBuf {
 fn rejected_json(rejected: &[Problem]) -> Value {
     Value::Array(rejected.iter().map(|p| json!({"id": p.id.as_ref().map(ToString::to_string), "line": p.line, "what": p.what})).collect())
 }
+
+/// For each record of `batch`, the `<repo>:<path>` hits of `git -C <repo> grep -l -w <id> -- docs '*.md'` on each of
+/// `repos`, in order, through the [`Runner`]. Exit 1 is no hit; any other failure is `git_failed`.
+pub(super) fn grep_hits_with(runner: &dyn Runner, repos: &[String], batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
+    let mut hits = HashMap::new();
+    for (_, record) in batch {
+        let mut found = Vec::new();
+        for repo in repos {
+            let mut cmd = Command::new(GIT);
+            cmd.args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"]).stdin(Stdio::null());
+            let out = runner.output(&mut cmd, "git", GREP_DEADLINE).map_err(|e| match e {
+                RunFailed::Io(e) => git_failed(repo, &e.to_string()),
+                RunFailed::Timeout(e) => e,
+            })?;
+            // 1: no match.
+            if !out.status.success() && out.status.code() != Some(1) {
+                return Err(git_failed(repo, String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            found.extend(String::from_utf8_lossy(&out.stdout).lines().map(|path| format!("{repo}:{path}")));
+        }
+        hits.insert(record.id.clone(), found);
+    }
+    Ok(hits)
+}
+
+/// The program of the grep; the runner picks the real or the fake one.
+const GIT: &str = "git";
+
+/// How long one `git grep` of a repo may take.
+const GREP_DEADLINE: Duration = Duration::from_secs(60);
 
 fn git_failed(repo: &str, why: &str) -> CpdError {
     CpdError::new(ErrorCode::GitFailed, format!("Cannot search {repo} for the record ids: {why}.")).with("repo", repo)

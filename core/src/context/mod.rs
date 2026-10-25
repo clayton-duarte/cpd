@@ -29,6 +29,8 @@ pub(crate) mod render;
 mod rename;
 mod show;
 mod write;
+#[cfg(test)]
+mod distill_git_tests;
 
 use std::fmt;
 use std::str::FromStr;

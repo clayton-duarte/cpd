@@ -81,7 +81,12 @@ pub fn run_with(runner: &dyn Runner, dir: &Path, args: &[&str]) -> Result<Out, C
 /// Like [`run`], but any non-zero exit is `git_failed` (with `argv`, `exit` and
 /// the last 60 lines of `stderr` in `details`). Returns stdout unchanged.
 pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let out = run(dir, args)?;
+    ok_with(&SystemRunner, dir, args)
+}
+
+/// [`ok`] on `runner`.
+pub fn ok_with(runner: &dyn Runner, dir: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let out = run_with(runner, dir, args)?;
     if out.code == 0 {
         Ok(out.stdout)
     } else {
