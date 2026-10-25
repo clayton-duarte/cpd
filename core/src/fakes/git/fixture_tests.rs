@@ -304,9 +304,10 @@ fn a_gitignore_line_with_a_trailing_slash_ignores_the_directory() {
 #[test]
 fn an_ignored_file_that_is_already_tracked_still_shows_its_changes() {
     let mut w = fx();
-    let dir = made(&mut w, &[(".gitignore", "tracked.txt\n"), ("tracked.txt", "1\n")]);
+    let dir = made(&mut w, &[("tracked.txt", "1\n")]);
+    w.write(&dir, ".gitignore", "tracked.txt\n");
     w.write(&dir, "tracked.txt", "2\n");
-    assert_eq!(status(&w, &dir), " M tracked.txt\n");
+    assert_eq!(status(&w, &dir), " M tracked.txt\n?? .gitignore\n");
 }
 
 #[test]
@@ -712,7 +713,7 @@ fn switch_says_what_it_did_without_dash_q() {
     let mut w = fx();
     let dir = forked(&mut w);
     let out = w.git(&dir, &["switch", "feat"]);
-    assert_eq!((out.code, out.stdout.as_str()), (0, "Switched to branch 'feat'\n"), "{}", out.stderr);
+    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (0, "", "Switched to branch 'feat'\n"));
 }
 
 #[test]
@@ -721,7 +722,7 @@ fn switch_dash_c_makes_the_branch_at_head_or_at_a_start_point_and_moves_to_it() 
     let dir = forked(&mut w);
     let first = sha(&w, &dir, "feat^{commit}");
     let out = w.git(&dir, &["switch", "-c", "new"]);
-    assert_eq!((out.code, out.stdout.as_str()), (0, "Switched to a new branch 'new'\n"), "{}", out.stderr);
+    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (0, "", "Switched to a new branch 'new'\n"));
     assert_eq!(sha(&w, &dir, "new"), sha(&w, &dir, "main"));
     w.ok(&dir, &["switch", "-q", "-c", "from-feat", "feat"]);
     assert_eq!((sha(&w, &dir, "from-feat"), first), (sha(&w, &dir, "feat"), sha(&w, &dir, "feat")));
@@ -763,7 +764,7 @@ fn checkout_dash_b_makes_the_branch_at_head_and_moves_to_it() {
     let mut w = fx();
     let dir = one(&mut w);
     let out = w.git(&dir, &["checkout", "-b", "side"]);
-    assert_eq!((out.code, out.stdout.as_str()), (0, "Switched to a new branch 'side'\n"), "{}", out.stderr);
+    assert_eq!((out.code, out.stdout.as_str(), out.stderr.as_str()), (0, "", "Switched to a new branch 'side'\n"));
     assert_eq!(w.ok(&dir, &["branch", "--show-current"]), "side\n");
     assert_eq!(sha(&w, &dir, "side"), sha(&w, &dir, "main"));
 }
@@ -795,7 +796,7 @@ fn checkout_detach_without_a_rev_detaches_at_head() {
     assert_eq!(w.git(&dir, &["symbolic-ref", "-q", "HEAD"]).code, 1);
     assert_eq!(sha(&w, &dir, "HEAD"), head);
     let out = w.git(&dir, &["checkout", "--detach", "main"]);
-    assert_eq!(out.stdout, format!("HEAD is now at {} base\n", short(&head)));
+    assert_eq!((out.code, out.stdout.as_str(), out.stderr), (0, "", format!("HEAD is now at {} base\n", short(&head))));
 }
 
 #[test]
@@ -1152,6 +1153,7 @@ fn merge_of_a_remote_tracking_branch_merges_what_a_fetch_brought() {
 fn mv_moves_the_file_on_disk_and_in_the_index() {
     let mut w = fx();
     let dir = made(&mut w, &[("verify.sh", "v\n"), ("keep.txt", "k\n")]);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
     w.ok(&dir, &["mv", "verify.sh", "src/not-protected.sh"]);
     assert_eq!((w.read(&dir, "verify.sh"), w.read(&dir, "src/not-protected.sh").as_deref()), (None, Some("v\n")));
     w.ok(&dir, &["commit", "-q", "-m", "rename away"]);
@@ -1265,10 +1267,10 @@ fn config_with_a_key_and_a_value_sets_it_for_the_repo() {
 fn config_sets_a_key_again_by_replacing_its_value() {
     let mut w = fx();
     let dir = one(&mut w);
-    w.ok(&dir, &["config", "user.email", "a@x.invalid"]);
-    w.ok(&dir, &["config", "user.email", "b@x.invalid"]);
-    assert_eq!(w.ok(&dir, &["config", "--get", "user.email"]), "b@x.invalid\n");
-    assert_eq!(w.ok(&dir, &["config", "--get-regexp", "^user\\.email$"]), "user.email b@x.invalid\n");
+    w.ok(&dir, &["config", "key.name", "a"]);
+    w.ok(&dir, &["config", "key.name", "b"]);
+    assert_eq!(w.ok(&dir, &["config", "--get", "key.name"]), "b\n");
+    assert_eq!(w.ok(&dir, &["config", "--get-regexp", "^key\\.name$"]), "key.name b\n");
 }
 
 #[test]
