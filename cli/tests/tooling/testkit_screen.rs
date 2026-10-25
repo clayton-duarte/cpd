@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use cpd_tui::view_ports::Input;
 
-use crate::common::screen::{Keys, Screen, ch, ctrl, key, typed};
+use crate::common::screen::{Keys, Screen, Script, SharedBackend, Step, ch, ctrl, key, typed};
 
 /// The screen of a 12x3 terminal after it drew `lines`.
 fn drawn(lines: Vec<Line<'static>>) -> Screen {
@@ -105,6 +105,64 @@ fn keys_poll_with_nothing_left_fails_loudly() {
     let mut keys = Keys::script([]);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| keys.poll(std::time::Duration::ZERO)));
+
+    assert!(result.is_err(), "a loop that polls past its script must not spin");
+}
+
+// ---- SharedBackend and Script
+
+#[test]
+fn shared_backend_shows_the_test_what_the_terminal_drew() {
+    let backend = SharedBackend::new(8, 2);
+    let mut terminal = backend.terminal();
+
+    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    assert_eq!(backend.screen().rows(), ["one", ""]);
+    terminal.draw(|frame| frame.render_widget(Paragraph::new("two"), frame.area())).expect("draw");
+
+    assert_eq!(backend.screen().rows(), ["two", ""]);
+}
+
+#[test]
+fn script_runs_what_the_world_does_and_the_looks_up_to_the_next_event_and_an_idle_poll_naps_the_clock() {
+    use cpd_core::ports::Fakes;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    let fakes = Fakes::new();
+    let backend = SharedBackend::new(8, 1);
+    let mut terminal = backend.terminal();
+    terminal.draw(|frame| frame.render_widget(Paragraph::new("first"), frame.area())).expect("draw");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let (done, looked) = (Rc::clone(&seen), Rc::clone(&seen));
+    let mut script = Script::new(
+        &fakes.clock,
+        &backend,
+        [
+            Step::then(move || done.borrow_mut().push("world".to_owned())),
+            Step::look(move |screen| looked.borrow_mut().push(screen.row(0))),
+            Step::Idle,
+            Step::ch('q'),
+        ],
+    );
+
+    assert!(!script.poll(Duration::from_millis(50)).unwrap(), "the idle poll finds nothing");
+    assert_eq!(*seen.borrow(), ["world", "first"]);
+    assert_eq!(fakes.clock.naps(), [Duration::from_millis(50)]);
+    assert!(script.poll(Duration::from_millis(50)).unwrap());
+    assert_eq!(script.read().unwrap(), ch('q'));
+    assert_eq!(script.remaining(), 0);
+}
+
+#[test]
+fn script_poll_with_nothing_left_fails_loudly() {
+    use cpd_core::ports::Fakes;
+
+    let fakes = Fakes::new();
+    let mut script = Script::new(&fakes.clock, &SharedBackend::new(1, 1), []);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| script.poll(std::time::Duration::ZERO)));
 
     assert!(result.is_err(), "a loop that polls past its script must not spin");
 }

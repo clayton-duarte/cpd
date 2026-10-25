@@ -140,7 +140,7 @@ pub fn show_with<B: Backend>(
 
 /// `events` (the latest, oldest first), with the Event `id` before them when it is older than all of them. An `id`
 /// that no Event has leaves them as they are.
-fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
+pub fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
     if events.first().is_some_and(|e| e.id <= id) {
         return Ok(events);
     }
