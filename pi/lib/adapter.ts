@@ -1,5 +1,6 @@
 import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
+import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
 import { homedir } from "node:os";
@@ -21,6 +22,7 @@ export { QUESTION_LABEL } from "./review.ts";
 
 /** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands, bash writes and edit/write calls: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
+  registerCompactionRatio(); // §15.19: pi's SettingsManager derives the reserve from the compaction ratio
   const host = createHost(pi, options);
 
   // commands.md §15.9: one renderer for every cpd customType; its style is read at `session_start` (startup.ts).
