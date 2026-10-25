@@ -15,7 +15,8 @@ fn cpd_slot_is_an_unknown_command() {
     env.write_config("version = 1\nmachine = \"t\"\n");
     let out = output(env.command(CPD).args(["slot", "--", "true"])).unwrap();
     assert_eq!(out.status.code(), Some(2), "cpd slot must be a usage error: {out:?}");
-    let err: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert!(out.stderr.is_empty(), "cpd prints its one JSON value on stdout: {out:?}");
+    let err: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(err["error"]["code"], "usage", "{err}");
     assert!(err["error"]["message"].as_str().unwrap().contains("slot"), "the command is gone: {err}");
 }
