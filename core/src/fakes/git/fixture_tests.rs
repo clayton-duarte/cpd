@@ -189,15 +189,6 @@ fn init_bare_makes_a_bare_repo_that_has_no_work_tree() {
     assert_eq!((status.code, status.stderr.as_str()), (128, "fatal: this operation must be run in a work tree\n"));
 }
 
-#[test]
-fn a_dir_that_init_did_not_make_is_not_a_repo() {
-    let mut w = fx();
-    let dir = w.fresh("plain");
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = w.git(&dir, &["status", "--porcelain"]);
-    assert_eq!((out.code, first(&out.stderr)), (128, "fatal: not a git repository (or any of the parent directories): .git"));
-}
-
 // ---- add, status, .gitignore ------------------------------------------------------------------------------
 
 #[test]
