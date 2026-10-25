@@ -247,9 +247,33 @@ impl Live {
 
     /// Dispatches Job `key` and runs its driver on this thread: `hook(self, id, n)` is called after the driver's `n`th nap (from 1),
     /// where the Worker's pi acts. Returns the id of the Attempt and what the driver printed.
-    pub(super) fn drive(&self, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+    pub(super) fn drive(&self, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+        self.drive_as(key, false, hook)
+    }
+
+    /// [`Live::drive`] for an Attempt that is PARALLEL (hs-d683: its PR has a live sibling): `job dispatch` always asks for the linear
+    /// one, so the Attempt it records, still `starting`, is given its own `cpd/<plan>--<attempt>` branch and worktree before its
+    /// driver runs, as the starter records a parallel one. The driver then creates the worktree and runs `pre-start` (A2), rebases
+    /// and fast-forwards with the compare-and-swap (§7.4) and removes the worktree at its end (A9).
+    pub(super) fn drive_parallel(&self, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+        self.drive_as(key, true, hook)
+    }
+
+    /// Gives the `starting` Attempt `id` the branch and worktree the starter records for a parallel one.
+    pub(super) fn make_parallel(&self, id: &str) {
+        let worktree = self.repo.parent().unwrap().join(format!("pay.pay--{id}"));
+        self.fixture(&format!(
+            "UPDATE attempts SET branch = 'cpd/pay--{id}', worktree = '{}' WHERE plan = 'pay' AND id = '{id}' AND status = 'starting';",
+            worktree.display()
+        ));
+    }
+
+    fn drive_as(&self, key: &str, parallel: bool, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
         let out = self.dispatch(key).ok();
         let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+        if parallel {
+            self.make_parallel(&id);
+        }
         let launch = self.fx.take_launch(self.fx.fakes.spawn.launches().len() - 1);
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         let lock = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap());

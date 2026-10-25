@@ -235,9 +235,21 @@ fn worker_exits(live: &Live, id: &str, status: u8) {
 }
 
 /// [`Live::drive`] with what `job dispatch` printed: `(its output, what the driver printed)`.
-fn drive_with_out(live: &Live, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+fn drive_with_out(live: &Live, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+    drive_with_out_as(live, key, false, hook)
+}
+
+/// [`drive_with_out`] for a parallel Attempt ([`Live::drive_parallel`]).
+fn drive_parallel_with_out(live: &Live, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+    drive_with_out_as(live, key, true, hook)
+}
+
+fn drive_with_out_as(live: &Live, key: &str, parallel: bool, mut hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
     let out = live.dispatch(key).ok();
     let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+    if parallel {
+        live.make_parallel(&id);
+    }
     let launch = live.fx.take_launch(live.fx.fakes.spawn.launches().len() - 1);
     let home = CpdHome::resolve(Some(live.fx.env.cpd_home().into()), None).unwrap();
     let _fd3 = live.fx.hand_over(File::open(home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap())).unwrap());
@@ -438,7 +450,7 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_files() {
     let live = live("");
     // The Worker edits README.md while another Job's merge edits it on the Lead Branch.
-    let (_, ran) = drive_with_out(&live, JOB, |live, id, nap| {
+    let (_, ran) = drive_parallel_with_out(&live, JOB, |live, id, nap| {
         if nap == 1 {
             live.commit(&live.lead, "README.md", "theirs\n", "other");
             live.commit(&live.worktree(id), "README.md", "ours\n", "ours");
@@ -533,7 +545,7 @@ fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
     set_hooks(&live, "pre-start = \"exit 7\"\n");
     live.fx.fake("sh", Reply::exit(7, "", ""));
 
-    let (id, _) = live.drive(JOB, |_, _, _| {});
+    let (id, _) = live.drive_parallel(JOB, |_, _, _| {});
     let attempt = live.attempt(&id);
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("setup_failed")));
@@ -618,7 +630,7 @@ fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
     set_hooks(&live, &format!("pre-start = \"{hook}\"\n"));
     After::install(&mut live, "sh", move |args| args.iter().any(|a| a == hook), &["job", "cancel", JOB, "--reason", "early", "--plan", PLAN]);
 
-    let (id, ran) = live.drive(JOB, |_, _, _| {});
+    let (id, ran) = live.drive_parallel(JOB, |_, _, _| {});
     let attempt = live.attempt(&id);
 
     assert_eq!(ran.ok()["outcome"], "cancelled");
@@ -633,7 +645,7 @@ fn a_cancel_before_the_rebase_ends_it_without_merging() {
     let live = live("");
     let old = live.lead_sha();
 
-    let (id, _) = live.drive(JOB, |live, id, nap| {
+    let (id, _) = live.drive_parallel(JOB, |live, id, nap| {
         if nap == 1 {
             live.commit(&live.worktree(id), "api.txt", "api\n", "api");
             cancel(live, id, "mid");
@@ -653,7 +665,7 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
     // has rewritten the Worker's commit.
     After::install(&mut live, "git", |args| args.iter().any(|a| a == "rebase"), &["job", "cancel", JOB, "--reason", "late", "--plan", PLAN]);
 
-    let (id, _) = live.drive(JOB, |live, id, nap| {
+    let (id, _) = live.drive_parallel(JOB, |live, id, nap| {
         if nap == 1 {
             // Another Job merges first, so the rebase rewrites the Worker's commit.
             live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "other"]);
@@ -778,7 +790,15 @@ fn dispatch_refuses_when_the_driver_lock_is_held() {
 #[test]
 fn dispatch_refuses_when_no_slot_is_free() {
     let fx = rows_with("concurrency = 1");
-    fx.add_job("ui", &[]);
+    // The live Attempt is of another PR: a sibling of `api`'s own PR would make the dispatch (always linear) lose, `cas_lost`,
+    // before the slots are counted (hs-d683).
+    fx.fixture(&format!(
+        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'web', '{}', 'web', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Web', 'config', cpd_txn(), 't', 't');",
+        fx.repo.display(),
+        fx.repo.with_file_name("pay.web").display()
+    ));
+    fx.add_job_in("web", "ui", &[]);
     fx.fixture(
         "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'ui';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)

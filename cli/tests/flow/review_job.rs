@@ -201,7 +201,7 @@ fn the_worker_is_a_fork_of_the_lead_that_commits_nothing_and_the_merge_leaves_th
     add(&fx, "final", &["--review"]).ok();
 
     let mut submitted = None;
-    let (id, _) = fx.drive("final", |live, id, nap| {
+    let (id, _) = fx.drive_parallel("final", |live, id, nap| {
         if nap == 1 {
             submitted = Some(reviewer(live, id));
         }
