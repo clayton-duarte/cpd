@@ -176,7 +176,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// `cpd slot` and `cpd test` are transparent to their command (commands.md §23, §26): they end the process with the
+/// `cpd slot` and `cpd test` are transparent to their command (commands.md §23, §27): they end the process with the
 /// command's exit status, and their own refusals are the error envelope on stderr. It never returns.
 fn transparent_exit(result: Result<u8, CpdError>) -> ! {
     match result {
@@ -184,6 +184,26 @@ fn transparent_exit(result: Result<u8, CpdError>) -> ! {
         Err(err) => {
             eprint!("{}", cpd_core::output::to_line(&err));
             std::process::exit(i32::from(err.exit().code()))
+        }
+    }
+}
+
+/// The repository the release commands work in: the current directory.
+fn repo_root() -> Result<std::path::PathBuf, CpdError> {
+    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
+}
+
+/// `cpd tag` and `cpd version sync` print one plain line, not JSON (commands.md §26), and end the process: the line on
+/// stdout and exit 0, or the failure's line on stderr and exit 1. It never returns.
+fn release_exit(result: Result<String, String>) -> ! {
+    match result {
+        Ok(line) => {
+            println!("{line}");
+            std::process::exit(0)
+        }
+        Err(line) => {
+            eprintln!("{line}");
+            std::process::exit(1)
         }
     }
 }
