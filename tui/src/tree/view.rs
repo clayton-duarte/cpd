@@ -1108,12 +1108,12 @@ mod tests {
         assert_eq!(click(&mut view, 6, 15), Effect::Run(resume(Subject::Context(cid("zeta")), Action::OpenManager(cid("zeta")))), "its title: unarchive, then its Manager");
         assert_eq!(drawn(&mut view, 44, 23), rows, "its title folds and unfolds nothing");
         click(&mut view, 3, 16);
-        let rows = drawn(&mut view, 44, 24);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
-        assert_eq!(rows[19], COLLAPSE, "its closing row unfolds it");
+        assert_eq!(rows[18], COLLAPSE, "its closing row unfolds it");
         assert_eq!(click(&mut view, 6, 15), Effect::Run(resume(Subject::Context(cid("zeta")), Action::OpenManager(cid("zeta")))));
-        assert_eq!(click(&mut view, 8, 19), Effect::None);
-        assert_eq!(drawn(&mut view, 44, 24)[16], EXPAND, "and folds it");
+        assert_eq!(click(&mut view, 8, 18), Effect::None);
+        assert_eq!(drawn(&mut view, 44, 23)[16], EXPAND, "and folds it");
     }
 
     #[test]
@@ -1252,8 +1252,8 @@ mod tests {
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "{rows:?}");
         // an archived Context unfolds at its own closing row
         assert_eq!(click(&mut view, 1, 14), Effect::None);
-        let rows = drawn(&mut view, 44, 24);
-        assert_eq!((rows[13].as_str(), rows[17].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
+        let rows = drawn(&mut view, 44, 23);
+        assert_eq!((rows[13].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
     }
 
     const UP_COLLAPSE: &str = "╰\u{F0B2C} collapse";
@@ -1436,10 +1436,10 @@ mod tests {
             press(&mut view, KeyCode::Esc);
         }
         // the closing rows have none, the empty area has one
-        drawn(&mut view, 44, 25);
-        for (column, row) in [(3, 7), (3, 13), (3, 19), (1, 20)] {
+        drawn(&mut view, 44, 24);
+        for (column, row) in [(3, 7), (3, 13), (3, 18), (1, 19)] {
             let _ = right_click(&mut view, column, row);
-            assert_eq!(view.menu.is_some(), row == 20, "({column}, {row}): a closing row has none, the empty area has one");
+            assert_eq!(view.menu.is_some(), row == 19, "({column}, {row}): a closing row has none, the empty area has one");
             view.menu = None;
         }
     }
