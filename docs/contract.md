@@ -2518,6 +2518,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Counter on an asleep Lead's row (every one, zeros too) | part of the row | fg 8 | palette: muted |
 | Counter separator `⋅` | no | fg 8 | palette: muted |
 | Closing toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes (click) | fg 7 | palette: read-only text |
+| Empty Context row `╰󰬪 new` | yes (left click opens New Plan) | the corner and glyph fg 8, the word new fg 15 | palette: muted and clickable text |
 | ` no Contexts` | no | fg 8 | palette: muted |
 | Scroll cues `▲ n more`, `▼ n more` (every view, popup and column) | no | fg 8 | `dialog/scroll.rs` through the palette: muted |
 | Footer: the snapshot's error (every view's error line) | no | fg 1 | palette: red |
@@ -2531,7 +2532,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Age (`42s`, `5m`) | no | fg 8 | palette: muted |
 | Keyboard cursor on an item row | yes | block: 4 inverted | `palette::selected()` |
 | Closing toggle `╰󰬦 expand` / `╰󰬬 collapse` | yes | fg 7 | palette: read-only text |
-| Terminator `╰󰬪` (nothing to fold) and empty Inbox closing row `╰󰬪 up to date, drink some water` | no | fg 8 | palette: muted |
+| Terminator `╰󰬪` (archived Context or Inbox: nothing to fold) and empty Inbox closing row `╰󰬪 up to date, drink some water` | no | fg 8 | palette: muted |
 | **The Plan view** | | | |
 | Job pill: draft | yes | block 13 inverted, caps 13 | `palette::pill(…)`, bright |
 | Job pill: queued | yes | block 15 inverted, caps 15 | `palette::pill_interactive()` |
