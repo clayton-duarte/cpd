@@ -1,16 +1,15 @@
 //! The cpd-rendered Context digest, `context show --digest` and `--topic`, and the first message (contract §4.6 "The
 //! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551). The tests run in this process (`Fx`); the
-//! ones that run `plan new` on the fake ports, where `cpd watch --ensure` is a scripted reply. One test, the Manager's
-//! first message, still runs the built binary (it starts a pane). Curations are written through `curation::propose`, as
+//! ones that run `plan new` (and the Manager's first message, which starts its window) on the fake ports, where `cpd
+//! watch --ensure` is a scripted reply and tmux is the fake route. Curations are written through `curation::propose`, as
 //! the distiller will.
 
 use crate::common;
 
 use std::fs;
-use std::path::PathBuf;
 
 use common::fx::Fx;
-use common::{Run, SLEEP_SECONDS, TestEnv, WATCH_OK};
+use common::TestEnv;
 use cpd_core::host::runner::Reply;
 use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
@@ -18,15 +17,6 @@ use cpd_core::ids::{ContextId, PlanId};
 use serde_json::Value;
 
 const CTX: &str = "ctx";
-
-/// Machine `m1`, Context `ctx` and a fake `cpd` for the panes (`plan new`).
-fn fx() -> TestEnv {
-    let env = TestEnv::new();
-    env.write_tmux_config("");
-    env.fake_cpd_panes(WATCH_OK);
-    env.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
-    env
-}
 
 /// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that do not run `plan new`.
 fn fast() -> Fx {
@@ -43,31 +33,6 @@ fn ported() -> Fx {
     fx.fake("cpd", Reply::ok(r#"{"ok": true, "started": true, "pane": "%9"}"#));
     fx.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
     fx
-}
-
-/// `cpd <args>` in this process (`Fx`) or as the binary (`TestEnv`): the same call, the same [`Run`].
-trait Cpd {
-    fn cpd(&self, args: &[&str]) -> Run;
-    /// The env's root directory.
-    fn root(&self) -> PathBuf;
-}
-
-impl Cpd for Fx {
-    fn cpd(&self, args: &[&str]) -> Run {
-        Fx::cpd(self, args)
-    }
-    fn root(&self) -> PathBuf {
-        self.env.root().to_path_buf()
-    }
-}
-
-impl Cpd for TestEnv {
-    fn cpd(&self, args: &[&str]) -> Run {
-        TestEnv::cpd(self, args)
-    }
-    fn root(&self) -> PathBuf {
-        TestEnv::root(self).to_path_buf()
-    }
 }
 
 /// Inserts a record of `kind` written `minutes` minutes ago (the CLI cannot backdate a record).
@@ -102,11 +67,11 @@ fn curate(env: &TestEnv, rows: &[(&str, &str, &str)]) {
     propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &curations, &[]).unwrap();
 }
 
-fn digest(env: &impl Cpd) -> Value {
+fn digest(env: &Fx) -> Value {
     env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok()
 }
 
-fn topic(env: &impl Cpd, t: &str) -> Value {
+fn topic(env: &Fx, t: &str) -> Value {
     env.cpd(&["context", "show", "--context", CTX, "--topic", t]).ok()
 }
 
@@ -119,8 +84,8 @@ fn lead_message(env: &TestEnv, plan: &str) -> String {
     fs::read_to_string(home.lead_message(&PlanId::parse(plan).unwrap())).unwrap()
 }
 
-fn new_plan_with_brief(env: &impl Cpd, id: &str, brief: &str) {
-    let file = env.root().join(format!("{id}-brief.md"));
+fn new_plan_with_brief(env: &Fx, id: &str, brief: &str) {
+    let file = env.env.root().join(format!("{id}-brief.md"));
     fs::write(&file, brief).unwrap();
     env.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
 }
@@ -299,17 +264,6 @@ fn a_retired_record_is_in_no_digest() {
     assert!(!message.contains("retired short"), "{message}");
 }
 
-/// A fake `pi` that creates its session file and sleeps; the cockpit is the one `plan new` made.
-fn manager_cockpit(env: &TestEnv) {
-    env.fake_cpd_views();
-    env.fake_pi(&format!(
-        "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
-         if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
-         printf '{{\"type\":\"session\"}}\\n' > \"$HOME/.pi/agent/sessions/g/2026_$id.jsonl\"; fi\n\
-         exec sleep {SLEEP_SECONDS}"
-    ));
-}
-
 /// hs-d558 FX5: a topic no curated record has ever used is refused, with the topics in use.
 #[test]
 fn show_topic_refuses_an_unknown_topic_with_the_topics_in_use() {
@@ -384,17 +338,17 @@ fn the_first_message_does_not_list_the_plans_own_brief_again() {
 /// hs-d558 FX7: a Manager's first message holds the digest and the uncurated records, at most 20; a brief is short.
 #[test]
 fn a_managers_first_message_holds_the_digest_and_the_uncurated_records() {
-    let env = fx();
-    env.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
+    let fx = ported();
+    fx.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
     for n in 2..=25 {
-        env.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
+        fx.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
     }
-    curate(&env, &[("m1-n1", "ledger", "curated short form")]);
-    new_plan_with_brief(&env, "pay", "BRIEF-FIRST-LINE\nBRIEF-SECOND-LINE\n");
-    manager_cockpit(&env);
-    env.cpd(&["context", "manager", "--context", CTX]).ok();
+    curate(&fx.env, &[("m1-n1", "ledger", "curated short form")]);
+    new_plan_with_brief(&fx, "pay", "BRIEF-FIRST-LINE\nBRIEF-SECOND-LINE\n");
+    // The cockpit is the one `plan new` made.
+    fx.cpd(&["context", "manager", "--context", CTX]).ok();
 
-    let path = env.cpd_home().join("run/ctx/manager-message.md");
+    let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     let message = fs::read_to_string(&path).unwrap();
     assert!(message.starts_with("You are the Manager of Context ctx \"Payments\"."), "{message}");
     assert!(message.contains("- [m1-n1] curated short form"), "the digest: {message}");
