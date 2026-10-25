@@ -3741,7 +3741,7 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 **Sends that use the gate** (every send of a message with `triggerTurn: true`): `session-message` Events, `attempt-nudge`, the adapter's errors, the Plan review decision message. All of these go through `gated` when the breaker is tripped, so they queue without starting turns.
 
-### 15.16 A primary checkout stays put (hs-n436)
+### 15.16 A primary checkout stays put (hs-n436, hs-d606, hs-d608)
 
 Decision (User, 2026-10-22, hs-n436; it applies hs-d573, fix the cause, and hs-d248, a guard only for behaviour seen in practice, which this is). No agent moves HEAD or changes the files of a repo's primary checkout. On 2026-10-21 Leads ran `cd ~/projects/cpd && git checkout -q --detach origin/main` to read the latest main; HEAD stayed detached, dotfiles-sync installs cpd only from a checkout on `main`, and hs took no new cpd for 14 hours. The adapter enforces the rule, as §15.11 and §15.12 do for theirs, so it is not left to the skills' prose.
 
