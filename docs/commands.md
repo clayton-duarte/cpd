@@ -3315,7 +3315,7 @@ Effects: `run/models-<provider>.json` written for each provider that has a good 
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--provider` is a file-name-safe token (`^[A-Za-z0-9._-]+$`) | `invalid_argument` | 2 |
+| `--provider` is a file-name-safe token (`^[A-Za-z0-9._-]+$`) | `usage` | 2 |
 
 ```json
 {"ok": true, "providers": [

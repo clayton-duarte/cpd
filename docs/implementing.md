@@ -15,7 +15,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | Directory | Package (library / binary) | Holds |
 |---|---|---|
 | `core/` | `cpd-core` (library `cpd_core`) | every area of the module map below except `tui`, `watch` and `doctor`, and the shared modules (`args`, `error`, `home`, `ids`, `output`). `core/src/lib.rs` is the crate root: it declares every module, once. |
-| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E11, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
+| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E14, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
 | `tui/` | `cpd-tui` (library `cpd_tui`) | the whole cockpit (`tui`, `tui view`, commands.md §13): `tui/src/lib.rs`, the views and the read model (`tui/src/read/`). It uses `cpd_core` for the store, events, host and the shared modules. It does not depend on `cpd-engine`. |
 | `cli/` | `cpd` (binary `cpd`) | `cli/src/main.rs`, which only calls `main_with`, and `cli/src/cli.rs`: the root `Command` enum, `run` and `main_with`. Also `cli/tests/`, the binary-driven integration tests: one test binary per area, `cli/tests/<area>/` (the area table under Tests). |
 
@@ -120,7 +120,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   |---|---|
   | `engine` | `watch*`, `doctor` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*` |
   | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
