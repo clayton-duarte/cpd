@@ -3603,7 +3603,7 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 
 ```
 ╭⦁ Message from cross-repo
-╰─ expand
+╰󰬦 expand · 14:30
 ```
 
 - The title row is `╭⦁ <title>`: `⦁` (U+2981) is painted with the theme token **`customMessageLabel`**, pi's colour for a custom message's label (violet/magenta in pi's themes; magenta, 5, in the Dango theme, hs-d534), so it never reads like bash's green `⦁`; it is a fixed colour that carries no status. The title (`Message from cross-repo`, the summary below) is bold.
