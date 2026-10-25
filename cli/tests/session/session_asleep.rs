@@ -1,10 +1,9 @@
 //! Asleep Sessions (contract §2.2 "Asleep", §4.5; commands.md §10.4, §10.10, §10.11, session list §10.x;
-//! hs-d515, hs-d520), run as the built binary against a private tmux server with a fake `pi`.
+//! hs-d515, hs-d520), run in this process (`Fx` on the fake ports: the cockpit is the fake tmux's).
 
 use crate::common::fx::Fx;
-use crate::common::{SLEEP_SECONDS, TestEnv};
 use crate::common::session::{events, setup, show};
-use crate::session::{cockpit, fake_pi};
+use crate::common::TestEnv;
 
 use serde_json::{Value, json};
 
@@ -19,21 +18,18 @@ fn put_to_sleep(env: &TestEnv, id: &str) {
 
 #[test]
 fn open_clears_asleep_at() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
-    cockpit(&env);
-    put_to_sleep(&env, LEAD1);
-    assert_eq!(show(&env, LEAD1)["asleep_at"], json!(ASLEEP));
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    put_to_sleep(&fx.env, LEAD1);
+    assert_eq!(show(&fx, LEAD1)["asleep_at"], json!(ASLEEP));
 
-    env.cpd(&["session", "open", LEAD1]).ok();
-    assert_eq!(show(&env, LEAD1)["asleep_at"], Value::Null, "session open wakes the Session");
+    fx.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(show(&fx, LEAD1)["asleep_at"], Value::Null, "session open wakes the Session");
 }
 
 #[test]
 fn list_shows_asleep_at() {
-    // Store only: the command tree runs in this process (`Fx`); the other two tests need tmux and stay on `TestEnv`.
     let fx = Fx::new();
     setup(&fx.env);
     put_to_sleep(&fx.env, LEAD2);
@@ -45,16 +41,16 @@ fn list_shows_asleep_at() {
 
 #[test]
 fn archive_clears_asleep_at() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.sql(&format!(
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.env.sql(&format!(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from, asleep_at)
            VALUES ('{FORK}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1', '{ASLEEP}')"
     ));
-    assert_eq!(show(&env, FORK)["asleep_at"], json!(ASLEEP));
-    env.cpd(&["session", "archive", FORK]).ok();
-    let row = show(&env, FORK);
+    assert_eq!(show(&fx, FORK)["asleep_at"], json!(ASLEEP));
+    fx.cpd(&["session", "archive", FORK]).ok();
+    let row = show(&fx, FORK);
     assert!(row["archived_at"].is_string(), "{row}");
     assert_eq!(row["asleep_at"], Value::Null, "archiving clears asleep_at in the same transaction");
-    assert_eq!(events(&env, "session-archived").len(), 1);
+    assert_eq!(events(&fx, "session-archived").len(), 1);
 }

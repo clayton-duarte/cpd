@@ -137,11 +137,17 @@ pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [Se
 /// snoozed. A snooze ends by the clock with no Event (§17): a view that shows the Inbox reads it again then. Read
 /// before the view's snapshot, so that a snooze that ends between the two reads is not missed.
 pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError> {
+    snooze_end_at(store, None)
+}
+
+/// [`snooze_end`] at `now` (contract §1.3 text), the database's clock when `None`: a view on a clock of its own passes its time.
+pub fn snooze_end_at(store: &mut Store, now: Option<&str>) -> Result<Option<OffsetDateTime>, CpdError> {
     let end: Option<String> = store.read(|conn| {
+        let now = db_now(conn, now)?;
         Ok(conn.query_row(
             "SELECT min(snoozed_until) FROM inbox_items
-              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-            [],
+              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > ?1",
+            [now],
             |r| r.get(0),
         )?)
     })?;
@@ -149,7 +155,20 @@ pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError>
         .transpose()
 }
 
+/// `now` as given (contract §1.3 text), or the database's own clock.
+fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<String, CpdError> {
+    match now {
+        Some(now) => Ok(now.to_owned()),
+        None => Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?),
+    }
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
+    tree_at(store, None)
+}
+
+/// [`tree`] with the Inbox's snoozes read at `now` (contract §1.3 text), the database's clock when `None`.
+pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
     let home = store_home(store)?;
     let engine_running = model::engine_running(&home)?;
     store.read(|conn| {
@@ -172,7 +191,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         }
 
         // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
-        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let now = db_now(conn, now)?;
         let mut inbox = visible_items(conn, &now)?;
 
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;

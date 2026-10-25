@@ -1,10 +1,11 @@
-//! The tree's **Delete** menu item and its popup (commands.md §13.2; hs-d527), end to end like `tui_tree.rs`: the built
-//! binary in a pane of a private tmux server over a prepared store, a fake `cpd` that records its command lines and a fake
+//! The tree's **Delete** menu item and its popup (commands.md §13.2; hs-d527). The menu runs in the test process on a
+//! `Tree` (`common/tree.rs`); the popup tests are end to end like the rest of `tui_tree.rs`: the built binary in a pane of a private tmux server over a prepared store, a fake `cpd` that records its command lines and a fake
 //! `tmux` that plays the dialog kit's popup. The tree runs `plan delete <id>` for the popup's list and, on `y`,
 //! `plan delete <id> --yes`.
 
 use crate::common;
 
+use common::tree::{self as drive, Tree, engine, fx};
 use common::{CPD, TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -138,12 +139,6 @@ impl<'a> Pane<'a> {
         }
     }
 
-    fn keys(&self, keys: &[&str]) {
-        let mut args = vec!["send-keys", "-t", SESSION];
-        args.extend(keys);
-        assert!(self.env.tmux(&args).status.success());
-    }
-
     /// The row of the Plan `id` (its label is the id), once the tree shows it.
     fn row_of(&self, id: &str) -> u16 {
         let screen = self.wait(&format!("the row of {id}"), |s| s.iter().any(|r| r.contains(&format!(" {id}"))));
@@ -155,11 +150,6 @@ impl<'a> Pane<'a> {
         let row = self.row_of(id);
         self.right_click(8, row);
         self.wait("the menu", |s| s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id ")))
-    }
-
-    fn close_menu(&self) {
-        self.keys(&["Escape"]);
-        self.wait("the menu closed", |s| s.iter().all(|r| !r.contains('╮')));
     }
 }
 
@@ -217,28 +207,53 @@ const PREVIEW: &str = r#"{"ok":true,"preview":true,"jobs":47,"attempts":121,"ses
 
 // ---------- tests ----------
 
+/// The row of the Plan `id` (its label is the id) on `tree`.
+fn row_of_plan(tree: &mut Tree, id: &str) -> u16 {
+    let screen = tree.until(&format!("the row of {id}"), |s| s.iter().any(|r| r.contains(&format!(" {id}"))));
+    screen.iter().position(|r| r.contains(&format!(" {id}"))).unwrap() as u16
+}
+
+/// Right-clicks the Plan `id` and returns the screen with its menu open.
+fn menu_of_plan(tree: &mut Tree, id: &str) -> Vec<String> {
+    let row = row_of_plan(tree, id);
+    tree.right_click(8, row);
+    tree.until("the menu", |s| s.iter().any(|r| r.contains('╮')) && s.iter().any(|r| r.contains("│ Copy id ")))
+}
+
+fn close_plan_menu(tree: &mut Tree) {
+    tree.keys(&["Escape"]);
+    tree.until("the menu closed", |s| s.iter().all(|r| !r.contains('╮')));
+}
+
 #[test]
 fn delete_item_only_on_archived_or_asleep_rows() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 60, 16);
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx.env);
+    drive::fake_cpd(&fx, r#"{"ok":true}"#);
+    let mut tree = Tree::start(&fx, 60, 16);
 
-    let live = pane.menu_of("live");
+    let live = menu_of_plan(&mut tree, "live");
     assert!(has_item(&live, "New session…") && !has_item(&live, "Delete"), "a live Plan has no Delete: {live:?}");
-    pane.close_menu();
-    let archived = pane.menu_of("old");
+    close_plan_menu(&mut tree);
+    let archived = menu_of_plan(&mut tree, "old");
     assert!(has_item(&archived, "Unarchive") && has_item(&archived, "Delete"), "an archived Plan has Delete: {archived:?}");
-    pane.close_menu();
-    put_to_sleep(&env);
-    // the tree reads the Event a moment after the write: a menu opened before that is of the old snapshot, so try again
-    let asleep = common::wait_some("the Delete item of the asleep Plan", common::WAIT, || {
-        let menu = pane.menu_of("nap");
-        pane.close_menu();
-        if has_item(&menu, "Delete") { Ok(menu) } else { Err(format!("the menu is {menu:?}")) }
-    });
+    close_plan_menu(&mut tree);
+    put_to_sleep(&fx.env);
+    // the tree reads the Event when its poll comes: a menu opened before that is of the old snapshot, so try again
+    let mut tries = 0;
+    let asleep = loop {
+        let menu = menu_of_plan(&mut tree, "nap");
+        close_plan_menu(&mut tree);
+        if has_item(&menu, "Delete") {
+            break menu;
+        }
+        tries += 1;
+        assert!(tries < 100, "the Delete item of the asleep Plan never shows; the last menu: {menu:?}");
+        tree.idle();
+    };
     assert!(has_item(&asleep, "Delete"), "an asleep Plan has Delete: {asleep:?}");
-    assert!(calls(&env).is_empty(), "opening menus runs nothing: {:?}", calls(&env));
+    assert!(drive::calls(&fx).is_empty(), "opening menus runs nothing: {:?}", drive::calls(&fx));
 }
 
 #[test]

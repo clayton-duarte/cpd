@@ -77,15 +77,21 @@ enum Step {
 struct FakeInput {
     clock: Arc<ManualClock>,
     steps: VecDeque<Step>,
+    /// The snapshots the loop told it of ([`Input::snapshot_read`]).
+    snapshots: Rc<std::cell::Cell<usize>>,
 }
 
 impl FakeInput {
     fn new(fakes: &Fakes, steps: Vec<Step>) -> FakeInput {
-        FakeInput { clock: Arc::clone(&fakes.clock), steps: steps.into() }
+        FakeInput { clock: Arc::clone(&fakes.clock), steps: steps.into(), snapshots: Rc::default() }
     }
 }
 
 impl Input for FakeInput {
+    fn snapshot_read(&mut self) {
+        self.snapshots.set(self.snapshots.get() + 1);
+    }
+
     fn poll(&mut self, wait: Duration) -> io::Result<bool> {
         loop {
             match self.steps.front_mut() {
@@ -868,15 +874,23 @@ const WORKER_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at,
 
 /// The worker of Attempt `api-a1` over a store, run on `steps`; the result, the draws, the naps and the last screen.
 fn run_worker(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String) {
+    let (result, draws, naps, shown, _) = run_worker_counting(fakes, home, steps);
+    (result, draws, naps, shown)
+}
+
+/// [`run_worker`], and the snapshots the loop told its input it took.
+fn run_worker_counting(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String, usize) {
     let mut store = home.store();
     sql(&mut store, WORKER_FIXTURE);
     let (plan, target) = (PlanId::parse("ship").unwrap(), Target::Attempt(AttemptId::parse("api-a1").unwrap()));
     let first = read::worker(&mut store, &plan, &target).unwrap();
     let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
     let mut input = FakeInput::new(fakes, steps);
+    let snapshots = Rc::clone(&input.snapshots);
     let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
     let result = worker::event_loop_with(&mut ctx, &mut store, follow, &plan, &target, first);
-    (result, ctx.draws(), fakes.clock.naps(), screen(&ctx))
+    let snapshots = snapshots.get();
+    (result, ctx.draws(), fakes.clock.naps(), screen(&ctx), snapshots)
 }
 
 /// Another process: the Worker's Session goes idle, and says so with an Event.
@@ -921,6 +935,39 @@ fn worker_a_change_in_the_store_is_not_looked_for_before_the_check_interval_is_o
     result.unwrap();
     assert_eq!(draws, 1);
     assert!(shown.contains("api-a1 running · working"), "{shown}");
+}
+
+#[test]
+fn worker_an_idle_store_reads_no_snapshot() {
+    let (fakes, home) = (Fakes::new(), home());
+    let mut steps = idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize);
+    steps.push(key(KeyCode::Char('q')));
+    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
+    result.unwrap();
+    assert_eq!(snapshots, 0, "two checks over a store with no Event");
+}
+
+#[test]
+fn worker_an_event_of_the_store_reads_one_snapshot_at_the_first_check_and_none_at_the_next() {
+    let (fakes, home) = (Fakes::new(), home());
+    let mut steps = worker_goes_idle(&home);
+    steps.extend(idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize));
+    steps.push(key(KeyCode::Char('q')));
+    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
+    result.unwrap();
+    assert_eq!(snapshots, 1, "one Event, read at the first check; the second check finds none");
+}
+
+#[test]
+fn a_context_tells_its_input_of_each_snapshot_and_a_real_input_ignores_it() {
+    let fakes = Fakes::new();
+    let mut input = FakeInput::new(&fakes, Vec::new());
+    let snapshots = Rc::clone(&input.snapshots);
+    let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
+    ctx.snapshot_read();
+    ctx.snapshot_read();
+    assert_eq!((snapshots.get(), ctx.draws()), (2, 0), "a snapshot is told, and is no frame");
+    crate::view_ports::CrosstermInput.snapshot_read(); // the default: nothing to count, nothing to fail
 }
 
 #[test]

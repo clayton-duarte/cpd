@@ -109,7 +109,8 @@ fn retry_transient(
     transient: fn(&str) -> bool,
     between: impl FnMut(),
 ) -> Result<String, CpdError> {
-    retry_transient_with(&*Ports::current().runner, &*Ports::current().clock, dir, args, transient, between)
+    let ports = Ports::current();
+    retry_transient_with(&*ports.runner, &*ports.clock, dir, args, transient, between)
 }
 
 /// [`retry_transient`] on `runner`, its naps on `clock`.
@@ -170,7 +171,8 @@ pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
 /// `git worktree list --porcelain`, as [`ok`], read again while it fails on a
 /// half-written or half-removed admin dir ([`is_admin_dir_race`], contract §7).
 pub fn worktree_list(dir: &Path) -> Result<String, CpdError> {
-    worktree_list_with(&*Ports::current().runner, &*Ports::current().clock, dir)
+    let ports = Ports::current();
+    worktree_list_with(&*ports.runner, &*ports.clock, dir)
 }
 
 /// [`worktree_list`] on `runner`, its naps on `clock`.
