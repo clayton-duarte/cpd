@@ -29,7 +29,7 @@ use crate::dialog::{Dialog, Mode};
 use super::popup;
 use super::viewlog::ViewLog;
 use super::view_ports::{Ctx, RunFn};
-use super::{Capture, RunCommand, dialog, run_view_on};
+use super::{Capture, dialog, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -267,7 +267,8 @@ pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option
 /// The merge marker ([`marker`], hs-d495) is written first, before `pr merge`, and removed when the request ends:
 /// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
 /// exists, the action does nothing but log `merge already running`.
-pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
+#[cfg(test)]
+pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: super::RunCommand) -> Result<(), CpdError> {
     action_with(&Ports::real(), home, tmux, pull, client, &run_command)
 }
 

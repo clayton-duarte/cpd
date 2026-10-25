@@ -132,6 +132,10 @@ use cpd_core::store::Store;
 /// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
 pub type RunCommand = fn(Vec<OsString>) -> Result<Output, CpdError>;
 
+/// [`RunCommand`] on the `Ports` the caller runs on: what the merge action runs `pr merge` and `pr poll` through, so a test's
+/// fake `gh` answers them.
+pub type RunOn = fn(&Ports, Vec<OsString>) -> Result<Output, CpdError>;
+
 /// The engine's restart of the tmux server onto the installed tmux (contract §6.1), which `cpd-engine` owns
 /// (`cpd_engine::watch::restart`). `cpd-tui` does not depend on `cpd-engine`, so `cli` passes it in, as it passes
 /// [`RunCommand`].
@@ -225,12 +229,9 @@ pub enum View {
     Chat,
 }
 
-pub fn run(args: Args, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
-    run_with(&Ports::real(), args, version, run_command, restart)
-}
-
-/// [`run`] on `ports`: the views the ports reach wait through their clock and read their time from it.
-pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+/// `cpd tui …` on `ports`: the views the ports reach wait through their clock and read their time from it, and the merge
+/// action runs its commands through `run_on`.
+pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunCommand, run_on: RunOn, restart: Restart) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, version, run_command, restart),
         Some(Command::View(view)) => backed_off(ports, match view {
@@ -245,7 +246,7 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
             View::Dialog(args) => dialog::run(ports, args),
             View::Chat => chat::run(),
         }),
-        Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), a.pull.as_deref(), &a.client, run_command)),
+        Some(Command::Action(a)) => Ok(cockpit::action(ports, a.action.as_deref(), a.pull.as_deref(), &a.client, run_command, run_on)),
     }
 }
 

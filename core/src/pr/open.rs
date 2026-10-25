@@ -16,6 +16,7 @@ use super::{Args, Env, gate_then, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
+use crate::host::runner::SystemRunner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::output::Output;
 use crate::job;
@@ -228,7 +229,7 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let created_at = match gh::lookup(lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+    let created_at = match gh::lookup(&SystemRunner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
         Some(looked_up) => looked_up.created_at,
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
@@ -257,7 +258,7 @@ fn merged_row(lead: &Path, head: &gh::HeadPr) -> Result<PolledPr, CpdError> {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", head.url))
             .with("url", head.url.as_str())
     })?;
-    match gh::lookup(lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
+    match gh::lookup(&SystemRunner, lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
         Some(looked_up) if looked_up.state == PrState::Merged => Ok(looked_up),
         Some(other) => Err(CpdError::new(
             ErrorCode::GhFailed,

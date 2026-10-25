@@ -162,7 +162,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => cpd_tui::run(a, version(), run_command, RESTART),
+        Command::Tui(a) => cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART),
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
@@ -229,6 +229,11 @@ fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<cpd
 /// The runner `cpd tui` hands the cockpit, which runs commands in this process.
 fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
     run(argv)
+}
+
+/// [`run_command`] on `ports`: what the merge action runs `pr merge` and `pr poll` through.
+fn run_command_on(ports: &Ports, argv: Vec<OsString>) -> Result<Output, CpdError> {
+    run_with(ports, argv)
 }
 
 /// What a clap parse failure prints. `--help` and `--version` are successes
