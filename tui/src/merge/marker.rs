@@ -24,7 +24,7 @@ pub fn path(home: &CpdHome, pull: &Pull) -> PathBuf {
 /// Writes the marker of `pull` for this process (`{"pid": <this pid>, "at": <RFC 3339 now>}`), atomically (a temporary
 /// file, then a rename), replacing any marker there, a stale one included.
 pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_on(&Ports::real(), home, pull)
+    write_on(&Ports::current(), home, pull)
 }
 
 /// [`write`] stamped by the clock of `ports`.
@@ -35,7 +35,7 @@ pub fn write_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdErr
 /// Rewrites the marker of `pull` as `{"pid", "at", "merged": true}` (hs-d550): `pr merge` succeeded, and the marker
 /// holds until a read stores the merge. Atomic, as [`write`].
 pub fn write_merged(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_merged_on(&Ports::real(), home, pull)
+    write_merged_on(&Ports::current(), home, pull)
 }
 
 /// [`write_merged`] stamped by the clock of `ports`.
@@ -85,7 +85,7 @@ fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
 /// `merged` whose pull request is in `open` (the open rows of `pull_requests`: no read has stored the merge yet). A
 /// stale marker, and a `merged` one whose pull request is not open, are none.
 pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
-    live_with(&Ports::real(), home, open)
+    live_with(&Ports::current(), home, open)
 }
 
 /// [`live`] with the pids asked of `ports.spawn`.

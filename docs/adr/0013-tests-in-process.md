@@ -51,6 +51,8 @@ impl Ports {
 }
 ```
 
+**Amendment: ambient, scoped ports** (a gap found by the Plan's Workers: only `pr` and `tag` handed `Ports` on, so a test through `run_with` still ran the real tools from every other area; about 45 wrappers called `SystemRunner`, `ProcessSpawn` or `Ports::real()` themselves). `Ports::scope(&ports, f)` sets a thread-local `Option<Ports>` for `f` and restores the previous value on exit (a drop guard, panic included); `Ports::current()` is the scoped ports, else `Ports::real()`. `run_with` scopes the whole parse-and-dispatch, and every old-name wrapper, `Env::open*`, the `Tmux` defaults and `Exe` read `Ports::current()`. Why: threading `&Ports` through ~45 signatures and every caller is one large change that blocks the migrations; the ambient scope is one named, tested seam they can use at once. A thread a command spawns captures `Ports::current()` and scopes it inside. How to replace it later: give one wrapper a `&Ports` parameter (its `_with` form already has it), switch its callers, and the guard test keeps a new wrapper from naming the real ports meanwhile.
+
 **`cli/src/cli.rs`**: `pub fn run_with(ports: &Ports, argv: Vec<OsString>, out: &mut dyn Write) -> Result<Output, CpdError>`
 
 **`cli/src/main.rs`** (stays thin): only `fn main() { Ports::real(); cli::run_with(…) }`

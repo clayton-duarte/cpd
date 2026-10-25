@@ -8,9 +8,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::run::{Out, run_with};
 use super::{TAIL_LINES, tail};
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// How many rounds rule S runs before it gives up (contract §7.4).
 pub const SYNC_ROUNDS: u32 = 20;
@@ -46,7 +47,7 @@ enum Round {
 /// `index.lock` was absent and the index file unchanged around it, so that a
 /// concurrent rule S's half-written tree is never taken for local changes.
 pub fn sync_lead(lead: &Path, branch: &str) -> Result<Synced, CpdError> {
-    sync_lead_with(&SystemRunner, &SystemClock, lead, branch)
+    sync_lead_with(&*Ports::current().runner, &*Ports::current().clock, lead, branch)
 }
 
 /// [`sync_lead`] on `runner`, napping on `clock` (a test passes a `FakeRunner` and a `ManualClock`).

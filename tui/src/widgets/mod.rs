@@ -76,7 +76,7 @@ fn open(ports: &Ports) -> Result<Opened, CpdError> {
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let mut sampler = Sampler::default();
-    let machine = Machine { name: hostname(&*ports.runner), usage: sampler.sample_with(ports) };
+    let machine = Machine { name: hostname(), usage: sampler.sample_with(ports) };
     let (mut prs, cursor) = read::open_prs(&mut store)?;
     // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
     let open = read::open_pulls(&mut store)?;
@@ -500,8 +500,8 @@ const UNKNOWN: &str = "?";
 
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
-fn hostname(runner: &dyn Runner) -> String {
-    hostname_with(runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+fn hostname() -> String {
+    hostname_with(&*Ports::current().runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
@@ -576,6 +576,6 @@ mod tests {
         let fake = FakeRunner::new(ManualClock::new()).on("hostname", |_| true, Reply::ok("mac-mini.local\n"));
         assert_eq!(hostname_with(&fake, &file, None), "homeserver", "the kernel's file comes first");
         assert_eq!(hostname_with(&fake, &dir.path().join("none"), Some("")), "mac-mini.local");
-        assert!(!hostname(&fake).is_empty());
+        assert!(!hostname_with(&fake, &file, None).is_empty());
     }
 }

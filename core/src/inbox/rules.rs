@@ -42,7 +42,7 @@ static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    conditions_on(&Ports::real(), store, home)
+    conditions_on(&Ports::current(), store, home)
 }
 
 /// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and

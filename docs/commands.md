@@ -36,8 +36,9 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
-26. [`prune`](#26-prune)
-27. [`tag` and `version`](#27-tag-and-version)
+26. [`gate`](#26-gate)
+27. [`prune`](#27-prune)
+28. [`tag` and `version`](#28-tag-and-version)
 
 ## 1. Conventions
 
@@ -60,6 +61,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd gate finish` (§26) | the run's report on stderr, and its exit status | like `slot`: it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd slot` (§23) | what the command it runs prints, and its exit status | it runs a command inside a test slot and is transparent to it; only its own refusals print the envelope, on stderr |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>`, and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
@@ -203,6 +205,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd host repair` (§9.17) | Manager | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
@@ -1527,7 +1530,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
 | (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
 | (kinds `open`, `update`) HEAD does not conflict with `origin/<base>`, freshly fetched (`git merge-tree --write-tree --name-only origin/<base> HEAD`; hs-d490: the base is merged only on a conflict, and a base that merely moved ahead is no refusal); `details` `{pr, base, base_sha, sha, files, next}`, `next` = `["git -C <worktree> merge --no-edit origin/<base>", "cpd attempt submit <attempt>"]` | `base_conflict` | 3 |
-| (kinds `open`, `update`; `pr.gate` `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
+| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
 | (the same) the gate worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
 
 Effects:
@@ -1666,7 +1669,7 @@ A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6
 
 **The repair** (hs-d340). A PR is opened by its `open` Job (contract §7.7), not by the Lead: engine E4 adds the Job to every started PR, its Worker merges the base, and its submit runs the Gate, pushes, and opens the pull request in its merge. `pr open` stays for what that cannot cover: a PR whose `open` Job is `failed` (the Lead decides between `job retry <job> --tier <T>` (§5.4) and this command), an engine that is down, or a PR whose `open` Job the Lead cancelled (`job cancel` stands, §5.3: E4 adds no new one, so this is how the PR is opened later; to give it up, `pr cancel`, §9.6). It is refused `open_job_live` while the PR has an `open` Job that is `draft`, `queued` or `running` (hs-d573), and its `jobs_not_done` counts every Job of the PR except its `open` and `update` Jobs. Nothing else here changes: the steps and refusals below are the ones the Job's submit and merge share (contract §7.6 steps 0, 1, 3, 4).
 
-`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `pr.gate` is `local`** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
+`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`)** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
 
 ```
 cpd pr open [--pr <key>] [--plan <id>]
@@ -1684,7 +1687,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the Gate | `pr_title_required` | 3 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`: a merged one was unstacked first, below): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
-| after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `pr.gate` `ci` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
+| after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `gate.merge` and `gate.pr` are `none` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
 | its owner has a policy file | `owner_unconfirmed` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
@@ -1699,14 +1702,14 @@ The Lead worktree's local changes refuse nothing: the Gate does not run there (h
 
 **A stacked PR** (hs-d324, hs-d325, hs-d301, contract §3.8 "Stacked PRs" step 7): when its base PR is `merged`, the command first **unstacks** it, **before the lookup and before every precondition below, `base_not_found` included** (its `base` becomes the base PR's own `base`, normally `main`, walking a chain of merged base PRs to its end; in its own transaction, **Event** `pr-base-changed` with `by` `pr open`, one per step, §5.2; the unstack is kept even when a later check refuses) and goes on with the new base, because GitHub deleted the merged base PR's branch: that branch is never looked up. The poll already unstacks such a PR when it records the base PR's merge (`by` `poll`, contract §7.6 step 6), so this is the case where no poll did yet. Otherwise `<base>` is the base PR's Lead Branch, so the conflict check, the Gate (its `target` the base PR's Lead Branch) and `gh pr create --base <base>` all run on top of it, and GitHub will not land the stacked pull request before the base PR. The Lead Branch contains the base PR's work, because it was started from the base PR's head (§9.7); a base PR that has moved on since is merged in only when it conflicts (`base_conflict`, `next`; hs-d490). Opened ready, never a draft, like every PR.
 
-**Ready, never a draft** (hs-d329): the pull request is opened only after the conflict check above and, with `pr.gate` `local`, the Gate; `gh pr create` never has `--draft` and no cpd command makes a pull request a draft or ready (contract §7.6 "Ready, never a draft"). Under `ci` the conflict check still applies and the pull request opens ready (the Lead's reading of hs-d329: `ci` skips only the Gate).
+**Ready, never a draft** (hs-d329): the pull request is opened only after the conflict check above and, with `gate.pr` is `local`, the Gate; `gh pr create` never has `--draft` and no cpd command makes a pull request a draft or ready (contract §7.6 "Ready, never a draft"). Under `ci` the conflict check still applies and the pull request opens ready (the Lead's reading of hs-d329: `ci` skips only the Gate).
 
 Effects:
 - **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The PR body's `# <title>` line uses the same title. The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
 - **No lock** (hs-d243, contract §7): merges into the PR go on during the command; no R first (an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses).
-- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request whose `pr.gate` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. Before the `plan-done` Event, every pending review of the Plan is closed `superseded`, reason "Plan review r<k> of Plan P is superseded: the Plan is done." The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
+- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request where `gate.pr` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. Before the `plan-done` Event, every pending review of the Plan is closed `superseded`, reason "Plan review r<k> of Plan P is superseded: the Plan is done." The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Conflict check** (contract §7.6 step 1, hs-d490): `git -C <repo> fetch origin <base>` (no `origin`: skipped, `refs/heads/<base>` used), `B = rev-parse origin/<base>` read once, `G = rev-parse refs/heads/<lead branch>` read once, then `git merge-tree --write-tree --name-only B G`; exit 1 is `base_conflict` with nothing run, pushed or written, any other failure `git_failed`. No ancestry test: a base that moved ahead is not a refusal and starts no Gate. It also applies to the adoption of an open pull request, not to a merged one. B is not fetched again after the Gate.
-- **Hooks:** with `pr.gate` `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The test slot** (contract §7.6 "The test slot", hs-d336): before `pre-start` it takes one of `test_concurrency` machine-wide slots (`run/test-<i>.lock`, default 2, shared with `cpd slot`, §23), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; test_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. It sets `CPD_TEST_SLOT=<i>` in the environment of both hooks, so a `cpd slot` inside them takes no second slot (§23). Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
+- **Hooks:** with `gate.pr` is `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The test slot** (contract §7.6 "The test slot", hs-d336): before `pre-start` it takes one of `test_concurrency` machine-wide slots (`run/test-<i>.lock`, default 2, shared with `cpd slot`, §23), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; test_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. It sets `CPD_TEST_SLOT=<i>` in the environment of both hooks, so a `cpd slot` inside them takes no second slot (§23). Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
 - **Re-read:** after the Gate the PR is read again; when it is no longer `dispatch` (a concurrent `pr open` opened it), the first precondition answers (`already`) and nothing is pushed.
 - **git:** rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`). The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op, and it pushes again what an earlier `push_failed` left behind. A rejection when the remote tip already contains G (a merge during the Gate pushed a descendant) is a success with `pushed` false; any other git failure is `git_failed`.
 - **gh:** the lookup above (`--state all`); when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (never `--draft`). When `gh pr create` fails, the `gh pr list` lookup runs again and a pull request it finds (a concurrent `pr open` created it) is adopted; otherwise the failure stands. `<title>` is the PR's stored title (Title, above); `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
@@ -1785,7 +1788,7 @@ Idempotent: yes; the rows hold what was reported, so a rerun with no change on G
 cpd pr rebase [--pr <key>] [--plan <id>] [--continue | --abort]
 ```
 
-Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required for a base that merely moved ahead (hs-d490). **The repair since hs-d497**, not how fix Jobs reach an `open` PR (the `update` Job they queue does it, §5.1): for a failed `update` Job, an engine that is down, or a conflict the Lead resolves itself. On a conflict the rebase **stays in progress in the PR's Lead worktree** and the command exits `rebase_conflict`; the Lead resolves the files and runs `--continue` (the rest of the rebase, the Gate and the lease push) or `--abort` (hs-d289; contract §7.6 "The conflict stop"). The Gate runs only when the PR's `pr.gate` is `local` (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
+Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required for a base that merely moved ahead (hs-d490). **The repair since hs-d497**, not how fix Jobs reach an `open` PR (the `update` Job they queue does it, §5.1): for a failed `update` Job, an engine that is down, or a conflict the Lead resolves itself. On a conflict the rebase **stays in progress in the PR's Lead worktree** and the command exits `rebase_conflict`; the Lead resolves the files and runs `--continue` (the rest of the rebase, the Gate and the lease push) or `--abort` (hs-d289; contract §7.6 "The conflict stop"). The Gate runs only when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
 
 | Flag | Meaning |
 |---|---|
@@ -1813,13 +1816,13 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required fo
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
-Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `pr.gate` `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from the PR's policy (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the Gate takes a machine-wide slot first and logs its wait (the Gate slot, contract §7.6, as `pr open`); the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, then the conflict stop below.
+Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `gate.pr` is `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from the PR's policy (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the Gate takes a machine-wide slot first and logs its wait (the Gate slot, contract §7.6, as `pr open`); the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, then the conflict stop below.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `pr.gate` `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `gate.pr` is `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
 
 **The conflict stop** (contract §7.6). On a conflict nothing is aborted: the Lead worktree holds the rebase, stopped at the first conflicting commit, and the Lead Branch ref is unchanged until the rebase finishes. The error:
 
@@ -1847,7 +1850,7 @@ Finishes the stopped rebase, then the Gate and the lease push of `pr rebase`. Or
 | `gate_error` and `gate_failed` as the rows above; nothing is pushed, the rebased Lead Branch stays | `gate_error` / `gate_failed` | 1 / 3 |
 | the push, as above: `--force-with-lease` against `X0`, `X0` read after guard U | `git_failed` | 1 |
 
-Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the tip the rebase started from, `rebase-merge/orig-head`); `GIT_EDITOR=true git -C <lead worktree> rebase --continue` (no editor; messages kept); `R'` the Lead worktree's `HEAD`; no rule S (that worktree was the one rebased); the Gate in a gate worktree at `R'` and the push exactly as `pr rebase` (slot and logged wait included: contract §7.6 "The Gate slot") (contract §7.6 C0–C6), the Gate only when `pr.gate` is `local`. No `fetch`: the rebase ends on the `origin/<base>` it started from. **Rows**: none; no Event. Output as `pr rebase`, `"rebased": true`, `old` = `S`, `new` = `R'`. Idempotent: no; a second run is `no_rebase_in_progress`.
+Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the tip the rebase started from, `rebase-merge/orig-head`); `GIT_EDITOR=true git -C <lead worktree> rebase --continue` (no editor; messages kept); `R'` the Lead worktree's `HEAD`; no rule S (that worktree was the one rebased); the Gate in a gate worktree at `R'` and the push exactly as `pr rebase` (slot and logged wait included: contract §7.6 "The Gate slot") (contract §7.6 C0–C6), the Gate only when `gate.pr` is `local`. No `fetch`: the rebase ends on the `origin/<base>` it started from. **Rows**: none; no Event. Output as `pr rebase`, `"rebased": true`, `old` = `S`, `new` = `R'`. Idempotent: no; a second run is `no_rebase_in_progress`.
 
 ### `pr rebase --abort`
 
@@ -2068,7 +2071,7 @@ Idempotent: yes (a read).
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `pr.gate` is `local` (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair since hs-d497, as `pr rebase`; the `update` Job does this for fix Jobs, §5.1) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
+Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair since hs-d497, as `pr rebase`; the `update` Job does this for fix Jobs, §5.1) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
 
 | Flag | Meaning |
 |---|---|
@@ -2089,13 +2092,13 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
-Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lead branch>`, read once; with `pr.gate` `local`, the Gate on a snapshot (§7.6, as `pr open`) in a gate worktree detached at G; it takes the Gate slot and logs its wait as `pr open` does (§7.6 "The Gate slot"); the PR re-read; then rule P, `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`, never `--force` or a lease). A rejection whose remote tip already contains G (a merge during the Gate pushed a descendant) is a success that pushed nothing. Any other git failure is `git_failed`. **Rows**: none; no Event.
+Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lead branch>`, read once; with `gate.pr` is `local`, the Gate on a snapshot (§7.6, as `pr open`) in a gate worktree detached at G; it takes the Gate slot and logs its wait as `pr open` does (§7.6 "The Gate slot"); the PR re-read; then rule P, `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`, never `--force` or a lease). A rejection whose remote tip already contains G (a merge during the Gate pushed a descendant) is a success that pushed nothing. Any other git failure is `git_failed`. **Rows**: none; no Event.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "pushed": true, "sha": "77aa01e…", "remote": "77aa01e…"}
 ```
 
-`sha` is G, the gated commit (the Lead Branch's tip when the command read it); `remote` is the remote branch's tip after the push, past G when merges that landed during the Gate were pushed (hs-d243). Idempotent: yes; a G the remote already has (git's porcelain status `=`, "up to date"), or has a descendant of, still runs the Gate (with `pr.gate` `local`), pushes nothing and returns `"pushed": false`.
+`sha` is G, the gated commit (the Lead Branch's tip when the command read it); `remote` is the remote branch's tip after the push, past G when merges that landed during the Gate were pushed (hs-d243). Idempotent: yes; a G the remote already has (git's porcelain status `=`, "up to date"), or has a descendant of, still runs the Gate (with `gate.pr` is `local`), pushes nothing and returns `"pushed": false`.
 
 ### 9.10 `pr merge`
 
@@ -2831,8 +2834,8 @@ Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it p
 {"ok": true, "checked": ["config", "store", "tmux", "listing", "home"], "tmux": {"version": "3.8", "server": "running"}}
 ```
 
-`"server"` is `"running"` or `"none"`. `scripts/install-cpd.sh` runs it with the new binary before it stops anything (contract §3.7).
-**`--mark-restart` (internal; hs-d471).** What `scripts/install-cpd.sh` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
+`"server"` is `"running"` or `"none"`. `cpd install` runs it with the new binary before it stops anything (§14.4, contract §3.7).
+**`--mark-restart` (internal; hs-d471).** What `cpd install` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -3325,6 +3328,32 @@ Effects: when `install/current-version` differs from the cached `pi_version`, on
 
 The `efforts` above are an illustration, not verified values. Idempotent: yes.
 
+### 14.4 `install`
+
+```
+cpd install --root <checkout>
+```
+
+Installs the cpd built from `<checkout>`: the binary and the pi adapter, then restarts what runs the old binary. The User's command at a shell, run by `scripts/install-cpd.sh` and, through it, by dotfiles' install and sync; no agent runs it and no cockpit action does (callers none, cockpit no, internal no: §2). `scripts/install-cpd.sh` is the bootstrap: `CPD_COMMIT=$(git rev-parse --short HEAD) scripts/cargo.sh build --release --locked -p cpd`, then `exec target/release/cpd install --root <checkout>`. `--root` is the checkout (a git worktree with `pi/`, `scripts/` and `core/src/store/migrations/`); the release binary is `<target>/release/cpd` (`$CARGO_TARGET_DIR` or `<root>/target`). The home is `$CPD_HOME` (default `~/.cpd`), the destination `~/.local/bin/cpd` and the adapter `~/.local/share/cpd/pi`.
+
+Steps, in order (implementing.md "`cpd install`" has each with its message; contract §3.7 "The adapter swap" and "The install's engine order" fix the rules):
+
+1. **Preflight.** `~/.local/share/cpd/pi` is absent, a symlink or a directory; else refused.
+2. **The migration check.** `git fetch --quiet origin main` (a failed fetch refuses); every file of `core/src/store/migrations/` must be on `origin/main` with the same content; else refused, listing the names.
+3. **The verdict of the built binary.** `<target>/release/cpd --version` must succeed, carry a `store` field, and not say `store.opens` false; else refused with the refusal's message and the fix of its code. Nothing migrates.
+4. **The binary.** Copied to `~/.local/bin/.cpd.tmp.<pid>`, `chmod 755`, `rename`d over `~/.local/bin/cpd` (atomic, also while it runs).
+5. **The adapter swap.** `pi/` minus `test/` is built as `pi.tmp.<pid>`, renamed to `pi.<id>`, linked as `pi.link.<pid>` (a relative symlink) and `rename`d over `pi` in one `rename(2)`; a real `pi/` directory is first renamed to `pi.legacy` (the one non-atomic moment, restored if the swap fails); `pi/package.json` must exist; then `pi.<id>` and `pi.legacy` that are neither current nor displaced and are older than 60 minutes, and `pi.tmp.<pid>` and `pi.link.<pid>` of dead pids, are removed (a failure only warns). Prints `installed <bin> and <link>` on stderr.
+6. **The follow-ups, on the new binary:** `cpd config`; `cpd watch --check` (§12); `cpd tui --respawn` (§13.1) when the cockpit has its `main` window; when the work session has its `watch` window, `cpd watch --mark-restart` (§12), `tmux kill-window -t =<work>:watch`, the wait for `locks/watch.lock` to be free (0.25 s steps, `CPD_INSTALL_LOCK_WAIT_SECS`, default 60), `cpd watch --ensure`, and the check that the lock is held. A failure of `config` or `watch --check` leaves the engine and the views alone and skips the rest; any other failure prints and goes on. Each failure is one line `cpd install follow-up failed: <text>` on stderr (texts: contract §3.7).
+7. **The tag.** `scripts/tag-version.sh` (docs/versioning.md): a failure warns with `tag-version:` and does not change the exit.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--root` is given | `usage` | 2 |
+
+Every refusal (steps 1 to 3, nothing replaced), failure (steps 4 and 5) and failed follow-up (step 6) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
+
+Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success, and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; the error `code` of each refusal is the Job's choice, unverified: no merged code names it yet). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+
 ## 15. The pi adapter's protocol
 
 The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review in the Lead's chat, with plannotator for the full render on request (§15.5). It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
@@ -3332,7 +3361,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 ### 15.1 Package and activation
 
 - **Package:** `pi/package.json` with `"keywords": ["pi-package"]` and `"pi": {"extensions": ["./extension.ts"], "skills": ["./skills"]}`; host packages are `peerDependencies: "*"` (cpd 1 §15, kept). The skill `cpd-lead` is the cpd 2 skill.
-- **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `scripts/install-cpd.sh`. (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
+- **Location:** `pi/`, installed to `~/.local/share/cpd/pi` by `cpd install` (§14.4). (History: before the switch-over it lived beside cpd 1's `pi/`, in a second directory.)
 - **Activation:** at pi's `session_start`, only when `ctx.mode` is `tui` and `CPD_SESSION` is set. Change from cpd 1: cpd 1 activated in any herdr or tmux pane (`HERDR_ENV`, `TMUX_PANE`); now cpd marks its own panes with `CPD_SESSION` (§6.5), so a pi the User starts by hand is left alone.
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
@@ -3470,7 +3499,7 @@ Rejected alternatives: one shared review server (cpd would have to run plannotat
 
 ### 15.6 Reload after an install
 
-Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `scripts/install-cpd.sh` the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
+Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first answer; contract §5.3 "Reload after an install" and §6.7. After `cpd install` (§14.4) the adapter reloads its own pi (`ctx.reload()`: extensions, skills, prompts, themes, context files) without the User typing and without typing into a pane. Nothing reaches the model.
 
 **Detection.** At `session_start` the adapter records the identity `(dev, ino, mtimeMs)` of its own directory (`dirname` of `pi/lib/`, from `import.meta.url`; contract §8 `pi_adapter`) with `statSync`. An `unref`'d timer polls it every 5 seconds (a constant of the adapter, not a config key) and is cleared at `session_shutdown`. The install replaces the directory as a whole (`rm -rf`, `mv`), so a new package has a new identity. `ENOENT` is the install in progress, not a change: the poll waits. A different identity of an existing directory is an install. The cpd binary is not watched (it changes first, before the directory is complete). The adapter runs only in `tui` mode (§15.1), so no other mode polls.
 
@@ -4327,10 +4356,13 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
  "files": ["/home/clayton/.cpd/policy/machines/homeserver.toml", "/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
  "policy": {
+   "gate": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
+           "keys": {"merge": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
+                    "pr": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+           "text": "These repos run no GitHub Actions: …"},
    "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
-                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
-          "text": "These repos run no GitHub Actions: …"},
+          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+          "text": ""},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
@@ -4798,7 +4830,24 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-## 26. `prune`
+## 26. `gate`
+
+The Gate's leak check (hs-d519, docs/research/hygiene.md "The Gate leak check", Plan tests-mock pro-d35). Area `core/src/gate/` and `cli/`.
+
+### 26.1 `gate finish`
+
+```
+cpd gate finish --run <id> --status <n>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--run <id>` | the run id (`GATE_RUN`, 6 characters). Required |
+| `--status <n>` | the exit status of the run's command. Required |
+
+Run by `scripts/gate-run.sh` after its command, with `TMPDIR` the run's directory. It lists what the run left: the processes that have `GATE_RUN=<id>` in their environment (`Spawn::with_env`), the tmux sockets named with the id (`/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`), the paths under `$TMPDIR`, and the lines of `$TMPDIR/tripwire.log`. A clean run prints nothing, removes the empty directory and exits with `--status`. Otherwise it prints `gate-run: FAIL: …` on stderr, `SIGKILL`s only the listed pids, removes only the listed sockets and the run's directory, and exits with `--status` when that is not 0, else 64. Another run's id never matches. Like `slot`, it prints no JSON of its own; a usage error is the envelope on stderr. Idempotent: yes.
+
+## 27. `prune`
 
 ```
 cpd prune [--apply] [--drop <lead-branch>]... <repo>...
@@ -4837,12 +4886,11 @@ Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `rem
 Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
 
 Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
-
-## 27. `tag` and `version`
+## 28. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
 
-### 27.1 `cpd tag`
+### 28.1 `cpd tag`
 
 `cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
 
@@ -4867,7 +4915,7 @@ Output (stderr, one line each; the stream the script used):
 
 Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
 
-### 27.2 `cpd version sync [--print]`
+### 28.2 `cpd version sync [--print]`
 
 cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
 
@@ -4877,3 +4925,36 @@ cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTO
 - Failures print a `sync-version:` line on stderr and exit 1, writing nothing: `sync-version: no 'pub const PROTOCOL: u32 = <n>;' line in <kind.rs>.`, `sync-version: no .sql file in <dir>.`, `sync-version: no [workspace.package] in <Cargo.toml>.`, `sync-version: no version line under [workspace.package] in <Cargo.toml>.`
 
 The test that fails when `Cargo.toml` differs from the derived version (docs/implementing.md "The version string") stays; `cpd version sync` is what fixes it.
+
+## 28. `test`
+
+The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thin (`exec cpd test …`). The selection and the name classification are pure over `git diff` and `cargo metadata` output, read through the `Runner`; the commands start `cargo` through `scripts/cargo.sh` (the bootstrap that builds cpd). Callers: Manager, Lead, Worker; not cockpit, not internal. The command tree is pinned by `cli/tests/tooling/interface.rs`, and [docs/interface.md](interface.md) is regenerated.
+
+### 28.1 `test changed`
+
+```
+cpd test changed [--dry-run] [<base>]
+```
+
+Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
+
+### 28.2 `test run`
+
+```
+cpd test run <name>...
+```
+
+Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
+
+### 28.3 `test list` and `test build`
+
+```
+cpd test list <name>
+cpd test build
+```
+
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+
+### 28.4 The `scripts/tests.sh` contract
+
+`.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. The script is only the bootstrap: it builds cpd with `scripts/cargo.sh build -p cpd` (a no-op when cpd is current, so a stale cpd never answers), takes the newest `target/*/cpd` and runs `exec cpd test <command> "$@"`; `scripts/test-changed` does the same for `cpd test changed`. A process's output reaches the caller when that process ends, not line by line: the runner returns it whole.

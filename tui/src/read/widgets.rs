@@ -10,9 +10,10 @@ use serde_json::Value;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
-use cpd_core::host::spawn::{Pid, ProcessSpawn, Spawn};
+use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::Phase;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
@@ -350,7 +351,7 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|d| d["pid"].as_u64())
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
-    Ok(if ProcessSpawn.alive(Pid(pid)) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
+    Ok(if Ports::current().spawn.alive(Pid(pid)) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {

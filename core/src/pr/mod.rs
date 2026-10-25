@@ -180,7 +180,7 @@ pub struct StartArgs {
     plan: PlanArg,
 }
 
-/// Runs `command`. Only `view` reads `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+/// Runs `command`. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Add(args) => add::add(args),
@@ -188,11 +188,11 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Cancel(args) => cancel::cancel(args),
         Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
-        Command::Poll(args) => poll::poll(args),
+        Command::Poll(args) => poll::poll(ports, args),
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(ports, args),
-        Command::Merge(args) => merge::merge(args),
+        Command::Merge(args) => merge::merge(ports, args),
     }
 }
 
@@ -318,7 +318,7 @@ fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -
 /// The Gate on a snapshot (contract §7.6 steps 1–4) on `sha`: the PR's dead gate
 /// worktrees swept, a gate worktree detached at `sha`, `pre-start` and `pre-merge`
 /// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
-/// Nothing runs when the PR's policy says `pr.gate` is not `local` (§8.3).
+/// Nothing runs when the PR's policy says `gate.pr` is not `local` (§8.3).
 fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
     gate_then(env, policy, plan, pr, sha, &format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged."))
 }
@@ -326,7 +326,7 @@ fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again:
 /// [`gate`] where `then` is what a refused Gate tells the caller to do next: the Lead's (`pr open`, `pr push`, `pr rebase`) or a Worker's
 /// (an `open` or `update` Job's submit, contract §7.7, which fixes what the Gate reports and submits again).
 fn gate_then(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, then: &str) -> Result<(), CpdError> {
-    if policy.pr.gate != Gate::Local {
+    if policy.gate.pr != Gate::Local {
         return Ok(());
     }
     git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, policy, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))

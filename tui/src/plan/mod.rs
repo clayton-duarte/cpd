@@ -146,7 +146,7 @@ struct Snapshot {
 
 /// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
 fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
-    snapshot_timed(&Ports::real(), store, width, now_ms, false)
+    snapshot_timed(&Ports::current(), store, width, now_ms, false)
 }
 
 /// [`snapshot`]'s chart, with the spinner frame and the time read on the clock of `ports`.

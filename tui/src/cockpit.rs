@@ -36,7 +36,7 @@ use serde_json::{Map, Value, json};
 
 use super::widgets::legend;
 use super::view_ports::RunFn;
-use super::{Restart, RestartOutcome, RunCommand, logs, merge, not_a_terminal, on_a_terminal};
+use super::{Restart, RestartOutcome, RunCommand, RunOn, logs, merge, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -364,9 +364,9 @@ impl Action {
 /// or any output. A failure is shown with `display-message -c <client>`
 /// instead, and if even that fails, it is dropped (a failed merge is first
 /// the merge action's own, [`merge::action`]).
-pub(super) fn action(name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand) -> Output {
-    if let Err(e) = run_action(name, pull, client, run_command) {
-        if let Ok(tmux) = action_tmux() {
+pub(super) fn action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Output {
+    if let Err(e) = run_action(ports, name, pull, client, run_command, run_on) {
+        if let Ok(tmux) = action_tmux(ports) {
             let message = format!("cpd tui action: {}", e.message());
             // `-l`: the message is shown as is, not expanded as a format.
             let _ = tmux.run(&["display-message".to_owned(), "-l".to_owned(), "-c".to_owned(), client.to_owned(), message]);
@@ -376,21 +376,21 @@ pub(super) fn action(name: Option<&str>, pull: Option<&str>, client: &str, run_c
 }
 
 /// The tmux server of the cockpit, from config `tmux.socket`.
-fn action_tmux() -> Result<Tmux, CpdError> {
-    Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket))
+fn action_tmux(ports: &Ports) -> Result<Tmux, CpdError> {
+    Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket).with_runner(ports.runner.clone()))
 }
 
-fn run_action(name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
+fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
         CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs or merge.", name.unwrap_or("")))
     })?;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
-    let tmux = Tmux::new(config.tmux.socket.clone());
+    let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ports.runner.clone());
     let popup = match (action, pull) {
         (Action::Merge, Some(pull)) => {
             let pull = merge::Pull::parse(pull).map_err(|e| CpdError::new(ErrorCode::Usage, e))?;
-            return merge::action(&home, &tmux, &pull, client, run_command);
+            return merge::action_with(ports, &home, &tmux, &pull, client, &|argv| run_on(ports, argv));
         }
         (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
         (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
@@ -517,7 +517,7 @@ fn command(run: RunFn, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
 /// Replaces this process with `tmux -L <socket> attach -t <cockpit>`, run by
 /// `program` (default: `tmux` on `PATH`); returns only when that fails.
 fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
-    exec_attach_with(&Ports::real(), tmux, cockpit, program)
+    exec_attach_with(&Ports::current(), tmux, cockpit, program)
 }
 
 /// [`exec_attach`] through `ports.spawn.exec`.
@@ -592,7 +592,7 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
 /// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
 /// still to come; a failure is one line on stderr.
 fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
-    tmux_version_with(&Ports::real(), home, config, store, tmux, restart)
+    tmux_version_with(&Ports::current(), home, config, store, tmux, restart)
 }
 
 /// [`tmux_version`] with the installed tmux asked of `ports.runner`.

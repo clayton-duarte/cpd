@@ -1129,9 +1129,9 @@ fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_
 
 #[test]
 fn the_views_need_a_terminal() {
-    let env = TestEnv::new();
+    let fx = Fx::with_ports();
     for view in ["widgets", "legend"] {
-        let run = env.cpd(&["tui", "view", view]);
+        let run = fx.cpd_without_a_terminal(&["tui", "view", view]);
         assert_eq!(run.exit, 3, "{view}: {run:?}");
         let error = run.error();
         assert_eq!(error["code"], "not_a_terminal", "{view}");

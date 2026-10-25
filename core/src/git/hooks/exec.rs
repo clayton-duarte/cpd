@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
+use crate::clock::{Clock, SystemClock};
 use crate::host::deadline::Failed;
 use crate::host::runner::{Call, HOOK_TOOL, Runner};
 
@@ -84,6 +85,21 @@ pub fn run_with(
     log: File,
     tail_lines: usize,
 ) -> Executed {
+    run_on(runner, &SystemClock, blocks, cwd, timeout, env, log, tail_lines)
+}
+
+/// [`run_with`] with the time `timeout` is measured on read from `clock`: what a block takes (a reply's `takes` on a
+/// `FakeRunner` is virtual) is what the blocks after it have left.
+pub fn run_on(
+    runner: &dyn Runner,
+    clock: &dyn Clock,
+    blocks: &[Vec<Rendered>],
+    cwd: &Path,
+    timeout: Duration,
+    env: &[(&str, &str)],
+    log: File,
+    tail_lines: usize,
+) -> Executed {
     let mut started: Option<Instant> = None;
     let mut output = Output { log, tail: VecDeque::new(), keep: tail_lines, log_error: None };
     let removed: Vec<String> =
@@ -92,8 +108,8 @@ pub fn run_with(
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
         // The first block has all of it: the clock starts with it.
-        let left = started.map_or(timeout, |at| timeout.saturating_sub(at.elapsed()));
-        started.get_or_insert_with(Instant::now);
+        let left = started.map_or(timeout, |at| timeout.saturating_sub(clock.now().saturating_duration_since(at)));
+        started.get_or_insert_with(|| clock.now());
         let ended: Vec<(Ended, Vec<u8>)> = std::thread::scope(|scope| {
             let threads: Vec<_> = block
                 .iter()
