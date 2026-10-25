@@ -80,6 +80,7 @@ mod updating_label;
 #[cfg(test)]
 mod pill_colours;
 mod plan;
+mod popup;
 pub mod read;
 mod runner;
 mod scroll;

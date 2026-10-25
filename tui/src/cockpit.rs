@@ -405,7 +405,9 @@ pub(crate) fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdEr
     size.ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}.")).with("socket", tmux.socket()))
 }
 
-/// `display-popup …` aimed at `client` (`-c`), so it opens there only.
+/// `display-popup …` aimed at `client` (`-c`), so it opens there only. The popup's argument vector stays as it
+/// was, with `-c` at index 1; the shared builder (`crate::popup::args`) places `-c` after `-B` for the merge, so
+/// the splice cannot move to the builder without changing the legend's, Logs' and the dialogs' vectors.
 pub(crate) fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
     popup.splice(1..1, ["-c".to_owned(), client.to_owned()]);
     popup

@@ -22,6 +22,7 @@ use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
+use crate::popup;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
 use crate::{Capture, run_view};
@@ -284,18 +285,15 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
 /// (plus the border), at most the client's size `(columns, rows)`.
 pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     let (w, h) = size();
-    [
-        "display-popup".to_owned(),
-        "-E".to_owned(),
-        "-T".to_owned(),
-        " legend ".to_owned(),
-        "-w".to_owned(),
-        (w + POPUP_BORDER).min(client.0).to_string(),
-        "-h".to_owned(),
-        (h + POPUP_BORDER).min(client.1).to_string(),
-        COMMAND.join(" "),
-    ]
-    .to_vec()
+    let size = ((w + POPUP_BORDER).min(client.0), (h + POPUP_BORDER).min(client.1));
+    popup::args(popup::Popup {
+        title: Some(" legend "),
+        border: false,
+        client: None,
+        dash: false,
+        size,
+        command: &COMMAND.join(" "),
+    })
 }
 
 /// `cpd tui view legend`: draws the legend until a key that does not scroll, or a click.

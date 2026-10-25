@@ -20,8 +20,8 @@ use std::time::Duration;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
 pub use self::view::{Log, draw};
+use super::popup;
 use super::read;
-use super::widgets::legend;
 use super::runner::{ViewError, kept};
 use super::{Capture, run_view};
 use cpd_core::config::Config;
@@ -29,6 +29,7 @@ use cpd_core::error::CpdError;
 use cpd_core::events::Selection;
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
+use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
 /// How many Events the view starts with (the `events list` default).
@@ -48,13 +49,18 @@ const SHARE: u16 = 80;
 /// size `(columns, rows)`; the view opens at the Event `event` when there is one.
 pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
     let cap = |n: u16| (u32::from(n) * u32::from(SHARE) / 100) as u16;
-    let mut args = legend::popup_args((cap(client.0), cap(client.1)));
-    args[3] = " logs ".to_owned();
-    *args.last_mut().expect("popup_args ends with the command") = match event {
-        Some(id) => format!("cpd tui view logs --event {id}"),
-        None => "cpd tui view logs".to_owned(),
+    let command = match event {
+        Some(id) => format!("{PROGRAM} tui view logs --event {id}"),
+        None => format!("{PROGRAM} tui view logs"),
     };
-    args
+    popup::args(popup::Popup {
+        title: Some(" logs "),
+        border: false,
+        client: None,
+        dash: false,
+        size: (cap(client.0), cap(client.1)),
+        command: &command,
+    })
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {

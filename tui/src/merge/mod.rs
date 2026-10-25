@@ -25,6 +25,7 @@ use rusqlite::OptionalExtension;
 use crate::box_widget::spacing;
 use crate::dialog::{Dialog, Mode};
 
+use super::popup;
 use super::viewlog::ViewLog;
 use super::{Capture, RunCommand, dialog, run_view};
 use cpd_core::config::Config;
@@ -149,45 +150,13 @@ fn popup_size(client: (u16, u16)) -> (u16, u16) {
     (POPUP.0.min(client.0.saturating_sub(2 * spacing::MARGIN_X)).max(1), POPUP.1.min(client.1))
 }
 
-/// `arg` as one word for the popup's shell: in single quotes.
-fn sh_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', r"'\''"))
-}
-
 /// The tmux arguments that open the dialog for `arg` (`<owner>/<repo>#<n>`) in a popup on the client `name`, at most
 /// the client's size `(columns, rows)`. The view gets `--client <name>`, for the merge it starts. (tmux does not
 /// expand formats in `display-popup`'s shell command, so the `#` of `arg` stays as it is.)
 pub fn popup_args(name: &str, client: (u16, u16), arg: &str) -> Vec<String> {
     let (w, h) = popup_size(client);
-    [
-        "display-popup".to_owned(),
-        "-E".to_owned(),
-        "-B".to_owned(),
-        "-c".to_owned(),
-        name.to_owned(),
-        "-w".to_owned(),
-        w.to_string(),
-        "-h".to_owned(),
-        h.to_string(),
-        "--".to_owned(),
-        format!("{PROGRAM} tui view merge {} --client {}", sh_quote(arg), sh_quote(name)),
-    ]
-    .to_vec()
-}
-
-/// The name and the size `(columns, rows)` of the most recently active client in `list-clients`'
-/// `#{client_activity} #{client_width} #{client_height} #{client_name}` lines.
-fn newest_named_client(listing: &str) -> Option<(String, (u16, u16))> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let mut words = line.splitn(4, ' ');
-            let activity: u64 = words.next()?.parse().ok()?;
-            let size = (words.next()?.parse().ok()?, words.next()?.parse().ok()?);
-            Some((activity, words.next().filter(|n| !n.is_empty())?.to_owned(), size))
-        })
-        .max_by_key(|(activity, _, _)| *activity)
-        .map(|(_, name, size)| (name, size))
+    let command = format!("{PROGRAM} tui view merge {} --client {}", popup::sh_quote(arg), popup::sh_quote(name));
+    popup::args(popup::Popup { title: None, border: true, client: Some(name), dash: true, size: (w, h), command: &command })
 }
 
 /// The merge icon's click, the menu's Merge and an Inbox `pr-ready` item's: the dialog for `arg` in a tmux popup over
@@ -195,7 +164,7 @@ fn newest_named_client(listing: &str) -> Option<(String, (u16, u16))> {
 pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
     let format = "#{client_activity} #{client_width} #{client_height} #{client_name}";
     let clients = tmux.run(&["list-clients", "-F", format].map(str::to_owned))?;
-    let (name, size) = newest_named_client(&clients).ok_or_else(|| {
+    let (name, size) = popup::newest_client(&clients).and_then(|(name, size)| Some((name?, size))).ok_or_else(|| {
         CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
     })?;
     tmux.run(&popup_args(&name, size, arg)).map(drop)
@@ -205,7 +174,7 @@ pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
 /// quoted for the shell, then every `#` doubled for `run-shell`'s format expansion, so it reaches `cpd` unchanged;
 /// stderr is dropped, as the StatusBar's binding drops it (`run-shell -b` shows any output in view mode).
 fn start_args(pull: &Pull, client: &str) -> Vec<String> {
-    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", sh_quote(&pull.to_string()), sh_quote(client));
+    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", popup::sh_quote(&pull.to_string()), popup::sh_quote(client));
     ["run-shell".to_owned(), "-b".to_owned(), command.replace('#', "##")].to_vec()
 }
 
@@ -376,8 +345,8 @@ mod tests {
 
     #[test]
     fn the_argument_is_quoted_for_the_popups_shell() {
-        assert_eq!(sh_quote("o/r#7"), "'o/r#7'");
-        assert_eq!(sh_quote("a'b"), r"'a'\''b'");
+        assert_eq!(popup::sh_quote("o/r#7"), "'o/r#7'");
+        assert_eq!(popup::sh_quote("a'b"), r"'a'\''b'");
     }
 
     #[test]
@@ -390,10 +359,11 @@ mod tests {
 
     #[test]
     fn the_popup_opens_on_the_newest_named_client() {
+        let named = |listing: &str| popup::newest_client(listing).and_then(|(name, size)| Some((name?, size)));
         let listing = "100 80 24 /dev/pts/1\n300 215 62 /dev/pts/4\n200 120 30 /dev/pts/2\n";
-        assert_eq!(newest_named_client(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
+        assert_eq!(named(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
         for bad in ["", "junk\n", "100 80 24\n", "100 80 24 \n", "x 80 24 /dev/pts/1\n"] {
-            assert_eq!(newest_named_client(bad), None, "{bad:?}");
+            assert_eq!(named(bad), None, "{bad:?}");
         }
     }
 }
