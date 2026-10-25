@@ -7,7 +7,7 @@ use super::engine::Engine;
 use super::report::{About, Step};
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
-use cpd_core::host::spawn::{Pid, ProcessSpawn, Spawn};
+use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{EscalationId, PlanId};
 
 struct Open {
@@ -33,7 +33,8 @@ pub(super) fn run(engine: &mut Engine) {
         }
         Err(e) => return engine.fail(Step::E1, About::Machine, &e),
     };
-    for escalation in open.into_iter().filter(|e| !u32::try_from(e.asker_pid).is_ok_and(|pid| ProcessSpawn.alive(Pid(pid)))) {
+    let spawn = engine.ports.spawn.clone();
+    for escalation in open.into_iter().filter(|e| !u32::try_from(e.asker_pid).is_ok_and(|pid| spawn.alive(Pid(pid)))) {
         let about = About::Attempt(escalation.plan.clone(), escalation.id.attempt().clone());
         match expire(engine, &escalation) {
             Ok(expired) => {

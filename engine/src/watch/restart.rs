@@ -19,9 +19,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -30,7 +28,7 @@ use time::OffsetDateTime;
 
 use super::engine::Engine;
 use super::lock;
-use super::record_detached;
+use super::{detached_launch, record_detached, sweep_detached};
 use cpd_core::clock::timestamp;
 use super::report::{About, Step};
 use super::SOURCE;
@@ -336,6 +334,7 @@ pub(super) fn detached() -> Result<cpd_core::output::Output, CpdError> {
 /// The engine's step before E1: reports a failed restart once, and starts the detached restart once
 /// nothing in the way is left (E3 holds meanwhile, [`holding`]).
 pub(super) fn drain(engine: &mut Engine) {
+    sweep_detached(engine);
     let pending = match read(&engine.home) {
         Ok(Some(pending)) => pending,
         Ok(None) => return,
@@ -352,12 +351,13 @@ pub(super) fn drain(engine: &mut Engine) {
         Ok(_) => return,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     }
-    if engine.restart_started.is_some_and(|at| at.elapsed() < RESTART_START_PAUSE) {
+    let now = engine.ports.clock.now();
+    if engine.restart_started.is_some_and(|at| now.saturating_duration_since(at) < RESTART_START_PAUSE) {
         return;
     }
-    match spawn(&engine.home) {
+    match spawn(engine) {
         Ok(pid) => {
-            engine.restart_started = Some(Instant::now());
+            engine.restart_started = Some(now);
             engine.log.line(&format!("tmux restart: nothing in the way; started the restart detached (pid {pid}, log run/tmux-restart.log)"));
         }
         Err(e) => engine.fail(Step::E3, About::Machine, &e),
@@ -385,36 +385,19 @@ fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
     }
 }
 
-/// Starts `cpd watch --restart-tmux` detached (`setsid`, stdin `/dev/null`, stdout and stderr
-/// appended to `run/tmux-restart.log`), as E3 starts a driver, its pid recorded in
+/// Starts `cpd watch --restart-tmux` through `engine.ports.spawn`, detached (`setsid`, stdin `/dev/null`, stdout and
+/// stderr appended to `run/tmux-restart.log`), as E3 starts a driver, its pid recorded in
 /// `run/tmux-restart.pid` ([`record_detached`]). Returns its pid.
-fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
-    let log_path = home.tmux_restart_log();
+fn spawn(engine: &mut Engine) -> Result<u32, CpdError> {
+    let log_path = engine.home.tmux_restart_log();
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the tmux restart: {why}."));
-    let exe = exe::started_as()?;
-    fs::create_dir_all(home.run_dir()).map_err(|e| failed(format!("cannot create {}: {e}", home.run_dir().display())))?;
-    let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| failed(format!("cannot open {}: {e}", log_path.display())))?;
-    let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
-    let mut command = Command::new(exe);
-    command
-        .args(["watch", "--restart-tmux"])
-        .current_dir(home.root())
-        .env("CPD_HOME", home.root())
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log);
-    // SAFETY: the closure runs in the forked child before exec and only makes an async-signal-safe system call.
-    unsafe {
-        command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
-    }
-    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
-    let pid_path = home.tmux_restart_pid();
-    record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
+    let exe = engine.ports.spawn.self_exe()?;
+    let run_dir = engine.home.run_dir();
+    fs::create_dir_all(&run_dir).map_err(|e| failed(format!("cannot create {}: {e}", run_dir.display())))?;
+    let launch = detached_launch(&exe, &["watch", "--restart-tmux"], &engine.home, log_path);
+    let pid = engine.ports.spawn.spawn(&launch).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid_path = engine.home.tmux_restart_pid();
+    record_detached(engine, pid, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
 
 #[cfg(test)]

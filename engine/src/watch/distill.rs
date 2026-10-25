@@ -3,15 +3,13 @@
 //! It only decides and spawns, as E3 does: the run takes its own lock,
 //! does its own work and appends its own `error` Event.
 
-use std::fs::{self, OpenOptions};
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::fs;
 
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::engine::{Engine, incident_holds, stopping};
-use super::record_detached;
+use super::{detached_launch, record_detached, sweep_detached};
 use super::report::{About, Step};
 use cpd_core::config::Config;
 use cpd_core::context::curation::not_curable;
@@ -38,6 +36,7 @@ fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
 const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL AND deleted_at IS NULL ORDER BY id";
 
 pub(super) fn run(engine: &mut Engine) {
+    sweep_detached(engine);
     if incident_holds(engine, Step::E9) {
         engine.log.line("E9: holding: incident mode is on");
         return;
@@ -51,7 +50,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(contexts) => contexts,
         Err(e) => return engine.fail(Step::E9, About::Machine, &e),
     };
-    let now = OffsetDateTime::now_utc();
+    let now = engine.ports.clock.utc();
     let mut failed = false;
     for context in contexts {
         if stopping() {
@@ -105,38 +104,19 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -
     Ok(())
 }
 
-/// Spawns `cpd context distill --context <context>` detached (`setsid`), stdin from `/dev/null`, stdout and
-/// stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid` ([`record_detached`]).
-/// Returns its pid.
-fn spawn(engine: &Engine, context: &ContextId, batch: u8) -> Result<u32, CpdError> {
+/// Spawns `cpd context distill --context <context>` through `engine.ports.spawn`, detached (`setsid`), stdin from
+/// `/dev/null`, stdout and stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid`
+/// ([`record_detached`]). Returns its pid.
+fn spawn(engine: &mut Engine, context: &ContextId, batch: u8) -> Result<u32, CpdError> {
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
-    let exe = cpd_core::host::exe::started_as()?;
+    let exe = engine.ports.spawn.self_exe()?;
     let log_path = log_path(&engine.home, context);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
-    let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| failed(format!("cannot open {}: {e}", log_path.display())))?;
-    let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
-    let mut command = Command::new(exe);
-    command
-        .args(["context", "distill", "--context", context.as_str(), "--batch", &batch.to_string()])
-        .current_dir(engine.home.root())
-        .env("CPD_HOME", engine.home.root())
-        // The caller's own identity is not the run's.
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log);
-    // SAFETY: the closure runs in the forked child before exec and only makes an async-signal-safe system call.
-    unsafe {
-        command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
-    }
-    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let args = ["context", "distill", "--context", context.as_str(), "--batch", &batch.to_string()];
+    let pid = engine.ports.spawn.spawn(&detached_launch(&exe, &args, &engine.home, log_path)).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
     let pid_path = engine.home.distill_pid(context);
-    record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
+    record_detached(engine, pid, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
 
 #[cfg(test)]
