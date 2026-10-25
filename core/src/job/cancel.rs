@@ -9,8 +9,17 @@ use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
+use crate::store::WriteTxn;
 
 const COMMAND: &str = "job cancel";
+
+/// What a cancel cascade changed: the Jobs it newly `failed` and the Jobs it newly `cancelled`, in creation
+/// order (contract §3.2 "Cancel", hs-d647).
+#[derive(Default)]
+pub(crate) struct Failed {
+    pub failed: Vec<String>,
+    pub cancelled: Vec<String>,
+}
 
 enum Decision {
     /// Already `cancelled`, or a request is already recorded.
@@ -44,10 +53,10 @@ fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result
     let mut env = Env::open()?;
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, shape))?;
-    let (status, requested, already) = match decision {
-        Decision::Already(job) => (job.status.clone(), job.status == "running", true),
+    let (status, requested, already, failed) = match decision {
+        Decision::Already(job) => (job.status.clone(), job.status == "running", true, Failed::default()),
         _ => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, shape)? {
-            Decision::Already(job) => Ok((job.status.clone(), job.status == "running", true)),
+            Decision::Already(job) => Ok((job.status.clone(), job.status == "running", true, Failed::default())),
             Decision::Cancel(job) => {
                 tx.execute(
                     "UPDATE jobs SET status = 'cancelled', failed_cause = NULL,
@@ -58,7 +67,9 @@ fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result
                 )?;
                 let text = format!("Job {key} of Plan {plan} was cancelled: {reason} Next: cpd plan show --plan {plan}");
                 append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
-                Ok(("cancelled".to_owned(), false, false))
+                // The dependents fail or are cancelled in the same transaction (contract §3.2 "Cancel", hs-d647).
+                let failed = fail_dependents(tx, &plan, &key, &reason)?;
+                Ok(("cancelled".to_owned(), false, false, failed))
             }
             Decision::Request(job, attempt) => {
                 tx.execute(
@@ -76,7 +87,7 @@ fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result
                         .job(key.clone())
                         .attempt(attempt),
                 )?;
-                Ok(("running".to_owned(), true, false))
+                Ok(("running".to_owned(), true, false, Failed::default()))
             }
         })?,
     };
@@ -84,7 +95,76 @@ fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result
     if already {
         out["already"] = json!(true);
     }
+    if !failed.failed.is_empty() {
+        out["failed"] = json!(failed.failed);
+    }
+    if !failed.cancelled.is_empty() {
+        out["cancelled"] = json!(failed.cancelled);
+    }
     Ok(Output::success(out))
+}
+
+/// In the caller's transaction, fail or cancel every Job of `plan` that needs `cancelled`, directly or
+/// transitively through any status (contract §3.2 "Cancel", hs-d647). A `queued` dependent becomes `failed`
+/// (`failed_cause` `its need <cancelled> was cancelled`, one `job-failed` Event); a `draft` one becomes
+/// `cancelled` (`cancel_reason` the same string, one `job-cancelled` Event). A dependent already `failed`,
+/// `merged` or `cancelled` is left as it is and still traversed through. `reason` is the cancelling Job's
+/// own reason, for the Event texts. Idempotent: a rerun over dependents already failed or cancelled writes
+/// nothing.
+pub(crate) fn fail_dependents(tx: &WriteTxn<'_>, plan: &PlanId, cancelled: &JobKey, reason: &str) -> Result<Failed, CpdError> {
+    let all = jobs::load(tx, plan)?;
+    let cause = format!("its need {cancelled} was cancelled");
+    // Reverse reachability: a Job is reached when one of its `needs` is `cancelled` or is already reached.
+    let mut reached: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    loop {
+        let mut grew = false;
+        for job in &all {
+            if reached.contains(&job.key) {
+                continue;
+            }
+            if job.needs.iter().any(|need| need == cancelled.as_str() || reached.contains(need)) {
+                reached.insert(job.key.clone());
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut changed = Failed::default();
+    for job in &all {
+        if !reached.contains(&job.key) {
+            continue;
+        }
+        let key = JobKey::parse(&job.key).map_err(|_| CpdError::bad_row(format!("Job key {:?}", job.key)))?;
+        match job.status.as_str() {
+            "queued" => {
+                tx.execute(
+                    "UPDATE jobs SET status = 'failed', failed_cause = ?3 WHERE plan = ?1 AND key = ?2",
+                    [plan.as_str(), job.key.as_str(), cause.as_str()],
+                )?;
+                let text = format!(
+                    "Job {} failed ({cause}): {reason} Decide: cpd job retry {} --tier <T> --plan {plan}, or cpd job cancel {} --reason <text> --plan {plan}",
+                    job.key, job.key, job.key
+                );
+                append(tx, NewEvent::job_failed(text, &cause, &cause, job.require_tier()?, 0).plan(plan.clone()).job(key))?;
+                changed.failed.push(job.key.clone());
+            }
+            "draft" => {
+                tx.execute(
+                    "UPDATE jobs SET status = 'cancelled', cancel_reason = ?3,
+                            cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
+                      WHERE plan = ?1 AND key = ?2",
+                    [plan.as_str(), job.key.as_str(), cause.as_str()],
+                )?;
+                let text = format!("Job {} of Plan {plan} was cancelled: {cause} Next: cpd plan show --plan {plan}", job.key);
+                append(tx, NewEvent::job_cancelled(text, &cause).plan(plan.clone()).job(key))?;
+                changed.cancelled.push(job.key.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(changed)
 }
 
 fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Result<Decision, CpdError> {

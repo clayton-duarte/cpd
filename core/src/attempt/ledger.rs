@@ -352,6 +352,11 @@ pub fn end_opened(
         return Err(cas_lost("The Job's status"));
     }
     events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
+    // The transaction that makes the Job `cancelled` also fails or cancels its dependents (contract §3.2 "Cancel", hs-d647).
+    if matches!(end, End::Cancelled) {
+        let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.unwrap_or_default();
+        crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, &reason)?;
+    }
     Ok(())
 }
 

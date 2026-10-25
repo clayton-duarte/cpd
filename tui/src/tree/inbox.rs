@@ -20,8 +20,8 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::actions::Action;
-use super::rows::truncate;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
+use crate::cells::{self, truncate};
 use crate::fold;
 use crate::link::link;
 use crate::merge::Pull;
@@ -301,10 +301,10 @@ fn is_link(kind: Kind) -> bool {
 /// `…` so that it never reaches the age, and the age (`width` cells: the body's). Returns the line and the number of cells of the label.
 /// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
 fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
-    let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
+    let room = width.saturating_sub(LEAD_WIDTH + 1 + cells::width(age));
     let label = truncate(&item.label, room);
-    let label_width = label.chars().count();
-    let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
+    let label_width = cells::width(&label);
+    let gap = width.saturating_sub(LEAD_WIDTH + label_width + cells::width(age));
     let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();

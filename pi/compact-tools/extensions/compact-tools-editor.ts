@@ -35,6 +35,11 @@ function state(): EditorState {
 	return holder[STATE_KEY];
 }
 
+/** The pane focus state the box tracks; the cursor reads it so focus is not tracked twice. */
+export function editorFocused(): boolean {
+	return state().focused;
+}
+
 /** Progress tells the box what the working label says; undefined when nothing is working. */
 export function setWorkingWords(words: string | undefined, frame = 0): void {
 	state().words = words;

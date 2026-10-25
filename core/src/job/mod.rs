@@ -11,6 +11,9 @@
 //! (no `txns` row), and again inside its write transaction, so that what it
 //! writes is what it checked.
 
+#[cfg(test)]
+mod incident_tests;
+
 mod add;
 mod approve;
 pub(crate) mod cancel;
@@ -339,6 +342,25 @@ fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Resul
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need a cancelled or failed Job.")
             .with("plan", plan.as_str())
             .with("needs", unavailable));
+    }
+    Ok(())
+}
+
+/// `job retry`: no key of `needs` is a `cancelled` Job (`needs_unavailable`, exit 3, `details.needs`; a `failed`
+/// need is allowed, §5.4, hs-d647): a Job held by a cancelled need can never start.
+pub(crate) fn check_needs_not_cancelled(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+    let cancelled: Vec<serde_json::Value> = jobs
+        .iter()
+        .filter(|j| needs.contains(&j.key) && j.status == "cancelled")
+        .map(|j| serde_json::json!({"key": j.key, "status": j.status}))
+        .collect();
+    if !cancelled.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::NeedsUnavailable,
+            "A Job held by a cancelled need can never start: cancel it and add a replacement whose needs do not name the cancelled Job.",
+        )
+        .with("plan", plan.as_str())
+        .with("needs", cancelled));
     }
     Ok(())
 }

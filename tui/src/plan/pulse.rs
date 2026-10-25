@@ -11,6 +11,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
+use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::read::{Bucket, age_text, Kind, Pulse, PulseRow, QUIET_MINUTES};
 
@@ -18,8 +19,6 @@ use crate::read::{Bucket, age_text, Kind, Pulse, PulseRow, QUIET_MINUTES};
 const MIN_BUCKETS: usize = 12;
 /// Columns of the age cell.
 const AGE_WIDTH: usize = 9;
-/// Rows a wheel notch scrolls.
-pub const NOTCH: usize = 3;
 /// The bars, level 1 to 8.
 const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
@@ -75,21 +74,6 @@ pub fn row_line(row: &PulseRow, id_width: usize, n: usize, max: u32) -> Line<'st
     Line::from(spans)
 }
 
-/// The largest offset: the last row at the foot of `height` rows.
-fn max_offset(rows: usize, height: usize) -> usize {
-    rows.saturating_sub(height)
-}
-
-/// `offset` clamped so no row scrolls past the last.
-pub fn clamp(offset: usize, rows: usize, height: usize) -> usize {
-    offset.min(max_offset(rows, height))
-}
-
-/// The offset after one wheel notch, `down` or up, clamped.
-pub fn scroll(offset: usize, down: bool, rows: usize, height: usize) -> usize {
-    clamp(if down { offset.saturating_add(NOTCH) } else { offset.saturating_sub(NOTCH) }, rows, height)
-}
-
 /// The row under the cell (`x`, `y`) of the screen when `area` shows the rows from `offset`.
 pub fn row_at(area: Rect, offset: usize, rows: usize, x: u16, y: u16) -> Option<usize> {
     if !area.contains((x, y).into()) {
@@ -99,15 +83,15 @@ pub fn row_at(area: Rect, offset: usize, rows: usize, x: u16, y: u16) -> Option<
     (row < rows).then_some(row)
 }
 
-/// Draws the rows of `pulse` from `offset` in `area` (inside the margin); returns the offset, clamped.
-pub fn draw(buf: &mut Buffer, area: Rect, pulse: &Pulse, offset: usize) -> usize {
-    let offset = clamp(offset, pulse.rows.len(), usize::from(area.height));
+/// Draws the rows of `pulse` from `scroll`'s offset in `area` (inside the margin), clamping `scroll` to the rows shown.
+pub fn draw(buf: &mut Buffer, area: Rect, pulse: &Pulse, scroll: &mut Scroll) {
+    scroll.resize(pulse.rows.len(), usize::from(area.height));
+    let offset = scroll.offset();
     let (id_width, n) = (id_width(pulse), buckets(usize::from(area.width), id_width(pulse)));
     for (i, row) in pulse.rows.iter().skip(offset).take(usize::from(area.height)).enumerate() {
         let line = Rect::new(area.x, area.y + i as u16, area.width, 1);
         row_line(row, id_width, n, pulse.max).render(line, buf);
     }
-    offset
 }
 
 /// What the legend shows for `quiet`: the label of a quiet Plan's age cell.
@@ -135,6 +119,7 @@ pub fn legend() -> Vec<(Span<'static>, String)> {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::style::Color;
     use super::*;
     use crate::read::Dot;
@@ -255,7 +240,7 @@ mod tests {
             events_cursor: 0,
         };
         let mut terminal = Terminal::new(TestBackend::new(125, 4)).unwrap();
-        terminal.draw(|f| { draw(f.buffer_mut(), Rect::new(2, 1, 121, 2), &pulse, 0); }).unwrap();
+        terminal.draw(|f| { draw(f.buffer_mut(), Rect::new(2, 1, 121, 2), &pulse, &mut Scroll::default()); }).unwrap();
         let line: String = (0..125).map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_owned()).collect();
         let n = buckets(121, 15);
         assert_eq!(line.chars().filter(|c| *c == '█').count(), n);
@@ -264,13 +249,22 @@ mod tests {
         assert!(line.starts_with("  cross-repo-plan  █"), "{line:?}: the id first, no dot");
     }
 
+    /// The offset after one wheel notch of `total` rows seen through 5, starting at `offset`.
+    fn wheel(total: usize, offset: usize, kind: MouseEventKind) -> usize {
+        let mut scroll = Scroll::default();
+        scroll.resize(total, 5);
+        scroll.by(isize::try_from(offset).unwrap_or(isize::MAX));
+        assert!(scroll.mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }));
+        scroll.offset()
+    }
+
     #[test]
     fn the_wheel_clamps_and_a_click_maps_to_the_row_under_it() {
         let area = Rect::new(2, 1, 40, 5);
-        assert_eq!(scroll(0, true, 8, 5), 3);
-        assert_eq!(scroll(3, true, 8, 5), 3, "no offset past the last row");
-        assert_eq!(scroll(1, false, 8, 5), 0);
-        assert_eq!(scroll(0, true, 3, 5), 0, "all rows fit");
+        assert_eq!(wheel(8, 0, MouseEventKind::ScrollDown), 3);
+        assert_eq!(wheel(8, 3, MouseEventKind::ScrollDown), 3, "no offset past the last row");
+        assert_eq!(wheel(8, 1, MouseEventKind::ScrollUp), 0);
+        assert_eq!(wheel(3, 0, MouseEventKind::ScrollDown), 0, "all rows fit");
         assert_eq!(row_at(area, 0, 8, 5, 1), Some(0));
         assert_eq!(row_at(area, 3, 8, 5, 3), Some(5));
         assert_eq!(row_at(area, 3, 8, 5, 5), Some(7));

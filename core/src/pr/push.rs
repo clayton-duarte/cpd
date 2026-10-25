@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
+use super::open::{agent, hold_refused};
 use super::{Args, Env, gate, illegal_phase, pr_policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
@@ -21,6 +22,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&plan, &args)?;
     let key = pr.key.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let branch = pr.lead_branch.clone();
     let lead = pr.lead(&id)?.clone();
     let policy = pr_policy(&mut env, &id, &key)?;

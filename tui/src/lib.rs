@@ -23,9 +23,18 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod guard_tests;
+#[cfg(test)]
+mod guard_popup_tests;
+#[cfg(test)]
+mod guard_terminal_tests;
+#[cfg(test)]
 mod section_title_tests;
+mod buffer;
+mod cells;
 mod chat;
 mod cockpit;
+mod host_click;
 pub mod dialog;
 pub mod fold;
 mod history;
@@ -44,15 +53,23 @@ mod layout_tests;
 mod layout_tree_tests;
 #[cfg(test)]
 mod input_box_tests;
+#[cfg(test)]
+mod input_box_width_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;
+#[cfg(test)]
+mod menu_width_tests;
 #[cfg(test)]
 mod failed_pill_tests;
 #[cfg(test)]
 mod landing_tests;
 #[cfg(test)]
 mod moon_tests;
+#[cfg(test)]
+mod phase_dot_tests;
+#[cfg(test)]
+mod phase_dot_views_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;
@@ -74,12 +91,19 @@ mod updating_label;
 #[cfg(test)]
 mod pill_colours;
 mod plan;
+mod popup;
 pub mod read;
 mod runner;
 mod scroll;
+#[cfg(test)]
+mod scroll_width_tests;
 pub mod section;
+#[cfg(test)]
+mod section_width_tests;
 mod no_notes;
 mod terminal_writes;
+#[cfg(test)]
+mod test_text;
 mod tree;
 mod viewlog;
 pub mod widgets;
