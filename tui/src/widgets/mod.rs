@@ -17,16 +17,18 @@
 
 pub(crate) mod column;
 #[cfg(test)]
+mod draw_tests;
+#[cfg(test)]
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;
-mod host;
+pub(crate) mod host;
 pub mod legend;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
-use std::process::Command;
+use cpd_core::host::runner::{Runner, SystemRunner};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -35,6 +37,7 @@ use ratatui::layout::{Margin, Position, Rect};
 use super::dialog;
 use super::pace::{self, Reads};
 use super::palette;
+use super::popup;
 use super::pump::{self, Pump, Schedule, Signal};
 use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
@@ -454,12 +457,14 @@ const UNKNOWN: &str = "?";
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
 fn hostname() -> String {
-    read_hostname(Path::new("/proc/sys/kernel/hostname"))
-        .or_else(|| std::env::var("HOSTNAME").ok().map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
-        .or_else(|| {
-            let out = Command::new("hostname").output().ok().filter(|o| o.status.success())?;
-            Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|n| !n.is_empty())
-        })
+    hostname_with(&SystemRunner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+}
+
+/// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
+pub(crate) fn hostname_with(runner: &dyn Runner, file: &Path, env: Option<&str>) -> String {
+    read_hostname(file)
+        .or_else(|| env.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+        .or_else(|| host::run_with(runner, "hostname", &[]).map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
         .unwrap_or_else(|| UNKNOWN.to_owned())
 }
 
@@ -472,23 +477,10 @@ fn read_hostname(path: &Path) -> Option<String> {
 /// The legend in a tmux popup over the cockpit, sized to it and at most the client's size.
 pub(crate) fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
     let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-    let client = newest_client(&clients).ok_or_else(|| {
+    let client = popup::newest_client(&clients).map(|(_, size)| size).ok_or_else(|| {
         CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
     })?;
     tmux.run(&legend::popup_args(client)).map(drop)
-}
-
-/// The size `(columns, rows)` of the most recently active client in `list-clients`'
-/// `#{client_activity} #{client_width} #{client_height}` lines.
-pub(crate) fn newest_client(listing: &str) -> Option<(u16, u16)> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let n: Vec<u64> = line.split(' ').filter_map(|x| x.parse().ok()).collect();
-            Some((*n.first()?, u16::try_from(*n.get(1)?).ok()?, u16::try_from(*n.get(2)?).ok()?))
-        })
-        .max()
-        .map(|(_, w, h)| (w, h))
 }
 
 #[cfg(test)]
@@ -511,15 +503,17 @@ mod tests {
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
             plan_failed: false,
+            plan_phase: None,
             merging: false,
         }
     }
 
     #[test]
     fn the_legend_popup_is_sized_by_the_most_recently_active_client() {
-        assert_eq!(newest_client("100 80 24\n300 215 62\n200 120 30\n"), Some((215, 62)));
-        assert_eq!(newest_client(""), None);
-        assert_eq!(newest_client("junk\n"), None);
+        let size = |listing: &str| popup::newest_client(listing).map(|(_, size)| size);
+        assert_eq!(size("100 80 24\n300 215 62\n200 120 30\n"), Some((215, 62)));
+        assert_eq!(size(""), None);
+        assert_eq!(size("junk\n"), None);
     }
 
     /// tui-W10: a name that cannot be read is no error of the view (nor are the CPU, GPU and memory, `host::Sampler`).

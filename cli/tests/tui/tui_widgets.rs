@@ -4,20 +4,21 @@
 //! their areas), and the palette the two share.
 
 use crate::common;
-use crate::tui_titles::{self, CAP_LEFT};
+use crate::tui_titles;
 
+use common::fx::Fx;
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, Meaning};
-use cpd_tui::read::{self, Dot, Widgets};
-use cpd_tui::widgets::{self, Hit, Machine, Usage, legend};
+use cpd_tui::read::{self, Widgets};
+use cpd_tui::widgets::{self, Hit, Machine, Usage};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
@@ -126,11 +127,11 @@ fn populate(store: &mut Store) {
     sql(store, &s);
 }
 
-fn fixture() -> (TestEnv, Store) {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+fn fixture() -> (Fx, Store) {
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     populate(&mut store);
-    (env, store)
+    (fx, store)
 }
 
 fn machine() -> Machine {
@@ -248,8 +249,8 @@ fn prs_store(env: &TestEnv) -> Store {
 /// the same lines on the same 30×14 pane, for a machine with no open pull request.
 #[test]
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut open(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut open(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, 0, 0))).unwrap();
@@ -262,44 +263,9 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
 }
 
 #[test]
-fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
-    let (got, _) = column(25);
-    let prs = header("PRs", Some(2));
-    let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
-    let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
-    let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
-    let mut expected = vec![
-        "",
-        " homeserver",
-        " \u{F4BC} 23%  \u{EFC5} 41%",
-        "",
-        prs.as_str(),
-        "",
-        seven.as_str(),
-        failed_open.as_str(),
-        eleven.as_str(),
-        none_open.as_str(),
-    ];
-    expected.resize(25, "");
-    assert_eq!(got, expected, "\n{}", got.join("\n"));
-}
-
-#[test]
-fn each_section_header_has_a_blank_row_above_and_below() {
-    for height in [20, 25, 29] {
-        let (got, _) = column(height);
-        for (title, count) in [("PRs", Some(2))] {
-            let at = got.iter().position(|r| *r == header(title, count)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
-            assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
-            assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
-        }
-    }
-}
-
-#[test]
 fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
@@ -328,8 +294,8 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
 
 #[test]
 fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 9; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let buf = render(46, 25, &w);
@@ -343,8 +309,8 @@ fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
 
 #[test]
 fn a_draft_shows_draft_and_the_others_open() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| p.draft).collect::<Vec<_>>(), [true, false, false]);
     let got = rows(&render(46, 25, &w)).join("\n");
     assert_eq!(got.matches("draft").count(), 1, "{got}");
@@ -352,8 +318,8 @@ fn a_draft_shows_draft_and_the_others_open() {
 
 #[test]
 fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others_are_not() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| p.active).collect::<Vec<_>>(), [false, false, true]);
     let buf = render(46, 25, &w);
@@ -383,12 +349,15 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others
 
 #[test]
 fn closed_and_merged_pull_requests_are_not_listed() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    let got = rows(&render(46, 25, &w)).join("\n");
-    for hidden in ["acme/web#2", "Closed web", "acme/api#1", "Merged api"] {
-        assert!(!got.contains(hidden), "{hidden}:\n{got}");
+    {
+        let fx = Fx::new();
+        let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
+        let got = rows(&render(46, 25, &w)).join("\n");
+        for hidden in ["acme/web#2", "Closed web", "acme/api#1", "Merged api"] {
+            assert!(!got.contains(hidden), "{hidden}:\n{got}");
+        }
     }
+    // (one `Fx` at a time: the second is the fixture's, in `column`)
     // The fixture's merged ones (a Plan's own, `old` #3 and `away` #9) are not listed either.
     let (got, _) = column(25);
     let got = got.join("\n");
@@ -397,8 +366,8 @@ fn closed_and_merged_pull_requests_are_not_listed() {
 
 #[test]
 fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let mut s = pull_request("acme/web", 31, "A colleague change", false, "open", "none", "passed", "2026-01-06T00:00:00.000Z");
     s += &pull_request("acme/web", 32, "My own, and asked of me", false, "open", "none", "passed", "2026-01-07T00:00:00.000Z");
     s += "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 31;
@@ -415,18 +384,9 @@ fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
 }
 
 #[test]
-fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
-    let (got, _) = column(25);
-    let got = got.join("\n");
-    for hidden in ["v1", "sketch lead", "never lead", "no PR", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
-        assert!(!got.contains(hidden), "{hidden}:\n{got}");
-    }
-}
-
-#[test]
 fn no_open_pull_request_says_so() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     let mut s = context("alpha") + &lead_row("ship", "v1");
     s += &plan_row("ship", "dispatch", "2026-01-02T00:00:00.000Z", None);
     s += &pull_request("acme/web", 2, "Closed web", false, "closed", "none", "none", "2026-01-01T00:00:00.000Z");
@@ -439,58 +399,13 @@ fn no_open_pull_request_says_so() {
     assert_eq!(buf[find(&buf, "no open PRs")].fg, palette::muted_text().fg.unwrap(), "muted, colour 8");
 }
 
-#[test]
-fn the_column_has_no_engine_slots_escalations_events_or_hint() {
-    let (got, _) = column(29);
-    let all = got.join("\n");
-    for gone in ["Engine", "Slots", "Escalations", "Events", "legend", "quit"] {
-        assert!(!all.contains(gone), "{gone}:\n{all}");
-    }
-}
-
 /// `acme/web#4` (failed checks) is owned by no Plan, `acme/repo#20` (pending) by `mine`: only the unowned one is red.
 #[test]
 fn failed_checks_are_red_on_an_unowned_pull_request() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     assert_eq!(buf[find(&buf, palette::CHECKS_FAILED)].fg, palette::color(Meaning::Failed));
-}
-
-#[test]
-fn the_column_takes_every_colour_from_the_palette() {
-    let (_, buf) = column(29);
-    let fg = |at: (u16, u16)| buf[at].fg;
-    let c = palette::color;
-    // The PRs: state and checks.
-    assert_eq!(fg(find(&buf, "open")), palette::clickable_text().fg.unwrap(), "an owned PR's `open` is 15 (yellow only when it is ready to merge)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), palette::color_clickable(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
-    // The titles: the corner and the line grey, the title inverted inside its caps.
-    for title in ["PRs"] {
-        let (x, y) = find(&buf, &format!("──{CAP_LEFT}{title}"));
-        assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
-        assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
-        let word = buf[(x + 3, y)].clone();
-        assert_eq!((word.fg, word.bg), (palette::pill_static().fg.unwrap(), palette::pill_static().bg.unwrap()), "{title}");
-        assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
-    }
-    let dim = |at: (u16, u16)| buf[at].fg == c(Meaning::Nothing);
-    let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are bold too); muted (colour 8): the title of the PR.
-    for title in ["homeserver", "acme/repo#7"] {
-        assert!(bold(find(&buf, title)), "{title}");
-        assert!(!dim(find(&buf, title)), "{title}");
-    }
-    for faint in ["cpd-tui cockpit", "Plan fresh"] {
-        assert!(dim(find(&buf, faint)), "{faint}");
-        assert!(!bold(find(&buf, faint)), "{faint}");
-    }
-    // Plain: the review decision and the CPU and memory %: not bold, not muted.
-    for plain in ["no review", "changes requested", "23%", "41%"] {
-        let at = find(&buf, plain);
-        assert!(!dim(at) && !bold(at), "{plain}");
-    }
 }
 
 #[test]
@@ -510,8 +425,8 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 
 #[test]
 fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     // Beside the 6 rows of the blank row, the machine, the header and its blank rows, each pull request takes 2, and
     // when some are hidden the `▼` row takes one more.
     for (height, listed) in [(6 + 6, 3), (6 + 5, 2), (6 + 4, 1), (6 + 3, 1), (6 + 2, 0), (6 + 1, 0)] {
@@ -532,8 +447,8 @@ fn linked_arrow(url: &str) -> String {
 
 #[test]
 fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
         assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
@@ -545,8 +460,8 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
 
 #[test]
 fn an_unowned_pr_is_read_only_text_on_both_lines_with_its_arrow_clickable_and_an_owned_one_is_clickable_text() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     assert_eq!(
         w.prs.iter().map(|p| p.lead.as_ref().map(|l| l.as_str())).collect::<Vec<_>>(),
         [None, None, Some("l-mine")],
@@ -578,8 +493,8 @@ fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
 
 #[test]
 fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advances_with_the_clock() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     // `mine` owns acme/repo#20 (third row pair); `acme/web#4` and `acme/repo#9` have no owner.
     let second = |w: &Widgets, frame: usize| row(&render_at(46, 25, w, frame), 11).trim_end().to_owned();
     let idle = read::widgets(&mut store, 3, 0).unwrap();
@@ -598,8 +513,8 @@ fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advanc
 
 #[test]
 fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let (_, hits) = render_hits(46, 25, &w);
     let [hit] = &hits[..] else { panic!("{hits:?}") };
     assert_eq!(hit.lead.as_str(), "l-mine");
@@ -611,8 +526,8 @@ fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
 
 #[test]
 fn a_snapshot_error_is_the_last_row_in_red() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     terminal
         .draw(|f| {
@@ -702,21 +617,21 @@ fn focused_session(env: &TestEnv) -> String {
 
 #[test]
 fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mouse() {
-    let env = pane_env();
-    prs_store(&env);
-    let pane = start(&env, "view");
-    let screen = wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    let width = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_width}"]).parse::<usize>().unwrap();
-    for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
-        let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
-        assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
+    // The column on the 120-column pane of the old test. Whether the terminal's mouse reporting is on while a view runs is
+    // `tui_runner`'s (`run_view`'s `Capture::Mouse`): a real pty's flag has no in-process subject.
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
+    let width = 120;
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let buf = render(width, 40, &w);
+    for (name, number, repo) in [(" acme/web#4", 4, "acme/web"), (" acme/repo#9", 9, "acme/repo"), (" acme/repo#20", 20, "acme/repo")] {
+        let y = (0..buf.area.height).find(|y| row(&buf, *y).starts_with(name)).unwrap_or_else(|| panic!("{name}: {:#?}", rows(&buf)));
+        let line = row(&buf, y);
+        assert_eq!(line.chars().count(), usize::from(width), "the arrow ends {name}'s line at the right edge: {line:?}");
         assert!(line.ends_with(CUE), "{line:?}");
+        // the cell at the right edge is the link to the pull request, in the OSC 8 escapes the terminal gets
+        assert_eq!(buf[(width - 1, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "{name}");
     }
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
-        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\{CUE}"))), "{url}: {styled:?}");
-    }
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }
 
 /// `q` does nothing in the column: with the cockpit's `pane-died` hook a view that exits is started again, so a `q` that
@@ -894,8 +809,8 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
 
 #[test]
 fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
@@ -1208,136 +1123,6 @@ fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
     assert_eq!(moved_events(&env), before, "no `session open` ran");
-}
-
-// ---------- the legend ----------
-
-fn legend_buffer() -> Buffer {
-    let (w, h) = legend::size();
-    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-    terminal.draw(|f| legend::draw(f, f.area())).unwrap();
-    terminal.backend().buffer().clone()
-}
-
-#[test]
-fn every_meaning_is_listed_with_its_swatch_in_its_colour() {
-    let buf = legend_buffer();
-    for m in Meaning::ALL {
-        let (x, y) = find(&buf, m.label());
-        assert_eq!(buf[(x - 4, y)].symbol(), "█", "{m:?}");
-        assert_eq!(buf[(x - 4, y)].fg, palette::color(m), "{m:?}");
-    }
-}
-
-#[test]
-fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
-    let buf = legend_buffer();
-    let jobs = find(&buf, "Jobs: Plan").1;
-    for (name, status, merging) in palette::JOB_LEGEND {
-        let (icon, _m) = palette::job_status(status, merging);
-        let (x, y) = find_after(&buf, jobs, name);
-        let text = row(&buf, y);
-        let pill_at = text.chars().position(|c| c.to_string() == icon).unwrap() as u16;
-        assert!(pill_at > x, "{name}: the pill follows the name");
-        let pill = palette::job_pill(status, merging, false);
-        assert_eq!(buf[(pill_at, y)].bg, pill.bg.unwrap(), "{name}: pill");
-        assert_eq!(buf[(pill_at, y)].fg, pill.fg.unwrap(), "{name}: pill text");
-        // the compact pill (hs-d474): no padding inside the caps
-        assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
-        // a rounded cap on each end, in the pill's colour on the default background
-        let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
-        for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
-            let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
-        }
-        let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
-        assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
-    }
-    let counters = row(&buf, find(&buf, "counters row").1);
-    assert!(counters.contains("1⋅1⋅1⋅1"), "{counters}");
-    assert!(counters.contains("planned⋅active⋅failed⋅done"), "{counters}");
-}
-
-#[test]
-fn the_session_dots_are_listed_in_their_colours() {
-    let buf = legend_buffer();
-    let dots = find(&buf, "Session Dots").1;
-    // The glyph column is as wide as the spinner's frames, then two cells of spacing.
-    let glyph_at = |text: &str| {
-        let (x, y) = find_after(&buf, dots, text);
-        (x - (palette::SPINNER.len() as u16 + 2), y)
-    };
-    let needs_you = glyph_at("the Session needs you");
-    assert_eq!(buf[needs_you].symbol(), palette::NEEDS_YOU);
-    let working = glyph_at("the Lead is working");
-    let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
-    assert_eq!(frames, palette::SPINNER.concat());
-    for (text, glyph, dot) in [
-        ("waiting:", palette::WAITING, Dot::Waiting),
-        ("idle, nothing needed", palette::IDLE, Dot::Idle),
-        ("pi stopped", palette::STOPPED, Dot::Stopped),
-        ("red:", palette::NEEDS_YOU, Dot::Red),
-        ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
-        ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
-        ("blue:", palette::NEEDS_YOU, Dot::Blue),
-        ("white:", palette::NEEDS_YOU, Dot::White),
-    ] {
-        let cell = &buf[glyph_at(text)];
-        let want = palette::dot_span(dot, 0, false);
-        assert_eq!(cell.symbol(), glyph, "{text}");
-        assert_eq!(cell.symbol(), want.content, "{text}");
-        assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
-    }
-    let precedence = format!(
-        "red > yellow > magenta > blue > white > {} > {} > {} > {}",
-        palette::SPINNER[0],
-        palette::WAITING,
-        palette::IDLE,
-        palette::STOPPED
-    );
-    find_after(&buf, dots, &precedence);
-    let red = row(&buf, find_after(&buf, dots, "red:").1);
-    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
-    assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
-    let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
-    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
-    let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
-    assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
-}
-
-#[test]
-fn the_pr_states_and_checks_are_listed_in_their_colours() {
-    let buf = legend_buffer();
-    for (name, state) in palette::PR_LEGEND {
-        assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
-    }
-    let checks = find(&buf, "PR Checks").1;
-    for (name, c) in palette::CHECKS_LEGEND {
-        let (icon, m) = palette::checks(c);
-        let (x, y) = find_after(&buf, checks, &format!(" {name}"));
-        assert_eq!(buf[(x - 1, y)].symbol(), icon, "{name}");
-        assert_eq!(buf[(x - 1, y)].fg, palette::color_clickable(m), "{name}");
-    }
-}
-
-#[test]
-fn the_legend_fits_its_own_size() {
-    let buf = legend_buffer();
-    assert!(row(&buf, 1).contains("Any Key Closes"));
-    let (w, h) = legend::size();
-    assert_eq!((buf.area.width, buf.area.height), (w, h));
-    assert!(row(&buf, h - 1).contains("passed"), "the last section is not cut");
-}
-
-#[test]
-fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
-    let (w, h) = legend::size();
-    assert_eq!(
-        legend::popup_args((215, 100)),
-        ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
-    );
-    let small = legend::popup_args((40, 20));
-    assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));
 }
 
 // ---------- the commands ----------

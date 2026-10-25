@@ -15,6 +15,7 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
+use super::open::{agent, hold_refused};
 use super::{Args, Env, RebaseArgs, gate, gate_hooks, illegal_phase, pr_policy, refusal, short};
 use crate::config::{self, Catalog};
 use crate::policy::{Gate, Policy};
@@ -53,6 +54,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&plan, &args)?.clone();
     let key = pr.key.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
@@ -150,6 +152,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&plan, &args)?.clone();
     let key = pr.key.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = Path::new(&pr.repo);
@@ -202,6 +205,7 @@ fn abort(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let plan = env.plan(&id)?;
     let pr = plan.select(&args.pr)?.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &pr.key, agent()))?;
     let lead = pr.lead(&id)?.clone();
     let branch = pr.lead_branch.as_str();
 

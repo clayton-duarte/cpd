@@ -18,6 +18,7 @@ mod context;
 mod driver_idle;
 mod driver_reload;
 mod driver;
+mod host_repair;
 mod job;
 mod metrics;
 mod plan_cancel;

@@ -4,6 +4,7 @@
 
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind, Urgency};
+use cpd_core::plan::Phase;
 use cpd_core::session::State;
 
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Blue > White >
@@ -17,8 +18,9 @@ pub enum Dot {
     /// `palette::WAITING` in `Meaning::Waiting`: the Session waits for another agent (a Worker for its Lead, a Lead
     /// for a Worker), not for the User (hs-d303). Never red, never a filled dot.
     Waiting,
-    /// `palette::SPINNER`: the Lead is working.
-    Working,
+    /// `palette::SPINNER`: the Lead is working; `Some(phase)` is the phase of the Plan it leads, `None` for a Session
+    /// that leads no Plan (a fork, a Manager, a Worker), drawn cyan (hs-d622).
+    Working(Option<Phase>),
     /// The red loader: the Plan's Lead is working while its Plan has a failed Job (hs-d581).
     Fixing,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
@@ -39,16 +41,17 @@ impl Dot {
         self >= Dot::White
     }
 
-    /// The dot of a working Lead: the red loader when its Plan has a failed Job.
-    pub fn working(failed: bool) -> Dot {
-        if failed { Dot::Fixing } else { Dot::Working }
+    /// The dot of a working Lead: the red loader when its Plan has a failed Job (hs-d581), else its Plan's phase
+    /// (`None`: no Plan, cyan).
+    pub fn working(failed: bool, phase: Option<Phase>) -> Dot {
+        if failed { Dot::Fixing } else { Dot::Working(phase) }
     }
 
     /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
     /// `palette::STOPPED`.
     pub fn glyph(state: State) -> Dot {
         match state {
-            State::Working => Dot::Working,
+            State::Working => Dot::Working(None),
             State::Stopped => Dot::Stopped,
             State::Waiting => Dot::Waiting,
             State::Idle | State::Blocked => Dot::Idle,
@@ -59,11 +62,12 @@ impl Dot {
     /// (hs-d183): a working Session shows the spinner whatever its items, so a Lead at work is never yellow, magenta
     /// or white; any other state shows its most urgent item, else its glyph. `failed` is true for a Plan's own Lead
     /// whose Plan has a failed Job (hs-d581): working, it shows the red loader, or the red dot when its own item is red.
-    pub fn of(state: State, item: Option<Urgency>, failed: bool) -> Dot {
+    /// `phase` is the phase of the Plan the Session leads (`None` for any other Session); only a working Session uses it.
+    pub fn of(state: State, item: Option<Urgency>, failed: bool, phase: Option<Phase>) -> Dot {
         if state == State::Working {
             return match (failed, item) {
                 (true, Some(Urgency::Red)) => Dot::Red,
-                _ => Dot::working(failed),
+                _ => Dot::working(failed, phase),
             };
         }
         item.map_or_else(|| Dot::glyph(state), Dot::from)
@@ -134,26 +138,26 @@ mod tests {
 
     #[test]
     fn the_glyphs_without_an_item() {
-        assert_eq!(Dot::of(State::Working, None, false), Dot::Working);
-        assert_eq!(Dot::of(State::Idle, None, false), Dot::Idle);
-        assert_eq!(Dot::of(State::Stopped, None, false), Dot::Stopped);
-        assert_eq!(Dot::of(State::Blocked, None, false), Dot::Idle, "blocked is no dot of its own: its dialog item is");
-        assert_eq!(Dot::of(State::Waiting, None, false), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
+        assert_eq!(Dot::of(State::Working, None, false, None), Dot::Working(None));
+        assert_eq!(Dot::of(State::Idle, None, false, None), Dot::Idle);
+        assert_eq!(Dot::of(State::Stopped, None, false, None), Dot::Stopped);
+        assert_eq!(Dot::of(State::Blocked, None, false, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
+        assert_eq!(Dot::of(State::Waiting, None, false, None), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
         for state in [State::Working, State::Idle, State::Waiting, State::Blocked, State::Stopped] {
-            assert!(!Dot::of(state, None, false).needs_you(), "no item, never a filled dot: {state:?}");
+            assert!(!Dot::of(state, None, false, None).needs_you(), "no item, never a filled dot: {state:?}");
         }
     }
 
     #[test]
     fn an_item_gives_its_urgency_colour_unless_the_session_is_working() {
         for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
-            assert_eq!(Dot::of(State::Working, Some(urgency), false), Dot::Working, "own state first (hs-d183): {urgency:?}");
+            assert_eq!(Dot::of(State::Working, Some(urgency), false, None), Dot::Working(None), "own state first (hs-d183): {urgency:?}");
         }
         for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             for (urgency, dot) in
                 [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Blue, Dot::Blue), (Urgency::White, Dot::White)]
             {
-                assert_eq!(Dot::of(state, Some(urgency), false), dot, "{state:?} {urgency:?}");
+                assert_eq!(Dot::of(state, Some(urgency), false, None), dot, "{state:?} {urgency:?}");
                 assert!(dot.needs_you());
             }
         }
@@ -233,7 +237,7 @@ mod tests {
     #[test]
     fn a_blue_item_gives_its_session_a_blue_dot_between_magenta_and_white() {
         assert_eq!(Dot::from(Urgency::Blue), Dot::Blue);
-        assert_eq!(Dot::of(State::Idle, Some(Urgency::Blue), false), Dot::Blue);
+        assert_eq!(Dot::of(State::Idle, Some(Urgency::Blue), false, None), Dot::Blue);
         assert!(Dot::Blue.needs_you());
         assert!(Dot::Magenta > Dot::Blue && Dot::Blue > Dot::White);
         let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
@@ -247,19 +251,19 @@ mod tests {
     /// only a working Session is changed.
     #[test]
     fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_unless_its_item_is_red() {
-        assert_eq!(Dot::of(State::Working, None, true), Dot::Fixing);
+        assert_eq!(Dot::of(State::Working, None, true, None), Dot::Fixing);
         for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
-            assert_eq!(Dot::of(State::Working, Some(urgency), true), Dot::Fixing, "{urgency:?}");
+            assert_eq!(Dot::of(State::Working, Some(urgency), true, None), Dot::Fixing, "{urgency:?}");
         }
-        assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true), Dot::Red);
+        assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, None), Dot::Red);
         for state in [State::Idle, State::Waiting, State::Stopped] {
-            assert_eq!(Dot::of(state, None, true), Dot::of(state, None, false), "{state:?}");
+            assert_eq!(Dot::of(state, None, true, None), Dot::of(state, None, false, None), "{state:?}");
         }
     }
 
     #[test]
     fn the_order_is_the_precedence() {
-        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Fixing, Dot::Working, Dot::Waiting, Dot::Idle, Dot::Stopped];
+        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Fixing, Dot::Working(None), Dot::Waiting, Dot::Idle, Dot::Stopped];
         assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > blue > white > fixing > working > waiting > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert!(!Dot::Fixing.needs_you());

@@ -8,6 +8,7 @@ use ratatui::buffer::Buffer;
 use super::flow::{self, FlowJob, Live};
 use super::*;
 use crate::box_widget::spacing;
+use crate::test_text::rows;
 
 fn row(buf: &Buffer, y: u16) -> String {
     (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
@@ -64,11 +65,7 @@ fn a_pr_box_title_follows_the_corner_and_one_dash() {
 }
 
 fn text(c: &flow::Chart) -> String {
-    let buf = &c.buf;
-    (0..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
+    rows(&c.buf).join("\n")
 }
 
 #[test]

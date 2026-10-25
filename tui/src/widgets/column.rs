@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
+use crate::cells;
 use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette::{self, Meaning};
@@ -130,16 +131,9 @@ pub(crate) fn muted(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), palette::muted_text())
 }
 
-/// `text` cut to `max` characters, ending in `…` when cut.
+/// `text` cut to `max` columns, ending in `…` when cut.
 fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
-    if max > 0 {
-        cut.push('…');
-    }
-    cut
+    cells::truncate(text, max)
 }
 
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󱆭` in the last column, then
@@ -151,9 +145,11 @@ fn truncate(text: &str, max: usize) -> String {
 /// yellow only when the PR is `clean`, ready to merge. An `active` one (a PR of the chat slot's Plan) is the blue block, bold,
 /// across both lines, with no colour of its own.
 /// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
+/// Its colour is [`Dot::working`]: the red loader when `plan_failed`, else the bright pair of the owning Plan's phase
+/// (`plan_phase`; `None`: cyan, hs-d622).
 pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
-    let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
+    let gap = " ".repeat(width.saturating_sub(cells::width(&name) + 1));
     let review = match pr.review_decision {
         ReviewDecision::Approved => "approved",
         ReviewDecision::ChangesRequested => "changes requested",
@@ -174,8 +170,8 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     // the colour of a mark that has a meaning, and the colourless text: bright and 15 when the PR is owned (clickable)
     let mark = |m| if owned { palette::fg_clickable(m) } else { palette::fg(m) };
     let text = if owned { palette::clickable_text() } else { palette::read_only_text() };
-    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed), frame, false));
-    let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + look.conflict.map_or(0, |(word, _)| 1 + word.chars().count());
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed, pr.plan_phase), frame, false));
+    let used = 2 + cells::width(state_text) + if dot.is_some() { 2 } else { 0 } + 3 + cells::width(review) + look.conflict.map_or(0, |(word, _)| 1 + cells::width(word));
     let mut spans = vec![
         "  ".into(),
         Span::styled(state_text, mark(state_meaning)),
@@ -197,7 +193,7 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     let mut shown = used;
     if room >= 4 {
         let title = format!("  {}", truncate(&pr.title, room));
-        shown += title.chars().count();
+        shown += cells::width(&title);
         spans.push(muted(title));
     }
     if pr.clean {
@@ -370,6 +366,10 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 }
 
 #[cfg(test)]
+#[path = "column_width_tests.rs"]
+mod column_width_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::read::PrState;
     use ratatui::Terminal;
@@ -377,6 +377,7 @@ mod tests {
     use ratatui::buffer::Buffer;
 
     use crate::palette::Meaning;
+    use crate::test_text::row;
 
     use super::*;
     fn drawn(width: u16, height: u16, open: &[OpenPr]) -> (Buffer, Vec<Hit>) {
@@ -420,12 +421,9 @@ mod tests {
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
             plan_failed: false,
+            plan_phase: None,
             merging: false,
         }
-    }
-
-    fn row(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
     }
 
     #[test]

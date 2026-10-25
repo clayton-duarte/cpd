@@ -14,6 +14,11 @@
 //! commit in a gate worktree of its own and pushes by rule P (§7.4, §7.6); each works on
 //! one PR of the Plan, `poll` on every open one.
 
+#[cfg(test)]
+mod gh_runner_tests;
+#[cfg(test)]
+mod incident_tests;
+
 mod add;
 mod cancel;
 mod edit;

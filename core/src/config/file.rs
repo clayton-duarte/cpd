@@ -548,3 +548,16 @@ fn tmux_name(s: &str) -> Result<String, String> {
     let ok = (1..=32).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not 1-32 characters of A-Z a-z 0-9 _ -")) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The retired `@juicesharp/rpiv-ask-user-question` package is no default of `lead_pi_packages`.
+    #[test]
+    fn default_lead_pi_packages_is_plannotator_only() {
+        const PLANNOTATOR: &str = "npm:@plannotator/pi-extension@0.28.17";
+        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("/config.toml")).unwrap();
+        assert_eq!(config.lead_pi_packages, [PLANNOTATOR]);
+    }
+}

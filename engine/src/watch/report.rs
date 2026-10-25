@@ -7,7 +7,8 @@
 //! succeeds in one part and fails in another does not append at every tick.
 //! With each `error` Event goes one message to the Context's Manager, or to
 //! every live Manager for a machine error (hs-d314). A stuck Job goes to its
-//! Context's Manager the same way, once (hs-d318, [`tell_stuck_job`]).
+//! Context's Manager the same way, once (hs-d318), grouped by PR (hs-d647,
+//! [`tell_stuck_jobs`]).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,7 +22,7 @@ use super::log::Log;
 use cpd_core::error::CpdError;
 use cpd_core::events::{self, NewEvent};
 use cpd_core::ids::{AttemptId, JobKey, PlanId, SessionId};
-use cpd_core::inbox::rules::StuckJob;
+use cpd_core::inbox::rules::{StuckGroup, StuckJob, stuck_groups};
 use cpd_core::session::tell_managers;
 use cpd_core::store::Store;
 
@@ -35,6 +36,7 @@ pub(super) enum Step {
     E5,
     E7,
     Workers,
+    HostAlert,
     E8,
     E9,
     E10,
@@ -54,6 +56,7 @@ impl fmt::Display for Step {
             Step::E5 => "E5 (PR)",
             Step::E7 => "E7 (PR start)",
             Step::Workers => "the @cpd_workers step",
+            Step::HostAlert => "the @cpd_host_alert step",
             Step::E8 => "E8 (Inbox)",
             Step::E9 => "E9 (Context digests)",
             Step::E10 => "E10 (Session titles)",
@@ -128,31 +131,33 @@ impl From<&CpdError> for Failure {
     }
 }
 
-/// What every message about the failure of a Job begins with: the record that it was sent ([`tell_stuck_job`]).
-fn stuck_prefix(stuck: &StuckJob) -> String {
-    format!("Job {}/{} failed ", stuck.plan, stuck.job)
+/// What every message about a group's stuck Jobs begins with: the record that it was sent ([`tell_stuck_jobs`]).
+fn stuck_prefix(group: &StuckGroup) -> String {
+    format!("Jobs of PR {}/{} failed ", group.plan, group.pr)
 }
 
-/// The message of a stuck Job to its Context's Manager (contract §3.7 "A stuck Job", hs-d318). `<T>` stays as written: the
-/// Manager chooses the Tier, which `job retry` requires.
-fn stuck_text(stuck: &StuckJob) -> String {
-    let (plan, job) = (&stuck.plan, &stuck.job);
+/// The one message of a PR's stuck Jobs to its Context's Manager (contract §3.7 "A stuck Job", hs-d647): each Job with its
+/// own minutes and `failed_cause`, oldest first. `<key>` and `<T>` stay as written for the Manager to choose.
+fn stuck_text(group: &StuckGroup) -> String {
+    let entries =
+        group.jobs.iter().map(|j| format!("{}/{} ({} min ago, {})", group.plan, j.job, j.minutes, j.cause)).collect::<Vec<_>>().join("; ");
     format!(
-        "{}{} min ago ({}) and its Lead has not retried or cancelled it. Retry it (cpd job retry {job} --plan {plan} --tier <T>), nudge the Lead, or ask the User.",
-        stuck_prefix(stuck),
-        stuck.minutes,
-        stuck.cause
+        "{}and their Lead has not retried or cancelled them: {}. Retry each (cpd job retry <key> --plan {} --tier <T>), nudge the Lead, or ask the User.",
+        stuck_prefix(group),
+        entries,
+        group.plan
     )
 }
 
-/// Whether the Context's live Manager is yet to be told of `stuck`: there is one (role `manager`, not archived) and no
-/// message of this failure reached it, that is one from the User's side (`from` null) newer than the Job's latest
-/// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of the Job is a newer Event, so it is told again.
-fn untold(conn: &Connection, stuck: &StuckJob) -> Result<bool, CpdError> {
+/// Whether the Context's live Manager is yet to be told of `group`: there is one (role `manager`, not archived) and no
+/// message of this PR's failure reached it, that is one from the User's side (`from` null) newer than the group's newest
+/// `job-failed` Event whose text begins [`stuck_prefix`]. A later failure of a Job of the PR is a newer Event, so the group
+/// is told again.
+fn untold(conn: &Connection, group: &StuckGroup) -> Result<bool, CpdError> {
     let manager: Option<String> = conn
         .query_row(
             "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND context = ?1",
-            [stuck.context.as_str()],
+            [group.context.as_str()],
             |r| r.get(0),
         )
         .optional()?;
@@ -160,22 +165,27 @@ fn untold(conn: &Connection, stuck: &StuckJob) -> Result<bool, CpdError> {
     let sent: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM events WHERE session = ?1 AND id > ?2 AND kind = 'session-message'
                          AND json_extract(data, '$.from') IS NULL AND instr(json_extract(data, '$.text'), ?3) = 1)",
-        params![manager, stuck.event, stuck_prefix(stuck)],
+        params![manager, group.event, stuck_prefix(group)],
         |r| r.get(0),
     )?;
     Ok(!sent)
 }
 
-/// Tells the live Manager of `stuck`'s Context, by the path of a step's failure (one waking message from the User's side,
-/// [`tell_managers`]), once until the Job leaves `failed` (contract §3.7 "A stuck Job", hs-d318): the record that it was
-/// told is the message itself ([`untold`]), so a later tick or a restarted engine sends nothing. With no live Manager
-/// nothing is sent and nothing is written (the next tick looks again). Returns whether a message was sent.
-pub(super) fn tell_stuck_job(store: &mut Store, stuck: &StuckJob) -> Result<bool, CpdError> {
-    if !store.read(|conn| untold(conn, stuck))? {
-        return Ok(false);
+/// Tells the live Manager of each group's Context one message per PR, by the path of a step's failure (one waking message
+/// from the User's side, [`tell_managers`]), once until a Job of the group fails again (contract §3.7 "A stuck Job",
+/// hs-d318, hs-d647): the record that it was told is the message itself ([`untold`]), so a later tick or a restarted
+/// engine sends nothing. With no live Manager nothing is sent and nothing is written (the next tick looks again). Returns
+/// the number of messages sent.
+pub(super) fn tell_stuck_jobs(store: &mut Store, stuck: &[StuckJob]) -> Result<usize, CpdError> {
+    let mut sent = 0;
+    for group in &stuck_groups(stuck.to_vec()) {
+        if !store.read(|conn| untold(conn, group))? {
+            continue;
+        }
+        let text = stuck_text(group);
+        sent += store.write(SOURCE, |tx| tell_managers(tx, group.event, &text))?;
     }
-    let text = stuck_text(stuck);
-    Ok(store.write(SOURCE, |tx| tell_managers(tx, stuck.event, &text))? > 0)
+    Ok(sent)
 }
 
 /// The failures reported and not cleared yet: `(step, about)` → code and the id of its `error` Event.
@@ -250,7 +260,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use cpd_core::home::CpdHome;
-    use cpd_core::ids::ContextId;
+    use cpd_core::ids::{ContextId, PrKey};
 
     fn failure(code: &str) -> Failure {
         Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }
@@ -420,9 +430,10 @@ mod tests {
     }
 
     /// The Job as the stuck query reads it: failed `minutes` ago, whose `job-failed` Event is `event`, for `crashed`.
-    fn stuck(context: &str, plan: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
+    fn stuck(context: &str, plan: &str, pr: &str, job: &str, event: i64, minutes: i64) -> StuckJob {
         StuckJob {
             plan: PlanId::parse(plan).unwrap(),
+            pr: PrKey::parse(pr).unwrap(),
             job: JobKey::parse(job).unwrap(),
             context: ContextId::parse(context).unwrap(),
             event,
@@ -431,10 +442,16 @@ mod tests {
         }
     }
 
-    fn text_of(plan: &str, job: &str, minutes: i64) -> String {
+    /// The text of a group's message: each `(job, minutes)` entry, oldest first, with the group's `<plan>/<pr>` prefix.
+    fn text_of(plan: &str, pr: &str, jobs: &[(&str, i64)]) -> String {
+        let entries = jobs
+            .iter()
+            .map(|(job, minutes)| format!("{plan}/{job} ({minutes} min ago, crashed)"))
+            .collect::<Vec<_>>()
+            .join("; ");
         format!(
-            "Job {plan}/{job} failed {minutes} min ago (crashed) and its Lead has not retried or cancelled it. \
-             Retry it (cpd job retry {job} --plan {plan} --tier <T>), nudge the Lead, or ask the User."
+            "Jobs of PR {plan}/{pr} failed and their Lead has not retried or cancelled them: {entries}. \
+             Retry each (cpd job retry <key> --plan {plan} --tier <T>), nudge the Lead, or ask the User."
         )
     }
 
@@ -449,12 +466,31 @@ mod tests {
         let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-a", "plan-a", "a");
 
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, 12)).unwrap());
-        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, true, text_of("plan-a", "a", 12))]);
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", failed, 12)]).unwrap(), 1);
+        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, true, text_of("plan-a", "repo", &[("a", 12)]))]);
         for minutes in [12, 13, 600] {
-            assert!(!tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, minutes)).unwrap(), "{minutes} min");
+            assert_eq!(
+                tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", failed, minutes)]).unwrap(),
+                0,
+                "{minutes} min"
+            );
         }
         assert_eq!(messages(&mut store).len(), 1);
+    }
+
+    /// hs-d647: the stuck Jobs of one PR are one message, oldest `job-failed` Event first, each with its own minutes.
+    #[test]
+    fn two_stuck_jobs_of_one_pr_are_one_message_oldest_first() {
+        let (_dir, mut store) = store_with_managers();
+        let old = job_failed(&mut store, "ctx-a", "plan-a", "old");
+        let fresh = job_failed(&mut store, "ctx-a", "plan-a", "fresh");
+
+        let jobs = [stuck("ctx-a", "plan-a", "repo", "old", old, 30), stuck("ctx-a", "plan-a", "repo", "fresh", fresh, 12)];
+        assert_eq!(tell_stuck_jobs(&mut store, &jobs).unwrap(), 1, "one PR, one message");
+        assert_eq!(
+            messages(&mut store),
+            [("mgr-a".to_owned(), None, true, text_of("plan-a", "repo", &[("old", 30), ("fresh", 12)]))]
+        );
     }
 
     /// After a retry the Job fails again: a newer `job-failed` Event, so a new message, once more.
@@ -462,13 +498,13 @@ mod tests {
     fn a_job_that_fails_again_after_a_retry_is_sent_again() {
         let (_dir, mut store) = store_with_managers();
         let first = job_failed(&mut store, "ctx-a", "plan-a", "a");
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", first, 10)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", first, 10)]).unwrap(), 1);
 
         let second = job_failed(&mut store, "ctx-a", "plan-a", "a");
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", second, 11)).unwrap());
-        assert!(!tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", second, 12)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", second, 11)]).unwrap(), 1);
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", second, 12)]).unwrap(), 0);
         let sent: Vec<String> = messages(&mut store).into_iter().map(|m| m.3).collect();
-        assert_eq!(sent, [text_of("plan-a", "a", 10), text_of("plan-a", "a", 11)]);
+        assert_eq!(sent, [text_of("plan-a", "repo", &[("a", 10)]), text_of("plan-a", "repo", &[("a", 11)])]);
     }
 
     /// No live Manager: nothing is sent and nothing is written, so a quiet tick stays quiet; a Manager that comes later, or
@@ -478,7 +514,7 @@ mod tests {
         let (_dir, mut store) = store_with_managers();
         let failed = job_failed(&mut store, "ctx-c", "plan-c", "c");
         let before = txns(&mut store);
-        assert!(!tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 0);
         assert_eq!((messages(&mut store), txns(&mut store)), (vec![], before), "the Context c has no Manager");
 
         let t = "2026-01-01T00:00:00.000Z";
@@ -495,7 +531,7 @@ mod tests {
                 .unwrap();
         };
         add(&mut store, "mgr-c", "ctx-c");
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 1);
         assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c"]);
 
         // The told Manager is archived and another takes its place: the new one is told.
@@ -505,40 +541,48 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert!(!tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap(), "an archived Manager is not live");
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(),
+            0,
+            "an archived Manager is not live"
+        );
         add(&mut store, "mgr-c2", "ctx-c");
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-c", "plan-c", "c", failed, 10)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-c", "plan-c", "repo", "c", failed, 10)]).unwrap(), 1);
         assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-c", "mgr-c2"]);
     }
 
-    /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this Job
-    /// (`pay/a` is not `pay/ab`) and from the User's side (a Lead's own words are not the engine's).
+    /// Only the Manager of the Job's Context hears of it, and a message counts as the record only when it is about this PR
+    /// (`plan-a/repo` is not `plan-a/other`) and from the User's side (a Lead's own words are not the engine's).
     #[test]
-    fn only_a_message_about_this_job_from_the_users_side_counts() {
+    fn only_a_message_about_this_pr_from_the_users_side_counts() {
         let (_dir, mut store) = store_with_managers();
         let a = job_failed(&mut store, "ctx-a", "plan-a", "a");
-        let ab = job_failed(&mut store, "ctx-a", "plan-a", "ab");
+        let other = job_failed(&mut store, "ctx-a", "plan-a", "b");
         let b = job_failed(&mut store, "ctx-b", "plan-b", "a");
 
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", a, 10)).unwrap());
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "ab", ab, 10)).unwrap(), "plan-a/ab is not plan-a/a");
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-b", "plan-b", "a", b, 10)).unwrap(), "another Context's Manager");
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "a", a, 10)]).unwrap(), 1);
+        assert_eq!(
+            tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "other", "b", other, 10)]).unwrap(),
+            1,
+            "another PR of the same plan is its own record"
+        );
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-b", "plan-b", "repo", "a", b, 10)]).unwrap(), 1, "another Context's Manager");
         let to: Vec<String> = messages(&mut store).into_iter().map(|m| m.0).collect();
         assert_eq!(to, ["mgr-a", "mgr-a", "mgr-b"]);
 
         // A Lead's message with the same words, to the Manager of ctx-a, is not the record.
-        let other = job_failed(&mut store, "ctx-a", "plan-a", "z");
+        let z = job_failed(&mut store, "ctx-a", "plan-a", "z");
         store
             .write("test", |tx| {
                 tx.execute(
                     "INSERT INTO events (txn, at, kind, context, session, text, data)
                      VALUES (cpd_txn(), '2026-01-01T00:00:00.000Z', 'session-message', 'ctx-a', 'mgr-a', 'x',
-                             '{\"from\":\"lead-a\",\"text\":\"Job plan-a/z failed by hand\",\"wake\":false}')",
+                             '{\"from\":\"lead-a\",\"text\":\"Jobs of PR plan-a/repo failed by hand\",\"wake\":false}')",
                     [],
                 )?;
                 Ok(())
             })
             .unwrap();
-        assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "z", other, 10)).unwrap());
+        assert_eq!(tell_stuck_jobs(&mut store, &[stuck("ctx-a", "plan-a", "repo", "z", z, 10)]).unwrap(), 1);
     }
 }

@@ -26,7 +26,7 @@
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
 //! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A Context is a fold ([`crate::fold`]): only a click on its `╰󰬦 expand` / `╰󰬬 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with `╰─`, with no row at all it ends with the terminator `╰󰬪`; hs-d574); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
 
-mod actions;
+pub(crate) mod actions;
 mod ask;
 mod cursor;
 mod folds;
@@ -43,6 +43,8 @@ mod margin_tests;
 #[cfg(test)]
 mod scroll_tests;
 #[cfg(test)]
+mod width_tests;
+#[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
 mod new_context_tests;
@@ -51,7 +53,13 @@ mod new_context_tests;
 mod another_owner_tests;
 #[cfg(test)]
 mod counter_tests;
+#[cfg(test)]
+mod asleep_tests;
+#[cfg(test)]
+mod loop_guard_tests;
 mod menu;
+#[cfg(test)]
+mod prepared_tests;
 mod rows;
 mod slug;
 mod view;
@@ -96,7 +104,8 @@ use cpd_core::store::Store;
 use actions::{Failed, Runner};
 use folds::FoldsFile;
 use kinds::KINDS;
-use view::{Effect, View};
+pub(crate) use view::View;
+use view::Effect;
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 

@@ -17,7 +17,7 @@ pub mod fingerprint;
 pub mod jobs;
 mod lead;
 mod list;
-mod lock;
+pub(crate) mod lock;
 mod new;
 mod outline;
 mod overlap;
@@ -250,19 +250,11 @@ fn read_text_file(path: &Path) -> Result<String, CpdError> {
     })
 }
 
-/// Writes a file under `$CPD_HOME` whole: to a temporary file beside it, then
-/// renamed over it, so a reader never sees half of it.
+/// Writes a file under `$CPD_HOME` whole, through [`crate::atomic::write_atomic`], so a reader never sees half of it.
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
             .with("path", path.display().to_string())
     };
-    let dir = path.parent().expect("a file under $CPD_HOME has a directory");
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    let tmp = dir.join(format!(".{}.{}.tmp", path.file_name().expect("a file name").to_string_lossy(), std::process::id()));
-    std::fs::write(&tmp, text).map_err(failed)?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        failed(e)
-    })
+    crate::atomic::write_atomic(path, text).map_err(failed)
 }

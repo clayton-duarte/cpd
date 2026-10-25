@@ -6,23 +6,23 @@ use crate::common;
 
 use std::fs;
 
-use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
 use serde_json::{Value, json};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn home(env: &TestEnv) -> CpdHome {
-    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+fn home(fx: &Fx) -> CpdHome {
+    CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap()
 }
 
 /// A Plan in `phase`, its Lead Session beside it; `archived` as a flag.
-fn plan(env: &TestEnv, id: &str, phase: &str, archived: bool) {
+fn plan(fx: &Fx, id: &str, phase: &str, archived: bool) {
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
-    env.sql(
+    fx.env.sql(
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/', 'O3', 'idle', 't', 't');
@@ -33,14 +33,14 @@ fn plan(env: &TestEnv, id: &str, phase: &str, archived: bool) {
 }
 
 /// A PR of `plan` in `repo`: `waiting` for a Plan still being planned, else `dispatch`, `merged` or `cancelled`.
-fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
+fn pr(fx: &Fx, plan: &str, key: &str, repo: &str, status: &str) {
     let none = "NULL, NULL, NULL, NULL";
     let (worktree, started, pull, merged) = match status {
         "waiting" | "cancelled" => ("NULL", "NULL", none.to_owned(), "NULL"),
         "dispatch" => ("'/w'", "'t'", none.to_owned(), "NULL"),
         "merged" => {
             // A merged PR names its stored GitHub row, one number each.
-            env.sql(
+            fx.env.sql(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                  VALUES ('acme/api', (SELECT COALESCE(MAX(number), 0) + 1 FROM pull_requests), 'u', 'Old', 0, 'merged', 'none', 'none', 't', 't', 't');",
             );
@@ -48,7 +48,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
         }
         other => panic!("no fixture for {other}"),
     };
-    env.sql(
+    fx.env.sql(
         &format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
@@ -58,8 +58,8 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
 }
 
 /// A Job of PR `pr` in `status` touching `touches`.
-fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
-    env.sql(
+fn job(fx: &Fx, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
+    fx.env.sql(
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
@@ -74,19 +74,19 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str, touches: &[
 }
 
 /// Context `ctx`, and Plan `mine` in phase `plan` with one PR `api` in `/r/api` and the draft Job `x` touching `core/src/x.rs`.
-fn fixture() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(home(&env).config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't');");
-    plan(&env, "mine", "plan", false);
-    pr(&env, "mine", "api", "/r/api", "waiting");
-    job(&env, "mine", "api", "x", "draft", &["core/src/x.rs"]);
-    env
+fn fixture() -> Fx {
+    let fx = Fx::new();
+    fs::write(home(&fx).config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    fx.env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't');");
+    plan(&fx, "mine", "plan", false);
+    pr(&fx, "mine", "api", "/r/api", "waiting");
+    job(&fx, "mine", "api", "x", "draft", &["core/src/x.rs"]);
+    fx
 }
 
-fn render(env: &TestEnv) -> (Value, String) {
-    let out = env.cpd(&["plan", "render", "--plan", "mine"]).ok();
-    let text = fs::read_to_string(home(env).plan_md(&PlanId::parse("mine").unwrap())).unwrap();
+fn render(fx: &Fx) -> (Value, String) {
+    let out = fx.cpd(&["plan", "render", "--plan", "mine"]).ok();
+    let text = fs::read_to_string(home(fx).plan_md(&PlanId::parse("mine").unwrap())).unwrap();
     (out["overlaps"].clone(), text)
 }
 
@@ -97,12 +97,12 @@ const HEADER: &str = "| Job | Other Plan | PR | Its Jobs (status) | Paths |\n|--
 
 #[test]
 fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
-    let env = fixture();
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "queued", &["docs/", "core/src/"]);
+    let fx = fixture();
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "queued", &["docs/", "core/src/"]);
 
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     assert_eq!(
         overlaps,
         json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
@@ -117,15 +117,15 @@ fn a_directory_containing_the_path_is_listed_in_the_file_and_the_json() {
 
 #[test]
 fn an_equal_path_and_a_file_inside_this_plans_directory_overlap() {
-    let env = fixture();
-    job(&env, "mine", "api", "dir", "draft", &["docs/"]);
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "same", "running", &["core/src/x.rs"]);
-    job(&env, "busy", "svc", "inside", "failed", &["docs/guide/a.md"]);
+    let fx = fixture();
+    job(&fx, "mine", "api", "dir", "draft", &["docs/"]);
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "same", "running", &["core/src/x.rs"]);
+    job(&fx, "busy", "svc", "inside", "failed", &["docs/guide/a.md"]);
 
     // By this Job's key: `dir` was added after `x`, and comes first.
-    let (overlaps, _) = render(&env);
+    let (overlaps, _) = render(&fx);
     assert_eq!(
         overlaps,
         json!([
@@ -137,12 +137,12 @@ fn an_equal_path_and_a_file_inside_this_plans_directory_overlap() {
 
 #[test]
 fn a_merged_job_on_an_unmerged_pr_is_listed() {
-    let env = fixture();
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "merged", &["core/src/x.rs"]);
+    let fx = fixture();
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "merged", &["core/src/x.rs"]);
 
-    let (overlaps, _) = render(&env);
+    let (overlaps, _) = render(&fx);
     assert_eq!(
         overlaps,
         json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "y", "status": "merged"}], "paths": ["core/src/x.rs"]}])
@@ -151,15 +151,15 @@ fn a_merged_job_on_an_unmerged_pr_is_listed() {
 
 #[test]
 fn two_overlapping_jobs_of_one_other_pr_give_one_row_listing_both() {
-    let env = fixture();
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
+    let fx = fixture();
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
     // In the order they were added, not by key; `w` overlaps nothing.
-    job(&env, "busy", "svc", "z", "running", &["core/src/"]);
-    job(&env, "busy", "svc", "y", "queued", &["core/src/x.rs"]);
-    job(&env, "busy", "svc", "w", "queued", &["cli/"]);
+    job(&fx, "busy", "svc", "z", "running", &["core/src/"]);
+    job(&fx, "busy", "svc", "y", "queued", &["core/src/x.rs"]);
+    job(&fx, "busy", "svc", "w", "queued", &["cli/"]);
 
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     assert_eq!(
         overlaps,
         json!([{"job": "x", "plan": "busy", "pr": "svc", "other_jobs": [{"key": "z", "status": "running"}, {"key": "y", "status": "queued"}], "paths": ["core/src/x.rs"]}])
@@ -170,15 +170,15 @@ fn two_overlapping_jobs_of_one_other_pr_give_one_row_listing_both() {
 
 #[test]
 fn paths_are_listed_once_and_the_table_caps_them_at_five() {
-    let env = fixture();
-    job(&env, "mine", "api", "wide", "draft", &["a/1.rs", "a/2.rs", "a/1.rs", "a/3.rs", "elsewhere/", "a/4.rs", "a/5.rs", "a/6.rs", "a/7.rs"]);
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "dir", "queued", &["a/"]);
-    job(&env, "busy", "svc", "same", "queued", &["a/1.rs", "a/2.rs"]);
+    let fx = fixture();
+    job(&fx, "mine", "api", "wide", "draft", &["a/1.rs", "a/2.rs", "a/1.rs", "a/3.rs", "elsewhere/", "a/4.rs", "a/5.rs", "a/6.rs", "a/7.rs"]);
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "dir", "queued", &["a/"]);
+    job(&fx, "busy", "svc", "same", "queued", &["a/1.rs", "a/2.rs"]);
 
     // Two Jobs overlap it on many paths, and it is one row: the JSON has every path once, the table five and the count of the rest.
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     assert_eq!(
         overlaps,
         json!([{
@@ -195,21 +195,21 @@ fn paths_are_listed_once_and_the_table_caps_them_at_five() {
 
 #[test]
 fn rows_are_ordered_by_this_jobs_key_then_the_other_plan_then_the_pr() {
-    let env = fixture();
+    let fx = fixture();
     // `x` (the fixture) was added first; `b` and `a` come after it.
-    job(&env, "mine", "api", "b", "draft", &["core/src/"]);
-    job(&env, "mine", "api", "a", "draft", &["docs/"]);
+    job(&fx, "mine", "api", "b", "draft", &["core/src/"]);
+    job(&fx, "mine", "api", "a", "draft", &["docs/"]);
     // The other Plans and PRs are added in the reverse of their order.
-    plan(&env, "beta", "dispatch", false);
-    pr(&env, "beta", "p2", "/r/api", "dispatch");
-    job(&env, "beta", "p2", "n", "queued", &["core/src/"]);
-    pr(&env, "beta", "p1", "/r/api", "dispatch");
-    job(&env, "beta", "p1", "m", "queued", &["core/src/"]);
-    plan(&env, "alpha", "dispatch", false);
-    pr(&env, "alpha", "p9", "/r/api", "dispatch");
-    job(&env, "alpha", "p9", "l", "queued", &["core/src/"]);
+    plan(&fx, "beta", "dispatch", false);
+    pr(&fx, "beta", "p2", "/r/api", "dispatch");
+    job(&fx, "beta", "p2", "n", "queued", &["core/src/"]);
+    pr(&fx, "beta", "p1", "/r/api", "dispatch");
+    job(&fx, "beta", "p1", "m", "queued", &["core/src/"]);
+    plan(&fx, "alpha", "dispatch", false);
+    pr(&fx, "alpha", "p9", "/r/api", "dispatch");
+    job(&fx, "alpha", "p9", "l", "queued", &["core/src/"]);
 
-    let (overlaps, _) = render(&env);
+    let (overlaps, _) = render(&fx);
     let listed: Vec<(&str, &str, &str)> =
         overlaps.as_array().unwrap().iter().map(|o| (o["job"].as_str().unwrap(), o["plan"].as_str().unwrap(), o["pr"].as_str().unwrap())).collect();
     assert_eq!(
@@ -220,19 +220,19 @@ fn rows_are_ordered_by_this_jobs_key_then_the_other_plan_then_the_pr() {
 
 #[test]
 fn the_jobs_of_this_plans_merged_pr_are_not_checked() {
-    let env = fixture();
+    let fx = fixture();
     let touches: &[&str] = &["core/src/"];
     // On its base already: `m` is no overlap, whatever the other Plan does.
-    pr(&env, "mine", "old", "/r/api", "merged");
-    job(&env, "mine", "old", "m", "merged", touches);
+    pr(&fx, "mine", "old", "/r/api", "merged");
+    job(&fx, "mine", "old", "m", "merged", touches);
     // A Job merged on the Lead Branch of a PR that is not merged is not on its base yet.
-    pr(&env, "mine", "live", "/r/api", "dispatch");
-    job(&env, "mine", "live", "landed", "merged", touches);
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "queued", touches);
+    pr(&fx, "mine", "live", "/r/api", "dispatch");
+    job(&fx, "mine", "live", "landed", "merged", touches);
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "queued", touches);
 
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     let listed: Vec<&str> = overlaps.as_array().unwrap().iter().map(|o| o["job"].as_str().unwrap()).collect();
     assert_eq!(listed, ["landed", "x"]);
     let table = format!(
@@ -243,12 +243,12 @@ fn the_jobs_of_this_plans_merged_pr_are_not_checked() {
 
 #[test]
 fn no_overlap_says_so() {
-    let env = fixture();
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "queued", &["core/src/y.rs", "core/src", "cli/"]);
+    let fx = fixture();
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "queued", &["core/src/y.rs", "core/src", "cli/"]);
 
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     assert_eq!(overlaps, json!([]));
     assert!(text.contains(&format!("## Overlaps\n\n{NONE}\n")), "{text}");
     assert!(!text.contains("| Other Plan |"), "{text}");
@@ -256,51 +256,51 @@ fn no_overlap_says_so() {
 
 #[test]
 fn done_and_archived_plans_merged_and_cancelled_prs_cancelled_jobs_and_other_repos_are_not_listed() {
-    let env = fixture();
+    let fx = fixture();
     let touches: &[&str] = &["core/src/"];
-    plan(&env, "finished", "done", false);
-    pr(&env, "finished", "svc", "/r/api", "merged");
-    job(&env, "finished", "svc", "a", "merged", touches);
+    plan(&fx, "finished", "done", false);
+    pr(&fx, "finished", "svc", "/r/api", "merged");
+    job(&fx, "finished", "svc", "a", "merged", touches);
 
-    plan(&env, "shelved", "dispatch", true);
-    pr(&env, "shelved", "svc", "/r/api", "dispatch");
-    job(&env, "shelved", "svc", "b", "queued", touches);
+    plan(&fx, "shelved", "dispatch", true);
+    pr(&fx, "shelved", "svc", "/r/api", "dispatch");
+    job(&fx, "shelved", "svc", "b", "queued", touches);
 
-    plan(&env, "shipped", "dispatch", false);
-    pr(&env, "shipped", "old", "/r/api", "merged");
-    job(&env, "shipped", "old", "c", "merged", touches);
-    pr(&env, "shipped", "gone", "/r/api", "cancelled");
-    job(&env, "shipped", "gone", "d", "cancelled", touches);
+    plan(&fx, "shipped", "dispatch", false);
+    pr(&fx, "shipped", "old", "/r/api", "merged");
+    job(&fx, "shipped", "old", "c", "merged", touches);
+    pr(&fx, "shipped", "gone", "/r/api", "cancelled");
+    job(&fx, "shipped", "gone", "d", "cancelled", touches);
 
-    plan(&env, "pruned", "dispatch", false);
-    pr(&env, "pruned", "svc", "/r/api", "dispatch");
-    job(&env, "pruned", "svc", "e", "cancelled", touches);
+    plan(&fx, "pruned", "dispatch", false);
+    pr(&fx, "pruned", "svc", "/r/api", "dispatch");
+    job(&fx, "pruned", "svc", "e", "cancelled", touches);
 
-    plan(&env, "elsewhere", "dispatch", false);
-    pr(&env, "elsewhere", "svc", "/r/web", "dispatch");
-    job(&env, "elsewhere", "svc", "f", "queued", touches);
+    plan(&fx, "elsewhere", "dispatch", false);
+    pr(&fx, "elsewhere", "svc", "/r/web", "dispatch");
+    job(&fx, "elsewhere", "svc", "f", "queued", touches);
 
-    let (overlaps, text) = render(&env);
+    let (overlaps, text) = render(&fx);
     assert_eq!(overlaps, json!([]));
     assert!(text.contains(NONE), "{text}");
 }
 
 #[test]
 fn a_plan_in_another_context_is_listed_and_this_plans_own_jobs_are_not() {
-    let env = fixture();
+    let fx = fixture();
     // Another Job of this very Plan, in another PR of the same repo.
-    pr(&env, "mine", "second", "/r/api", "waiting");
-    job(&env, "mine", "second", "x2", "draft", &["core/src/"]);
-    env.sql(
+    pr(&fx, "mine", "second", "/r/api", "waiting");
+    job(&fx, "mine", "second", "x2", "draft", &["core/src/"]);
+    fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead-far', 'lead', 'other', 'far', 'far', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('far', 'other', 'Far', 'grounding', 'lead-far', '2000-01-01T00:00:00.000Z', NULL);",
     );
-    pr(&env, "far", "svc", "/r/api", "waiting");
-    job(&env, "far", "svc", "y", "draft", &["core/src/x.rs"]);
+    pr(&fx, "far", "svc", "/r/api", "waiting");
+    job(&fx, "far", "svc", "y", "draft", &["core/src/x.rs"]);
 
-    let (overlaps, _) = render(&env);
+    let (overlaps, _) = render(&fx);
     assert_eq!(
         overlaps,
         json!([
@@ -312,27 +312,27 @@ fn a_plan_in_another_context_is_listed_and_this_plans_own_jobs_are_not() {
 
 #[test]
 fn a_cancelled_pr_or_job_of_this_plan_is_not_compared() {
-    let env = fixture();
-    pr(&env, "mine", "dead", "/r/api", "cancelled");
-    job(&env, "mine", "dead", "z", "cancelled", &["docs/a.md"]);
-    job(&env, "mine", "api", "w", "cancelled", &["docs/b.md"]);
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "queued", &["docs/"]);
+    let fx = fixture();
+    pr(&fx, "mine", "dead", "/r/api", "cancelled");
+    job(&fx, "mine", "dead", "z", "cancelled", &["docs/a.md"]);
+    job(&fx, "mine", "api", "w", "cancelled", &["docs/b.md"]);
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "queued", &["docs/"]);
 
-    let (overlaps, _) = render(&env);
+    let (overlaps, _) = render(&fx);
     assert_eq!(overlaps, json!([]));
 }
 
 #[test]
 fn the_plan_review_file_carries_the_overlaps_and_nothing_is_refused() {
-    let env = fixture();
-    plan(&env, "busy", "dispatch", false);
-    pr(&env, "busy", "svc", "/r/api", "dispatch");
-    job(&env, "busy", "svc", "y", "queued", &["core/src/"]);
+    let fx = fixture();
+    plan(&fx, "busy", "dispatch", false);
+    pr(&fx, "busy", "svc", "/r/api", "dispatch");
+    job(&fx, "busy", "svc", "y", "queued", &["core/src/"]);
 
-    env.outline_for_review("mine");
-    let out = env.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
+    fx.env.outline_for_review("mine");
+    let out = fx.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
     assert!(text.contains("| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |"), "{text}");
 }

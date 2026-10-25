@@ -15,20 +15,30 @@ mod view;
 #[cfg(test)]
 pub(crate) use view::layout_sample;
 #[cfg(test)]
+mod scroll_width_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod pane;
+#[cfg(test)]
+mod pane_tests;
+#[cfg(test)]
+mod checklist_tests;
+#[cfg(test)]
+mod view_width_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use ratatui::crossterm::event::{self, Event};
 use serde::{Deserialize, Serialize};
 
 use super::cockpit::{client_size, on_client};
-use super::widgets::newest_client;
+use super::popup;
 use super::viewlog::ViewLog;
-use super::{not_a_terminal, on_a_terminal};
+use super::{Capture, run_view};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
@@ -206,42 +216,51 @@ impl Kind {
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
-    let (common, mut dialog) = args.kind.parts()?;
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view dialog"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal, &mut dialog));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    let outcome = result.map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view dialog failed: {e}."))
-            .with("command", "tui view dialog")
-    })?;
+    let parts = args.kind.parts()?;
+    let mut ending: Option<(Common, Dialog, Outcome)> = None;
+    run_view(
+        "dialog",
+        Capture::Mouse,
+        move || Ok(parts),
+        |terminal, (common, mut dialog)| {
+            let outcome = show(terminal, &mut dialog)?;
+            ending = Some((common, dialog, outcome));
+            Ok(())
+        },
+    )?;
+    // The terminal is restored; the result file is written from what the body kept.
+    let (common, dialog, outcome) = ending.expect("the body ran");
+    write_result(&common.out, &dialog, &outcome)?;
+    Ok(Output::Owned)
+}
+
+/// Writes how `dialog` closed to `path`: `{approved, ticked, unticked}` for a checklist, the [`Outcome`] for the others.
+fn write_result(path: &Path, dialog: &Dialog, outcome: &Outcome) -> Result<(), CpdError> {
     match dialog.ticks() {
         Some((ticked, unticked)) => {
             let json = serde_json::json!({"approved": outcome.confirmed, "ticked": ticked, "unticked": unticked});
-            write_json(&common.out, &json.to_string())?;
+            write_json(path, &json.to_string())
         }
-        None => write_outcome(&common.out, &outcome)?,
+        None => write_outcome(path, outcome),
     }
-    Ok(Output::Owned)
 }
 
 /// Draws and takes input until the dialog closes.
 fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io::Result<Outcome> {
     loop {
         terminal.draw(|f| dialog.draw(f))?;
-        let closed = match event::read()? {
-            Event::Key(key) => dialog.press_key(key),
-            Event::Mouse(mouse) => dialog.press_mouse(mouse),
-            _ => None,
-        };
-        if let Some(outcome) = closed {
+        if let Some(outcome) = dispatch(dialog, event::read()?) {
             return Ok(outcome);
         }
+    }
+}
+
+/// What `event` does to `dialog`: the outcome that closes it, if any.
+fn dispatch(dialog: &mut Dialog, event: Event) -> Option<Outcome> {
+    match event {
+        Event::Key(key) => dialog.press_key(key),
+        Event::Mouse(mouse) => dialog.press_mouse(mouse),
+        _ => None,
     }
 }
 
@@ -277,34 +296,19 @@ fn temp_path() -> PathBuf {
     std::env::temp_dir().join(format!("cpd-dialog-{}-{}.json", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)))
 }
 
-/// `arg` as one word for the popup's shell: in single quotes.
-fn sh_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', r"'\''"))
-}
-
 /// The shell command the popup runs: `cpd tui view dialog <kind> --title=… --out=… --<field>=…`. Each is one word in
 /// the `--name=value` form, so a value that starts with `-` is a value.
 fn view_command(kind: &str, title: &str, out: &Path, fields: &[(&str, &str)]) -> String {
-    let mut command = format!("{PROGRAM} tui view dialog {kind} --title={} --out={}", sh_quote(title), sh_quote(&out.display().to_string()));
+    let mut command = format!("{PROGRAM} tui view dialog {kind} --title={} --out={}", popup::sh_quote(title), popup::sh_quote(&out.display().to_string()));
     for (name, value) in fields {
-        command.push_str(&format!(" --{name}={}", sh_quote(value)));
+        command.push_str(&format!(" --{name}={}", popup::sh_quote(value)));
     }
     command
 }
 
 /// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, with no tmux border (`-B`): the view draws its own frame.
 fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
-    [
-        "display-popup".to_owned(),
-        "-E".to_owned(),
-        "-B".to_owned(),
-        "-w".to_owned(),
-        size.0.to_string(),
-        "-h".to_owned(),
-        size.1.to_string(),
-        command.to_owned(),
-    ]
-    .to_vec()
+    popup::args(popup::Popup { title: None, border: true, client: None, dash: false, size, command })
 }
 
 /// The narrowest and the widest inside of a dialog; a longer line wraps.
@@ -373,7 +377,7 @@ fn ask_with<T>(
         On::Newest => {
             let clients =
                 tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-            newest_client(&clients).ok_or_else(|| {
+            popup::newest_client(&clients).map(|(_, size)| size).ok_or_else(|| {
                 CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
             })?
         }

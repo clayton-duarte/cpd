@@ -24,7 +24,7 @@ pub(crate) mod pulse;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -38,6 +38,7 @@ use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
 use crate::box_widget::spacing;
+use crate::dialog::scroll::Scroll;
 use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
@@ -237,8 +238,8 @@ struct Ui {
     /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
     /// chart may have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
-    /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
-    pulse_offset: usize,
+    /// Pulse's scroll (reset whenever the Context of the Pulse changes).
+    pulse_scroll: Scroll,
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
@@ -280,7 +281,15 @@ impl Ui {
             window = rows;
         }
         self.body = window.inner(MARGIN);
-        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset);
+        pulse::draw(f.buffer_mut(), self.body, pulse, &mut self.pulse_scroll);
+    }
+
+    /// Draws what `snap` holds: Pulse, or the chart of the Plan in the chat slot.
+    fn draw_snapshot(&mut self, f: &mut Frame, snap: &Snapshot) {
+        match snap.pulse.as_ref() {
+            Some(pulse) => self.draw_pulse(f, pulse),
+            None => self.draw(f, snap.centre.as_ref()),
+        }
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -354,16 +363,11 @@ impl Offsets {
         Ok(())
     }
 
-    /// Replaces the file: a temporary file beside it, then a rename.
+    /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
         let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
         let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
-        let dir = self.path.parent().unwrap_or(Path::new("."));
-        fs::create_dir_all(dir)?;
-        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
-        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        cpd_core::atomic::write_atomic(&self.path, text)
     }
 }
 
@@ -382,6 +386,14 @@ fn arrow(selected: &mut Selection, boxes: &Boxes, dir: Dir) {
 fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
     let job = centre.plan.jobs.iter().find(|j| j.key.as_str() == key)?;
     job.current_attempt().map(|a| a.id.clone())
+}
+
+/// The view's first frame for `store` at `now_ms` (Unix ms), drawn on `f` as `run` draws it: one snapshot, at the corner of its
+/// chart, with nothing selected. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_first_frame(store: &mut Store, f: &mut Frame, now_ms: i64) -> Result<(), CpdError> {
+    let snap = snapshot(store, f.area().width, now_ms)?;
+    Ui::default().draw_snapshot(f, &snap);
+    Ok(())
 }
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
@@ -489,7 +501,7 @@ fn show(
                     *snap = next;
                     let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                     if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                        ui.pulse_offset = 0;
+                        ui.pulse_scroll = Scroll::default();
                     }
                     if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
                         ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
@@ -533,12 +545,7 @@ fn show(
         }
         if redraw {
             let (drawn, written) = trace.draw(epoch, &log, frame, || {
-                terminal
-                    .draw(|f| match snap.pulse.as_ref() {
-                        Some(pulse) => ui.draw_pulse(f, pulse),
-                        None => ui.draw(f, snap.centre.as_ref()),
-                    })
-                    .map(drop)
+                terminal.draw(|f| ui.draw_snapshot(f, snap)).map(drop)
             });
             drawn?;
             if let Err(why) = written {
@@ -576,14 +583,14 @@ fn show(
             Input::Resize(..) => schedule.force(), // the bucket count changes
             Input::Mouse(m) if snap.pulse.is_some() => {
                 let Some(pulse) = snap.pulse.as_ref() else { continue };
-                let height = usize::from(ui.body.height);
                 match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        lead = pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), m.column, m.row)
+                        lead = pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), m.column, m.row)
                             .map(|i| pulse.rows[i].lead.clone());
                     }
-                    MouseEventKind::ScrollUp => ui.pulse_offset = pulse::scroll(ui.pulse_offset, false, pulse.rows.len(), height),
-                    MouseEventKind::ScrollDown => ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, pulse.rows.len(), height),
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        ui.pulse_scroll.mouse(m);
+                    }
                     _ => {}
                 }
             }
@@ -782,6 +789,7 @@ mod tests {
     use ratatui::buffer::Buffer;
 
     use super::*;
+    use crate::dialog::scroll::WHEEL_ROWS;
     use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
@@ -1093,12 +1101,12 @@ mod tests {
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
-            pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
+            pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
         };
         assert_eq!(lead(&ui, 2).as_deref(), Some("lead-bb"));
-        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
-        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
-        assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
+        ui.pulse_scroll.by(WHEEL_ROWS as isize);
+        ui.pulse_scroll.by(WHEEL_ROWS as isize);
+        assert_eq!(ui.pulse_scroll.offset(), 3, "clamped at the last row");
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
         assert!(rows[1].starts_with("  dd  "), "{:?}", rows[1]);
         assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));

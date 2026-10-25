@@ -1129,8 +1129,8 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 			setWorkingIndicator: (value?: typeof indicator) => { indicator = value; },
 		},
 	} as unknown as ExtensionContext);
-	assert.equal(indicator?.frames.length, 28);
-	assert.equal(indicator?.intervalMs, 50);
+	assert.deepEqual(indicator?.frames, []);
+	assert.equal(indicator?.intervalMs, undefined);
 	handlers.get("agent_start")?.({});
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
@@ -1560,7 +1560,8 @@ test("hides Pi's own notice lines from the chat and restores its children", () =
 test("shares one animation clock that stops when nothing listens", async () => {
 	const { install } = await import("@sinonjs/fake-timers");
 	const clock = install({ toFake: ["setInterval", "clearInterval"] });
-	const { onTick, TICK_MS } = await import("../../compact-tools/extensions/compact-tools-clock.ts");
+	const { onTick, setClockFocused, TICK_MS } = await import("../../compact-tools/extensions/compact-tools-clock.ts");
+	setClockFocused(true);
 	let label = 0;
 	let line = 0;
 	const stopLabel = onTick(() => label++);

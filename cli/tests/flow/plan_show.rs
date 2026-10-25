@@ -1,26 +1,21 @@
 //! `plan show`, `plan list` and `plan render` with PRs (commands.md §4.2, §4.3,
-//! §4.5, R34): the built binary against a temporary `$CPD_HOME` with a Plan
+//! §4.5, R34): the command tree in this process (`Fx`) against a temporary `$CPD_HOME` with a Plan
 //! written straight into the database.
 
 use crate::common;
 
 use std::fs;
 
-use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::home::CpdHome;
 use serde_json::{Value, json};
 
-struct Fx {
-    env: TestEnv,
-}
-
 /// The env with its config and Plan `pay-1` in `phase` (the Lead's session beside it), no PR.
 fn fx(phase: &str) -> Fx {
-    let env = TestEnv::new();
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let fx = Fx::new();
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
-    let fx = Fx { env };
     fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -31,7 +26,16 @@ fn fx(phase: &str) -> Fx {
     fx
 }
 
-impl Fx {
+/// The fixtures of Plan `pay-1` on an [`Fx`].
+trait Pay {
+    fn pr(&self, key: &str, status: &str, needs: &[&str]);
+    fn job(&self, key: &str, pr: &str, status: &str, needs: &[&str]);
+    fn show(&self) -> Value;
+    fn list(&self) -> Value;
+    fn render(&self) -> (Value, String);
+}
+
+impl Pay for Fx {
     /// A PR of `pay-1` in `status`, with the columns that status requires.
     fn pr(&self, key: &str, status: &str, needs: &[&str]) {
         let (worktree, started, pull) = match status {
@@ -75,16 +79,16 @@ impl Fx {
     }
 
     fn show(&self) -> Value {
-        self.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok()
+        self.cpd(&["plan", "show", "--plan", "pay-1"]).ok()
     }
 
     fn list(&self) -> Value {
-        self.env.cpd(&["plan", "list"]).ok()
+        self.cpd(&["plan", "list"]).ok()
     }
 
     /// `plan render`'s output and the file it wrote.
     fn render(&self) -> (Value, String) {
-        let out = self.env.cpd(&["plan", "render", "--plan", "pay-1"]).ok();
+        let out = self.cpd(&["plan", "render", "--plan", "pay-1"]).ok();
         let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
         (out, text)
     }

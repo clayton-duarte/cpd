@@ -1,5 +1,5 @@
 //! `cpd tui view history` (commands.md §13.2, §17), end to end: the built binary
-//! runs in a pane of a private tmux server (its terminal), over a prepared
+//! (but for the refusals before drawing, which run in this process, `Fx`) runs in a pane of a private tmux server (its terminal), over a prepared
 //! store and a fixture pi session file; a test reads the screen
 //! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are
 //! unit-tested in `tui/src/history/` and `tui/src/worker/`.
@@ -8,6 +8,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
+use common::fx::Fx;
 use common::{CPD, TestEnv};
 use serde_json::json;
 
@@ -15,8 +16,12 @@ use serde_json::json;
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    configure(&env);
     env
+}
+
+fn configure(env: &TestEnv) {
+    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
 }
 
 /// Context `alpha` with the Lead Session `l1`, named `old lead`, with `file` (or none registered), archived or not.
@@ -170,21 +175,26 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
 
 #[test]
 fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
-    let env = env();
-    populate(&env, None, true);
-    let run = env.cpd(&["tui", "view", "history", "nope"]);
+    // In this process (`Fx`): `load` refuses before `run_view` looks at the terminal, so no terminal is reached.
+    let fx = Fx::new();
+    let env = &fx.env;
+    configure(env);
+    populate(env, None, true);
+    let run = fx.cpd(&["tui", "view", "history", "nope"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("session_not_found")), "{run:?}");
-    let run = env.cpd(&["tui", "view", "history", "l1"]);
+    let run = fx.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a Session with no file: {run:?}");
     env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
-    let run = env.cpd(&["tui", "view", "history", "l1"]);
+    let run = fx.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a file that is not there: {run:?}");
-    let run = env.cpd(&["tui", "view", "history"]);
+    let run = fx.cpd(&["tui", "view", "history"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{run:?}");
 }
 
 #[test]
 fn the_view_needs_a_terminal() {
+    // Stays on `TestEnv` and the built binary: the refusal is the real isatty of the process's stdin and stdout, which
+    // `Fx` (the test process's own) must not decide; it waits for the `run_with` seam (on_a_terminal injected).
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file), true);

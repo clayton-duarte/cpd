@@ -7,10 +7,8 @@ use crate::common;
 use std::fs::{self, File};
 use std::path::PathBuf;
 
+use common::session::show;
 use common::{Run, SLEEP_SECONDS, TestEnv, refused};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const LEAD: &str = "lead1";
@@ -18,23 +16,6 @@ const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 const ARCHIVED: &str = "lead2";
 const NO_FILE: &str = "lead3";
-
-fn home(env: &TestEnv) -> CpdHome {
-    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
-}
-
-fn store(env: &TestEnv) -> Store {
-    Store::open(&home(env), 5000).unwrap()
-}
-
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
-}
-
-fn fixture(env: &TestEnv, sql: &str) {
-    store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
-}
 
 /// The fake pi records its stdin, its environment and its cwd, prints `answer` (a file the test
 /// writes) on stdout, `stderr` on stderr and exits with the status in `status`.
@@ -89,8 +70,7 @@ fn setup(env: &TestEnv) {
     }
     let lead_file = session_file(env, LEAD, &numbered(4));
     let manager_file = session_file(env, MANAGER, &numbered(2));
-    fixture(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
                ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
@@ -127,10 +107,6 @@ const WIDTH: &str = "68";
 
 fn retitle(env: &TestEnv, session: &str) -> Run {
     env.cpd(&["session", "retitle", session, "--width", WIDTH])
-}
-
-fn show(env: &TestEnv, session: &str) -> Value {
-    env.cpd(&["session", "show", session]).ok()["session"].clone()
 }
 
 fn titled_events(env: &TestEnv) -> Vec<Value> {
@@ -310,15 +286,9 @@ fn one_transaction_writes_title_titled_at_and_the_session_titled_event_and_a_rer
     );
     assert_eq!(event["text"], format!("Session {LEAD} titled \"Dynamic session titles\"."));
     // The Event and the row are of one transaction.
-    let same: i64 = store(&env)
-        .read(|c| {
-            Ok(c.query_row(
-                "SELECT count(*) FROM events e JOIN txns t ON t.id = e.txn JOIN sessions s ON s.titled_at = t.at WHERE e.kind = 'session-titled' AND s.id = ?1",
-                [LEAD],
-                |r| r.get(0),
-            )?)
-        })
-        .unwrap();
+    let same: i64 = env.query(&format!(
+        "SELECT count(*) FROM events e JOIN txns t ON t.id = e.txn JOIN sessions s ON s.titled_at = t.at WHERE e.kind = 'session-titled' AND s.id = '{LEAD}'"
+    ));
     assert_eq!(same, 1);
 
     answer(&env, "TITLE: Another subject now\n", 0);
@@ -401,7 +371,7 @@ fn a_session_with_no_messages_is_skipped_with_no_pi_and_nothing_written() {
     let missing = env.root().join("missing.jsonl");
     let empty = session_file(&env, "empty", &[("toolResult", "only tools".to_owned()), ("assistant", "  ".to_owned())]);
     for file in [missing, empty] {
-        fixture(&env, &format!("UPDATE sessions SET file = '{}' WHERE id = '{NO_FILE}'", file.display()));
+        env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = '{NO_FILE}'", file.display()));
         assert_eq!(retitle(&env, NO_FILE).json(), skip(NO_FILE));
     }
     assert!(env.calls("pi").is_empty());

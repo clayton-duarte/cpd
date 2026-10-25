@@ -10,7 +10,8 @@ use serde_json::json;
 
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::deadline::{self, Failed};
+use crate::host::deadline::Failed;
+use crate::host::runner::{Runner, SystemRunner};
 
 /// A local git call's deadline (contract §7): a local repo answers in seconds.
 const LOCAL_DEADLINE: Duration = Duration::from_secs(60);
@@ -50,6 +51,11 @@ pub(super) fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i3
 /// code. Only a git that cannot start, dies from a signal (`git_failed`) or runs
 /// past its deadline (`tool_timeout`) is an error.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
+    run_with(&SystemRunner, dir, args)
+}
+
+/// [`run`] on `runner`.
+pub fn run_with(runner: &dyn Runner, dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
     let limit = match args.first() {
         Some(&("fetch" | "push" | "ls-remote")) => NETWORK_DEADLINE,
         _ => LOCAL_DEADLINE,
@@ -60,7 +66,7 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
     for (i, (key, value)) in LOCK_TIMEOUTS.iter().enumerate() {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), key).env(format!("GIT_CONFIG_VALUE_{i}"), value);
     }
-    let output = deadline::output(&mut cmd, "git", limit).map_err(|e| match e {
+    let output = runner.output(&mut cmd, "git", limit).map_err(|e| match e {
         Failed::Io(e) => failed(dir, args, format!("Cannot run git: {e}."), None, ""),
         Failed::Timeout(e) => e,
     })?;

@@ -5,6 +5,7 @@
 mod common;
 
 mod events;
+mod home;
 mod store;
 mod store_local_needs;
 mod store_asleep;

@@ -13,6 +13,8 @@ use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
+use crate::host::deadline::Failed;
+use crate::host::runner::{NO_DEADLINE, Runner, SystemRunner};
 use crate::ids::ContextId;
 use crate::output::Output;
 
@@ -244,12 +246,18 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
 
 /// The offset of local time, as `date +%z` prints it (`+0200`, `-0530`).
 fn local_offset() -> Result<UtcOffset, CpdError> {
+    local_offset_with(&SystemRunner)
+}
+
+/// [`local_offset`] on `runner`: one call of `date +%z`.
+pub fn local_offset_with(runner: &dyn Runner) -> Result<UtcOffset, CpdError> {
     let fail = |message: String| CpdError::new(ErrorCode::SpawnFailed, message).with("argv", json!(["date", "+%z"]));
-    let out = Process::new("date")
-        .arg("+%z")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| fail(format!("Cannot run `date +%z`: {e}.")))?;
+    let out = runner
+        .output(Process::new("date").arg("+%z").stdin(Stdio::null()), "date", NO_DEADLINE)
+        .map_err(|e| match e {
+            Failed::Io(e) => fail(format!("Cannot run `date +%z`: {e}.")),
+            Failed::Timeout(e) => e,
+        })?;
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
     if !out.status.success() {
         return Err(fail(format!("`date +%z` failed: {stderr}")).with("stderr", stderr));

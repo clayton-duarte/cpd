@@ -9,20 +9,21 @@ use std::process::{Child, Stdio};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use crate::home::{HasCpdHome, Home};
 use common::{CPD, Run, TestEnv, copy_executable, output, spawn, write_executable};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::{Kind, NewEvent, append};
+use cpd_core::events::{Kind, NewEvent, Selection, append};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-fn home(env: &TestEnv) -> CpdHome {
+fn home(env: &impl HasCpdHome) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-fn open(env: &TestEnv) -> Store {
+fn open(env: &impl HasCpdHome) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
@@ -148,10 +149,22 @@ fn seed(store: &mut Store) {
 fn seeded() -> TestEnv {
     let env = TestEnv::new();
     env.write_config(CONFIG);
-    let mut store = open(&env);
+    seed_store(&env);
+    env
+}
+
+/// The fixture and the eleven Events, in the store of `env`.
+fn seed_store(env: &impl HasCpdHome) {
+    let mut store = open(env);
     fixture(&mut store);
     seed(&mut store);
-    env
+}
+
+/// What `events list` prints as `events` (`Selection::fetch`, which `list` runs), for the tests that call the library.
+fn fetched(env: &impl HasCpdHome, kinds: Vec<Kind>, since: i64, limit: i64) -> Vec<Value> {
+    let mut store = open(env);
+    let events = store.read(|conn| Selection::resolve(conn, None, None, None, kinds)?.fetch(conn, since, None, limit)).unwrap();
+    events.iter().map(|e| serde_json::to_value(e).unwrap()).collect()
 }
 
 fn ids(events: &Value) -> Vec<i64> {
@@ -246,8 +259,8 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
     ("review-opened", "cs", "p", &["pn_id", "kind", "subject", "port"], &[]),
     ("review-closed", "cs", "p", &["pn_id", "ended"], &[]),
-    ("incident-started", "", "", &["by", "reason", "started_at"], &[]),
-    ("incident-ended", "", "", &["by", "ended_at"], &[]),
+    ("incident-started", "", "", &["by", "reason", "started_at", "plans"], &["until_pr"]),
+    ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
 ];
 
 fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {
@@ -281,8 +294,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     assert_eq!(names, SPEC.iter().map(|s| s.0).collect::<Vec<_>>());
 
     // The rows of `event_kinds` (§4.5: a kind exists when its row does) are the same kinds.
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
     let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
@@ -294,8 +306,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
 
 #[test]
 fn every_kind_is_appended_with_its_fields() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, optional) in SPEC {
@@ -307,14 +318,13 @@ fn every_kind_is_appended_with_its_fields() {
         let all_data: Vec<&str> = data.iter().chain(optional.iter()).copied().collect();
         append_one(&mut store, event(kind, &all_columns, &all_data)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
-    let events = list(&env, &["--limit", "5000"])["events"].clone();
-    assert_eq!(events.as_array().unwrap().len(), SPEC.len() * 2);
+    let events = fetched(&env, vec![], 0, 5000);
+    assert_eq!(events.len(), SPEC.len() * 2);
 }
 
 #[test]
 fn a_missing_field_is_refused() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -330,8 +340,7 @@ fn a_missing_field_is_refused() {
 
 #[test]
 fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -355,8 +364,7 @@ fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
 
 #[test]
 fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, _) in SPEC {
@@ -406,18 +414,21 @@ fn an_unknown_kind_is_refused() {
 
 #[test]
 fn the_new_archive_and_rename_kinds_are_accepted_by_list_and_follow() {
-    let env = seeded();
+    let env = Home::new();
+    seed_store(&env);
     for kind in ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"] {
-        let run = env.cpd(&["events", "list", "--kind", kind]);
-        assert_eq!(ids(&run.ok()["events"]), Vec::<i64>::new(), "{kind}: {run:?}");
+        // `--kind` is parsed with `Kind::from_str`; `list` then selects by it.
+        let parsed = Kind::from_str(kind).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        assert_eq!(ids(&Value::Array(fetched(&env, vec![parsed], 0, 500))), Vec::<i64>::new(), "{kind}");
     }
 }
 
 #[test]
 fn append_takes_the_context_of_the_plan_else_of_the_session() {
-    let env = seeded();
-    let events = list(&env, &["--since", "0"])["events"].clone();
-    let by_id = |id: i64| events.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+    let env = Home::new();
+    seed_store(&env);
+    let events = fetched(&env, vec![], 0, 500);
+    let by_id = |id: i64| events.iter().find(|e| e["id"] == id).unwrap().clone();
     assert_eq!(by_id(2)["context"], "ctx"); // plan-created: from the Plan
     assert_eq!(by_id(7)["context"], "ctx"); // session-renamed: from the Session
     assert_eq!(by_id(7)["plan"], Value::Null);
@@ -426,8 +437,7 @@ fn append_takes_the_context_of_the_plan_else_of_the_session() {
 
 #[test]
 fn append_names_a_missing_plan_or_session() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let e = NewEvent::new(Kind::JobRetried, "x", json!({"tier": 1})).plan(plan("nope")).job(job());
@@ -438,8 +448,7 @@ fn append_names_a_missing_plan_or_session() {
 
 #[test]
 fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let (txn, id) = store

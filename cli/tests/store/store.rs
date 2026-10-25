@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::home::{HasCpdHome, Home};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -19,16 +20,16 @@ use serde_json::{Value, json};
 
 const FP: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-fn home(env: &TestEnv) -> CpdHome {
+fn home(env: &impl HasCpdHome) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-fn open(env: &TestEnv) -> Store {
+fn open(env: &impl HasCpdHome) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
 /// A connection that is not cpd's, like the `sqlite3` shell: no `cpd_txn()`.
-fn raw(env: &TestEnv) -> Connection {
+fn raw(env: &impl HasCpdHome) -> Connection {
     let conn = Connection::open(home(env).db()).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
     conn
@@ -86,7 +87,7 @@ fn fixture(store: &mut Store) -> i64 {
 }
 
 /// An open store holding the fixture's Context, Lead and Plan.
-fn fixture_store(env: &TestEnv) -> Store {
+fn fixture_store(env: &impl HasCpdHome) -> Store {
     let mut store = open(env);
     fixture(&mut store);
     store
@@ -101,7 +102,7 @@ fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
 
 #[test]
 fn a_new_database_is_wal_with_cpds_application_id() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let store = open(&env);
     assert_eq!(store.path(), env.cpd_home().join("cpd.db"));
     assert!(store.schema_mismatch().is_none());
@@ -119,7 +120,7 @@ fn a_new_database_is_wal_with_cpds_application_id() {
 /// §4.1: every connection cpd opens syncs with NORMAL (1) in WAL mode; synchronous is per connection.
 #[test]
 fn every_connection_is_synchronous_normal_in_wal_mode() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let (sync, mode): (i64, String) = store
         .read(|conn| {
@@ -135,7 +136,7 @@ fn every_connection_is_synchronous_normal_in_wal_mode() {
 
 #[test]
 fn cpd_home_is_created_on_first_use() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let nested = env.root().join("a/b/home");
     let store = Store::open(&CpdHome::resolve(Some(nested.clone().into()), None).unwrap(), 5000).unwrap();
     assert_eq!(store.path(), nested.join("cpd.db"));
@@ -144,7 +145,7 @@ fn cpd_home_is_created_on_first_use() {
 
 #[test]
 fn a_file_that_is_not_a_database_is_store_failed() {
-    let env = TestEnv::new();
+    let env = Home::new();
     fs::write(home(&env).db(), "this is not sqlite, not at all, and long enough to have a header").unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreFailed, "{err:?}");
@@ -155,7 +156,7 @@ fn a_file_that_is_not_a_database_is_store_failed() {
 
 #[test]
 fn a_foreign_application_id_is_refused_and_never_written() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let conn = Connection::open(home(&env).db()).unwrap();
     conn.pragma_update(None, "application_id", 42).unwrap();
     drop(conn);
@@ -176,7 +177,7 @@ fn contract() -> String {
 }
 
 /// `(table, no_delete)` of every row of `history_tables`: the tables whose history triggers are generated (§4.4).
-fn history_tables(env: &TestEnv) -> Vec<(String, bool)> {
+fn history_tables(env: &impl HasCpdHome) -> Vec<(String, bool)> {
     let conn = raw(env);
     let mut stmt = conn.prepare("SELECT name, no_delete FROM history_tables ORDER BY name").unwrap();
     stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1))).unwrap().map(Result::unwrap).collect()
@@ -229,7 +230,7 @@ fn the_schema_is_contract_4_4_as_written() {
     }
     let expected = schema_sql(&contract);
     assert!(expected.len() > 40, "{expected:?}");
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let found: std::collections::BTreeMap<String, String> = schema_sql(&raw(&env)).into_iter().collect();
     for (name, sql) in expected {
@@ -239,7 +240,7 @@ fn the_schema_is_contract_4_4_as_written() {
 
 #[test]
 fn every_table_index_and_trigger_of_4_4_exists() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let mut expected = BTreeSet::new();
     for block in contract_ddl_blocks() {
@@ -276,7 +277,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 26, "§4.4's tables, the three lookup tables and schema_migrations");
+    assert_eq!(tables.len(), 27, "§4.4's tables, the three lookup tables and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -287,7 +288,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
 
 #[test]
 fn generated_history_triggers_match_the_contracts_example() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let conn = raw(&env);
     let example = &contract_ddl_blocks()[2];
@@ -319,7 +320,7 @@ fn generated_history_triggers_match_the_contracts_example() {
 
 #[test]
 fn every_column_of_every_table_appears_in_its_history_triggers() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let conn = raw(&env);
     let sql_of = |name: &str| -> String {
@@ -361,7 +362,7 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
 
 #[test]
 fn writes_are_copied_into_history_with_their_txn() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let txn = fixture(&mut store);
     let update = store
@@ -394,7 +395,7 @@ fn writes_are_copied_into_history_with_their_txn() {
 /// sql-F2 (hs-d234): a Job status flip used to store the whole row twice, its long text included.
 #[test]
 fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     // A Job with the size of a real one (7 KB of text on average, quality-sql-perf.md).
@@ -448,7 +449,7 @@ fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() 
 
 #[test]
 fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let txn = fixture(&mut store);
     let cases = [
@@ -487,7 +488,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
 /// Contract §4.4 `pr_needs` (migration `local-needs`): a need names a PR of the Plan by key; one naming no PR is refused.
 #[test]
 fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let txn = fixture(&mut store);
     store
@@ -511,7 +512,7 @@ fn a_need_names_a_pr_of_its_plan_and_one_naming_no_pr_is_refused() {
 
 #[test]
 fn transitions_outside_section_3_are_illegal_transition() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for sql in [
@@ -538,7 +539,7 @@ fn transitions_outside_section_3_are_illegal_transition() {
 
 #[test]
 fn a_locked_job_and_its_dependencies_are_job_locked() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for sql in [
@@ -574,7 +575,7 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
 
 #[test]
 fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_its_spec() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let insert = |key: &str, status: &str, fingerprint: &str| {
@@ -610,7 +611,7 @@ fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_
 #[test]
 fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
     // dependencies_locked: a non-draft Job created in this transaction (append) may get Dependencies.
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     store
@@ -630,7 +631,7 @@ fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
 
 #[test]
 fn append_only_tables_refuse_updates_and_deletes() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     store
@@ -672,7 +673,7 @@ fn append_only_tables_refuse_updates_and_deletes() {
 
 #[test]
 fn a_connection_without_cpd_txn_cannot_write() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let conn = raw(&env);
@@ -695,7 +696,7 @@ fn a_connection_without_cpd_txn_cannot_write() {
 
 #[test]
 fn a_cpd_txn_that_does_not_match_the_txns_row_is_refused() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let conn = raw(&env);
@@ -718,7 +719,7 @@ fn a_cpd_txn_that_does_not_match_the_txns_row_is_refused() {
 
 #[test]
 fn a_read_transaction_cannot_write() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let err = store
@@ -734,7 +735,7 @@ fn a_read_transaction_cannot_write() {
 /// store-G3: the statements that fire no trigger are stopped too.
 #[test]
 fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
@@ -753,7 +754,7 @@ fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
 
 #[test]
 fn every_write_transaction_has_its_txns_row() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let id = store.write("job add", |tx| Ok(tx.id())).unwrap();
     assert_eq!(id, 2, "txn 1 is the migration");
@@ -769,7 +770,7 @@ fn every_write_transaction_has_its_txns_row() {
 
 #[test]
 fn a_failed_write_rolls_back_everything_including_its_txns_row() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let err = store
         .write("test", |tx| {
@@ -794,7 +795,7 @@ fn a_failed_write_rolls_back_everything_including_its_txns_row() {
 
 #[test]
 fn a_changed_schema_refuses_writes_but_not_reads() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     drop(store);
@@ -813,7 +814,7 @@ fn a_changed_schema_refuses_writes_but_not_reads() {
 
 #[test]
 fn the_tamper_report_lists_history_rows_without_a_txn() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     let conn = raw(&env);
@@ -826,7 +827,7 @@ fn the_tamper_report_lists_history_rows_without_a_txn() {
 
 #[test]
 fn the_tamper_report_lists_every_orphan_among_many_history_rows_in_id_order() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let conn = raw(&env);
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
@@ -853,7 +854,7 @@ fn the_tamper_report_lists_every_orphan_among_many_history_rows_in_id_order() {
 
 #[test]
 fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let _store = open(&env);
     let conn = raw(&env);
     let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {ORPHAN_HISTORY_SQL}")).unwrap();
@@ -869,7 +870,7 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
 
 /// The detail column of `EXPLAIN QUERY PLAN <sql>` on a fresh store, one line per step.
 fn query_plan(sql: &str) -> Vec<String> {
-    let env = TestEnv::new();
+    let env = Home::new();
     let _store = open(&env);
     let conn = raw(&env);
     let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
@@ -924,7 +925,7 @@ fn the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index(
 /// still see as live, so a `stopped` Session with no pane costs nothing.
 #[test]
 fn only_the_live_sessions_are_in_sessions_live() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = fixture_store(&env);
     store
         .write("test", |tx| {
@@ -948,7 +949,7 @@ fn only_the_live_sessions_are_in_sessions_live() {
 
 #[test]
 fn migrating_an_empty_file_creates_the_schema_once() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     fs::write(home(&env).db(), b"").unwrap();
     let store = open(&env);
     assert!(store.schema_mismatch().is_none());
@@ -972,7 +973,7 @@ fn migrating_an_empty_file_creates_the_schema_once() {
 
 #[test]
 fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its_schema_hash() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
@@ -1007,7 +1008,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
 /// Migration `loop-guard` (contract §4.4, §5.2): a fresh store takes the Event kind `session-resumed` and the Inbox kind `loop-guard`.
 #[test]
 fn a_fresh_database_accepts_the_session_resumed_event_and_a_loop_guard_inbox_item() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let mut store = fixture_store(&env);
     store
         .write("test", |tx| {
@@ -1026,7 +1027,7 @@ fn a_fresh_database_accepts_the_session_resumed_event_and_a_loop_guard_inbox_ite
 
 #[test]
 fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let mut store = fixture_store(&env);
     let columns: i64 = store
         .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
@@ -1060,7 +1061,7 @@ fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan
 
 #[test]
 fn a_newer_schema_is_store_too_new() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
@@ -1073,7 +1074,7 @@ fn a_newer_schema_is_store_too_new() {
 
 #[test]
 fn a_failed_migration_rolls_back_entirely() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     // A database whose migration 1 cannot apply: a table `history` already exists.
     raw(&env).execute_batch("CREATE TABLE history (x)").unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
@@ -1091,7 +1092,7 @@ fn a_failed_migration_rolls_back_entirely() {
 
 #[test]
 fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     // Every migration applies, but the schema it leaves is not the one the binary
     // describes: an object the migrations do not know stays in `sqlite_schema`.
     raw(&env).execute_batch("CREATE TABLE stray (x)").unwrap();
@@ -1115,7 +1116,7 @@ fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
 
 #[test]
 fn a_write_after_another_connection_bumped_user_version_is_store_too_new_and_appends_nothing() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = fixture_store(&env);
     let txns = |store: &mut Store| store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0))?)).unwrap();
     let before = txns(&mut store);
@@ -1147,7 +1148,7 @@ fn pragmas(store: &mut Store) -> (i64, i64) {
 
 #[test]
 fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let mut store = open(&env);
     assert_eq!(pragmas(&mut store), (1, 0));
 }
@@ -1179,7 +1180,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
 
 #[test]
 fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_runner() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let mut store = open(&env);
     let rows: Vec<(String, String, i64, i64)> = store
         .read(|c| {
@@ -1422,7 +1423,7 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
 /// The holder's record is removed when its transaction ends, by a commit or a rollback.
 #[test]
 fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
     let records = || -> Vec<String> {
         let names = fs::read_dir(home(&env).locks_dir()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
@@ -1460,7 +1461,7 @@ fn a_slow_write_is_logged_with_where_its_time_went() {
 /// A lock held by a connection that is not cpd's has no record: `store_busy` says the holder is unknown.
 #[test]
 fn a_store_busy_with_no_recorded_holder_says_so() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let other = raw(&env);
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -1473,12 +1474,12 @@ fn a_store_busy_with_no_recorded_holder_says_so() {
 
 #[test]
 fn a_record_of_a_dead_process_is_not_the_holder() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
-    let mut dead = std::process::Command::new("true").spawn().unwrap();
-    dead.wait().unwrap();
-    let record = json!({"pid": dead.id(), "command": "gone", "argv": "gone", "session": null, "attempt": null, "since_unix_ms": now_ms()});
-    fs::write(home(&env).locks_dir().join(format!("store-writer-{}.json", dead.id())), record.to_string()).unwrap();
+    // A pid no process has: above every system's `pid_max` (no child to spawn and reap).
+    let dead = i32::MAX as u32;
+    let record = json!({"pid": dead, "command": "gone", "argv": "gone", "session": null, "attempt": null, "since_unix_ms": now_ms()});
+    fs::write(home(&env).locks_dir().join(format!("store-writer-{dead}.json")), record.to_string()).unwrap();
     let other = raw(&env);
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
     let e = Store::open(&home(&env), 100).unwrap().write("test", |_| Ok(())).unwrap_err();
@@ -1532,7 +1533,7 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
 
 #[test]
 fn a_persisting_store_gives_up_when_told_to_and_its_reads_never_wait() {
-    let env = TestEnv::new();
+    let env = Home::new();
     drop(open(&env));
     let other = raw(&env);
     other.execute_batch("BEGIN IMMEDIATE").unwrap();
@@ -1639,7 +1640,7 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
 
 /// A migration this binary lacks, recorded as a newer cpd would (`cpd_txn()` is stood in by the
 /// newest `txns` id).
-fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
+fn apply_newer(env: &impl HasCpdHome, name: &str, compat: &str) {
     drop(open(env));
     let conn = raw(env);
     let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();

@@ -17,6 +17,10 @@
 #   environment, and the lines with ` GATE_RUN=<id>` are the run's processes (the
 #   same rule). Pids that are no longer alive are skipped (the scan's own ps and
 #   grep have exited when it looks at them). The hint uses `ps -E -p <pid>`.
+# - Every leftover process is reported with the `NEXTEST_TEST_NAME` of its environment (the test
+#   that started it, read before the process is stopped) and its parent chain's command lines.
+# - GATE_RUN_PROCFS (default /proc) is where the Linux branch reads processes from; a test points
+#   it at a fake directory, or at a path that does not exist to take the `ps` branch on Linux too.
 set -u
 
 [ $# -gt 0 ] || { echo "usage: gate-run.sh <command> [<args>...]" >&2; exit 2; }
@@ -31,6 +35,7 @@ export TMPDIR
 # Node's compile cache would put a `node-compile-cache` directory in TMPDIR: a tool's cache, not a leak of a test.
 NODE_DISABLE_COMPILE_CACHE=1
 export NODE_DISABLE_COMPILE_CACHE
+procfs=${GATE_RUN_PROCFS:-/proc}
 uid=$(id -u)
 self=$$
 tmux_dirs="/tmp/tmux-$uid"
@@ -38,9 +43,9 @@ tmux_dirs="/tmp/tmux-$uid"
 
 # ppid_of PID: the parent's pid (empty when the process is gone).
 ppid_of() {
-  if [ -r "/proc/$1/stat" ]; then
+  if [ -r "$procfs/$1/stat" ]; then
     _l=
-    { read -r _l < "/proc/$1/stat"; } 2>/dev/null || return 0
+    { read -r _l < "$procfs/$1/stat"; } 2>/dev/null || return 0
     _l=${_l##*) }
     set -- $_l
     echo "${2-}"
@@ -66,9 +71,9 @@ related() {
 
 # run_pids: the pids of this user's processes that have GATE_RUN=<id> in their environment.
 run_pids() {
-  if [ -d /proc/self ]; then
-    for _e in /proc/[0-9]*/environ; do
-      _p=${_e#/proc/}
+  if [ -d "$procfs/self" ]; then
+    for _e in "$procfs"/[0-9]*/environ; do
+      _p=${_e#"$procfs"/}
       _p=${_p%/environ}
       { tr '\0' '\n' < "$_e" | grep -qxF "GATE_RUN=$GATE_RUN"; } 2>/dev/null && echo "$_p"
     done
@@ -78,11 +83,33 @@ run_pids() {
 }
 
 cmdline_of() {
-  if [ -r "/proc/$1/cmdline" ]; then
-    tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | cut -c 1-100
+  if [ -r "$procfs/$1/cmdline" ]; then
+    tr '\0' ' ' < "$procfs/$1/cmdline" 2>/dev/null | cut -c 1-100
   else
     ps -o command= -p "$1" 2>/dev/null | cut -c 1-100
   fi
+}
+
+# env_value PID NAME: the value of NAME in PID's environment (empty when it has none, or when the
+# system does not show it: on macOS an Apple platform binary hides its environment).
+env_value() {
+  if [ -d "$procfs/self" ]; then
+    tr '\0' '\n' < "$procfs/$1/environ" 2>/dev/null | grep -m1 "^$2=" | cut -d= -f2-
+  else
+    ps -E -p "$1" -o command= 2>/dev/null | tr ' ' '\n' | grep -m1 "^$2=" | cut -d= -f2-
+  fi
+}
+
+# parents_of PID: the pid and command line of each ancestor of PID, up to pid 1, `<pid> <command> < ...`.
+parents_of() {
+  _q=$(ppid_of "$1")
+  _out=
+  while [ -n "$_q" ] && [ "$_q" -ge 1 ]; do
+    _out="${_out:+$_out < }$_q $(cmdline_of "$_q")"
+    [ "$_q" -gt 1 ] || break
+    _q=$(ppid_of "$_q")
+  done
+  echo "$_out"
 }
 
 finish() {
@@ -103,13 +130,16 @@ finish() {
   rm -f "$TMPDIR/tripwire.log"
   for p in $(run_pids); do
     related "$p" && continue
-    if [ -d /proc/self ]; then
-      [ -d "/proc/$p" ] || continue
+    if [ -d "$procfs/self" ]; then
+      [ -d "$procfs/$p" ] || continue
     else
       kill -0 "$p" 2>/dev/null || continue
     fi
     pids="$pids $p"
     report="${report}  process $p (ppid $(ppid_of "$p")) $(cmdline_of "$p")$nl"
+    _t=$(env_value "$p" NEXTEST_TEST_NAME)
+    report="${report}    NEXTEST_TEST_NAME=${_t:-(not in its environment, or not shown by this system)}$nl"
+    report="${report}    parents: $(parents_of "$p")$nl"
     count=$((count + 1))
   done
   sockets=
@@ -137,8 +167,8 @@ finish() {
     printf '%s' "$report"
     if [ -n "$pids" ]; then
       set -- $pids
-      if [ -d /proc/self ]; then
-        printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`tr '\\0' '\\n' </proc/$1/environ | grep NEXTEST_TEST_NAME\`"
+      if [ -d "$procfs/self" ]; then
+        printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`tr '\\0' '\\n' <$procfs/$1/environ | grep NEXTEST_TEST_NAME\`"
       else
         printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`ps -E -p $1 -o command= | tr ' ' '\\n' | grep NEXTEST_TEST_NAME\`"
       fi

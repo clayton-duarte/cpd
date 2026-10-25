@@ -139,3 +139,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
 | `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
 | `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |
+| `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
+| `cpd host approve` | Record the User's approval for one checkout repair (adapter) (§9.11) | internal | |
+| `cpd host repair` | Repair the skipped cpd install (Manager) (§9.11) | Manager | |

@@ -6,8 +6,6 @@
 cpd::engine doctor::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_curate_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_distill_inbox::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_inbox::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_loop_guard_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_sleep::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_team::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_titles_width::  # m-engine: engine tests on a real tmux server
@@ -24,10 +22,7 @@ cpd::session pill_lines::  # m-session: session tests on a real tmux server
 cpd::session plannotator_env::  # m-session: session tests on a real tmux server
 cpd::session session_asleep::  # m-session: session tests on a real tmux server
 cpd::session session_first_message::  # m-session: session tests on a real tmux server
-cpd::session session_list_archived::  # m-session: session tests on a real tmux server
 cpd::session session_reload::  # m-session: session tests on a real tmux server
-cpd::session session_report::  # m-session: session tests on a real tmux server
-cpd::session session_resume::  # m-session: session tests on a real tmux server
 cpd::session session_retier::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
 cpd::session session_titles_glance::  # m-session: session tests on a real tmux server
@@ -37,27 +32,19 @@ cpd::session session::  # m-session: session tests on a real tmux server
 cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_curation::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_digest::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_distill::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_manager_by_user::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_manager::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_pending_waiting::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_pending::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context::  # m-flow: flow commands that may reach a real tmux
 cpd::flow driver_idle::  # m-flow: flow commands that may reach a real tmux
 cpd::flow driver_reload::  # m-flow: flow commands that may reach a real tmux
 cpd::flow driver::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_cancel::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan_delete::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan_new_by_user::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_outline::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_overlap::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_render_cancelled::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_render_waiting::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_show::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
@@ -99,11 +86,8 @@ cpd::tui tui_merge::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_checklist::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_dialog::  # m-tui-r: view driven through a pane
 cpd::tui tui_logs::  # m-tui-r: view driven through a pane
-cpd::tui tui_loop_guard::  # m-tui-r: view driven through a pane
 cpd::tui tui_runner::  # m-tui-r: view driven through a pane
 cpd::tui tui_chat_pad::  # m-tui-r: view driven through a pane
-cpd::tui tui_plan_cancelled::  # m-tui-r: view driven through a pane
-cpd::tui tui_plan_waiting::  # m-tui-r: view driven through a pane
 cpd::tui tui_history::  # m-tui-r: view driven through a pane
 cpd::tui tui_titles::  # m-tui-r: view driven through a pane
 cpd-core context::  # m-units: unit tests that may start a real tmux

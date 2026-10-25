@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.14.46"
+version = "0.14.48"
 dependencies = [
  "clap",
  "cpd",
@@ -317,12 +317,14 @@ dependencies = [
 
 [[package]]
 name = "cpd-core"
-version = "0.14.46"
+version = "0.14.48"
 dependencies = [
  "clap",
+ "cpd-core",
  "libproc",
  "minijinja",
  "nix 0.31.3",
+ "parking_lot",
  "ratatui",
  "rusqlite",
  "serde",
@@ -336,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-engine"
-version = "0.14.46"
+version = "0.14.48"
 dependencies = [
  "clap",
  "cpd-core",
@@ -351,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-tui"
-version = "0.14.46"
+version = "0.14.48"
 dependencies = [
  "clap",
  "cpd-core",

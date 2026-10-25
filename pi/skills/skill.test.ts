@@ -344,13 +344,19 @@ function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: 
   const outline = section(commandsDoc, "### 4.13 `plan outline`");
   for (const line of outline.split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
   const reasons = /reasons` is a subset of `\[([^\]]+)\]`/.exec(kindRows().get("pr-feedback")!)![1]!.match(/[a-z_]+/g)!;
-  const tools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
+  const contractTools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
+  // Extract pi tool names from commands.md headings: "The pi tool `name`"
+  const piTools: string[] = [];
+  for (const match of commandsDoc.matchAll(/^### \d+\.\d+ The pi tool `([a-z_]+)`/gm)) {
+    piTools.push(match[1]!);
+  }
+  const tools = [...contractTools.filter((t) => !t.startsWith("plannotator")), ...piTools];
   return {
     causes: new Set(ticks(section(contractDoc, "### 3.4 Attempt statuses, outcomes and causes"), /^[a-z]+(_[a-z]+)*$/)),
     reasons: new Set(reasons),
     configKeys: new Set(configDefaults().keys()),
     fields,
-    tools: new Set(tools.filter((t) => !t.startsWith("plannotator"))),
+    tools: new Set(tools),
   };
 }
 

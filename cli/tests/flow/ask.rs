@@ -1,5 +1,5 @@
-//! Escalations (contract §3.3, §3.5; commands.md §8), run as the built binary
-//! against a temporary `$CPD_HOME`. Plans, Jobs, Attempts and Sessions are
+//! Escalations (contract §3.3, §3.5; commands.md §8), against a temporary `$CPD_HOME`: the refusals and `answer` run
+//! in this process (`Fx`); the two tests that block in `ask` run the built binary (`TestEnv`). Plans, Jobs, Attempts and Sessions are
 //! written straight into the database, as fixtures: they belong to other
 //! areas. `ask` blocks, so it runs as a child process the test answers.
 
@@ -7,6 +7,7 @@ use crate::common;
 
 use std::process::{Child, Stdio};
 
+use common::fx::Fx;
 use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -57,6 +58,11 @@ fn setup(env: &TestEnv) {
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+}
+
+/// [`events`] of an `Fx`: `events list` in this process.
+fn fx_events(fx: &Fx, kind: &str) -> Vec<Value> {
+    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 fn session_state(env: &TestEnv) -> (String, Option<String>) {
@@ -182,42 +188,39 @@ fn every_ask_is_a_new_escalation() {
 
 #[test]
 fn ask_refuses_an_attempt_that_is_not_running() {
-    let env = TestEnv::new();
-    setup(&env);
-    fixture(&env, "UPDATE attempts SET status = 'merging', submitted_sha = 's', submitted_at = 't' WHERE id = 'a-a1';");
-    let error = refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
+    let fx = Fx::new();
+    setup(&fx.env);
+    fixture(&fx.env, "UPDATE attempts SET status = 'merging', submitted_sha = 's', submitted_at = 't' WHERE id = 'a-a1';");
+    let error = refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
     assert_eq!(error["details"]["status"], "merging");
-    fixture(&env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';");
-    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
+    fixture(&fx.env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';");
+    refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
     // Nothing was written.
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM escalations"), 0);
-    assert!(events(&env, "escalation").is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM escalations"), 0);
+    assert!(fx_events(&fx, "escalation").is_empty());
 }
 
 #[test]
 fn ask_refusals_before_the_attempt() {
-    let env = TestEnv::new();
-    setup(&env);
-    refused(&env.cpd(&["ask", "a-a2", "Q?", "--plan", "pl"]), "attempt_not_found", 4);
-    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&env.cpd(&["ask", "a-a1", "Q?"]), "plan_required", 2);
-    refused(&env.cpd(&["ask", "not-an-attempt", "Q?", "--plan", "pl"]), "invalid_attempt_id", 2);
-    refused(&env.cpd(&["ask", "a-a1", "", "--plan", "pl"]), "usage", 2);
-    refused(&env.cpd(&["ask", "a-a1", "Q?", "--timeout-minutes", "soon", "--plan", "pl"]), "usage", 2);
+    let fx = Fx::new();
+    setup(&fx.env);
+    refused(&fx.cpd(&["ask", "a-a2", "Q?", "--plan", "pl"]), "attempt_not_found", 4);
+    refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.cpd(&["ask", "a-a1", "Q?"]), "plan_required", 2);
+    refused(&fx.cpd(&["ask", "not-an-attempt", "Q?", "--plan", "pl"]), "invalid_attempt_id", 2);
+    refused(&fx.cpd(&["ask", "a-a1", "", "--plan", "pl"]), "usage", 2);
+    refused(&fx.cpd(&["ask", "a-a1", "Q?", "--timeout-minutes", "soon", "--plan", "pl"]), "usage", 2);
     // A stopped Worker Session cannot become waiting (§3.6): nothing is written.
-    fixture(&env, "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';");
-    refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM escalations"), 0);
+    fixture(&fx.env, "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';");
+    refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM escalations"), 0);
 }
 
 #[test]
 fn ask_takes_the_plan_from_the_environment() {
-    let env = TestEnv::new();
-    setup(&env);
-    let run = {
-        let out = env.command(CPD).env("CPD_PLAN", "pl").args(["ask", "a-a1", "Q?", "--timeout-minutes", "0"]).output().unwrap();
-        Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }
-    };
+    let fx = Fx::new();
+    setup(&fx.env);
+    let run = fx.cpd_with(fx.env.root(), &["ask", "a-a1", "Q?", "--timeout-minutes", "0"], &[("CPD_PLAN", "pl")]);
     refused(&run, "ask_timeout", 5);
 }
 
@@ -234,20 +237,20 @@ fn open_escalation(env: &TestEnv) {
 
 #[test]
 fn answer_records_the_answer() {
-    let env = TestEnv::new();
-    setup(&env);
-    open_escalation(&env);
-    let out = env.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
+    let fx = Fx::new();
+    setup(&fx.env);
+    open_escalation(&fx.env);
+    let out = fx.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
     assert_eq!(out["escalation"], "a-a1-q1");
     assert_eq!(out["attempt"], "a-a1");
     let answered_at = out["answered_at"].as_str().unwrap();
     assert!(answered_at.ends_with('Z') && answered_at.len() == 24, "{answered_at}");
 
-    let (status, answer, at): (String, String, String) = store(&env)
+    let (status, answer, at): (String, String, String) = store(&fx.env)
         .read(|c| Ok(c.query_row("SELECT status, answer, answered_at FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
         .unwrap();
     assert_eq!((status.as_str(), answer.as_str(), at.as_str()), ("answered", "Use the v2 field names.", answered_at));
-    let answered = events(&env, "escalation-answered");
+    let answered = fx_events(&fx, "escalation-answered");
     assert_eq!(answered.len(), 1);
     assert_eq!(answered[0]["data"], json!({"escalation": "a-a1-q1"}));
     assert_eq!((answered[0]["plan"].as_str(), answered[0]["job"].as_str(), answered[0]["attempt"].as_str()), (Some("pl"), Some("a"), Some("a-a1")));
@@ -255,32 +258,32 @@ fn answer_records_the_answer() {
 
 #[test]
 fn answer_is_refused_unless_the_escalation_is_open() {
-    let env = TestEnv::new();
-    setup(&env);
-    open_escalation(&env);
-    env.cpd(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
-    let events_before = events(&env, "escalation-answered").len();
-    refused(&env.cpd(&["answer", "a-a1-q1", "Second.", "--plan", "pl"]), "escalation_answered", 3);
-    assert_eq!(env.query::<String>("SELECT answer FROM escalations WHERE id = 'a-a1-q1'"), "First.");
-    assert_eq!(events(&env, "escalation-answered").len(), events_before);
+    let fx = Fx::new();
+    setup(&fx.env);
+    open_escalation(&fx.env);
+    fx.cpd(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
+    let events_before = fx_events(&fx, "escalation-answered").len();
+    refused(&fx.cpd(&["answer", "a-a1-q1", "Second.", "--plan", "pl"]), "escalation_answered", 3);
+    assert_eq!(fx.env.query::<String>("SELECT answer FROM escalations WHERE id = 'a-a1-q1'"), "First.");
+    assert_eq!(fx_events(&fx, "escalation-answered").len(), events_before);
 
     fixture(
-        &env,
+        &fx.env,
         "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at, expired_at)
          VALUES ('pl', 'a-a1-q2', 'a-a1', 2, 'Gone?', 'expired', 1, 't', 't');",
     );
-    refused(&env.cpd(&["answer", "a-a1-q2", "Late.", "--plan", "pl"]), "escalation_expired", 3);
+    refused(&fx.cpd(&["answer", "a-a1-q2", "Late.", "--plan", "pl"]), "escalation_expired", 3);
 }
 
 #[test]
 fn answer_refusals_before_the_escalation() {
-    let env = TestEnv::new();
-    setup(&env);
-    open_escalation(&env);
-    refused(&env.cpd(&["answer", "a-a1-q9", "A.", "--plan", "pl"]), "escalation_not_found", 4);
-    refused(&env.cpd(&["answer", "a-a1-q1", "A.", "--plan", "other"]), "escalation_not_found", 4);
-    refused(&env.cpd(&["answer", "a-a1-q1", "A."]), "plan_required", 2);
-    refused(&env.cpd(&["answer", "q1", "A.", "--plan", "pl"]), "invalid_escalation_id", 2);
-    refused(&env.cpd(&["answer", "a-a1-q1", "", "--plan", "pl"]), "usage", 2);
-    assert_eq!(env.query::<String>("SELECT status FROM escalations WHERE id = 'a-a1-q1'"), "open");
+    let fx = Fx::new();
+    setup(&fx.env);
+    open_escalation(&fx.env);
+    refused(&fx.cpd(&["answer", "a-a1-q9", "A.", "--plan", "pl"]), "escalation_not_found", 4);
+    refused(&fx.cpd(&["answer", "a-a1-q1", "A.", "--plan", "other"]), "escalation_not_found", 4);
+    refused(&fx.cpd(&["answer", "a-a1-q1", "A."]), "plan_required", 2);
+    refused(&fx.cpd(&["answer", "q1", "A.", "--plan", "pl"]), "invalid_escalation_id", 2);
+    refused(&fx.cpd(&["answer", "a-a1-q1", "", "--plan", "pl"]), "usage", 2);
+    assert_eq!(fx.env.query::<String>("SELECT status FROM escalations WHERE id = 'a-a1-q1'"), "open");
 }

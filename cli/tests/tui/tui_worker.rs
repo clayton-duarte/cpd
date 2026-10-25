@@ -162,62 +162,6 @@ const STATUS: &str = " api-a1 running · working";
 
 // ---------- tests ----------
 
-#[test]
-fn the_session_file_of_the_worker_is_rendered_read_only() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("test result")));
-    assert_eq!(
-        screen,
-        [
-            "16:33:44 you",
-            "      Implement the API.",
-            "16:33:44 agent",
-            "      On it.",
-            "16:33:44 → bash cargo test",
-            "        󰘌 test result: ok",
-            "",
-            "",
-            "",
-            "",
-            "",
-            STATUS,
-        ]
-    );
-}
-
-/// `you` and the User's text are grey (7), `agent` and `→ tool` cyan (6): contract §6.1.1.
-#[test]
-fn the_roles_are_in_the_palettes_colours() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    let pane = Pane::start(&env, 40, 12);
-    pane.wait("the conversation", |s| s.iter().any(|r| r.contains("test result")));
-    let out = env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
-    let raw = String::from_utf8(out.stdout).unwrap();
-    let row_with = |text: &str| raw.lines().find(|l| l.contains(text)).unwrap_or_else(|| panic!("no row with {text}:\n{raw}")).to_owned();
-    // tmux reports the 16 ANSI colours as `38;5;N`: grey 7, cyan 6
-    assert!(row_with("you").contains("\x1b[38;5;7myou"), "you: {raw:?}");
-    assert!(row_with("Implement the API.").contains("\x1b[38;5;7m      Implement"), "the User's text: {raw:?}");
-    assert!(row_with("agent").contains("\x1b[38;5;6magent"), "agent: {raw:?}");
-    assert!(row_with("→ bash").contains("\x1b[38;5;6m→ bash"), "tool: {raw:?}");
-}
-
-/// A Worker that asked its Lead waits for an agent, not for the User (hs-d303): the foot reads `waiting <label>`.
-#[test]
-fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    env.sql("UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'w1';");
-    let pane = Pane::start(&env, 60, 12);
-    let screen = pane.wait("the foot", |s| s.iter().any(|r| r.contains("test result")));
-    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
-}
-
 /// The Job form's rows and helpers (commands.md §13.2, Job `planview-docs`): the reason header (P4, P5, P6).
 const PLACEHOLDER: &str = " No Attempt yet: the Job has not started.";
 
@@ -237,132 +181,8 @@ fn job(key: &str, status: &str, reason: Option<&str>) -> String {
     )
 }
 
-fn need(job: &str, needs: &str) -> String {
-    format!("INSERT INTO dependencies (plan, job, needs) VALUES ('ship', '{job}', '{needs}');")
-}
-
 fn job_pane<'a>(env: &'a TestEnv, key: &str, width: u16, height: u16) -> Pane<'a> {
     Pane::start_command(env, width, height, &format!("{CPD} tui view worker --job {key} --plan ship"))
-}
-
-fn rows(text: &[&str]) -> Vec<String> {
-    text.iter().map(|r| (*r).to_owned()).collect()
-}
-
-/// The Job form of a cancelled Job without an Attempt: the reason at the top, in colour 8 (P4, P5).
-#[test]
-fn the_job_form_of_a_cancelled_job_without_an_attempt_says_why_at_the_top() {
-    let env = env();
-    populate(&env, None);
-    env.sql(&job("dead", "cancelled", Some("the vendor API is gone for good so the export was dropped by the User")));
-    let pane = job_pane(&env, "dead", 44, 8);
-    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
-    assert_eq!(
-        screen,
-        rows(&[
-            " cancelled: the vendor API is gone for good",
-            " so the export was dropped by the User",
-            "",
-            PLACEHOLDER,
-            "",
-            "",
-            "",
-            " dead cancelled",
-        ]),
-        "{screen:?}"
-    );
-    let out = env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
-    let raw = String::from_utf8(out.stdout).unwrap();
-    let row = raw.lines().find(|l| l.contains("cancelled: the vendor")).unwrap_or_else(|| panic!("no header:\n{raw}"));
-    assert!(row.contains("\x1b[38;5;8m cancelled: the vendor"), "the header is colour 8: {row:?}");
-}
-
-/// The Job form of a queued Job: what it waits for, or nothing when its needs are merged.
-#[test]
-fn the_job_form_of_a_waiting_job_says_what_it_waits_for_at_the_top() {
-    let env = env();
-    populate(&env, None);
-    env.sql(&[
-        job("a", "queued", None),
-        job("b", "queued", None),
-        job("m", "merged", None),
-        job("web", "queued", None),
-        job("ok", "queued", None),
-        need("web", "a"),
-        need("web", "b"),
-        need("ok", "m"),
-    ]
-    .concat());
-    let pane = job_pane(&env, "web", 60, 5);
-    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
-    assert_eq!(screen, rows(&[" waiting on a, b", "", PLACEHOLDER, "", " web waiting"]), "{screen:?}");
-
-    env.tmux(&["kill-server"]);
-    let pane = job_pane(&env, "ok", 60, 3);
-    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
-    assert_eq!(screen, rows(&[PLACEHOLDER, "", " ok queued"]), "{screen:?}");
-}
-
-/// An ended Attempt that failed says why at the top, pinned (P5), not at the foot: what the User reads when the
-/// Worker of a failed Job is opened from its pill in the Plan view.
-#[test]
-fn the_attempt_form_of_a_failed_job_says_why_at_the_top_and_not_at_the_foot() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    env.sql(
-        "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';
-         UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = '2026-01-03T00:05:00.000Z';
-         UPDATE jobs SET status = 'failed', failed_cause = 'crashed';",
-    );
-    let pane = Pane::start(&env, 60, 12);
-    let screen = pane.wait("the transcript", |s| s.iter().any(|r| r.contains("test result")));
-    assert_eq!(screen[..3], rows(&[" failed: crashed", "", "16:33:44 you"])[..], "{screen:?}");
-    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped"), "{screen:?}");
-    pane.keys(&["k", "k", "k", "k", "k", "k", "k", "k"]);
-    pane.keys(&["PageUp"]);
-    let screen = pane.screen();
-    assert_eq!(screen[..2], rows(&[" failed: crashed", ""])[..], "pinned: {screen:?}");
-    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped"), "{screen:?}");
-}
-
-/// A running or merged Job has no header.
-#[test]
-fn the_attempt_form_of_a_merged_job_has_no_header() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    env.sql(
-        "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';
-         UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc123', ended_at = '2026-01-03T00:05:00.000Z';
-         UPDATE jobs SET status = 'merged', merged_sha = 'abc123';",
-    );
-    let pane = Pane::start(&env, 60, 12);
-    let screen = pane.wait("the transcript", |s| s.iter().any(|r| r.contains("test result")));
-    assert_eq!(screen[0], "16:33:44 you", "{screen:?}");
-}
-
-/// P5: at most 5 header rows, `…` ends the 5th, then one empty row.
-#[test]
-fn a_long_reason_wraps_and_stops_at_five_rows() {
-    let env = env();
-    populate(&env, None);
-    let reason = (1..=39).map(|i| format!("word{i:02}")).collect::<Vec<_>>().join(" ");
-    env.sql(&job("dead", "cancelled", Some(&reason)));
-    let pane = job_pane(&env, "dead", 44, 10);
-    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
-    assert_eq!(
-        screen[..4],
-        rows(&[
-            " cancelled: word01 word02 word03 word04",
-            " word05 word06 word07 word08 word09 word10",
-            " word11 word12 word13 word14 word15 word16",
-            " word17 word18 word19 word20 word21 word22",
-        ])[..],
-        "{screen:?}"
-    );
-    assert!(screen[4].starts_with(" word23") && screen[4].ends_with('…'), "the fifth row ends in …: {screen:?}");
-    assert_eq!((screen[5].as_str(), screen[6].as_str()), ("", PLACEHOLDER), "{screen:?}");
 }
 
 #[test]
@@ -459,15 +279,6 @@ fn a_session_without_its_file_yet_says_so_and_shows_it_once_it_exists() {
     assert!(screen[0].starts_with(" No session file at ") && screen.join("").replace(' ', "").contains("later.jsonl"), "{screen:?}"); // the path may wrap in a long test root
     std::fs::write(&file, entry("user", json!({"type": "text", "text": "Hello."}))).unwrap();
     pane.wait("the file", |s| s.iter().any(|r| r.contains("Hello.")));
-}
-
-#[test]
-fn a_session_with_no_file_registered_says_so() {
-    let env = env();
-    populate(&env, None);
-    let pane = Pane::start(&env, 70, 3);
-    let screen = pane.wait("the placeholder", |s| s.iter().any(|r| r.contains("No session file yet")));
-    assert_eq!(screen[0], " No session file yet: the Worker has not started its Session.");
 }
 
 const EVENT: &str = "INSERT INTO events (txn, at, kind, context, plan, attempt, session, text, data)

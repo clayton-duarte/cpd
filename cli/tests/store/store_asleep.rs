@@ -1,13 +1,13 @@
 //! Migration of `sessions.asleep_at` and the `session-asleep` Event kind (contract §4.5; hs-d515, hs-d520).
 
-use crate::common::TestEnv;
+use crate::home::{HasCpdHome, Home};
 
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
 
 #[test]
 fn migration_adds_asleep_at_and_the_event_kind() {
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
 

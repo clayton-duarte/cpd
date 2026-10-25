@@ -20,7 +20,7 @@ export const KINDS = [
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "session-resumed", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-base-changed", "pr-opened", "pr-merged",
-  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-ended", "error",
+  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "error",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 

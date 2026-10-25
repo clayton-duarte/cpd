@@ -4,13 +4,17 @@
 //!
 //! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
 //! goes straight to the merge.
+//!
+//! The `dispatch_refuses_*` tests refuse before any worktree, window or process exists: they run the command tree
+//! in this process (`Fx`, [`Rows`]) against rows alone, with no repo, no tmux server and no fake pi.
 
 use crate::common;
 
 use std::fs::{self, File, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use common::fx::Fx as InProcess;
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
@@ -63,6 +67,22 @@ fn fx_with(config_extra: &str) -> Fx {
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup).unwrap().path;
+    seed_home(&env, config_extra);
+    // The work session as the engine leaves it: its `watch` window, and
+    // remain-on-exit (§6.1) so a dead Worker pane stays to be read.
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    seed_rows(&env, &repo, &lead);
+    let fx = Fx { env, repo, lead };
+    fx.pi("exit 0");
+    fx.add_job(JOB, &[]);
+    fx
+}
+
+/// The config on this env's tmux server (`config_extra` is more TOML), a fake pi install whose Tier catalog is
+/// seeded in the cache by [`seed_rows`], and the policy file of the repo `acme/pay`.
+fn seed_home(env: &TestEnv, config_extra: &str) {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -78,23 +98,23 @@ fn fx_with(config_extra: &str) -> Fx {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
-    // The work session as the engine leaves it: its `watch` window, and
-    // remain-on-exit (§6.1) so a dead Worker pane stays to be read.
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(env.tmux(args).status.success(), "tmux {args:?}");
-    }
     // The PRs are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
     env.repo_policy("acme", "pay", "");
-    let fx = Fx { env, repo, lead };
-    fx.pi("exit 0");
+}
+
+/// The Tier catalog, Context, Lead Session, Plan (phase `dispatch`) and PR `repo` of Plan `pay` in the store of `env`;
+/// `repo` and `lead` are the paths the PR names.
+fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
     let catalog: String = EFFORTS
         .iter()
         .map(|(letter, model, efforts)| {
             format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
         })
         .collect();
-    fx.fixture(&format!(
-        "{catalog}
+    fixture(
+        env,
+        &format!(
+            "{catalog}
          INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -102,11 +122,88 @@ fn fx_with(config_extra: &str) -> Fx {
            VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
          INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
            VALUES ('pay', 'repo', '{repo}', 'pay', 'main', 'dispatch', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't');",
-        repo = fx.repo.display(),
-        lead = fx.lead.display()
-    ));
-    fx.add_job(JOB, &[]);
-    fx
+            repo = repo.display(),
+            lead = lead.display()
+        ),
+    );
+}
+
+fn store(env: &TestEnv) -> Store {
+    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+}
+
+fn fixture(env: &TestEnv, sql: &str) {
+    store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
+}
+
+/// Job `key` of PR `pr` of Plan `pay`, queued with its Locked-Job fingerprint.
+fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
+    let mut sql = format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+         VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+    );
+    for need in needs {
+        sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
+    }
+    fixture(env, &sql);
+    let plan = PlanId::parse(PLAN).unwrap();
+    let all = store(env).read(|conn| jobs::load(conn, &plan)).unwrap();
+    let job = all.iter().find(|j| j.key == key).unwrap();
+    fixture(env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';", locked_fingerprint(job)));
+}
+
+/// [`Fx`] without a repo, a worktree, a tmux server, a fake pi or a child process: the same rows (Plan `pay`, PR
+/// `repo`, Job `api` queued), written by SQL in an [`InProcess`] env whose `job dispatch` runs in this process. The
+/// paths the rows name (`repo`, `lead`) do not exist: a refusal is made before anything reads them.
+struct Rows {
+    fx: InProcess,
+    repo: PathBuf,
+}
+
+fn rows() -> Rows {
+    rows_with("")
+}
+
+fn rows_with(config_extra: &str) -> Rows {
+    let fx = InProcess::new();
+    let repo = fx.env.root().join("repos/pay");
+    seed_home(&fx.env, config_extra);
+    seed_rows(&fx.env, &repo, &fx.env.root().join("repos/pay.pay"));
+    add_job_in(&fx.env, "repo", JOB, &[]);
+    Rows { fx, repo }
+}
+
+impl Rows {
+    fn home(&self) -> CpdHome {
+        CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap()
+    }
+
+    fn fixture(&self, sql: &str) {
+        fixture(&self.fx.env, sql);
+    }
+
+    /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
+    fn add_job(&self, key: &str, needs: &[&str]) {
+        self.add_job_in("repo", key, needs);
+    }
+
+    /// [`Rows::add_job`] in PR `pr`.
+    fn add_job_in(&self, pr: &str, key: &str, needs: &[&str]) {
+        add_job_in(&self.fx.env, pr, key, needs);
+    }
+
+    /// `job dispatch <key>` with [`DRIVER_ENV`], in this process.
+    fn dispatch(&self, key: &str) -> Run {
+        self.fx.cpd_with(self.fx.env.root(), &["job", "dispatch", key, "--plan", PLAN], &DRIVER_ENV)
+    }
+
+    fn job_status(&self, key: &str) -> String {
+        self.fx.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+    }
+
+    fn txns(&self) -> i64 {
+        self.fx.env.query("SELECT count(*) FROM txns")
+    }
 }
 
 impl Fx {
@@ -115,11 +212,11 @@ impl Fx {
     }
 
     fn store(&self) -> Store {
-        Store::open(&self.home(), 5000).unwrap()
+        store(&self.env)
     }
 
     fn fixture(&self, sql: &str) {
-        self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
+        fixture(&self.env, sql);
     }
 
     /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
@@ -129,21 +226,7 @@ impl Fx {
 
     /// [`Fx::add_job`] in PR `pr`.
     fn add_job_in(&self, pr: &str, key: &str, needs: &[&str]) {
-        let mut sql = format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
-        );
-        for need in needs {
-            sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
-        }
-        self.fixture(&sql);
-        let plan = PlanId::parse(PLAN).unwrap();
-        let all = self.store().read(|conn| jobs::load(conn, &plan)).unwrap();
-        let job = all.iter().find(|j| j.key == key).unwrap();
-        self.fixture(&format!(
-            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';",
-            locked_fingerprint(job)
-        ));
+        add_job_in(&self.env, pr, key, needs);
     }
 
     /// The fake `pi`: `body` runs in the Worker's pane, cwd the worktree, with
@@ -339,7 +422,7 @@ sleep 120"#,
 
 #[test]
 fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
-    let fx = fx();
+    let fx = rows();
     fx.fixture(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');",
@@ -730,7 +813,7 @@ fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
 
 #[test]
 fn dispatch_refuses_a_job_that_is_not_ready() {
-    let fx = fx();
+    let fx = rows();
     fx.add_job("ui", &["api"]);
     let before = fx.txns();
 
@@ -741,7 +824,7 @@ fn dispatch_refuses_a_job_that_is_not_ready() {
 
 #[test]
 fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
-    let fx = fx();
+    let fx = rows();
     fx.fixture(&format!("UPDATE jobs SET fingerprint = '{}' WHERE plan = 'pay' AND key = 'api';", "0".repeat(64)));
     refused(&fx.dispatch(JOB), "locked_job_tampered", 3);
     assert_eq!(fx.job_status(JOB), "queued");
@@ -749,7 +832,7 @@ fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
 
 #[test]
 fn dispatch_refuses_when_the_driver_lock_is_held() {
-    let fx = fx();
+    let fx = rows();
     let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = OpenOptions::new().create(true).truncate(false).write(true).open(&lock).unwrap();
@@ -763,7 +846,7 @@ fn dispatch_refuses_when_the_driver_lock_is_held() {
 
 #[test]
 fn dispatch_refuses_when_no_slot_is_free() {
-    let fx = fx_with("concurrency = 1");
+    let fx = rows_with("concurrency = 1");
     fx.add_job("ui", &[]);
     fx.fixture(
         "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'ui';
@@ -773,7 +856,7 @@ fn dispatch_refuses_when_no_slot_is_free() {
 
     refused(&fx.dispatch(JOB), "no_slot", 3);
     assert_eq!(fx.job_status(JOB), "queued");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0);
+    assert_eq!(fx.fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0);
 }
 
 #[test]

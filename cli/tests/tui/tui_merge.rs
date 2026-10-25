@@ -12,11 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use common::fx::Fx;
 use common::{CPD, TestEnv, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::merge;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 const REF: &str = "o/r#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -42,6 +45,12 @@ fn env() -> TestEnv {
         ),
     )
     .unwrap();
+    seed(&env);
+    env
+}
+
+/// The pull request `o/r#7` in the env's store.
+fn seed(env: &TestEnv) {
     let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
     store
         .write("fixture", |tx| {
@@ -53,7 +62,6 @@ fn env() -> TestEnv {
             Ok::<(), CpdError>(())
         })
         .unwrap();
-    env
 }
 
 /// The file the fake `gh pr merge` waits for, when the test gives it one.
@@ -187,10 +195,6 @@ fn closed(env: &TestEnv) -> bool {
     !env.tmux(&["has-session", "-t", "view"]).status.success()
 }
 
-fn wait_closed(env: &TestEnv) {
-    wait_until("the view to close", || closed(env));
-}
-
 /// A left button press at 1-based `(column, row)` of the pane, as the terminal sends it (SGR mouse reporting). The
 /// release is not sent: the view acts on the press, and may be gone by the time a release would arrive.
 fn click(env: &TestEnv, pane: &str, column: u16, row: u16) {
@@ -262,57 +266,20 @@ fn has(rows: &[String], text: &str) -> bool {
 
 // ---------- the dialog, before the confirm (unchanged) ----------
 
-#[test]
-fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
-    let env = env();
-    gh(&env, "CLEAN", 0);
-    let pane = start(&env);
-    let rows = wait_dialog(&env, &pane);
-    assert_eq!(rows[2..5], [inside(" o/r#7"), inside(" Add the thing"), inside(" method: squash")]);
-    assert!(rows[6].starts_with(&format!("│ {}", pill("Merge"))) && rows[6].ends_with(&format!("{} │", pill("Cancel"))), "{rows:?}");
-    assert!(env.calls("gh").is_empty(), "opening the dialog runs nothing");
-}
-
-#[test]
-fn n_q_and_esc_close_it_and_start_nothing() {
-    for key in ["n", "q", "Escape"] {
-        let env = env();
-        gh(&env, "CLEAN", 0);
-        fake_tmux(&env);
-        let pane = start(&env);
-        wait_dialog(&env, &pane);
-        tmux_out(&env, &["send-keys", "-t", &pane, key]);
-        wait_closed(&env);
-        // the confirm starts its action before the view ends, so by now a `run-shell` would be recorded
-        assert!(tmux_calls(&env, "run-shell").is_empty(), "{key}: {:?}", env.calls("tmux"));
-        assert!(env.calls("gh").is_empty(), "{key}");
-    }
-}
-
-#[test]
-fn a_click_on_cancel_closes_it_and_starts_nothing() {
-    let env = env();
-    gh(&env, "CLEAN", 0);
-    fake_tmux(&env);
-    let pane = start(&env);
-    wait_dialog(&env, &pane);
-    // the Cancel pill is at 0-based columns 50 to 57, row 6
-    click(&env, &pane, 54, 7);
-    wait_closed(&env);
-    assert!(tmux_calls(&env, "run-shell").is_empty(), "{:?}", env.calls("tmux"));
-    assert!(env.calls("gh").is_empty());
+/// The dialog of `arg` as the view draws it in the 60x8 popup, over the store of `fx`: its rows, each without trailing blanks.
+fn dialog_rows(fx: &Fx, arg: &str) -> Vec<String> {
+    let mut store = fx.env.store();
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+    terminal.draw(|f| merge::draw_dialog(&mut store, f, arg).unwrap()).unwrap();
+    let buf = terminal.backend().buffer();
+    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
 }
 
 #[test]
 fn a_pull_request_the_store_does_not_have_shows_no_title() {
-    let env = env();
-    gh(&env, "CLEAN", 0);
-    let args = [
-        "new-session", "-d", "-s", "view", "-x", "60", "-y", "8", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", "o/r#8", "--client",
-        CLIENT,
-    ];
-    let pane = tmux_out(&env, &args).trim().to_owned();
-    let rows = wait_dialog(&env, &pane);
+    let fx = Fx::new();
+    seed(&fx.env);
+    let rows = dialog_rows(&fx, "o/r#8");
     assert_eq!(rows[2..5], [inside(" o/r#8"), inside(""), inside(" method: squash")]);
 }
 
@@ -332,29 +299,6 @@ fn the_view_needs_a_terminal_a_pull_request_reference_and_a_client() {
 }
 
 // ---------- the popup that opens it ----------
-
-/// `command` as `sh` splits it, with `cpd` printing its arguments one per line: the arguments `cpd` would get. (tmux's
-/// `display-popup` does not expand formats in its shell command; `run-shell` does, and its test is the real thing.)
-fn argv_of(env: &TestEnv, command: &str) -> Vec<String> {
-    let script = format!("cpd() {{ for a in \"$@\"; do printf '%s\\n' \"$a\"; done; }}\n{command}");
-    let out = env.command("sh").args(["-c", &script]).output().unwrap();
-    assert!(out.status.success(), "{script}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
-}
-
-#[test]
-fn the_popup_opens_on_the_named_client_and_its_command_reaches_cpd_unchanged() {
-    // commands.md §13.2: `display-popup -E -B -c <name> -w <width> -h <height> -- cpd tui view merge <ref> --client <name>`
-    let env = env();
-    let args = merge::popup_args(CLIENT, (200, 60), REF);
-    let (command, flags) = args.split_last().unwrap();
-    assert_eq!(flags, ["display-popup", "-E", "-B", "-c", CLIENT, "-w", "60", "-h", "8", "--"]);
-    assert_eq!(argv_of(&env, command), ["tui", "view", "merge", REF, "--client", CLIENT]);
-    // at most the client's size
-    let small = merge::popup_args(CLIENT, (50, 6), REF);
-    let after = |flag: &str| small.iter().position(|a| a == flag).map(|i| small[i + 1].as_str());
-    assert_eq!((after("-w"), after("-h")), (Some("48"), Some("6")), "{small:?}");
-}
 
 #[test]
 fn the_popup_on_a_client_closes_at_once_on_the_confirm_while_gh_is_merging() {
