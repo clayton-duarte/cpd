@@ -22,6 +22,7 @@ const COMMANDS: &str = "[test-commands]\nbuild = \"test ! -e BROKEN\"\nrun = \"e
 
 fn pr_env() -> TestEnv {
     let env = TestEnv::new();
+    env.fake_tmux();
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     env.write_tmux_config("");
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
@@ -36,7 +37,6 @@ fn add_tdd(env: &TestEnv, repo: &Path) -> Run {
 #[test]
 fn pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file() {
     let env = pr_env();
-    env.fake_tmux();
     let repo = env.keyed_repo("shop").canonicalize().unwrap();
     assert!(!repo.join(".config/cpd.toml").exists());
     env.repo_policy("acme", "shop", "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n");
@@ -46,7 +46,6 @@ fn pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file() {
 #[test]
 fn a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands() {
     let env = pr_env();
-    env.fake_tmux();
     let repo = env.keyed_repo("shop").canonicalize().unwrap();
     fs::create_dir_all(repo.join(".config")).unwrap();
     fs::write(repo.join(".config/cpd.toml"), "[tests]\nbuild = \"true\"\nrun = \"true\"\n").unwrap();
