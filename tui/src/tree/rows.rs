@@ -378,6 +378,19 @@ pub struct Hits {
 /// expanded when it holds the closing row's identifier. The closing row is a sibling of the title row, not a child, so
 /// that it stays under the live rows.
 ///
+/// The drawn order's key (hs-d686): the row's dot-urgency tier first, then its last activity, the newest Event
+/// first. `sort_by_key` is stable, so a tie keeps the read model's creation order.
+type Order = (u8, std::cmp::Reverse<i64>);
+
+fn row_key(dot: Dot, last_activity: i64) -> Order {
+    (dot.tier(), std::cmp::Reverse(last_activity))
+}
+
+/// A Plan row's key: its Lead's dot (a missing Lead has no Inbox item, tier 4), then the Plan's last activity.
+fn plan_key(p: &PlanNode) -> Order {
+    row_key(p.lead().map_or(Dot::Stopped, |l| l.dot), p.head.last_activity)
+}
+
 /// A Context with nothing to fold (no archived row) has no closing row when it has rows: its last row's branch is the
 /// `╰─` instead of `├─` (hs-d477). With no row at all it ends with the terminator ` ╰󰬪` (U+F0B2A; hs-d574).
 fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
@@ -385,8 +398,19 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     let close = toggle_id(&id);
     let k = kids(c);
     let expanded = opened.contains(&vec![close.clone()]);
-    let mut rows: Vec<(Id, Line<'static>)> = k.direct.iter().map(|p| plan_row(c, p, width, frame)).collect();
-    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, s.is_asleep())));
+    // The live Plans and forks are ONE list, stable-sorted by tier then last activity (hs-d686): a tie keeps the
+    // read model's order (the Plans before the forks).
+    let mut live: Vec<(Order, Id, Line<'static>)> = Vec::new();
+    for p in &k.direct {
+        let (id, line) = plan_row(c, p, width, frame);
+        live.push((plan_key(p), id, line));
+    }
+    for (_, s) in &k.forks {
+        let (id, line) = fork_row(s, width, frame, s.is_asleep());
+        live.push((row_key(s.dot, s.last_activity), id, line));
+    }
+    live.sort_by_key(|(key, ..)| *key);
+    let mut rows: Vec<(Id, Line<'static>)> = live.into_iter().map(|(_, id, line)| (id, line)).collect();
     if expanded {
         rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
@@ -416,7 +440,9 @@ fn spacer(c: &ContextNode) -> FlatRow {
 /// The tree's visible rows for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree
 /// state's open set: a Context not in it shows its title only. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
-    let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
+    let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
+    // The live Contexts by tier then last activity (hs-d686); the archived ones keep their read-model order after them.
+    live.sort_by_key(|c| row_key(c.dot, c.last_activity));
     let contexts: Vec<&ContextNode> = live.into_iter().chain(archived).collect();
     let last = contexts.len().saturating_sub(1);
     contexts
