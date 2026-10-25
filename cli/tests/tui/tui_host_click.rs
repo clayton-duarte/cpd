@@ -7,7 +7,7 @@ use crate::common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{Run, TestEnv};
+use common::{Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::store::Store;
@@ -70,9 +70,9 @@ fn cockpit(env: &TestEnv) {
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", MAIN_WINDOW, "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", "sleep 600"]);
+    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", MAIN_WINDOW, "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep 600"]);
+    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
 }
 
