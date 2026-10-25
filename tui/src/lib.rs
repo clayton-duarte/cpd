@@ -94,7 +94,7 @@ mod updating_label;
 mod pill_colours;
 mod plan;
 pub use plan::draw_first_frame;
-pub use history::draw_history;
+pub use history::{draw_history, show_with as show_history_with};
 mod popup;
 pub mod read;
 mod runner;

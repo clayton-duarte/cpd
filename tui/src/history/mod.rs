@@ -14,17 +14,19 @@
 
 mod view;
 
-use ratatui::crossterm::event::{self, Event};
-use ratatui::DefaultTerminal;
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::Event;
 use rusqlite::OptionalExtension;
 
-use super::{Capture, chat, run_view};
+use super::view_ports::Ctx;
+use super::{Capture, chat, run_view_on};
 use crate::worker::render::render;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use view::View;
 
@@ -49,7 +51,9 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     // `session_not_found` and `file_unreadable` refuse before anything is drawn.
     let history = load(&mut store, &args.id)?;
-    run_view("history", Capture::Mouse, || Ok(history), |terminal, history| Ok(event_loop(terminal, history)?))?;
+    run_view_on(&Ports::current(), "history", Capture::Mouse, || Ok(history), |ctx, history| {
+        Ok(show_with(ctx, &history.name, history.archived, &history.text)?)
+    })?;
     // `q` or Esc: the pane shows the placeholder text, as the chat slot's placeholder does.
     chat::run()
 }
@@ -78,12 +82,14 @@ fn load(store: &mut Store, id: &SessionId) -> Result<History, CpdError> {
     Ok(History { name, archived, text })
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, history: History) -> std::io::Result<()> {
-    let mut view = View::new(&history.name, history.archived);
-    view.set_lines(render(&history.text));
+/// Draws the history of the Session `name` over the text of its file and takes input until `q` or Esc: what `run` runs in
+/// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
+    let mut view = View::new(name, archived);
+    view.set_lines(render(text));
     loop {
-        terminal.draw(|f| view.draw(f))?;
-        match event::read()? {
+        ctx.draw(|f| view.draw(f))?;
+        match ctx.input.read()? {
             Event::Key(key) => {
                 if view.key(key) {
                     return Ok(());

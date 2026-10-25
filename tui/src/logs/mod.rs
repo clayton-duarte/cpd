@@ -103,7 +103,7 @@ fn closes(code: KeyCode) -> bool {
 
 /// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
 /// until a read succeeds ([`kept`]). Input, the wait and frames are the [`Ctx`]'s.
-pub(crate) fn show_with<B: Backend>(
+pub fn show_with<B: Backend>(
     ctx: &mut Ctx<B>,
     store: &mut Store,
     poll: Duration,
