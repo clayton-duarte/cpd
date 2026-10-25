@@ -290,6 +290,10 @@ fn usage_error(err: &clap::Error, text: &str) -> CpdError {
 }
 
 #[cfg(test)]
+#[path = "ambient_run_with_tests.rs"]
+mod ambient_run_with_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use cpd_core::args::{Name, PlanArg, Text};

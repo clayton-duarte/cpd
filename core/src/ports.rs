@@ -25,6 +25,20 @@ impl Ports {
     pub fn real() -> Ports {
         Ports { clock: Arc::new(SystemClock), runner: Arc::new(SystemRunner), spawn: Arc::new(ProcessSpawn) }
     }
+
+    /// Runs `f` with `ports` as the ambient [`Ports::current`] of this thread, then puts the previous value back, also
+    /// when `f` panics (a drop guard), so scopes nest. A thread `f` spawns does not see the scope: it captures
+    /// `Ports::current()` before the spawn and scopes it inside.
+    pub fn scope<R>(ports: &Ports, f: impl FnOnce() -> R) -> R {
+        let _ = (ports, f);
+        todo!("Ports::scope: a thread-local Option<Ports>, set for f and restored by a drop guard")
+    }
+
+    /// The ports scoped on this thread by [`Ports::scope`], else [`Ports::real`]. A wrapper that has no `Ports` of its
+    /// own reads this, never `SystemRunner`, `ProcessSpawn` or `Ports::real()`.
+    pub fn current() -> Ports {
+        todo!("Ports::current: the scoped ports of this thread, else Ports::real()")
+    }
 }
 
 /// The fakes over one `Ports`, typed so a test scripts them and reads their record.
