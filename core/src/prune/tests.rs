@@ -59,9 +59,7 @@ impl Fixture {
         repo.push();
 
         let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
-        let fx = Fixture { tmp, fakes, universe, route, home, repo, origin, worktrees: 0 };
-        fx.merged_prs(NO_PRS);
-        fx
+        Fixture { tmp, fakes, universe, route, home, repo, origin, worktrees: 0 }
     }
 
     /// `gh pr list` answers `json` (exit 0).
@@ -121,6 +119,8 @@ impl Fixture {
                 other => panic!("the test passes no {other}"),
             }
         }
+        // The default `gh` answer goes last: the first matching rule answers, so a test's own rule wins.
+        self.merged_prs(NO_PRS);
         let outcome = run(&self.fakes.ports, &self.home, &args);
         self.route.assert_supported();
         outcome

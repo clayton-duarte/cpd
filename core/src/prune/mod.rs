@@ -1,15 +1,18 @@
 //! `cpd prune` (commands.md §26): the clean-up of leftover worktrees whose work reached `origin/main`.
-//!
-//! STUB: the signatures the tests of `tests.rs` call; the logic is the next Job's.
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 
 use clap::Args as ClapArgs;
 
 use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::output::Output;
+use crate::host::deadline::Failed;
 use crate::ports::Ports;
+use crate::store::Store;
 
 #[cfg(test)]
 mod tests;
@@ -36,12 +39,273 @@ pub struct Outcome {
     pub stderr: String,
 }
 
+/// The deadline of one `git` call (a fetch included).
+const GIT: Duration = Duration::from_secs(120);
+/// The deadline of `gh pr list`.
+const GH: Duration = Duration::from_secs(120);
+/// The store's busy timeout, as the config default.
+const BUSY_MS: u64 = 5000;
+/// How many merged PRs deep a chain of bases may go before it must reach main.
+const MAX_LEVELS: usize = 5;
+
 /// Prunes `args.repos` on `ports`, reading the protected set from the store of `home`.
-pub fn run(_ports: &Ports, _home: &CpdHome, _args: &Args) -> Outcome {
-    todo!("cpd prune: rs-prune2-code")
+pub fn run(ports: &Ports, home: &CpdHome, args: &Args) -> Outcome {
+    let protected = match protected(ports, home) {
+        Ok(p) => p,
+        Err(e) => return Outcome { exit: 2, stdout: String::new(), stderr: format!("failed: cannot read the protected set: {e}\n") },
+    };
+    let mut out = Outcome { exit: 0, stdout: String::new(), stderr: String::new() };
+    for repo in &args.repos {
+        if let Err(e) = prune_repo(ports, args, &protected, repo, &mut out) {
+            out.stderr.push_str(&format!("failed {}: {e}\n", repo.display()));
+            out.exit = 1;
+        }
+    }
+    out
 }
 
 /// The command of the binary: [`run`] on the real ports and `$CPD_HOME`.
-pub fn command(_args: Args) -> Result<Output, CpdError> {
-    todo!("cpd prune: rs-prune2-code")
+pub fn command(args: Args) -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let out = run(&Ports::real(), &home, &args);
+    print!("{}", out.stdout);
+    eprint!("{}", out.stderr);
+    if out.exit != 0 {
+        std::process::exit(i32::from(out.exit));
+    }
+    Ok(Output::Owned)
+}
+
+/// The branches cpd still runs: the Lead Branch of each unmerged PR of a Plan that is not done, and
+/// `cpd/<plan>--<attempt>` for each Attempt of a Job of such a PR.
+fn protected(ports: &Ports, home: &CpdHome) -> Result<BTreeSet<String>, CpdError> {
+    let mut store = Store::open_with(&*ports.clock, home, BUSY_MS, None)?;
+    store.read(|conn| {
+        let mut set = BTreeSet::new();
+        let mut leads = conn.prepare(
+            "SELECT prs.lead_branch FROM prs JOIN plans ON plans.id = prs.plan \
+             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+        )?;
+        for row in leads.query_map([], |r| r.get::<_, Option<String>>(0))? {
+            set.extend(row?);
+        }
+        let mut attempts = conn.prepare(
+            "SELECT attempts.plan, attempts.id FROM attempts \
+             JOIN jobs ON jobs.plan = attempts.plan AND jobs.key = attempts.job \
+             JOIN prs ON prs.plan = jobs.plan AND prs.key = jobs.pr \
+             JOIN plans ON plans.id = prs.plan \
+             WHERE plans.phase != 'done' AND prs.status != 'merged'",
+        )?;
+        for row in attempts.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (plan, id) = row?;
+            set.insert(format!("cpd/{plan}--{id}"));
+        }
+        Ok(set)
+    })
+}
+
+/// A merged PR of `gh pr list`.
+struct Merged {
+    number: u64,
+    head: String,
+    base: String,
+    oid: String,
+}
+
+struct Worktree {
+    path: PathBuf,
+    head: String,
+    branch: Option<String>,
+}
+
+fn git(ports: &Ports, dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    ports.runner.output(&mut cmd, "git", GIT).map_err(|e| failure(&e))
+}
+
+/// `git` that must exit 0: its stdout.
+fn git_ok(ports: &Ports, dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = git(ports, dir, args)?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(text(&out.stderr))
+    }
+}
+
+fn failure(e: &Failed) -> String {
+    match e {
+        Failed::Io(e) => e.to_string(),
+        Failed::Timeout(e) => e.to_string(),
+    }
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim().to_owned()
+}
+
+/// `owner/repo` of a remote URL.
+fn slug(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let mut parts = url.rsplit(['/', ':']);
+    let repo = parts.next().unwrap_or("");
+    match parts.next() {
+        Some(owner) if !owner.is_empty() => format!("{owner}/{repo}"),
+        _ => url.to_owned(),
+    }
+}
+
+fn merged_prs(ports: &Ports, slug: &str) -> Result<Vec<Merged>, String> {
+    let mut cmd = Command::new("gh");
+    cmd.args(["pr", "list", "--repo", slug, "--state", "merged", "--limit", "500", "--json", "number,headRefName,baseRefName,headRefOid"]);
+    let out = ports.runner.output(&mut cmd, "gh", GH).map_err(|e| failure(&e))?;
+    if !out.status.success() {
+        return Err(text(&out.stderr));
+    }
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("cannot read the output of gh pr list: {e}"))?;
+    let list = json.as_array().ok_or("cannot read the output of gh pr list: not a list")?;
+    let field = |v: &serde_json::Value, k: &str| v.get(k).and_then(|s| s.as_str()).map(str::to_owned);
+    list.iter()
+        .map(|v| {
+            Some(Merged {
+                number: v.get("number")?.as_u64()?,
+                head: field(v, "headRefName")?,
+                base: field(v, "baseRefName")?,
+                oid: field(v, "headRefOid")?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "cannot read the output of gh pr list: a PR lacks a field".to_owned())
+}
+
+fn worktrees(ports: &Ports, repo: &Path) -> Result<Vec<Worktree>, String> {
+    let listing = git_ok(ports, repo, &["worktree", "list", "--porcelain"])?;
+    Ok(listing
+        .split("\n\n")
+        .skip(1)
+        .filter(|block| !block.trim().is_empty())
+        .map(|block| {
+            let mut wt = Worktree { path: PathBuf::new(), head: String::new(), branch: None };
+            for line in block.lines() {
+                if let Some(p) = line.strip_prefix("worktree ") {
+                    wt.path = PathBuf::from(p);
+                } else if let Some(h) = line.strip_prefix("HEAD ") {
+                    wt.head = h.to_owned();
+                } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+                    wt.branch = Some(b.to_owned());
+                }
+            }
+            wt
+        })
+        .collect())
+}
+
+/// True when `base` reaches main through merged PRs.
+fn reached(prs: &[Merged], base: &str, level: usize) -> bool {
+    base == "main" || (level < MAX_LEVELS && prs.iter().any(|p| p.head == base && reached(prs, &p.base, level + 1)))
+}
+
+/// True when a merged PR of the Lead Branch of `branch` contains `head` and reached main.
+fn merged_via_pr(ports: &Ports, repo: &Path, prs: &[Merged], branch: &str, head: &str, failed: &mut Vec<String>) -> bool {
+    let lead = lead_of(branch);
+    let legacy = lead.strip_prefix("cpd/").and_then(|rest| rest.split_once('/')).map(|(plan, _)| format!("cpd/{plan}"));
+    let prefix = format!("{lead}/");
+    for pr in prs {
+        let named = pr.head == lead || pr.head.starts_with(&prefix) || legacy.as_deref() == Some(pr.head.as_str());
+        if !named || !reached(prs, &pr.base, 0) {
+            continue;
+        }
+        let have = matches!(git(ports, repo, &["cat-file", "-e", &format!("{}^{{commit}}", pr.oid)]), Ok(o) if o.status.success());
+        if !have && !matches!(git(ports, repo, &["fetch", "-q", "origin", &format!("pull/{}/head", pr.number)]), Ok(o) if o.status.success()) {
+            failed.push(format!("cannot fetch pull/{}/head", pr.number));
+            continue;
+        }
+        if matches!(git(ports, repo, &["merge-base", "--is-ancestor", head, &pr.oid]), Ok(o) if o.status.success()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The Lead Branch of `branch`: the part before the first `--`.
+fn lead_of(branch: &str) -> &str {
+    branch.split_once("--").map_or(branch, |(lead, _)| lead)
+}
+
+fn prune_repo(ports: &Ports, args: &Args, protected: &BTreeSet<String>, repo: &Path, out: &mut Outcome) -> Result<(), String> {
+    let url = git_ok(ports, repo, &["remote", "get-url", "origin"])?;
+    let slug = slug(&url);
+    git_ok(ports, repo, &["fetch", "-q", "origin"])?;
+    let prs = merged_prs(ports, &slug)?;
+    let list = worktrees(ports, repo)?;
+
+    let mut failed = Vec::new();
+    let (mut removes, mut keeps) = (0, 0);
+    for wt in &list {
+        let label = wt.branch.as_deref().unwrap_or("detached");
+        let path = wt.path.display();
+        let mut reason = None;
+        let mut dropped = false;
+        if wt.branch.as_ref().is_some_and(|b| protected.contains(b)) {
+            reason = Some("active");
+        }
+        if reason.is_none() && wt.path.is_dir() {
+            match git_ok(ports, &wt.path, &["status", "--porcelain"]) {
+                Err(e) => {
+                    out.stdout.push_str(&format!("failed {path}: {e}\n"));
+                    failed.push(e);
+                    continue;
+                }
+                Ok(s) if !s.trim().is_empty() => reason = Some("dirty"),
+                Ok(_) => {}
+            }
+        }
+        if reason.is_none() {
+            let lead = wt.branch.as_deref().map(lead_of);
+            if lead.is_some_and(|l| args.drop.iter().any(|d| d == l)) {
+                dropped = true;
+            } else if matches!(git(ports, repo, &["merge-base", "--is-ancestor", &wt.head, "origin/main"]), Ok(o) if o.status.success()) {
+            } else if wt.branch.as_deref().is_some_and(|b| merged_via_pr(ports, repo, &prs, b, &wt.head, &mut failed)) {
+            } else {
+                reason = Some("not merged");
+            }
+        }
+        if let Some(reason) = reason {
+            out.stdout.push_str(&format!("keep {path} ({label}): {reason}\n"));
+            keeps += 1;
+            continue;
+        }
+        out.stdout.push_str(&format!("remove {path} ({label}){}\n", if dropped { ": dropped" } else { "" }));
+        removes += 1;
+        if !args.apply {
+            continue;
+        }
+        if let Err(e) = git_ok(ports, repo, &["worktree", "remove", "--force", &wt.path.to_string_lossy()]) {
+            out.stdout.push_str(&format!("failed {path}: {e}\n"));
+            failed.push(e);
+            continue;
+        }
+        if let Some(branch) = &wt.branch {
+            let exists = matches!(git(ports, repo, &["rev-parse", "--verify", "-q", &format!("refs/heads/{branch}")]), Ok(o) if o.status.success());
+            let line = format!("branch refs/heads/{branch}");
+            let used = worktrees_all(ports, repo)?.lines().any(|l| l == line);
+            if exists && !used
+                && let Err(e) = git_ok(ports, repo, &["branch", "-D", branch])
+            {
+                out.stdout.push_str(&format!("failed {path}: {e}\n"));
+                failed.push(e);
+            }
+        }
+    }
+    if args.apply {
+        git_ok(ports, repo, &["worktree", "prune"]).map_err(|e| e.to_string())?;
+    }
+    out.stdout.push_str(&format!("{}: {removes} remove, {keeps} keep\n", repo.display()));
+    if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
+}
+
+fn worktrees_all(ports: &Ports, repo: &Path) -> Result<String, String> {
+    git_ok(ports, repo, &["worktree", "list", "--porcelain"])
 }
