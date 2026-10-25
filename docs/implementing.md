@@ -119,8 +119,8 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `secret*` |
-  | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `secret*`, `host_repair` |
+  | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env`, `host_pill` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
   | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
