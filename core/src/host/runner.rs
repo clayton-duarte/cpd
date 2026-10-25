@@ -1,6 +1,7 @@
 //! The process seam: [`Runner`] runs one `Command` under a deadline, like [`deadline::output`].
 //! [`SystemRunner`] is the real one; [`FakeRunner`] answers from a script, in-process, on virtual time.
 
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -11,6 +12,9 @@ use std::time::Duration;
 
 use super::deadline::{self, Failed};
 use crate::clock::{Clock, ManualClock};
+
+/// The `Call.deadline` of a process that has none (pi in a retitle, `cpd watch --ensure`, `date`): a `Duration` the real runner never reaches.
+pub const NO_DEADLINE: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 100);
 
 pub trait Runner: Send + Sync {
     /// Runs `cmd` for at most `deadline` and returns what [`deadline::output`] returns: the same `Output`,
@@ -25,11 +29,21 @@ pub trait Runner: Send + Sync {
 /// The `Command` that `call` describes: its program, arguments, environment (a `None` value removes the variable)
 /// and working directory. Stdin and stderr are wired by the runner, not here.
 pub fn command(call: &Call) -> Command {
-    let _ = call;
-    todo!("port-run2: build the Command of a Call")
+    let mut cmd = Command::new(&call.program);
+    cmd.args(&call.args);
+    for (key, value) in &call.envs {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
+    if let Some(cwd) = &call.cwd {
+        cmd.current_dir(cwd);
+    }
+    cmd
 }
 
-/// The real runner: [`deadline::output`] and nothing else.
+/// The real runner: [`deadline::output`], plus a thread that writes `Call.stdin` and a file for `Call.stderr_to`.
 pub struct SystemRunner;
 
 impl Runner for SystemRunner {
@@ -37,8 +51,12 @@ impl Runner for SystemRunner {
         deadline::output(cmd, tool, deadline)
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
-        let _ = call;
-        todo!("port-run2: SystemRunner::run")
+        let mut cmd = command(call);
+        if let Some(path) = &call.stderr_to {
+            let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
+            cmd.stderr(file);
+        }
+        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some())
     }
 }
 
@@ -176,6 +194,26 @@ impl FakeRunner {
     }
 }
 
+impl FakeRunner {
+    /// Answers `call` like [`deadline::output`]: its `Output`, `Failed::Io` or `Failed::Timeout`, on virtual time.
+    fn reply(&self, call: Call) -> Result<Output, Failed> {
+        let deadline = call.deadline;
+        match self.answer(&call) {
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+            Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
+            Some(Reply::Exit { takes, .. }) if takes >= deadline => {
+                self.clock.sleep(deadline);
+                let argv = std::iter::once(call.program).chain(call.args).collect();
+                Err(Failed::Timeout(deadline::timeout(&call.tool, argv, deadline)))
+            }
+            Some(Reply::Exit { code, stdout, stderr, takes }) => {
+                self.clock.sleep(takes);
+                Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
+            }
+        }
+    }
+}
+
 impl Runner for FakeRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         let program = cmd.get_program().to_string_lossy().into_owned();
@@ -184,7 +222,7 @@ impl Runner for FakeRunner {
             .get_envs()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
             .collect();
-        let call = Call {
+        self.reply(Call {
             tool: tool.to_owned(),
             program,
             args,
@@ -193,23 +231,9 @@ impl Runner for FakeRunner {
             deadline,
             stdin: None,
             stderr_to: None,
-        };
-        match self.answer(&call) {
-            None => Err(Failed::Io(ErrorKind::NotFound.into())),
-            Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
-            Some(Reply::Exit { takes, .. }) if takes >= deadline => {
-                self.clock.sleep(deadline);
-                let argv = std::iter::once(call.program).chain(call.args).collect();
-                Err(Failed::Timeout(deadline::timeout(tool, argv, deadline)))
-            }
-            Some(Reply::Exit { code, stdout, stderr, takes }) => {
-                self.clock.sleep(takes);
-                Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
-            }
-        }
+        })
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
-        let _ = call;
-        todo!("port-run2: FakeRunner::run")
+        self.reply(call.clone())
     }
 }

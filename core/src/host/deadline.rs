@@ -9,7 +9,7 @@
 //! Only a debug build reads it: a release build (the installed `cpd`) has no way
 //! to change a deadline.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::mpsc::{Receiver, channel};
@@ -49,12 +49,49 @@ pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Outpu
 
 /// [`output`] with `grace` between `SIGTERM` and `SIGKILL` instead of [`GRACE`]: for this module's tests.
 fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration) -> Result<Output, Failed> {
+    cmd.stderr(Stdio::piped());
+    run(cmd, tool, deadline, grace, Stdin::AsSet)
+}
+
+/// [`output`] with `stdin` written to the child's stdin by a thread, which then closes it (`None`: a null stdin),
+/// and, when `stderr_set` is true, the child's stderr as the caller set it on `cmd` (a file it is appended to)
+/// instead of captured. A write that fails is `Failed::Io` when the child exited successfully.
+pub(super) fn output_fed(cmd: &mut Command, tool: &str, deadline: Duration, stdin: Option<Vec<u8>>, stderr_set: bool) -> Result<Output, Failed> {
+    if !stderr_set {
+        cmd.stderr(Stdio::piped());
+    }
+    run(cmd, tool, deadline, GRACE, stdin.map_or(Stdin::Null, Stdin::Bytes))
+}
+
+/// Where the stdin of the child comes from.
+enum Stdin {
+    /// As the caller set it on the `Command`.
+    AsSet,
+    Null,
+    /// Written by a thread, then closed.
+    Bytes(Vec<u8>),
+}
+
+fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin: Stdin) -> Result<Output, Failed> {
     let deadline = limit(&format!("DEADLINE_{}", tool.to_ascii_uppercase()), deadline);
     let argv: Vec<String> = std::iter::once(cmd.get_program())
         .chain(cmd.get_args())
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn().map_err(Failed::Io)?;
+    match &stdin {
+        Stdin::AsSet => {}
+        Stdin::Null => {
+            cmd.stdin(Stdio::null());
+        }
+        Stdin::Bytes(_) => {
+            cmd.stdin(Stdio::piped());
+        }
+    }
+    let mut child = cmd.stdout(Stdio::piped()).process_group(0).spawn().map_err(Failed::Io)?;
+    let written = match stdin {
+        Stdin::Bytes(bytes) => child.stdin.take().map(|mut pipe| thread::spawn(move || pipe.write_all(&bytes))),
+        _ => None,
+    };
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
     let until = Instant::now() + deadline;
@@ -78,7 +115,11 @@ fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: D
     // deadline also bounds (a daemon it left behind may hold them).
     let left = until.saturating_duration_since(Instant::now());
     let read = |rx: Receiver<Vec<u8>>| rx.recv_timeout(left.max(DRAIN)).unwrap_or_default();
-    Ok(Output { status, stdout: read(stdout), stderr: read(stderr) })
+    let output = Output { status, stdout: read(stdout), stderr: read(stderr) };
+    match written.map(|w| w.join().expect("the writer of the child's stdin does not panic")) {
+        Some(Err(e)) if status.success() => Err(Failed::Io(e)),
+        _ => Ok(output),
+    }
 }
 
 /// The `tool_timeout` error (contract §1.2): `tool`, `argv`, `deadline_seconds`
