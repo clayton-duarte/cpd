@@ -126,11 +126,12 @@ export function hookEditor(): void {
 export class EditorBoxController {
 	private stopInput: (() => void) | undefined;
 
-	bind(ctx: ExtensionContext): void {
+	bind(ctx: ExtensionContext, reload: boolean): void {
 		this.release();
 		hookEditor();
-		state().focused = false;
-		setClockFocused(false);
+		// A fresh start (not a /reload) has no prior report; a reload keeps the focus the pane reported.
+		if (!reload) state().focused = false;
+		setClockFocused(state().focused);
 		let tui: TUI | undefined;
 		ctx.ui.setWidget(WIDGET_KEY, (host) => {
 			tui = host;
@@ -167,7 +168,6 @@ export class EditorBoxController {
 
 	dispose(ctx?: ExtensionContext): void {
 		this.release();
-		state().focused = false;
 		setClockFocused(false);
 		state().words = undefined;
 		ctx?.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
