@@ -66,10 +66,8 @@ cpd::pr pr_cleanup_cancel::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_cleanup::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_crud::  # m-pr-a: pr commands that may reach a real tmux
 cpd::pr pr_local_needs::  # m-pr-a: pr commands that may reach a real tmux
-cpd::pr pr_merge::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_push::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr pr_view::  # m-pr-a: pr commands that may reach a real tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
