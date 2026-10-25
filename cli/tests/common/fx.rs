@@ -23,20 +23,23 @@
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs::File;
-use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
+use std::io::{self, BufRead, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{ExitCode, Output};
+use std::process::{ExitCode, ExitStatus, Output};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::ThreadId;
 use std::time::Duration;
 
-use nix::unistd::{dup, dup2_stdin, dup2_stdout};
+use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
 
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
-use cpd_core::host::spawn::Launch;
+use cpd_core::error::CpdError;
+use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::Fakes;
 
@@ -51,13 +54,103 @@ const LIMIT: Duration = Duration::from_secs(600);
 /// The descriptor a driver finds its lock on (`Launch::hand_over`).
 const HAND_OVER_FD: std::os::fd::RawFd = 3;
 
-/// What [`Fx::hand_over`] returns: closes fd 3 when it drops.
-pub struct HandOver(());
+/// What [`Fx::hand_over`] returns: closes fd 3 when it drops, if fd 3 still is the file it handed over (the driver closes it
+/// itself when it ends the way it should, and another file may have taken the number since).
+pub struct HandOver {
+    dev: u64,
+    ino: u64,
+}
+
+impl HandOver {
+    fn of_fd3() -> HandOver {
+        // SAFETY: fd 3 is open (the caller just made it so).
+        let file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(HAND_OVER_FD) });
+        let meta = file.metadata().expect("stat fd 3");
+        HandOver { dev: meta.dev(), ino: meta.ino() }
+    }
+}
 
 impl Drop for HandOver {
     fn drop(&mut self) {
-        // SAFETY: closes the descriptor `hand_over` made; EBADF (the driver closed it) is the usual end.
-        unsafe { nix::libc::close(HAND_OVER_FD) };
+        // SAFETY: only reads the descriptor, which `ManuallyDrop` never closes by itself.
+        let file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(HAND_OVER_FD) });
+        if file.metadata().is_ok_and(|m| (m.dev(), m.ino()) == (self.dev, self.ino)) {
+            // SAFETY: closes the descriptor `hand_over` made.
+            unsafe { nix::libc::close(HAND_OVER_FD) };
+        }
+    }
+}
+
+/// What a `Spawn::exec` of an [`Fx::exec_replaces_the_process`] unwinds the driver with: the process is gone, as after `exec(2)`.
+pub struct Exec {
+    /// What was exec'd: the program and its argv.
+    pub launch: Launch,
+    /// Whether fd 3 was close-on-exec at the call: false is what keeps the driver lock across a real `exec`. `None`: fd 3 was closed.
+    pub fd3_cloexec: Option<bool>,
+    /// fd 3 as `exec` keeps it: the same open file description (so the lock), a descriptor of its own. `None`: fd 3 was closed.
+    kept: Option<OwnedFd>,
+}
+
+impl Exec {
+    /// The lock file as the new program finds it, to be handed over again ([`Fx::hand_over`]) on fd 3.
+    pub fn fd3(&mut self) -> File {
+        File::from(self.kept.take().expect("fd 3 was open at the exec"))
+    }
+}
+
+/// A `Spawn` over the `FakeSpawn` whose `exec` records the `Launch` there, keeps fd 3 and unwinds with an [`Exec`]: the code after
+/// an `exec(2)` never runs, and nor does the rest of the driver that called it. [`Fx::run_launch_until_exec`] catches it.
+struct Replacing {
+    inner: Arc<FakeSpawn>,
+}
+
+impl Spawn for Replacing {
+    fn spawn(&self, l: &Launch) -> io::Result<Pid> {
+        self.inner.spawn(l)
+    }
+    fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>> {
+        self.inner.try_wait(p)
+    }
+    fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
+        self.inner.signal(p, s)
+    }
+    fn alive(&self, p: Pid) -> bool {
+        self.inner.alive(p)
+    }
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        self.inner.exe_of(p)
+    }
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        self.inner.cmdline(p)
+    }
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        self.inner.with_env(key, value)
+    }
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        self.inner.ppid(p)
+    }
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        self.inner.env_of(p, key)
+    }
+    fn descendants(&self, root: Pid) -> Vec<Pid> {
+        self.inner.descendants(root)
+    }
+    fn exec(&self, l: &Launch) -> io::Error {
+        // Records the launch; its answer, the failure of a fake, is not one here.
+        let _ = self.inner.exec(l);
+        // SAFETY: only probes the descriptor number.
+        let fd3 = unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) };
+        let flags = nix::fcntl::fcntl(fd3, nix::fcntl::FcntlArg::F_GETFD).ok();
+        let cloexec = flags.map(|f| nix::fcntl::FdFlag::from_bits_truncate(f).contains(nix::fcntl::FdFlag::FD_CLOEXEC));
+        let kept = flags.and_then(|_| dup(fd3).ok());
+        // Not `panic!`: no message, no hook, and a driver that does not catch unwinding does not see a failure.
+        std::panic::resume_unwind(Box::new(Exec { launch: l.clone(), fd3_cloexec: cloexec, kept }))
+    }
+    fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
+        self.inner.stream(l)
+    }
+    fn self_exe(&self) -> Result<PathBuf, CpdError> {
+        self.inner.self_exe()
     }
 }
 
@@ -136,6 +229,37 @@ impl Clock for NapClock {
 
     fn kind(&self) -> &'static str {
         "NapClock"
+    }
+}
+
+/// Fd 2 of the process pointing at a log file (appending) for a run, put back on drop: what the driver's `eprintln!` reaches when its
+/// `Launch::stdout_to` is that file. (Under `cargo test`'s capture, `eprintln!` never reaches fd 2: nextest runs the tests with it off.)
+struct StderrTo {
+    path: PathBuf,
+    saved: OwnedFd,
+}
+
+impl StderrTo {
+    fn enter(path: &Path) -> StderrTo {
+        std::fs::create_dir_all(path.parent().expect("a log lives in a directory")).expect("create the log's directory");
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).expect("open the log");
+        let saved = dup(std::io::stderr()).expect("dup stderr");
+        dup2_stderr(&file).expect("point stderr at the log");
+        StderrTo { path: path.to_path_buf(), saved }
+    }
+
+    /// Puts fd 2 back and appends the result the process printed on stdout, the last line of its log.
+    fn finish(self, stdout: &str) {
+        let path = self.path.clone();
+        drop(self);
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).expect("open the log");
+        file.write_all(stdout.as_bytes()).expect("write the log");
+    }
+}
+
+impl Drop for StderrTo {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
     }
 }
 
@@ -281,7 +405,32 @@ impl Fx {
         let set: Vec<_> = launch.env_set.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
         let remove: Vec<_> = launch.env_remove.iter().map(String::as_str).collect();
         let args: Vec<_> = launch.args.iter().map(String::as_str).collect();
-        self.run(&cwd, &args, &set, &remove)
+        // As the process would have it: what it writes to stderr (the driver's log lines) and then its result go to `stdout_to`.
+        let log = launch.stdout_to.as_deref().map(StderrTo::enter);
+        let run = self.run(&cwd, &args, &set, &remove);
+        if let Some(log) = log {
+            log.finish(&run.stdout);
+        }
+        run
+    }
+
+    /// [`Fx::run_launch_with`] for a program that may `exec`: `Err` is the [`Exec`] of a `Spawn::exec` the run reached (after
+    /// [`Fx::exec_replaces_the_process`]), which ends the run where `exec(2)` ends a process; the env, directory and fd 2 are put back.
+    pub fn run_launch_until_exec(&self, launch: &Launch, hook: impl FnMut(&Fx, usize)) -> Result<Run, Exec> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_launch_with(launch, hook))) {
+            Ok(run) => Ok(run),
+            Err(payload) => match payload.downcast::<Exec>() {
+                Ok(exec) => Err(*exec),
+                Err(other) => std::panic::resume_unwind(other),
+            },
+        }
+    }
+
+    /// From here a `Spawn::exec` of the product's ends the run that made it ([`Fx::run_launch_until_exec`]) instead of failing as a
+    /// fake's does: the launch is recorded on the `FakeSpawn` as before. For an `Fx` of [`Fx::with_ports`].
+    pub fn exec_replaces_the_process(&mut self) {
+        assert!(self.on_fake_ports, "exec_replaces_the_process is for an Fx::with_ports");
+        self.fakes.ports.spawn = Arc::new(Replacing { inner: self.fakes.spawn.clone() });
     }
 
     /// [`Fx::run_launch`] that calls `hook(self, n)` after the `n`th nap (from 1) the run takes on the fake clock, on this thread: a
@@ -320,7 +469,7 @@ impl Fx {
         // SAFETY: fd 3 is open, whichever way it got here.
         let fd3 = unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) };
         nix::fcntl::fcntl(fd3, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty())).expect("clear close-on-exec on fd 3");
-        HandOver(())
+        HandOver::of_fd3()
     }
 
     /// An `Fx` over `env`. Waits for the other `Fx` of the process, if any.
@@ -339,6 +488,8 @@ impl Fx {
     }
 
     fn enter(env: TestEnv, lock: MutexGuard<'static, ()>) -> Fx {
+        // The path a driver reads as cpd's own executable (`Spawn::self_exe` of the real ports): this test binary. The first record wins.
+        cpd_core::host::exe::record_start();
         // `isolation` reads `PATH` through `inherited_path`, cached at its first call: here, before any change.
         let (remove, set) = env.isolation();
         let saved_vars: Vec<_> = std::env::vars_os().collect();

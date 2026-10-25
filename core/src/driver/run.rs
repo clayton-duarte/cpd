@@ -196,7 +196,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A1: before anything opens a file, so fd 3 cannot be one of ours. Held
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
-    let exe = Exe::current()?;
+    // This executable as the ports tell it (the real ones: the path recorded at process start), so that a test can stand
+    // a file of its own for it and replace that file.
+    let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
@@ -416,7 +418,10 @@ impl Driver {
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
-        let failed = self.exe.exec_with(&*self.ports.spawn, std::env::args_os().skip(1));
+        // The argv this driver was started with (`start` makes it so), from its own fields: a driver run in a test has no process argv.
+        let id = self.id.to_string();
+        let args = ["attempt", "run", id.as_str(), "--plan", self.plan.as_str()];
+        let failed = self.exe.exec_with(&*self.ports.spawn, args);
         // Still here: the `exec` failed. Do not leak the lock to the children.
         let _ = self.lock.close_on_exec();
         Err(failed)
