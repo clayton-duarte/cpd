@@ -107,8 +107,10 @@ fn the_command_of_a_call_has_its_program_args_cwd_and_envs() {
     assert_eq!(cmd.get_program(), "/usr/bin/pi");
     assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["--print", "--", "go"]);
     assert_eq!(cmd.get_current_dir(), Some(std::path::Path::new("/work")));
-    let envs: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_str().unwrap(), v.map(|v| v.to_str().unwrap()))).collect();
-    assert_eq!(envs, [("PI_SKIP_VERSION_CHECK", Some("1")), ("CPD_SESSION", None)]);
+    // `Command` keeps its environment in a map sorted by key: the test pins the set, not an order.
+    let mut envs: Vec<_> = cmd.get_envs().map(|(k, v)| (k.to_str().unwrap(), v.map(|v| v.to_str().unwrap()))).collect();
+    envs.sort();
+    assert_eq!(envs, [("CPD_SESSION", None), ("PI_SKIP_VERSION_CHECK", Some("1"))]);
 }
 
 #[test]
