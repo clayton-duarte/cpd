@@ -94,17 +94,10 @@ pub const TICK_SECONDS: &str = "0.1";
 pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
 
 /// The poll periods of a whole Plan's processes, as test overrides (contract §1.2), for a test that runs an engine or
-/// a Plan end to end: the engine's E5 every tick, A9's kill pauses (the engine's and the drivers'), the drivers (A4, a
-/// review Job's Lead) and the wrappers (pi's file, a fork's source) every 50 ms. What such a test waits for is the
-/// next look of each.
-pub const PLAN_POLLS: [(&str, &str); 6] = [
-    PR_POLL_EVERY_TICK,
-    ("CPD_TEST_DRIVER_POLL", "0.05"),
-    ("CPD_TEST_LEAD_POLL", "0.05"),
-    ("CPD_TEST_KILL_PAUSE", "0.05"),
-    ("CPD_TEST_FILE_POLL", "0.05"),
-    ("CPD_TEST_SOURCE_POLL", "0.05"),
-];
+/// a Plan end to end: the engine's E5 every tick and the wrappers (pi's file, a fork's source) every 50 ms. What such a
+/// test waits for is the next look of each. (The drivers' polls and kill pauses have no override: a test of a driver
+/// runs it in this process on the `ManualClock`.)
+pub const PLAN_POLLS: [(&str, &str); 3] = [PR_POLL_EVERY_TICK, ("CPD_TEST_FILE_POLL", "0.05"), ("CPD_TEST_SOURCE_POLL", "0.05")];
 
 /// The teardown script. It finds nothing by scanning: it stops what the env tracks.
 ///
