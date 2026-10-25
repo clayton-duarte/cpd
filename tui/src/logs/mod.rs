@@ -22,6 +22,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 pub use self::view::{Log, draw};
 use super::popup;
 use super::read;
+use super::widgets::legend;
 use super::runner::{ViewError, kept};
 use super::{Capture, run_view};
 use cpd_core::config::Config;
@@ -45,10 +46,15 @@ pub struct Args {
 /// The popup's share of the client, in percent, at most.
 const SHARE: u16 = 80;
 
+/// The tmux border around the legend's own frame.
+const POPUP_BORDER: u16 = 2;
+
 /// The tmux arguments that open the log in a popup: sized like the legend's, at most [`SHARE`] % of the client's
 /// size `(columns, rows)`; the view opens at the Event `event` when there is one.
 pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
+    let (w, h) = legend::size();
     let cap = |n: u16| (u32::from(n) * u32::from(SHARE) / 100) as u16;
+    let size = ((w + POPUP_BORDER).min(cap(client.0)), (h + POPUP_BORDER).min(cap(client.1)));
     let command = match event {
         Some(id) => format!("{PROGRAM} tui view logs --event {id}"),
         None => format!("{PROGRAM} tui view logs"),
@@ -58,7 +64,7 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
         border: false,
         client: None,
         dash: false,
-        size: (cap(client.0), cap(client.1)),
+        size,
         command: &command,
     })
 }

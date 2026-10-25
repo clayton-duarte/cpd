@@ -205,13 +205,13 @@ impl Kind {
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    // The arguments are parsed (and a bad items file refused) in `prepare`, before the terminal is set up; `run_view`
-    // checks the terminal first, so a bad items file is now refused after `not_a_terminal` (it was before).
+    // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
+    let parts = args.kind.parts()?;
     let mut ending: Option<(Common, Dialog, Outcome)> = None;
     run_view(
         "dialog",
         Capture::Mouse,
-        || args.kind.parts(),
+        move || Ok(parts),
         |terminal, (common, mut dialog)| {
             let outcome = show(terminal, &mut dialog)?;
             ending = Some((common, dialog, outcome));
