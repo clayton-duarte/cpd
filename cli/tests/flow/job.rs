@@ -2010,7 +2010,9 @@ fn job_cancel_keeps_the_last_test_and_the_last_impl_job_of_a_tdd_pr_that_has_not
     plan(&env, "pl", "plan");
     shaped_pr(&env, "pl", "api", "tdd");
     add_kind(&env, "pl", "d", "docs", &spec_file(&env), "api").ok();
-    add_needing(&env, "pl", "t", "test", &["d"], "api").ok();
+    // The test Job does not need the docs one: cancelling a need cascades to its dependents (contract §3.2
+    // "Cancel", hs-d647), and this test is about the shape, not the cascade.
+    add_needing(&env, "pl", "t", "test", &[], "api").ok();
     add_needing(&env, "pl", "i", "impl", &["t"], "api").ok();
     // A stub the PR does not need goes.
     job(&env, &["cancel", "d", "--reason", "No docs."], "pl").ok();
