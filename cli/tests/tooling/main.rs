@@ -23,6 +23,7 @@ mod run_with;
 mod smoke;
 mod slot;
 mod testkit;
+mod testkit_hosts;
 mod testkit_screen;
 mod tripwire_script;
 mod version;

@@ -19,7 +19,8 @@ use crate::ids::{ContextId, OwnerLogin, RepoName};
 use crate::session::Role;
 
 pub use domain::{
-    audience, Checks, Domain, DomainSource, Feedback, Gate, Policy, Pr, Scope, Source, Sources, Text,
+    audience, Checks, Domain, DomainSource, Feedback, Gate, GateAlias, Gates, Policy, Pr, Scope, Source, Sources,
+    Text,
 };
 /// The `policy` commands (commands.md §22).
 #[derive(clap::Subcommand, Debug)]
@@ -68,6 +69,8 @@ impl std::fmt::Display for PolicyKey {
 pub struct Resolved {
     pub policy: Policy,
     pub sources: Sources,
+    /// Deprecations met while resolving (the `[pr] gate` alias), for `cpd policy show`.
+    pub warnings: Vec<String>,
 }
 
 impl Resolved {
@@ -223,9 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn default_sets_every_domain_with_ci_and_any() {
+    fn default_sets_every_domain_with_gate_none_and_any() {
         let d = default_policy();
-        assert_eq!(d.pr.gate, Gate::Ci);
+        assert_eq!((d.gate.merge, d.gate.pr), (Gate::None, Gate::None));
         assert_eq!(d.pr.feedback.checks, Checks::Any);
         for domain in Domain::ALL {
             assert_eq!(d.text(*domain), "");
@@ -286,10 +289,10 @@ mod tests {
     #[test]
     fn the_lenient_resolve_takes_a_missing_repo_file_as_no_repo_scope() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
+        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
         let r = resolve_lenient(&home, &host(), &repo_key("acme", "other")).unwrap();
-        assert_eq!(r.policy.pr.gate, Gate::Local);
-        assert!(matches!(r.sources.get(Domain::Pr).source, Source::Owner(_)));
+        assert_eq!(r.policy.gate.pr, Gate::Local);
+        assert!(matches!(r.sources.get(Domain::Gates).source, Source::Owner(_)));
         // A missing owner file is still `owner_unconfirmed`.
         let err = resolve_lenient(&home, &host(), &repo_key("nobody", "other")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
@@ -314,28 +317,43 @@ mod tests {
         write(
             &home,
             "owners/acme.toml",
-            "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n",
+            "[pr]\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n",
         );
-        write(&home, "repos/acme/cpd.toml", "[pr]\ngate = \"ci\"\n");
+        write(&home, "repos/acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &host(), &repo_key("acme", "cpd")).unwrap();
-        assert_eq!(r.policy.pr.gate, Gate::Ci);
         assert_eq!(r.policy.pr.feedback.checks, Checks::Any, "cpd's default, not the owner's none");
         assert_eq!(r.policy.pr.text, "", "the text is replaced, not inherited");
         let src = r.sources.get(Domain::Pr);
         assert_eq!(src.source, Source::Repo(real(&home, "repos/acme/cpd.toml")));
         assert_eq!(src.left_out, ["feedback.checks"]);
         assert!(src.to_string().ends_with(" (key default)"));
-        // The owner file sets both keys: no `(key default)`.
+        // The owner file sets the only typed key: no `(key default)`.
         let o = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
-        assert_eq!(o.policy.pr.gate, Gate::Local);
         assert_eq!(o.policy.pr.feedback.checks, Checks::None);
         assert!(!o.sources.get(Domain::Pr).key_default());
     }
 
     #[test]
+    fn the_deprecated_pr_gate_alias_sets_both_gates_and_warns() {
+        let (_d, home) = home();
+        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
+        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::Local, Gate::Local));
+        assert_eq!(r.warnings.len(), 1);
+        assert!(r.warnings[0].contains("[pr] gate"), "{}", r.warnings[0]);
+        write(&home, "owners/acme.toml", "[pr]\ngate = \"ci\"\n");
+        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::None, Gate::None));
+        // An explicit `[gate]` table wins over the alias.
+        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n");
+        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::None, Gate::Local));
+    }
+
+    #[test]
     fn an_empty_table_is_cpds_default_for_the_whole_domain() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\ntext = \"t\"\n");
+        write(&home, "owners/acme.toml", "[pr]\nfeedback.checks = \"none\"\ntext = \"t\"\n");
         write(&home, "repos/acme/cpd.toml", "[pr]\n");
         let r = resolve(&home, &host(), &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.pr, default_policy().pr);
@@ -420,9 +438,9 @@ mod tests {
         }
         assert_eq!(r.sources.get(Domain::Pr).to_string(), "default (no owner file)");
         // With an owner file it resolves as `resolve` does.
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
+        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
         let r = resolve_unowned_row(&home, &host(), &repo_key("acme", "cpd")).unwrap();
-        assert_eq!(r.policy.pr.gate, Gate::Local);
+        assert_eq!(r.policy.gate.pr, Gate::Local);
         assert_eq!(r.policy.code.text, "ignored");
     }
 
