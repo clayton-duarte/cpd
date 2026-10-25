@@ -12,82 +12,31 @@ use clap::Parser;
 use cpd_tui::history;
 use serde_json::json;
 
+use common::cockpit::tui;
 use common::fx::Fx;
 use common::screen::{Bytes, Display, FakeTty, Script, Step, ch, then};
-use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-    env.fake(
-        "cpd",
-        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
-    );
-    env
-}
-
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
+/// `tmux <args>`'s stdout on the fake server; panics when it fails.
+fn tmux_out(fx: &Fx, args: &[&str]) -> String {
+    let out = fx.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// The options of the one status row, as the cockpit sets them on the fake server. A 20-row client's window is 19 rows
+/// and the lowest pane ends on row 19 because of them (`status on`, no second row): the geometry itself is tmux's, not
+/// asserted (research mig-tui-a §5 row 6).
 #[test]
 fn the_status_line_is_one_row_and_the_panes_reach_the_row_above_it() {
-    let env = env();
-    env.cpd(&["tui"]).ok();
+    let fx = common::tree::fx();
+    tui(&fx, &[]);
 
-    // A real client of 20 rows, on a server of its own, killed at the end.
-    let socket = format!("{}-pad", env.tmux_socket());
-    let outer = |args: &[&str]| {
-        let out = env.command("tmux").args(["-L", &socket, "-f", "/dev/null"]).args(args).output().unwrap();
-        assert!(out.status.success(), "outer tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap()
-    };
-    let attach = format!("env -u TMUX tmux -L {} attach -t cpd", env.tmux_socket());
-    outer(&["set", "-g", "status", "off", ";", "new-session", "-d", "-s", "o", "-x", "215", "-y", "20", &attach]);
-    wait_until("the client is attached", || !tmux_out(&env, &["list-clients", "-t", "=cpd"]).trim().is_empty());
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // The options: one status row, the line in row 0, no row 1.
-        assert_eq!(tmux_out(&env, &["show", "-v", "-t", "=cpd:", "status"]).trim(), "on");
-        assert!(tmux_out(&env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]).contains("\u{2500}"));
-        assert!(
-            tmux_out(&env, &["show", "-v", "-t", "=cpd:", "status-format[1]"]).trim().is_empty(),
-            "no status-format row sits between the panes and the line"
-        );
-
-        // The geometry: the window is 19 rows and the lowest pane ends on row 19 (1-based).
-        let window = tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]);
-        assert_eq!(window.trim(), "19", "a 20-row client: the status line takes one row");
-        let panes = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_top}\t#{pane_height}"]);
-        let bottoms: Vec<u32> = panes
-            .lines()
-            .map(|l| {
-                let (top, height) = l.split_once('\t').unwrap();
-                top.parse::<u32>().unwrap() + height.parse::<u32>().unwrap()
-            })
-            .collect();
-        assert_eq!(bottoms.iter().max(), Some(&19), "the lowest pane ends on row 19: {bottoms:?}");
-
-        // The screen: row 20 is the `─` line.
-        let screen = outer(&["capture-pane", "-p", "-t", "o"]);
-        let rows: Vec<&str> = screen.lines().collect();
-        assert!(rows.get(19).is_some_and(|r| r.contains('\u{2500}')), "row 20 is the ─ line: {screen}");
-    }));
-    let _ = env.command("tmux").args(["-L", &socket, "kill-server"]).stderr(std::process::Stdio::null()).status();
-    if let Err(e) = result {
-        std::panic::resume_unwind(e);
-    }
+    // The options: one status row, the line in row 0, no row 1.
+    assert_eq!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status"]).trim(), "on");
+    assert!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]).contains("\u{2500}"));
+    // The fake server refuses to show an option that was never set, so row 1 is read off the session's own options.
+    let set = tmux_out(&fx, &["show", "-t", "=cpd:"]);
+    assert!(!set.lines().any(|l| l.starts_with("status-format[1]")), "no status-format row sits between the panes and the line: {set}");
 }
 
 /// The history view in a 40 x 12 terminal of the test process (`history::run_on`: scripted input, a `TestBackend`): its rows
