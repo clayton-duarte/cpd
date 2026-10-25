@@ -23,7 +23,7 @@ use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
-use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
+use crate::host::spawn::{Pid as SpawnPid, Spawn};
 use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
@@ -65,18 +65,15 @@ pub(super) struct PaneWatch {
 
 /// One A4 poll on `ports`: the nap of `DRIVER_POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
 /// (`PaneWatch::look_with` on `ports.spawn`).
-pub(super) fn poll_with(_ports: &Ports, _watch: &mut PaneWatch, _tmux: &Tmux, _pane: &PaneId) -> Result<Look, CpdError> {
-    todo!("poll on ports.clock")
+pub(super) fn poll_with(ports: &Ports, watch: &mut PaneWatch, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+    ports.clock.sleep(limit("DRIVER_POLL", POLL));
+    watch.look_with(&*ports.spawn, tmux, pane)
 }
 
 impl PaneWatch {
-    /// [`PaneWatch::look`] whose pid test (`alive`) asks `spawn`.
-    pub(super) fn look_with(&mut self, _spawn: &dyn Spawn, _tmux: &Tmux, _pane: &PaneId) -> Result<Look, CpdError> {
-        todo!("look on spawn")
-    }
-
-    fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
-        if let Some(pid) = self.pid.filter(|&pid| ProcessSpawn.alive(SpawnPid(pid))) {
+    /// The look at the pane: the pid test (`alive`) asks `spawn`.
+    pub(super) fn look_with(&mut self, spawn: &dyn Spawn, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+        if let Some(pid) = self.pid.filter(|&pid| spawn.alive(SpawnPid(pid))) {
             return Ok(Look::Alive(Some(pid)));
         }
         let panes = match tmux.list_panes() {
@@ -152,6 +149,8 @@ struct Driver {
     exe: Exe,
     /// Loaded in A1; the ladder needs it to end an Attempt.
     catalog: Option<Catalog>,
+    /// Time, processes and `exec`: the real ones, or a test's.
+    ports: Ports,
 }
 
 /// Where A1 takes an Attempt up, by its status (§3.4 step 4).
@@ -201,7 +200,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
-    let Env { home, config, store, .. } = match opened {
+    let Env { home, config, store, ports, .. } = match opened {
         Ok(env) => env,
         Err(e) => {
             leave_infra(&home, &plan, &id, &e);
@@ -209,7 +208,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
+    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, ports };
 
     let outcome = (|| {
         let target = driver.load()?;
@@ -349,7 +348,7 @@ impl Driver {
         let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
-            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target, &log)? {
+            match worker::wait_for_lead_with(&self.ports, &mut self.store, &self.config, dirs, target, &log)? {
                 Some(fork) => Some(fork),
                 None => return self.end(target, End::Cancelled, dirs),
             }
@@ -417,7 +416,7 @@ impl Driver {
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
-        let failed = self.exe.exec(std::env::args_os().skip(1));
+        let failed = self.exe.exec_with(&*self.ports.spawn, std::env::args_os().skip(1));
         // Still here: the `exec` failed. Do not leak the lock to the children.
         let _ = self.lock.close_on_exec();
         Err(failed)
@@ -510,11 +509,9 @@ impl Driver {
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
-        let poll = limit("DRIVER_POLL", POLL);
         loop {
-            std::thread::sleep(poll);
             // The pane before the row: a Worker that submits and exits is seen `merging`.
-            let look = watch.look(&self.tmux, pane)?;
+            let look = poll_with(&self.ports, &mut watch, &self.tmux, pane)?;
             if file.is_none() {
                 file = pi::session_file(dirs, session);
                 if let Some(found) = &file {
@@ -567,7 +564,7 @@ impl Driver {
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
             let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi, span_open)) {
+            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &stall::descendants, &file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
@@ -683,7 +680,7 @@ impl Driver {
         // steps, so nothing can move the Attempt branch afterwards. A failure is
         // reported as A9's is; the merge still runs, A9 tries the kill again.
         let target = self.load()?;
-        if let Err(e) = worker::kill_window(&self.config, &self.tmux, &target) {
+        if let Err(e) = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id) {
             log(&format!("killing the Worker's window failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
         }
@@ -710,7 +707,7 @@ impl Driver {
     /// the driver lock file (this process keeps fd 3 until it exits). A
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
-        let mut result = worker::kill_window(&self.config, &self.tmux, target);
+        let mut result = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id);
         if merged && result.is_ok() {
             result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }

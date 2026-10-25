@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::Value;
 
 use super::row::{self, State};
-use super::run::{existing_file, patiently};
+use super::run::{existing_file, patiently_with};
 use super::Env;
 use crate::clock::Clock;
 use crate::error::CpdError;
@@ -28,14 +28,20 @@ const SOURCE_POLL: Duration = Duration::from_secs(2);
 /// that is `stopped` with no file can never become idle (hs-d196): the pane says so
 /// and waits for Enter to try again; `None` at the end of input. A source that is
 /// working is waited for without a time bound.
-pub(super) fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str) -> Result<Option<PathBuf>, CpdError> {
+pub(super) fn wait_for_source_with(
+    ports: &Ports,
+    env: &mut Env,
+    dirs: &PiDirs,
+    source: &SessionId,
+    name: &str,
+) -> Result<Option<PathBuf>, CpdError> {
     let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
     let mut shown = false;
     loop {
-        let src = patiently("reading the source Lead", || env.store.read(|conn| row::load(conn, source)))?;
+        let src = patiently_with(&*ports.clock, "reading the source Lead", || env.store.read(|conn| row::load(conn, source)))?;
         if let Some(file) = existing_file(dirs, &src)
             && matches!(src.state, State::Idle | State::Stopped)
-            && quiet_since(&file, quiet)
+            && quiet_since_with(&*ports.clock, &file, quiet)
             && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
         {
             return Ok(Some(file));
@@ -56,32 +62,15 @@ pub(super) fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, 
             let _ = std::io::stdout().flush();
             shown = true;
         }
-        std::thread::sleep(limit("SOURCE_POLL", SOURCE_POLL));
+        ports.clock.sleep(limit("SOURCE_POLL", SOURCE_POLL));
     }
 }
 
-/// [`wait_for_source`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the source's file is read on its
-/// `utc()`, and a transient store error is waited out on `ports.clock` (`patiently_with`).
-pub(super) fn wait_for_source_with(
-    _ports: &Ports,
-    _env: &mut Env,
-    _dirs: &PiDirs,
-    _source: &SessionId,
-    _name: &str,
-) -> Result<Option<PathBuf>, CpdError> {
-    todo!("wait_for_source on ports.clock")
-}
-
 /// [`quiet_since`] on `clock`: the file's modification time against `clock.utc()`.
-pub(crate) fn quiet_since_with(_clock: &dyn Clock, _file: &Path, _quiet: Duration) -> bool {
-    todo!("quiet_since on a clock")
-}
-
-/// The file has not been modified for `quiet`.
-pub(crate) fn quiet_since(file: &Path, quiet: Duration) -> bool {
+pub(crate) fn quiet_since_with(clock: &dyn Clock, file: &Path, quiet: Duration) -> bool {
     std::fs::metadata(file)
         .and_then(|m| m.modified())
-        .is_ok_and(|modified| SystemTime::now().duration_since(modified).is_ok_and(|age| age >= quiet))
+        .is_ok_and(|modified| SystemTime::from(clock.utc()).duration_since(modified).is_ok_and(|age| age >= quiet))
 }
 
 /// The last `message` entry of a pi session file is a finished assistant

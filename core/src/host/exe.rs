@@ -7,7 +7,6 @@
 use std::cell::Cell;
 use std::ffi::OsStr;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -142,12 +141,19 @@ impl Exe {
 
     /// [`Exe::exec`] through `spawn`: `Spawn::exec` of a `Launch` whose program is the path and whose arguments are `args`.
     /// Returns only on failure, as `spawn_failed`.
-    pub fn exec_with<I, S>(&self, _spawn: &dyn super::spawn::Spawn, _args: I) -> CpdError
+    pub fn exec_with<I, S>(&self, spawn: &dyn super::spawn::Spawn, args: I) -> CpdError
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        todo!("exec on spawn")
+        let launch = super::spawn::Launch {
+            program: self.path.display().to_string(),
+            args: args.into_iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect(),
+            ..super::spawn::Launch::default()
+        };
+        let e = spawn.exec(&launch);
+        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", self.path.display()))
+            .with("path", self.path.display().to_string())
     }
 
     /// Replaces this process with the executable at the same path, `args` as its
@@ -157,9 +163,7 @@ impl Exe {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let e = Command::new(&self.path).args(args).exec();
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", self.path.display()))
-            .with("path", self.path.display().to_string())
+        self.exec_with(&super::spawn::ProcessSpawn, args)
     }
 }
 

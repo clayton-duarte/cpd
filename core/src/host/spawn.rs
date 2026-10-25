@@ -241,6 +241,8 @@ impl Spawn for ProcessSpawn {
 
     fn exec(&self, l: &Launch) -> io::Error {
         let mut command = command(l);
+        // The new program owns this process's terminal (a reloaded `session run` reads its stdin): `command` sets null.
+        command.stdin(Stdio::inherit());
         if let Some(path) = &l.stdout_to {
             match std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|f| Ok((f.try_clone()?, f))) {
                 Ok((out, err)) => {

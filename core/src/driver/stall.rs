@@ -14,12 +14,14 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
-
-use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
+#[cfg(test)]
+use crate::host::spawn::ProcessSpawn;
+use crate::host::spawn::{Pid as SpawnPid, Signal};
+#[cfg(test)]
+use crate::host::spawn::Spawn;
+use crate::ports::Ports;
 use serde_json::Value;
 
 /// How long the processes get between `SIGTERM` and `SIGKILL`.
@@ -78,17 +80,33 @@ impl Watch {
     /// inside a tool call, kills pi's descendants and returns the driver-log
     /// line; None when there is nothing to do. While a check span is open
     /// (`span_open`, §7.7) nothing is killed and the quiet starts over.
+    #[cfg(test)]
     pub fn check(&mut self, file: &Path, pi: u32, span_open: bool) -> Option<String> {
+        self.check_with(&Ports::real(), &descendants, file, pi, span_open)
+    }
+
+    /// [`Watch::check`] on `ports`: the quiet of `file` is its modification time against `ports.clock.utc()`, the signals
+    /// and the waits of `terminate_with` go to `ports.spawn` and naps of `ports.clock`, the command lines come from
+    /// `ports.spawn.cmdline`, and `descendants` names pi's live descendants (the `/proc` or `libproc` walk, in production).
+    pub(super) fn check_with(
+        &mut self,
+        ports: &Ports,
+        descendants: &dyn Fn(u32) -> Vec<u32>,
+        file: &Path,
+        pi: u32,
+        span_open: bool,
+    ) -> Option<String> {
         if self.limit.is_zero() {
             return None;
         }
+        let now = SystemTime::from(ports.clock.utc());
         if span_open {
-            self.span_seen_at = Some(SystemTime::now());
+            self.span_seen_at = Some(now);
             return None;
         }
         let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
         let modified = self.span_seen_at.map_or(modified, |seen| modified.max(seen));
-        let quiet = SystemTime::now().duration_since(modified).unwrap_or_default();
+        let quiet = now.duration_since(modified).unwrap_or_default();
         if quiet < self.limit || self.killed_at == Some(modified) {
             return None;
         }
@@ -100,8 +118,9 @@ impl Watch {
             return None;
         }
         self.killed_at = Some(modified);
-        let named: Vec<String> = pids.iter().map(|&p| format!("{p} ({})", cmdline(p))).collect();
-        let forced = terminate(&pids);
+        let named: Vec<String> =
+            pids.iter().map(|&p| format!("{p} ({})", ports.spawn.cmdline(SpawnPid(p)).unwrap_or_default())).collect();
+        let forced = terminate_with(ports, &pids);
         let mut line = format!(
             "A4: stall: the Worker's tool call has been idle {} s; killed pid {}",
             quiet.as_secs(),
@@ -112,22 +131,6 @@ impl Watch {
             line += &format!("; SIGKILL after {} s to pid {}", GRACE.as_secs(), forced.join(", "));
         }
         Some(line)
-    }
-}
-
-impl Watch {
-    /// [`Watch::check`] on `ports`: the quiet of `file` is its modification time against `ports.clock.utc()`, the signals
-    /// and the waits of `terminate` go to `ports.spawn` and naps of `ports.clock`, the command lines come from
-    /// `ports.spawn.cmdline`, and `descendants` names pi's live descendants (the `/proc` or `libproc` walk, in production).
-    pub(super) fn check_with(
-        &mut self,
-        _ports: &crate::ports::Ports,
-        _descendants: &dyn Fn(u32) -> Vec<u32>,
-        _file: &Path,
-        _pi: u32,
-        _span_open: bool,
-    ) -> Option<String> {
-        todo!("check on ports")
     }
 }
 
@@ -165,7 +168,7 @@ fn all_pids() -> Vec<u32> {
 }
 
 /// Every live descendant of `root`, not `root` itself, in pid order.
-fn descendants(root: u32) -> Vec<u32> {
+pub(super) fn descendants(root: u32) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for pid in all_pids() {
         if let Some((ppid, state)) = stat(pid)
@@ -186,46 +189,39 @@ fn descendants(root: u32) -> Vec<u32> {
     found
 }
 
-/// `pid`'s command line, its arguments joined by spaces. macOS: `libproc` has
-/// no argv reader (only the name and path), so `ps -o command=` gives it.
-#[cfg(target_os = "macos")]
+/// `pid`'s command line, as the real `Spawn` reads it.
+#[cfg(test)]
 fn cmdline(pid: u32) -> String {
-    let out = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output();
-    out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
-}
-
-/// `pid`'s command line from `/proc/<pid>/cmdline`, its arguments joined by spaces.
-#[cfg(not(target_os = "macos"))]
-fn cmdline(pid: u32) -> String {
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-    let words: Vec<String> =
-        raw.split(|&b| b == 0).filter(|w| !w.is_empty()).map(|w| String::from_utf8_lossy(w).into_owned()).collect();
-    words.join(" ")
-}
-
-fn signal(pid: u32, signal: Signal) {
-    // A process already gone is what we want.
-    let _ = kill(Pid::from_raw(pid as i32), signal);
+    ProcessSpawn.cmdline(SpawnPid(pid)).unwrap_or_default()
 }
 
 /// `SIGTERM` to `pids`, then `SIGKILL` to those still alive after
-/// [`GRACE`]; returns the pids that needed `SIGKILL`.
-fn terminate(pids: &[u32]) -> Vec<u32> {
+/// [`GRACE`]; returns the pids that needed `SIGKILL`. Signals and the liveness test go to `ports.spawn`, the wait is
+/// naps of 100 ms on `ports.clock`.
+fn terminate_with(ports: &Ports, pids: &[u32]) -> Vec<u32> {
+    let (clock, spawn) = (&*ports.clock, &*ports.spawn);
     for &pid in pids {
-        signal(pid, Signal::SIGTERM);
+        // A process already gone is what we want.
+        let _ = spawn.signal(SpawnPid(pid), Signal::Term);
     }
-    let deadline = Instant::now() + GRACE;
-    while Instant::now() < deadline {
-        if !pids.iter().any(|&p| ProcessSpawn.alive(SpawnPid(p))) {
+    let deadline = clock.now() + GRACE;
+    while clock.now() < deadline {
+        if !pids.iter().any(|&p| spawn.alive(SpawnPid(p))) {
             return Vec::new();
         }
-        std::thread::sleep(Duration::from_millis(100));
+        clock.sleep(Duration::from_millis(100));
     }
-    let left: Vec<u32> = pids.iter().copied().filter(|&p| ProcessSpawn.alive(SpawnPid(p))).collect();
+    let left: Vec<u32> = pids.iter().copied().filter(|&p| spawn.alive(SpawnPid(p))).collect();
     for &pid in &left {
-        signal(pid, Signal::SIGKILL);
+        let _ = spawn.signal(SpawnPid(pid), Signal::Kill);
     }
     left
+}
+
+/// [`terminate_with`] on the real ports.
+#[cfg(test)]
+fn terminate(pids: &[u32]) -> Vec<u32> {
+    terminate_with(&Ports::real(), pids)
 }
 
 #[cfg(test)]
