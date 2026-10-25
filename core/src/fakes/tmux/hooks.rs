@@ -42,7 +42,7 @@ pub fn fire(cx: &mut Cx, name: &str, loc: Loc, vars: Vec<(String, String)>) {
     cx.depth = 0;
 }
 
-/// Splits a tmux command string into commands (on `;`) of words. Quotes group; a quote closes only before
+/// Splits a tmux command string into commands (on `;`) of words. Quotes group (`\"` inside a double-quoted word is a quote); a quote closes only before
 /// whitespace, `;` or the end, so `'run-shell 'echo x''` is one word holding `run-shell 'echo x'`.
 fn tokenize(src: &str) -> R<Vec<Vec<String>>> {
     let chars: Vec<char> = src.chars().collect();
@@ -55,6 +55,10 @@ fn tokenize(src: &str) -> R<Vec<Vec<String>>> {
                 in_word = true;
                 i += 1;
                 while i < chars.len() && !(chars[i] == c && closes(i + 1)) {
+                    // As in tmux, `\"` in a double-quoted word is a quote of the word's own (the nested command of a hook).
+                    if c == '"' && chars[i] == '\\' && chars.get(i + 1) == Some(&'"') {
+                        i += 1;
+                    }
                     word.push(chars[i]);
                     i += 1;
                 }

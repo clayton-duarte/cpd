@@ -1509,6 +1509,16 @@ impl Locale {
         }
     }
 
+    /// This locale's variables, to set on a call that runs in this process (`Fx::cpd_with`).
+    pub fn vars(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Locale::Unset => &[],
+            Locale::EmptyLang => &[("LANG", "")],
+            Locale::LangC => &[("LANG", "C")],
+            Locale::LcAllC => &[("LC_ALL", "C")],
+        }
+    }
+
     /// The same as `env` words for `env -i`: what a wrapper script passes to the real tmux.
     pub fn env_words(self) -> &'static str {
         match self {
