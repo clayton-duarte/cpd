@@ -4,8 +4,8 @@
 //!
 //! The cockpit runs in the test process (`common::cockpit`, on the fake ports and the fake tmux server of an `Fx`): its
 //! tests pin the tmux commands it sends (the layout's `new-session`, `split-window`, `resize-pane` and the rest, in
-//! order: `steps`) and the options it sets, never tmux's geometry or rendering. The tests of the plan-new server options
-//! and of the harness (`TestEnv`) are the ones that still run the binary.
+//! order: `steps`) and the options it sets, never tmux's geometry or rendering. The only tests that still run a process
+//! are the two of the harness (`TestEnv`): its denied tools and its environment.
 
 use crate::common;
 
@@ -15,89 +15,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::cockpit::{action, ran, tui};
 use common::fx::Fx;
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::TestEnv;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
 use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS, STATUS_CLICK, STATUS_FORMAT};
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
-
-/// An env with a config on its private tmux server, and a fake `cpd` that
-/// runs the real one except for the views whose Jobs have not landed, which
-/// sleep so that their panes stay alive.
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    // The engine the cockpit starts polls GitHub from its first tick: it finds nothing.
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-    env.fake(
-        "cpd",
-        &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
-    );
-    env
-}
-
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap()
-}
-
-/// `tmux <args>`'s stdout, or `None` when tmux refuses (an option it does not know).
-fn tmux_try(env: &TestEnv, args: &[&str]) -> Option<String> {
-    let out = env.tmux(args);
-    out.status.success().then(|| String::from_utf8(out.stdout).unwrap())
-}
-
-/// One pane of `cpd:main`.
-
-fn windows(env: &TestEnv, session: &str) -> Vec<String> {
-    tmux_out(env, &["list-windows", "-t", &format!("={session}"), "-F", "#{window_name}"]).lines().map(str::to_owned).collect()
-}
-
-/// Asserts the server has every option, binding and hook `host` sets at a
-/// server start (contract §6.1; their values are pinned in `tests/host.rs`).
-fn assert_server_options(env: &TestEnv) {
-    for option in SERVER_OPTIONS.iter() {
-        let option: Vec<&str> = option.iter().map(String::as_str).collect();
-        match option.as_slice() {
-            ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
-            // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
-            ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
-                Some(shown) => assert_eq!(shown.trim_end_matches('\n'), *value, "{name}"),
-                None => eprintln!("{name} not asserted: this tmux does not know the option"),
-            },
-            ["set", "-as", name, value] => {
-                let shown = tmux_out(env, &["show", "-sv", name]);
-                for feature in value.split(',').filter(|f| !f.is_empty()) {
-                    assert_eq!(shown.lines().filter(|l| *l == feature).count(), 1, "{feature} in {shown}");
-                }
-            }
-            ["set", "-s", name, value] => assert_eq!(tmux_out(env, &["show", "-sv", name]).trim_end_matches('\n'), *value, "{name}"),
-            // The hooks' exact text is pinned in `tests/host.rs`; here, that the server has each, and that it starts the engine again.
-            ["set-hook", "-g", hook, _] => {
-                let shown = tmux_out(env, &["show-hooks", "-g", hook]);
-                assert!(shown.starts_with(&format!("{hook}[0] if-shell -F ")), "{shown}");
-                assert!(shown.contains("cpd watch --ensure --wait"), "{shown}");
-            }
-            ["bind", "-T", table, key, .., command] => {
-                // tmux shows a `;` inside a binding escaped
-                let shown = tmux_out(env, &["list-keys", "-T", table, key]).replace("\\;", ";");
-                assert!(shown.contains(command), "{command} in {shown}");
-            }
-            other => panic!("an option this test cannot check: {other:?}"),
-        }
-    }
-}
 
 /// The line of `list-keys -T <table>` that binds `key`, in the fake server's rendering (a command's words joined by a space).
 fn binding(fx: &Fx, table: &str, key: &str) -> String {
@@ -1053,17 +977,12 @@ fn tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise() {
 
 #[test]
 fn a_server_started_by_plan_new_has_every_server_option() {
-    let env = env();
-    env.fake("cpd", &format!("if [ \"$1 $2\" = 'session run' ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""));
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
-    )
-    .unwrap();
-    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
-    assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
-    assert_server_options(&env);
+    let fx = Fx::with_ports();
+    fx.env.write_config(&format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", fx.env.tmux_socket()));
+    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+    fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
+    assert_eq!(window_names(&fx, "cpd"), ["park-pay"], "plan new started the server, not tui");
+    assert_options_on_fake(&fx);
 }
 
 #[test]
@@ -1078,11 +997,11 @@ fn tui_attach_without_a_terminal_is_refused_before_anything_is_built() {
 
 #[test]
 fn tui_view_routes_by_name() {
-    let env = env();
-    let run = env.cpd(&["tui", "view", "chat"]);
+    let fx = common::tree::fx();
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "chat"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (3, json!("not_a_terminal")), "{run:?}");
     for words in [&["tui", "view", "nope"][..], &["tui", "view"], &["tui", "--bogus"]] {
-        let run = env.cpd(words);
+        let run = fx.cpd(words);
         assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{words:?}: {run:?}");
     }
 }
