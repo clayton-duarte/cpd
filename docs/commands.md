@@ -154,8 +154,10 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `lead_branch_moved` | 3 | an `open` or `update` Job's submit (§6.1) found the Lead Branch's tip not in HEAD; `details.next` is the merge to run (contract §7.7) |
 | `open_job_live` | 3 | `pr open` (§9.1) found the PR's `open` Job `draft`, `queued` or `running`; `details.job` (hs-d573) |
 | `not_an_impl_job`, `path_not_guarded` | 3 | `job approve-tests` (§5.9): the Job is not of kind `impl`; `details.paths` lists the paths no `test_files` entry of its test Jobs guards |
+| `host_approval_required`, `not_a_manager` | 3 | `cpd host repair` (§9.17): needs an approval of the calling Session (`host_approval_required`); Manager role only (`not_a_manager`, commands.md §9.17) |
 | `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors`, and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
+| `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
 
 ### 1.4 Files written by commands
@@ -194,6 +196,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | Command | Callers | Cockpit | Internal |
 |---|---|---|---|
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
+| `cpd host approve` (§9.17) | | no | yes |
+| `cpd host repair` (§9.17) | Manager | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
