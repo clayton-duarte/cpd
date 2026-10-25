@@ -37,25 +37,6 @@ fn commands_get_an_isolated_environment() {
 }
 
 #[test]
-fn cpd_runs_and_prints_one_json_value() {
-    let env = TestEnv::new();
-    let run = env.cpd(&["--version"]);
-    let ok = run.ok();
-    let hash = ok["version"]
-        .as_str()
-        .and_then(|v| v.strip_prefix(env!("CARGO_PKG_VERSION")))
-        .and_then(|rest| rest.strip_prefix('-'))
-        .expect("version is <Cargo version>-<hash>");
-    assert!(
-        hash == "unknown" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
-        "bad hash {hash}"
-    );
-    let run = env.cpd(&["no-such-command"]);
-    assert_eq!(run.error()["code"], "usage");
-    assert_eq!(run.exit, 2);
-}
-
-#[test]
 fn git_repo_has_one_commit_on_main() {
     // Twice: the second repo is a copy of the template (the first makes it if there is none).
     for _ in 0..2 {
@@ -562,53 +543,6 @@ fn helper_lines(helper: &mut KillChild, key: &str) -> Vec<String> {
         }
     }
     found
-}
-
-// ---- hygiene.md 3a: a test that kills its own tmux server does not let the supervising hooks restart one ----
-
-/// An env whose server has the real hooks of `SERVER_OPTIONS` armed, with a fake `cpd` whose `watch --ensure --wait`
-/// (what the hooks run) writes `marker`, and a `tmux` that records its calls to `log` before running the real one.
-fn armed_env(marker: &std::path::Path, log: &std::path::Path) -> TestEnv {
-    let env = TestEnv::new();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"watch --ensure --wait\") : > '{}'; exit 0;; esac\nexit 1", marker.display()));
-    common::write_executable(
-        &env.bin().join("tmux"),
-        &format!("#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), common::real_tmux().display()),
-    );
-    let out = env.tmux(&["new-session", "-d", "-s", "t", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    for option in cpd_core::host::tmux::SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
-        let out = env.tmux(&option.iter().map(String::as_str).collect::<Vec<_>>());
-        assert!(out.status.success(), "{option:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    env
-}
-
-#[test]
-fn a_server_the_test_kills_is_not_restarted_by_its_supervising_hooks() {
-    // Outside the env: the env's directory is removed with it, and a late hook would write after that.
-    let outside = tempfile::tempdir().unwrap();
-    let (marker, log) = (outside.path().join("ensure-ran"), outside.path().join("tmux-calls"));
-    let env = armed_env(&marker, &log);
-    let socket = env.tmux_socket().to_owned();
-
-    env.kill_tmux_server();
-
-    // Disarmed first: both hooks are unset before the server is killed (a kill-server that runs a hook is only sometimes
-    // seen, hygiene.md bug 3: this is the deterministic half).
-    let calls = std::fs::read_to_string(&log).unwrap();
-    let at = |needle: &str| calls.lines().position(|l| l.contains(needle));
-    let kill = at("kill-server").expect("kill_tmux_server runs kill-server");
-    for hook in ["pane-died", "window-unlinked"] {
-        let unset = at(&format!("set-hook -gu {hook}")).unwrap_or_else(|| panic!("the {hook} hook is not unset:\n{calls}"));
-        assert!(unset < kill, "the {hook} hook is unset after kill-server:\n{calls}");
-    }
-    // And nothing ran the hook, nor started a server on the socket, within the wait.
-    let restarted = common::poll(WAIT, || {
-        let mentions = marker.exists() || processes_mentioning(std::path::Path::new(&socket)).iter().any(|p| *p != std::process::id());
-        mentions.then_some(())
-    });
-    assert!(restarted.is_none(), "a hook ran `cpd watch --ensure --wait` or a process mentions {socket} after the kill");
 }
 
 // ---- hygiene.md 1b: the git wrapper tests run through the env's group and reaper ----

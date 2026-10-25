@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pill_spins_through_the_eight_moon_phases() {
+    fn a_running_pill_spins_through_the_28_moon_phases() {
         let icons: Vec<String> = (0..=palette::SPINNER.len()).map(|f| icon_at(Live::Running, f)).collect();
         assert_eq!(icons, [palette::SPINNER.to_vec(), vec![palette::SPINNER[0]]].concat());
     }

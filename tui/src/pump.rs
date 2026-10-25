@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::Event;
 
-pub const FRAME: Duration = Duration::from_millis(100);
+pub const FRAME: Duration = Duration::from_millis(crate::palette::FRAME_MS);
 pub const SAFETY: Duration = Duration::from_secs(2);
 
 pub enum Signal {
@@ -136,7 +136,7 @@ pub struct Needs {
 
 pub fn wake(now: Instant, wall_ms: u64, needs: &Needs, deadline: Option<Instant>) -> Option<Instant> {
     let next = |period: u64| now + Duration::from_millis(period - wall_ms % period);
-    [deadline, needs.at, needs.frame.then(|| next(100)), needs.second.then(|| next(1000))]
+    [deadline, needs.at, needs.frame.then(|| next(crate::palette::FRAME_MS)), needs.second.then(|| next(1000))]
         .into_iter()
         .flatten()
         .min()
