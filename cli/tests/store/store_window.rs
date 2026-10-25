@@ -7,6 +7,7 @@ use crate::common;
 
 use std::fs;
 
+use crate::home::{HasCpdHome, Home};
 use common::TestEnv;
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
@@ -25,13 +26,13 @@ fn machine() -> TestEnv {
     env
 }
 
-fn home(env: &TestEnv) -> CpdHome {
+fn home(env: &impl HasCpdHome) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
 /// What a newer binary does: runs `sql` and records the migration `name` (cpd's own `cpd_txn()` is
 /// stood in by the id of the store's newest `txns` row).
-fn apply_newer(env: &TestEnv, name: &str, compat: &str, sql: &str) {
+fn apply_newer(env: &impl HasCpdHome, name: &str, compat: &str, sql: &str) {
     let conn = Connection::open(home(env).db()).unwrap();
     let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
@@ -45,7 +46,7 @@ fn apply_newer(env: &TestEnv, name: &str, compat: &str, sql: &str) {
 }
 
 /// A store with a new table and a new column of an additive migration this binary lacks.
-fn store_with_additive_migrations(env: &TestEnv) {
+fn store_with_additive_migrations(env: &impl HasCpdHome) {
     drop(Store::open(&home(env), 5000).unwrap());
     apply_newer(
         env,
@@ -56,14 +57,14 @@ fn store_with_additive_migrations(env: &TestEnv) {
     apply_newer(env, NEWEST, "additive", "ALTER TABLE events ADD COLUMN newest TEXT;");
 }
 
-fn read_only_verdict(env: &TestEnv) -> cpd_core::store::Verdict<'static> {
+fn read_only_verdict(env: &impl HasCpdHome) -> cpd_core::store::Verdict<'static> {
     let conn = Connection::open_with_flags(home(env).db(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     verdict(&conn).unwrap()
 }
 
 #[test]
 fn a_binary_opens_a_store_with_additive_migrations_it_does_not_know() {
-    let env = machine();
+    let env = Home::new();
     store_with_additive_migrations(&env);
 
     let v = read_only_verdict(&env);
@@ -128,7 +129,7 @@ fn a_store_whose_newest_breaking_migration_this_binary_lacks_is_store_too_new() 
 
 #[test]
 fn inside_the_window_a_dropped_object_of_this_binary_is_still_store_tampered() {
-    let env = machine();
+    let env = Home::new();
     store_with_additive_migrations(&env);
     let conn = Connection::open(home(&env).db()).unwrap();
     let index: String = conn

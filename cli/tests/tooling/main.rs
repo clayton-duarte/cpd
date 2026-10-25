@@ -9,6 +9,7 @@ mod dead_code;
 mod gate_run;
 mod fake_tmux;
 mod fx;
+mod guards;
 mod harness;
 mod install_script;
 mod interface;
