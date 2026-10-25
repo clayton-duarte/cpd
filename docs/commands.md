@@ -1353,12 +1353,13 @@ cpd job cancel <key> --reason <text> [--plan <id>]
 Effects (§3.2 "Cancel"):
 - `draft` (in any phase: a draft added after the lock is cancelled like one in phase `plan`), `queued` or `failed`: one transaction, `status = cancelled`, `cancel_reason`, `cancel_requested_at`; **Event** `job-cancelled` `{reason}`.
 - `running`: one transaction, `cancel_reason` and `cancel_requested_at` only; **Event** `job-cancel-requested` `{reason}`. Engine E2 sets the Attempt's `stop_request = cancelled`, and the driver or E2 ends it `cancelled` at its next safe point (§3.4), which appends `job-cancelled`. No tmux action by this command.
+- **Dependents (hs-d647)**: in the same transaction, every Job of the Plan that needs the cancelled Job, directly or transitively through any status, becomes `failed` (when `queued`: `failed_cause` is `its need <cancelled-key> was cancelled`, one `job-failed` Event) or `cancelled` (when a `draft`: `cancel_reason` the same string, one `job-cancelled` Event); one already `failed`, `merged` or `cancelled` is untouched. The result's `failed` and `cancelled` arrays name the Jobs this changed, and are absent when empty. In the `running` case the dependents are failed in the transaction that makes the Job `cancelled` (the engine's, 3.4), not by this command.
 
 ```json
-{"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
+{"ok": true, "job": "worker", "status": "cancelled", "cancel_requested": false, "failed": ["dep"], "cancelled": ["draft-dep"]}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a cancelled Job cannot start (cpd 1 §11, kept); they stay `queued`. **Cancelling a PR's `open` Job stands** (contract §3.7 E4, §3.8): engine E4 adds no fresh one, so the PR stays `dispatch` with no live `open` Job. It is not a way to start over: to open the PR later the Lead runs `pr open --pr <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `pr cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the PR, its `open` Job included, with the PR and adds nothing back. `job retry` (§5.4) takes a `failed` Job only and runs it again at another Tier.
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a `failed` Job stay `queued`: `job retry` recovers the need, so that wait is legal. **Cancelling a PR's `open` Job stands** (contract §3.7 E4, §3.8): engine E4 adds no fresh one, so the PR stays `dispatch` with no live `open` Job. It is not a way to start over: to open the PR later the Lead runs `pr open --pr <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `pr cancel <key>` (§9.6), which also cancels every `draft`, `queued` or `failed` Job of the PR, its `open` Job included, with the PR and adds nothing back. `job retry` (§5.4) takes a `failed` Job only and runs it again at another Tier.
 
 ### 5.4 `job retry`
 
@@ -1370,6 +1371,7 @@ cpd job retry <key> --tier <T> [--plan <id>]
 |---|---|---|
 | `--tier` is a Tier a Worker may have, `H3` or `S0`–`S3` (§5, hs-d554): **`job retry --tier` refuses a Tier outside the Worker range**, so a Job that failed on `S3` cannot be retried higher; its remedy is the same Tier or a new Job with a better Spec. Checked first, so a refused Tier changes nothing | `tier_not_allowed` | 2 |
 | the Job is `failed` (or `queued` with this `retry_tier` and no Attempt since: `already`) | `job_not_failed` | 3 |
+| no `needs` Job is `cancelled` (`needs_unavailable`, exit 3, `details.needs` lists them): a Job held by a cancelled need can never start, so cancel it and add a replacement whose needs do not name the cancelled Job. A `failed` need is allowed: retrying recovers it | `needs_unavailable` | 3 |
 
 Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null`. **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier, and the ladder restarts from it with a fresh cap (§9; Attempts whose driver never started are never counted).
 
