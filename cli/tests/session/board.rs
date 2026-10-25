@@ -1,15 +1,14 @@
 //! `cpd board post | list | take` (commands.md §10a, hs-d514), the command tree in this process (`Fx`).
 
 use crate::common::fx::Fx;
+use crate::common::session::{events, setup_with_fork};
 use crate::common::{TestEnv, refused};
-use crate::session_send::{exec_sql, messages, setup};
 use serde_json::{Value, json};
 
 const FROM_LEAD2: &[(&str, &str)] = &[("CPD_SESSION", "lead2")];
 
 fn with_manager(env: &TestEnv) {
-    exec_sql(
-        env,
+    env.sql(
         "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
          VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'idle', 't5', 't5', NULL)",
     );
@@ -34,7 +33,7 @@ fn list(fx: &Fx, session: &str, all: bool) -> Vec<Value> {
 #[test]
 fn a_post_to_a_plan_reaches_its_lead() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let out = post(&fx, "PR opened", "pay");
     assert_eq!(out["session"], "lead1");
     assert_eq!(out["context"], "ctx");
@@ -48,7 +47,7 @@ fn a_post_to_a_plan_reaches_its_lead() {
 #[test]
 fn a_post_to_manager_reaches_the_context_manager() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     with_manager(&fx.env);
     let out = post(&fx, "Need a decision", "manager");
     assert_eq!(out["session"], "mgr1");
@@ -60,8 +59,8 @@ fn a_post_to_manager_reaches_the_context_manager() {
 #[test]
 fn a_post_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
     let fx = Fx::new();
-    setup(&fx.env);
-    exec_sql(&fx.env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+    setup_with_fork(&fx.env);
+    fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';
          UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
          UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
@@ -73,7 +72,7 @@ fn a_post_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
 #[test]
 fn take_returns_the_pending_posts_once_and_marks_them_read() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     post(&fx, "first", "pay");
     post(&fx, "second", "pay");
     let taken = take(&fx, "lead1");
@@ -85,7 +84,7 @@ fn take_returns_the_pending_posts_once_and_marks_them_read() {
 #[test]
 fn list_all_shows_read_posts_too() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     post(&fx, "first", "pay");
     take(&fx, "lead1");
     post(&fx, "second", "pay");
@@ -98,10 +97,10 @@ fn list_all_shows_read_posts_too() {
 #[test]
 fn a_post_appends_no_event() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let before = fx.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
     post(&fx, "quiet", "pay");
     let after = fx.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
     assert_eq!(before, after);
-    assert!(messages(&fx).is_empty());
+    assert!(events(&fx, "session-message").is_empty());
 }

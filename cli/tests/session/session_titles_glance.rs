@@ -1,31 +1,20 @@
 //! `cpd session retitle <session> --width <cols>` as hs-d543 amends it (commands.md §10.14): the input is the last 2
 //! turns, the limit is N = cols - 8 characters (never cut, no word cap) and a width below 9 is a usage refusal. Run as
 //! the built binary with a fake `pi` install whose Tier catalog is seeded in the cache (`a_width_below_9_is_refused`, which starts no
-//! process, runs the command tree in this process: `Fx`). The helpers are copies of
-//! those of `session_titles.rs`, cut down to one Lead.
+//! process, runs the command tree in this process: `Fx`). The fake pi, the session file and `setup` are
+//! variants of those of `session_titles.rs`, cut down to one Lead; `show` and the fixture writer (`env.sql`) are the
+//! harness's.
 
 use crate::common;
 
 use std::fs;
 
 use common::fx::Fx;
+use common::session::show;
 use common::{Run, TestEnv, refused};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const LEAD: &str = "lead1";
-
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
-}
-
-fn fixture(env: &TestEnv, sql: &str) {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap().write("fixture", |tx| exec(tx, sql)).unwrap();
-}
 
 /// The fake pi records its stdin, prints `answer` (a file the test writes) on stdout and exits 0.
 const FAKE_PI: &str = r#"d="$(dirname "$0")/.."
@@ -73,8 +62,7 @@ fn setup(env: &TestEnv) {
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
     let file = session_file(env, LEAD, &turns(5));
-    fixture(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
                ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
@@ -96,10 +84,6 @@ fn answer(env: &TestEnv, stdout: &str) {
 
 fn retitle(env: &TestEnv, width: &str) -> Run {
     env.cpd(&["session", "retitle", LEAD, "--width", width])
-}
-
-fn show(env: &TestEnv) -> Value {
-    env.cpd(&["session", "show", LEAD]).ok()["session"].clone()
 }
 
 fn pi_stdin(env: &TestEnv) -> String {
@@ -140,7 +124,7 @@ fn the_limit_is_the_width_less_8() {
     answer(&env, &format!("TITLE: {forty_two}\n"));
     let out = retitle(&env, "50").ok();
     assert_eq!(out["title"], json!(forty_two));
-    assert_eq!(show(&env)["title"], json!(forty_two));
+    assert_eq!(show(&env, LEAD)["title"], json!(forty_two));
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 1, "{calls:?}");
     let prompt = calls[0].last().unwrap();
@@ -152,7 +136,7 @@ fn the_limit_is_the_width_less_8() {
     answer(&env, &format!("TITLE: {}\n", "a".repeat(43)));
     let error = refused(&retitle(&env, "50"), "title_failed", 1);
     assert_eq!(error["details"]["reason"], "malformed");
-    nothing_written(&show(&env));
+    nothing_written(&show(&env, LEAD));
 }
 
 #[test]
@@ -165,7 +149,7 @@ fn a_title_may_have_more_than_ten_words() {
     answer(&env, &format!("TITLE: {title}\n"));
     let out = retitle(&env, "100").ok();
     assert_eq!(out["title"], json!(title));
-    assert_eq!(show(&env)["title"], json!(title));
+    assert_eq!(show(&env, LEAD)["title"], json!(title));
 }
 
 // ---------- the width ----------

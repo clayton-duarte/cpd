@@ -3,9 +3,9 @@
 
 use crate::common::fx::Fx;
 use crate::common::{SLEEP_SECONDS, TestEnv};
-use crate::session::{cockpit, events, fake_pi, home, setup, show};
+use crate::common::session::{events, setup, show};
+use crate::session::{cockpit, fake_pi};
 
-use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const LEAD1: &str = "lead1";
@@ -13,18 +13,8 @@ const LEAD2: &str = "lead2";
 const FORK: &str = "forkless";
 const ASLEEP: &str = "2020-01-02T00:00:00Z";
 
-fn exec_sql(env: &TestEnv, sql: &str) {
-    let mut store = Store::open(&home(env), 5000).unwrap();
-    store
-        .write("test", |tx| {
-            tx.execute_batch(sql)?;
-            Ok(())
-        })
-        .unwrap();
-}
-
 fn put_to_sleep(env: &TestEnv, id: &str) {
-    exec_sql(env, &format!("UPDATE sessions SET asleep_at = '{ASLEEP}' WHERE id = '{id}'"));
+    env.sql(&format!("UPDATE sessions SET asleep_at = '{ASLEEP}' WHERE id = '{id}'"));
 }
 
 #[test]
@@ -57,13 +47,10 @@ fn list_shows_asleep_at() {
 fn archive_clears_asleep_at() {
     let env = TestEnv::new();
     setup(&env);
-    exec_sql(
-        &env,
-        &format!(
-            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from, asleep_at)
-               VALUES ('{FORK}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1', '{ASLEEP}')"
-        ),
-    );
+    env.sql(&format!(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from, asleep_at)
+           VALUES ('{FORK}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1', '{ASLEEP}')"
+    ));
     assert_eq!(show(&env, FORK)["asleep_at"], json!(ASLEEP));
     env.cpd(&["session", "archive", FORK]).ok();
     let row = show(&env, FORK);

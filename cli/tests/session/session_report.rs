@@ -3,7 +3,7 @@
 
 use crate::common;
 
-use super::session_send::setup;
+use crate::common::session::setup_with_fork;
 use common::fx::Fx;
 use common::refused;
 use serde_json::{Value, json};
@@ -22,7 +22,7 @@ fn follow(fx: &Fx, session: &str) -> Vec<Value> {
 #[test]
 fn report_appends_one_error_event_for_the_managers_digest() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let out = fx.cpd_with(
         fx.env.root(),
         &["session", "report", "--what", "follower", "--code", "store_busy", "--message", "the store is busy", "--details", "{\"n\": 3}"],
@@ -46,7 +46,7 @@ fn report_appends_one_error_event_for_the_managers_digest() {
 #[test]
 fn a_reported_error_has_no_plan_and_no_session_so_no_lead_follows_it() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd(&["session", "report", "--session", "lead1", "--what", "w", "--code", "boom", "--message", "m"]).ok();
     assert_eq!(errors(&fx).len(), 1);
     assert!(follow(&fx, "lead1").is_empty());
@@ -57,7 +57,7 @@ fn a_reported_error_has_no_plan_and_no_session_so_no_lead_follows_it() {
 #[test]
 fn report_refuses_an_unknown_session_a_bad_code_and_a_bad_details_and_writes_nothing() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let report = |session: &str, code: &str, details: Option<&str>| {
         let mut args = vec!["session", "report", "--session", session, "--what", "w", "--code", code, "--message", "m"];
         if let Some(d) = details {

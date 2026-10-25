@@ -8,7 +8,8 @@
 
 use crate::common::fx::Fx;
 use crate::common::{SLEEP_SECONDS, TestEnv, refused, wait_until};
-use crate::session::{cockpit, fake_pi, home, pi_calls_with, setup};
+use crate::common::session::{events, home, setup, show};
+use crate::session::{cockpit, fake_pi, pi_calls_with};
 
 use std::fs;
 
@@ -42,16 +43,8 @@ fn fixture(env: &TestEnv) {
     ));
 }
 
-fn show(fx: &Fx, id: &str) -> Value {
-    fx.cpd(&["session", "show", id]).ok()["session"].clone()
-}
-
 fn tier(fx: &Fx, id: &str) -> String {
     show(fx, id)["tier"].as_str().unwrap().to_owned()
-}
-
-fn retiered(fx: &Fx) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", "session-retiered"]).ok()["events"].as_array().unwrap().clone()
 }
 
 /// Every Session's `tier`, by id.
@@ -82,7 +75,7 @@ fn retier_one_moves_a_lead_to_lead_tier_with_one_event() {
     assert_eq!(tier(&fx, LEAD1), "O2");
     let shown = show(&fx, LEAD1);
     assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/opus"), Some("medium")), "{shown}");
-    let sent = retiered(&fx);
+    let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1, "one Event: {sent:?}");
     let event = &sent[0];
     assert_eq!(event["session"], LEAD1);
@@ -108,7 +101,7 @@ fn retier_one_moves_a_manager_to_manager_tier() {
     assert_eq!(tier(&fx, MANAGER), "O4");
     let shown = show(&fx, MANAGER);
     assert_eq!((shown["model"].as_str(), shown["thinking"].as_str()), (Some("p/opus"), Some("xhigh")));
-    let sent = retiered(&fx);
+    let sent = events(&fx, "session-retiered");
     assert_eq!(sent.len(), 1);
     assert_eq!((sent[0]["session"].as_str(), sent[0]["plan"].clone(), sent[0]["data"].clone()), (Some(MANAGER), Value::Null, json!({"from": "O5", "to": "O4"})));
 }
@@ -149,7 +142,7 @@ fn retier_all_moves_live_leads_and_managers_and_nothing_else() {
     assert_eq!(tier(&fx, ARCHIVED_MANAGER), "O5");
 
     // One Event per changed Session, none for the others.
-    let mut sessions: Vec<String> = retiered(&fx).iter().map(|e| e["session"].as_str().unwrap().to_owned()).collect();
+    let mut sessions: Vec<String> = events(&fx, "session-retiered").iter().map(|e| e["session"].as_str().unwrap().to_owned()).collect();
     sessions.sort();
     assert_eq!(sessions, [FORK, LEAD1, LEAD2, MANAGER]);
 }
@@ -162,20 +155,20 @@ fn retier_is_idempotent_and_a_session_on_its_tier_gets_no_event() {
     let fx = Fx::new();
     fixture(&fx.env);
     fx.cpd(&["session", "retier", "--all"]).ok();
-    let events_before = retiered(&fx).len();
+    let events_before = events(&fx, "session-retiered").len();
     let cursor = fx.cpd(&["session", "list"]).ok()["events_cursor"].clone();
     let tiers_before = tiers(&fx);
 
     let again = fx.cpd(&["session", "retier", "--all"]).ok();
     assert_eq!(again["already"], true, "{again}");
     assert_eq!(again["retiered"], json!([]));
-    assert_eq!(retiered(&fx).len(), events_before);
+    assert_eq!(events(&fx, "session-retiered").len(), events_before);
     assert_eq!(fx.cpd(&["session", "list"]).ok()["events_cursor"], cursor, "nothing was written");
     assert_eq!(tiers(&fx), tiers_before);
 
     let one = fx.cpd(&["session", "retier", ON_TARGET]).ok();
     assert_eq!((one["already"].clone(), one["retiered"].clone(), one["unchanged"].clone()), (json!(true), json!([]), json!([ON_TARGET])));
-    assert_eq!(retiered(&fx).len(), events_before);
+    assert_eq!(events(&fx, "session-retiered").len(), events_before);
 }
 
 /// The refusals write nothing: a Worker (`not_a_lead`, its Tier is its Job's), an archived Session (`archived`), an
@@ -197,7 +190,7 @@ fn retier_refuses_what_it_may_not_touch_and_writes_nothing() {
 
     assert_eq!(tiers(&fx), tiers_before);
     assert_eq!(fx.cpd(&["session", "list"]).ok()["events_cursor"], cursor);
-    assert!(retiered(&fx).is_empty());
+    assert!(events(&fx, "session-retiered").is_empty());
 }
 
 /// A relaunch **resumes** on the row's current Tier (hs-d506): `--model <tiers.O>:<level>` before `--session <file>`,

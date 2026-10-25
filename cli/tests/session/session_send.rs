@@ -6,73 +6,12 @@ use crate::common;
 use std::fs;
 
 use common::fx::Fx;
-use common::{CPD, Run, TestEnv, refused};
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
+use common::session::{events, setup_with_fork};
+use common::{TestEnv, refused};
 use serde_json::{Value, json};
 
-fn store(env: &TestEnv) -> Store {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap()
-}
-
-pub(crate) fn exec_sql(env: &TestEnv, sql: &str) {
-    store(env)
-        .write("fixture", |tx| {
-            tx.execute_batch(sql)?;
-            Ok(())
-        })
-        .unwrap();
-}
-
-/// Context `ctx`; Plans `pay` (Lead `lead1`, idle, with a side fork `fork1`) and
-/// `other` (Lead `lead2`, stopped); Worker `worker1` of `pay`.
-pub(crate) fn setup(env: &TestEnv) {
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n").unwrap();
-    let fp = "a".repeat(64);
-    let mut store = store(env);
-    store
-        .write("fixture", |tx| {
-            let txn = tx.id();
-            tx.execute_batch(&format!(
-                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                 INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
-                   ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '/', 'O3', 'idle', 't1', 't1', NULL),
-                   ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '/', 'O3', 'stopped', 't2', 't2', NULL),
-                   ('fork1', 'lead', 'ctx', 'pay', NULL, 'Side fork', '/', 'O3', 'stopped', 't4', 't4', 'lead1'),
-                   ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '/', 'S2', 'working', 't3', 't3', NULL);
-                 INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
-                   ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
-                   ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
-                   ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {txn}, 't'),
-                   ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't');
-                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, created_txn, created_at)
-                   VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {txn}, 't');
-                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
-                   VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');"
-            ))?;
-            Ok(())
-        })
-        .unwrap();
-}
-
-pub(crate) fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
-    let mut cmd = env.command(CPD);
-    for (k, v) in vars {
-        cmd.env(k, v);
-    }
-    let out = cmd.args(args).output().unwrap();
-    Run {
-        exit: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
-}
-
-pub(crate) fn messages(fx: &Fx) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", "session-message"]).ok()["events"].as_array().unwrap().clone()
+fn messages(fx: &Fx) -> Vec<Value> {
+    events(fx, "session-message")
 }
 
 /// `events follow` owns its stdout (`Fx` cannot capture it): the built binary, through the env of `fx`.
@@ -85,7 +24,7 @@ fn follow(fx: &Fx, session: &str) -> Vec<Value> {
 #[test]
 fn a_send_appends_one_session_message_from_cpd_session() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let out = fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "hi there", "--unblocks", "u"], &[("CPD_SESSION", "lead2")]).ok();
     let events = messages(&fx);
     assert_eq!(events.len(), 1);
@@ -101,7 +40,7 @@ fn a_send_appends_one_session_message_from_cpd_session() {
 #[test]
 fn from_is_pi_session_id_when_cpd_session_is_unset_and_null_for_the_user() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let pi = fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "from pi", "--unblocks", "u"], &[("PI_SESSION_ID", "worker1")]).ok();
     assert_eq!(pi["from"], "worker1");
     let both = fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "both", "--unblocks", "u"], &[("CPD_SESSION", "lead2"), ("PI_SESSION_ID", "worker1")]).ok();
@@ -117,7 +56,7 @@ fn from_is_pi_session_id_when_cpd_session_is_unset_and_null_for_the_user() {
 #[test]
 fn the_event_text_quotes_the_first_60_characters() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let message = format!("{}{}", "é".repeat(60), "tail");
     fx.cpd(&["session", "send", "lead1", &message, "--unblocks", "u"]).ok();
     let event = &messages(&fx)[0];
@@ -129,7 +68,7 @@ fn the_event_text_quotes_the_first_60_characters() {
 #[test]
 fn a_message_can_come_from_a_file_as_written() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let path = fx.env.root().join("message.md");
     fs::write(&path, "line one\nline two\n").unwrap();
     let out = fx.cpd(&["session", "send", "lead1", "--file", path.to_str().unwrap(), "--unblocks", "u"]).ok();
@@ -140,7 +79,7 @@ fn a_message_can_come_from_a_file_as_written() {
 #[test]
 fn each_call_is_one_more_message() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let a = fx.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
     let b = fx.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
     assert_ne!(a["event"], b["event"]);
@@ -150,7 +89,7 @@ fn each_call_is_one_more_message() {
 #[test]
 fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     for lead in ["lead1", "lead2", "fork1"] {
         let out = fx.cpd(&["session", "send", lead, "hello", "--unblocks", "u"]).ok();
         assert_eq!(out["session"], lead);
@@ -163,10 +102,8 @@ fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
 #[test]
 fn a_manager_is_a_target_and_an_archived_one_is_refused() {
     let fx = Fx::new();
-    setup(&fx.env);
-    exec_sql(
-        &fx.env,
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
+    setup_with_fork(&fx.env);
+    fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
          VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'stopped', 't5', 't5', NULL)",
     );
     let out = fx.cpd_with(fx.env.root(), &["session", "send", "mgr1", "done", "--unblocks", "u"], &[("CPD_SESSION", "lead1")]).ok();
@@ -175,7 +112,7 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
     assert_eq!(events.len(), 1);
     assert_eq!((&events[0]["session"], &events[0]["context"], &events[0]["plan"]), (&json!("mgr1"), &json!("ctx"), &Value::Null));
     assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done", "unblocks": "u"}));
-    exec_sql(&fx.env, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'");
+    fx.env.sql("UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'");
     refused(&fx.cpd(&["session", "send", "mgr1", "again", "--unblocks", "u"]), "archived", 3);
     assert_eq!(messages(&fx).len(), 1);
 }
@@ -183,13 +120,13 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
 #[test]
 fn the_refusals_write_nothing() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let error = refused(&fx.cpd(&["session", "send", "nope", "hi", "--unblocks", "u"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nope");
     let error = refused(&fx.cpd(&["session", "send", "worker1", "hi", "--unblocks", "u"]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
     assert!(error["message"].as_str().unwrap().ends_with("is a worker, not a Lead or a Manager."), "{error}");
-    exec_sql(&fx.env, "UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
+    fx.env.sql("UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
     let error = refused(&fx.cpd(&["session", "send", "fork1", "hi", "--unblocks", "u"]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd session unarchive fork1");
     assert!(messages(&fx).is_empty());
@@ -202,7 +139,7 @@ fn the_refusals_write_nothing() {
 #[test]
 fn exactly_one_of_text_and_file_and_the_text_limits() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let path = fx.env.root().join("m.md");
     fs::write(&path, "x").unwrap();
     let file = path.to_str().unwrap();
@@ -221,7 +158,7 @@ fn exactly_one_of_text_and_file_and_the_text_limits() {
 #[test]
 fn the_targets_follower_sees_the_message_and_the_senders_does_not() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "ping", "--unblocks", "u"], &[("CPD_SESSION", "lead2")]).ok();
     let seen = follow(&fx, "lead1");
     assert_eq!(seen.len(), 1, "{seen:?}");
@@ -239,7 +176,7 @@ const AGENT: &[(&str, &str)] = &[("CPD_SESSION", "lead2")];
 #[test]
 fn a_send_without_unblocks_is_a_usage_error() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd(&["session", "send", "lead1", "ok", "--unblocks", "u"]).ok();
     refused(&fx.cpd(&["session", "send", "lead1", "hi"]), "usage", 2);
     refused(&fx.cpd(&["session", "send", "lead1", "hi", "--unblocks", ""]), "usage", 2);
@@ -250,7 +187,7 @@ fn a_send_without_unblocks_is_a_usage_error() {
 #[test]
 fn every_send_wakes_and_carries_its_unblocks() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let out = fx.cpd(&["session", "send", "lead1", "x", "--unblocks", "PR #210 opened"]).ok();
     assert_eq!(out["unblocks"], "PR #210 opened");
     assert!(out.get("wake").is_none(), "{out}");
@@ -262,7 +199,7 @@ fn every_send_wakes_and_carries_its_unblocks() {
 #[test]
 fn the_wake_flag_is_gone() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd(&["session", "send", "lead1", "x", "--unblocks", "u"]).ok();
     refused(&fx.cpd(&["session", "send", "lead1", "y", "--unblocks", "u", "--wake"]), "usage", 2);
     assert_eq!(messages(&fx).len(), 1);
@@ -271,8 +208,8 @@ fn the_wake_flag_is_gone() {
 #[test]
 fn a_send_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
     let fx = Fx::new();
-    setup(&fx.env);
-    exec_sql(&fx.env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+    setup_with_fork(&fx.env);
+    fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';
          UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
          UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
@@ -285,7 +222,7 @@ fn a_send_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
 #[test]
 fn the_same_text_to_a_second_session_is_refused_broadcast() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "news", "--unblocks", "u"], AGENT).ok();
     let error = refused(&fx.cpd_with(fx.env.root(), &["session", "send", "fork1", " news ", "--unblocks", "u"], AGENT), "broadcast", 3);
     assert_eq!(error["details"]["session"], "lead1");
@@ -295,7 +232,7 @@ fn the_same_text_to_a_second_session_is_refused_broadcast() {
 #[test]
 fn the_same_text_to_the_same_session_within_an_hour_is_refused_duplicate() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "news", "--unblocks", "u"], AGENT).ok();
     let error = refused(&fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "news", "--unblocks", "u"], AGENT), "duplicate", 3);
     assert!(error["details"]["at"].is_string(), "{error}");
@@ -305,8 +242,8 @@ fn the_same_text_to_the_same_session_within_an_hour_is_refused_duplicate() {
 #[test]
 fn the_user_without_a_session_is_not_guarded() {
     let fx = Fx::new();
-    setup(&fx.env);
-    exec_sql(&fx.env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+    setup_with_fork(&fx.env);
+    fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';
          UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
          UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");

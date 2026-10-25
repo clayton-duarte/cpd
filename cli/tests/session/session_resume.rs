@@ -5,7 +5,7 @@ use crate::common;
 
 use std::fs;
 
-use crate::session_send::{exec_sql, setup};
+use crate::common::session::{events, setup_with_fork};
 use common::fx::Fx;
 use common::refused;
 use serde_json::{Value, json};
@@ -13,11 +13,11 @@ use serde_json::{Value, json};
 const GUARD: &str = "cpd: loop guard";
 
 fn blocked(fx: &Fx, id: &str, label: &str) {
-    exec_sql(&fx.env, &format!("UPDATE sessions SET state = 'blocked', state_label = '{label}' WHERE id = '{id}'"));
+    fx.env.sql(&format!("UPDATE sessions SET state = 'blocked', state_label = '{label}' WHERE id = '{id}'"));
 }
 
 fn resumed(fx: &Fx) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", "session-resumed"]).ok()["events"].as_array().unwrap().clone()
+    events(fx, "session-resumed")
 }
 
 fn count(fx: &Fx, sql: &str) -> i64 {
@@ -27,7 +27,7 @@ fn count(fx: &Fx, sql: &str) -> i64 {
 #[test]
 fn resume_a_loop_guarded_lead_writes_one_session_resumed_event() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     blocked(&fx, "lead1", GUARD);
     let out = fx.cpd(&["session", "resume", "lead1"]).ok();
     let events = resumed(&fx);
@@ -50,10 +50,8 @@ fn resume_a_loop_guarded_lead_writes_one_session_resumed_event() {
 #[test]
 fn resume_a_loop_guarded_manager_writes_one_session_resumed_event() {
     let fx = Fx::new();
-    setup(&fx.env);
-    exec_sql(
-        &fx.env,
-        "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_label, state_at, created_at, forked_from)
+    setup_with_fork(&fx.env);
+    fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_label, state_at, created_at, forked_from)
          VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'blocked', 'cpd: loop guard', 't5', 't5', NULL)",
     );
     let out = fx.cpd(&["session", "resume", "mgr1"]).ok();
@@ -72,7 +70,7 @@ fn resume_a_loop_guarded_manager_writes_one_session_resumed_event() {
 #[test]
 fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     let events = |fx: &Fx| count(fx, "SELECT count(*) FROM events");
     let before = events(&fx);
 
@@ -81,7 +79,7 @@ fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
         let error = refused(&fx.cpd(&["session", "resume", id]), "not_loop_guarded", 3);
         assert_eq!(error["details"], json!({"state": state, "label": null}), "{error}");
     }
-    exec_sql(&fx.env, "UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
+    fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
     let error = refused(&fx.cpd(&["session", "resume", "lead1"]), "not_loop_guarded", 3);
     assert_eq!(error["details"], json!({"state": "working", "label": null}), "{error}");
 
@@ -94,7 +92,7 @@ fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
     assert_eq!(error["details"], json!({"state": "blocked", "label": "Which repo?"}), "{error}");
 
     // The label with another state.
-    exec_sql(&fx.env, &format!("UPDATE sessions SET state = 'waiting', state_label = '{GUARD}' WHERE id = 'lead1'"));
+    fx.env.sql(&format!("UPDATE sessions SET state = 'waiting', state_label = '{GUARD}' WHERE id = 'lead1'"));
     let error = refused(&fx.cpd(&["session", "resume", "lead1"]), "not_loop_guarded", 3);
     assert_eq!(error["details"], json!({"state": "waiting", "label": GUARD}), "{error}");
 
@@ -107,14 +105,14 @@ fn resume_refuses_a_session_that_is_not_loop_guarded_and_writes_nothing() {
 #[test]
 fn resume_refuses_a_worker_an_archived_session_and_an_unknown_id() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     blocked(&fx, "worker1", GUARD);
     blocked(&fx, "fork1", GUARD);
     let error = refused(&fx.cpd(&["session", "resume", "nope"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nope", "{error}");
     let error = refused(&fx.cpd(&["session", "resume", "worker1"]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker", "{error}");
-    exec_sql(&fx.env, "UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
+    fx.env.sql("UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
     let error = refused(&fx.cpd(&["session", "resume", "fork1"]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd session unarchive fork1");
     assert!(resumed(&fx).is_empty());
@@ -128,7 +126,7 @@ fn resume_refuses_a_worker_an_archived_session_and_an_unknown_id() {
 #[test]
 fn session_show_reports_loop_guard_turns() {
     let fx = Fx::new();
-    setup(&fx.env);
+    setup_with_fork(&fx.env);
     for id in ["lead1", "worker1"] {
         assert_eq!(fx.cpd(&["session", "show", id]).ok()["session"]["loop_guard_turns"], 20, "{id}");
     }

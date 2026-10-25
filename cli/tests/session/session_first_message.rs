@@ -1,7 +1,7 @@
 //! `cpd session first-message` (commands.md §10.15, hs-d542 A3), run as the built binary.
 
 use crate::common;
-use crate::session::setup;
+use crate::common::session::setup;
 
 use std::fs;
 

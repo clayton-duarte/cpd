@@ -3,7 +3,7 @@
 
 use crate::common::TestEnv;
 use crate::common::fx::Fx;
-use crate::session::{home, setup};
+use crate::common::session::{home, setup};
 use cpd_core::store::Store;
 
 use serde_json::Value;
