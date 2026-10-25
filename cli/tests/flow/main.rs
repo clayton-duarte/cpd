@@ -8,6 +8,7 @@ mod ask;
 mod attempt;
 mod config;
 mod context_curation;
+mod gate;
 mod context_digest;
 mod context_distill;
 mod context_manager;
