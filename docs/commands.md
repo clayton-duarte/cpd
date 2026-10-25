@@ -4379,51 +4379,11 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
 
 Idempotent: yes; it only reads. It is also the check to run after editing a policy file.
 
-## 23. `slot`
-
-Runs a command inside one of the machine's test slots (contract §7.6 "The test slot", hs-d336, hs-d301): the way any repo's scripts make a full test run take one of `test_concurrency` slots, so that Gates and test runs together never load the machine beyond it. Area `core/` (the slot routine shared with the Gate) and `cli/`.
-
-### 23.1 `slot`
-
-```
-cpd slot -- <cmd> [args…]
-```
-
-| Argument | Meaning |
-|---|---|
-| `<cmd> [args…]` | the command and its arguments, after `--`, run as given (looked up on `PATH`, no shell). Required |
-
-| Precondition | Code | Exit |
-|---|---|---|
-| a command is given after `--` | `usage` | 2 |
-| `test_concurrency` in `$CPD_HOME/config.toml` is valid (1–64; contract §8.2) | `config_invalid` | 1 |
-| `$CPD_HOME/run/` can be created and a slot file opened (a failure is a fault of the machine, not a refusal of the command) | `internal` | 1 |
-
-Nothing else is checked: `slot` opens no store, needs no Plan, Session or selection (`CPD_*` selectors are ignored), and works in any directory.
-
-Effects:
-- **Inside a slot already.** When `CPD_TEST_SLOT` is set and non-empty in the environment (the command runs inside a Gate, whose hooks have it, or inside another `cpd slot`), no slot is taken, nothing is written and the command runs at once; so nesting cannot deadlock.
-- **Otherwise** it reads `test_concurrency` once, then takes a slot exactly as the Gate does (contract §7.6 "The test slot"): a non-blocking `flock` on `run/test-<i>.lock` for `i` in `0..test_concurrency` in order, and when all are busy it polls every 1000 ms with no cap and no refusal. **The wait lines** go to stderr only (no log file; stdout is never touched, the command's stdout stays the caller's): `slot: waiting for a slot (<n> of <n> busy; test_concurrency <n>)` when the first try finds every slot busy; `slot: still waiting for a slot (<s> s)` every 60 s; `slot: slot <i> taken after <s> s` when taken after a wait. A slot taken at once writes nothing.
-- It then starts the command with the environment of `slot` plus `CPD_TEST_SLOT=<i>`, **the variable**, whose value is the held slot number. The command inherits stdin, stdout and stderr and runs in `slot`'s working directory. The slot's file descriptor is not inherited (`O_CLOEXEC`), so a background process the command leaves behind does not hold the slot.
-- **The slot is held until the command ends**, then released; a `slot` that dies frees it by itself (§1.4). `SIGINT`, `SIGTERM` and `SIGHUP` received by `slot` are forwarded to the command, and `slot` goes on waiting for it, holding the slot, so a signal never frees a slot under a command that is still running.
-
-**Exit status** (one more exception to §1.2's one JSON value: `slot` prints no JSON of its own on success, the command's output is the output): the command's exit status; `128 + n` when the command was ended by signal `n`; `127` when the command is not found and `126` when it cannot be executed, each with one line on stderr naming the command (the shell's convention). The refusals above print the usual error envelope on stderr and exit as listed; they happen only before the command starts, so a command's own exit 1, 2 or 3 cannot be told from them by status alone (accepted: the refusals are config or disk faults, not a normal path).
-
-**Use in this repo** (contract §7.6): `scripts/cargo.sh` runs a **full** `cargo test` or `cargo nextest run` through `cpd slot --`, and `package.json`'s `test` script does too when it has no file or name argument (hs-d464). **Full** is decided by the scripts, not by `cpd slot`, which takes a slot unconditionally; the shapes are contract §7.6 "The test slot", "What is full": no test filter (`-E`/`--filterset`, a positional test name, a name after `--`) means full, whatever `-p`, `--workspace`, `--test`, `--lib` or `--bin` it has (a `-p <crate>` run without a filter is still full); a filtered run, `--no-run`, `nextest list`, `cargo build`, `check` and every other subcommand take no slot, and so does `npm test -- <file>`. When `cpd` is not on `PATH` or has no `slot` the scripts run the command directly. So `npm run typecheck`, `scripts/cargo.sh build` (the quick check), `scripts/cargo.sh nextest run -E 'test(x)'`, `scripts/cargo.sh test -p cpd-core spec::`, `scripts/cargo.sh test --no-run` and `scripts/cargo.sh nextest list` wait for nothing, and a full test run does.
-
-Idempotent: yes; it holds nothing after it exits. Example:
-
-```
-$ cpd slot -- scripts/cargo.sh nextest run
-slot: waiting for a slot (2 of 2 busy; test_concurrency 2)
-slot: slot 1 taken after 94 s
-```
-
-## 24. `secret`
+## 23. `secret`
 
 Wraps 1Password's CLI `op` to manage secrets in Secure Notes. cpd enforces who may do what, in which vault, and when. Agents never call `op` (the pi adapter refuses it). Agents run `get` and `list` only; the Lead runs all commands. Workers on a permitted Attempt run `get` under an allowance. A Lead or Manager needs an approval for most vaults. cpd holds no token and never signs in; the 1Password app's per-use prompt (where it runs) is the approval. Values never appear in argv, output, Events, logs, files or the store. Area `core/src/secret/`.
 
-### 24.0 What `cpd secret` is
+### 23.0 What `cpd secret` is
 
 **Caller checks** (contract §8.4 "Who the caller is"):
 
@@ -4491,7 +4451,7 @@ Wraps 1Password's CLI `op` to manage secrets in Secure Notes. cpd enforces who m
 | `secret_op_missing` | 1 | `op` not found on `PATH` |
 | `secret_op_failed` | 1 | op exited non-zero (not the specific errors above) |
 
-### 24.1 `get`
+### 23.1 `get`
 
 ```
 cpd secret get <item> --vault <v> --field <f>
@@ -4523,7 +4483,7 @@ Output:
 
 Idempotent: yes; every run gets the current value.
 
-### 24.2 `list`
+### 23.2 `list`
 
 ```
 cpd secret list --vault <v>
@@ -4556,7 +4516,7 @@ Output:
 
 Idempotent: yes.
 
-### 24.3 `create`
+### 23.3 `create`
 
 ```
 cpd secret create <item> --vault <v> --field <f>
@@ -4591,7 +4551,7 @@ Output:
 
 Idempotent: no; `create` on an existing item is `secret_exists` (exit 3).
 
-### 24.4 `edit`
+### 23.4 `edit`
 
 ```
 cpd secret edit <item> --vault <v> --field <f>
@@ -4626,7 +4586,7 @@ Output:
 
 Idempotent: no (running it again sets the value again, which is OK semantically, but is not reported as `already`).
 
-### 24.5 `delete`
+### 23.5 `delete`
 
 ```
 cpd secret delete <item> --vault <v>
@@ -4659,7 +4619,7 @@ Output:
 
 Idempotent: no; a second run on an archived item is `secret_not_found` (exit 4).
 
-### 24.6 `allow`
+### 23.6 `allow`
 
 ```
 cpd secret allow <item> --attempt <id> --vault <v> --field <f>
@@ -4693,7 +4653,7 @@ Output:
 
 Idempotent: yes; an entry already listed returns `"already": true`.
 
-### 24.7 `approve` (internal)
+### 23.7 `approve` (internal)
 
 ```
 cpd secret approve --action <get|list|create|edit|delete> --vault <v> [--item <i>] [--field <f>]
@@ -4728,11 +4688,11 @@ Output:
 Idempotent: no; every call writes a new file.
 
 
-## 25. `incident`
+## 23. `incident`
 
 Incident mode (hs-d643, user decision hs-d643; supersedes hs-d634): Plan-scoped hold on scheduling. One Manager-only command to start and end, one any caller may read. A Manager starts with one or more Plans (no machine-wide mode).
 
-### 25.1 `incident start`
+### 23.1 `incident start`
 
 ```
 cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <plan>/<key>]
@@ -4780,7 +4740,7 @@ Fresh start with auto-end:
 
 **Idempotent:** yes; when the set and `until_pr` are already as named, returns `changed: false` with the existing incident.
 
-### 25.2 `incident end`
+### 23.2 `incident end`
 
 ```
 cpd incident end
@@ -4800,7 +4760,7 @@ Output:
 
 Idempotent: yes; incident mode already off returns `"changed": false` with `incident: null`.
 
-### 25.3 `incident status`
+### 23.3 `incident status`
 
 ```
 cpd incident status
@@ -4830,11 +4790,11 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-## 26. `gate`
+## 23. `gate`
 
 The Gate's leak check (hs-d519, docs/research/hygiene.md "The Gate leak check", Plan tests-mock pro-d35). Area `core/src/gate/` and `cli/`.
 
-### 26.1 `gate finish`
+### 23.1 `gate finish`
 
 ```
 cpd gate finish --run <id> --status <n>
@@ -4847,7 +4807,7 @@ cpd gate finish --run <id> --status <n>
 
 Run by `scripts/gate-run.sh` after its command, with `TMPDIR` the run's directory. It lists what the run left: the processes that have `GATE_RUN=<id>` in their environment (`Spawn::with_env`), the tmux sockets named with the id (`/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`), the paths under `$TMPDIR`, and the lines of `$TMPDIR/tripwire.log`. A clean run prints nothing, removes the empty directory and exits with `--status`. Otherwise it prints `gate-run: FAIL: …` on stderr, `SIGKILL`s only the listed pids, removes only the listed sockets and the run's directory, and exits with `--status` when that is not 0, else 64. Another run's id never matches. Like `slot`, it prints no JSON of its own; a usage error is the envelope on stderr. Idempotent: yes.
 
-## 27. `prune`
+## 23. `prune`
 
 ```
 cpd prune [--apply] [--drop <lead-branch>]... <repo>...
@@ -4886,11 +4846,11 @@ Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `rem
 Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
 
 Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
-## 28. `tag` and `version`
+## 23. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
 
-### 28.1 `cpd tag`
+### 23.1 `cpd tag`
 
 `cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
 
@@ -4915,7 +4875,7 @@ Output (stderr, one line each; the stream the script used):
 
 Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
 
-### 28.2 `cpd version sync [--print]`
+### 23.2 `cpd version sync [--print]`
 
 cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
 
@@ -4926,11 +4886,11 @@ cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTO
 
 The test that fails when `Cargo.toml` differs from the derived version (docs/implementing.md "The version string") stays; `cpd version sync` is what fixes it.
 
-## 28. `test`
+## 23. `test`
 
 The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thin (`exec cpd test …`). The selection and the name classification are pure over `git diff` and `cargo metadata` output, read through the `Runner`; the commands start `cargo` through `scripts/cargo.sh` (the bootstrap that builds cpd). Callers: Manager, Lead, Worker; not cockpit, not internal. The command tree is pinned by `cli/tests/tooling/interface.rs`, and [docs/interface.md](interface.md) is regenerated.
 
-### 28.1 `test changed`
+### 23.1 `test changed`
 
 ```
 cpd test changed [--dry-run] [<base>]
@@ -4938,7 +4898,7 @@ cpd test changed [--dry-run] [<base>]
 
 Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
 
-### 28.2 `test run`
+### 23.2 `test run`
 
 ```
 cpd test run <name>...
@@ -4946,7 +4906,7 @@ cpd test run <name>...
 
 Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
-### 28.3 `test list` and `test build`
+### 23.3 `test list` and `test build`
 
 ```
 cpd test list <name>
@@ -4955,6 +4915,6 @@ cpd test build
 
 `list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
-### 28.4 The `scripts/tests.sh` contract
+### 23.4 The `scripts/tests.sh` contract
 
 `.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. The script is only the bootstrap: it builds cpd with `scripts/cargo.sh build -p cpd` (a no-op when cpd is current, so a stale cpd never answers), takes the newest `target/*/cpd` and runs `exec cpd test <command> "$@"`; `scripts/test-changed` does the same for `cpd test changed`. A process's output reaches the caller when that process ends, not line by line: the runner returns it whole.
