@@ -118,18 +118,6 @@ test("the teardown stops the processes of the env's tmux panes when list-panes f
   }
 });
 
-test("the teardown stops the panes of an env whose tmux server is already gone (its socket is not there, its directory is)", async () => {
-  const e = await env(true);
-  try {
-    const pane = e.pane(e.home);
-    rmSync(join(e.dir, "tmux", `tmux-${process.getuid!()}`, "cpdt-1"), { force: true });
-    e.teardown();
-    assert.equal(e.alive(pane), false, "a pane of the env's tmux outlived the teardown");
-  } finally {
-    e.stop();
-  }
-});
-
 test("the teardown leaves the processes of an env that never had a tmux server to the group and the recorded pids", async () => {
   const e = await env(false);
   try {

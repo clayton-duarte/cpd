@@ -212,13 +212,13 @@ stop_tmux() {
   done
 }
 
-# tmux_used: this env ever had a tmux server: its socket is there, or the directory tmux makes for
-# the sockets in the env's own tmux dir (a server that has died leaves that, not its socket).
+# tmux_used: this env ever had a tmux server: its socket file is there (a server that was killed
+# leaves its socket file behind, so a test that killed its own server still shows).
 tmux_used() {
   for _s in "$tmuxdir"/tmux-*/"$socket" "$tmuxdir"/tmux-*/"$socket"-*; do
     [ -S "$_s" ] && return 0
   done
-  [ "$tmuxdir" = "$dir/tmux" ] && [ -d "$tmuxdir/tmux-$(id -u)" ]
+  return 1
 }
 
 # tagged: the pids of the processes that run with this env's CPD_HOME, but this one: the tmux server
