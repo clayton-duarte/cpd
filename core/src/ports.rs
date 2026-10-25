@@ -1,5 +1,6 @@
 //! `Ports`: the three seams a test fakes (docs/implementing.md, "Ports, Spawn and run_with").
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::clock::{Clock, SystemClock};
@@ -25,6 +26,34 @@ impl Ports {
     pub fn real() -> Ports {
         Ports { clock: Arc::new(SystemClock), runner: Arc::new(SystemRunner), spawn: Arc::new(ProcessSpawn) }
     }
+
+    /// Runs `f` with `ports` as the ambient [`Ports::current`] of this thread, then puts the previous value back, also
+    /// when `f` panics (a drop guard), so scopes nest. A thread `f` spawns does not see the scope: it captures
+    /// `Ports::current()` before the spawn and scopes it inside.
+    pub fn scope<R>(ports: &Ports, f: impl FnOnce() -> R) -> R {
+        /// Puts the previous value back on drop, so a panic of `f` restores it too.
+        struct Restore(Option<Ports>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let previous = self.0.take();
+                SCOPED.with(|cell| *cell.borrow_mut() = previous);
+            }
+        }
+        let previous = SCOPED.with(|cell| cell.borrow_mut().replace(ports.clone()));
+        let _restore = Restore(previous);
+        f()
+    }
+
+    /// The ports scoped on this thread by [`Ports::scope`], else [`Ports::real`]. A wrapper that has no `Ports` of its
+    /// own reads this, never `SystemRunner`, `ProcessSpawn` or `Ports::real()`.
+    pub fn current() -> Ports {
+        SCOPED.with(|cell| cell.borrow().clone()).unwrap_or_else(Ports::real)
+    }
+}
+
+thread_local! {
+    /// The ports of the innermost [`Ports::scope`] on this thread.
+    static SCOPED: RefCell<Option<Ports>> = const { RefCell::new(None) };
 }
 
 /// The fakes over one `Ports`, typed so a test scripts them and reads their record.

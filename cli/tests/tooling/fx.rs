@@ -129,6 +129,16 @@ fn a_command_that_owns_its_stdout_is_refused_loudly_and_the_process_is_restored(
     assert_eq!(std::env::current_dir().unwrap(), cwd);
 }
 
+#[test]
+fn export_sets_the_variable_for_the_fx_and_dropping_it_puts_the_environment_back() {
+    let before = vars();
+    let fx = fx();
+    fx.export("FX_SET_VAR_TEST", "kept");
+    assert_eq!(std::env::var("FX_SET_VAR_TEST").as_deref(), Ok("kept"));
+    drop(fx);
+    assert_eq!(changed(&vars(), &before), Vec::<std::ffi::OsString>::new());
+}
+
 /// What stdin and stdout are: the device and inode each points at.
 fn std_files() -> [(u64, u64); 2] {
     let id = |fd: std::os::fd::BorrowedFd| {

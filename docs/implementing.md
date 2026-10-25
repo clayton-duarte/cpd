@@ -273,6 +273,8 @@ pub struct Launch { program, args, env_set, env_remove, cwd, setsid: bool, stdou
 
 **A launched `cpd` child is recorded and run by the test** (decided, pro-d35). When the product launches `cpd` (a driver, a poll, `session run`), `FakeSpawn` only records the `Launch`; it never starts it and never routes it to `run_with`, so no second thread puts virtual time under another clock reader. The test reads `launches()` and, when it wants the child's effect, calls `run_with(&ports, argv, out)` itself on its own thread with the argv of the `Launch`, then `exit(pid, code)`. There is no `cpd-fake` binary and no fake binary or script of any kind.
 
+**Ambient ports: `Ports::scope` and `Ports::current`** (decided by the Lead; reversible: a later explicit threading replaces a `Ports::current()` call by call). `Ports::scope(&ports, f) -> R` sets a thread-local `Option<Ports>` for the duration of `f` and restores the previous value on exit, panic included, so scopes nest. `Ports::current() -> Ports` is the scoped ports of this thread, else `Ports::real()`. `cli::run_with` runs the whole parse-and-dispatch inside `Ports::scope`, so a command reaches the ports a test gave it also through the areas that hand none on. The readers are the old-name wrappers (`old_name()` calls `old_name_with(&*Ports::current().runner, ..)`), `Env::open`, `Env::open_home`, `Env::open_home_persistent` and the default `Tmux` handles. **A new wrapper reads `Ports::current()`, never `SystemRunner`, `ProcessSpawn` or `Ports::real()`**: the guard test `ambient_ports_tests::no_product_file_builds_the_real_ports_by_hand` fails on a non-test line that names them outside its allowlist (the definitions and the entries that start the process on the real ports). A thread a command spawns does not see the scope: capture `Ports::current()` before the spawn and `Ports::scope` it inside the thread.
+
 **`_with` convention.** Every existing public signature stays. A function that needs a port gains `<name>_with(&Ports, ..)` (or `(&dyn Clock, ..)`, `(&dyn Runner, ..)` where it needs one) beside it, and the old name calls it with `Ports::real()`. `Env` is the exception: it gains the field `ports` because its sites cannot all change. The `_with` form holds the logic; the old name is one line.
 
 **`Clock::utc()`.** `Clock` also reports the UTC wall time. `SystemClock::utc()` is the system time; `ManualClock::utc()` is a fixed epoch plus the time elapsed on the clock (`advance` and `sleep` move it), so a stamp the product writes (an Event's `at`, a `started_at`) is deterministic and moves with virtual time.
@@ -328,6 +330,27 @@ The real-tmux harness (`env.tmux`, `env.tmux_socket()`, `TestEnv::kill_tmux_serv
 
 **Fidelity.** No test in the Gate runs real git (policy [tests]). The route is pinned by twin scenarios, `fakes::git::twin`, whose expected stdout, stderr and exit code are LITERAL text recorded once from real git 2.43 by hand in a scratch dir (the git version is in a comment beside each literal, in the test files of PR port-git-fixtures-tests under `core/src/fakes/git/`). The Gate never regenerates them. A behaviour of the route that no scenario pins must not exist (delete it or add the scenario); when real git and the route disagree, the route changes.
 
+### The git and tmux fixtures of `Fx`
+
+PR testkit-hosts puts the fixtures of the two hosts on `Fx`, with the names `TestEnv` had, so a migration is a rename. They go through the routes above (`GitRoute`, `TmuxRoute` on the `Fx`'s `FakeRunner`): no process, no `PATH` entry, no real git or tmux. Where merged code differs from this text, the code wins.
+
+**Git.**
+- `fx.git_repo(name)` makes `<root>/repos/<name>` in the `Universe`: branch `main`, one commit (`README.md`), and a real working tree and `.git/` directory on disk (see `The git route`).
+- `fx.keyed_repo(name)` is `git_repo` plus `origin` = `https://github.com/acme/<name>.git` and `refs/remotes/origin/main`. Nothing is reachable at that URL: `fetch`, `push` and `ls-remote` exit 128 (`Could not resolve host`) until `local_origin`.
+- `fx.local_origin(repo, bare)` sets `url.<bare>.insteadOf = <the repo's GitHub URL>`, so the GitHub URL resolves to the bare repo of the `Universe`.
+- `fx.git(dir, args)` runs `git` with `dir` as the cwd through the route, asserts exit 0 and returns trimmed stdout (same signature as `TestEnv::git`).
+- `fx.commit_file(dir, path, text, message)` writes `path` under `dir` and commits it (`write` then `commit` of `Repo`).
+
+**Tmux.**
+- `fx.tmux(args)` runs `tmux -L <the env's private socket> <args>` through the `FakeRunner`'s tmux route and returns its output.
+- `fx.tmux_state()` returns the `FakeTmux::state` view of the env's socket (`None` while no server exists): `panes()`, `pane_env(id)`, `options()`, `keys(id)`, `popups()`, `hooks()`, `sessions()`, `windows()`.
+- `fx.cockpit(..)` starts the cockpit session in the fake server, and `fx.panes()` lists its panes from the same state. Both only record: no pane program runs.
+- `fx.fake_cpd_views()` registers a `cpd` reply for `tui view chat` and `tui view history` that exits at once; every other `cpd` call goes through `run_with`. The pane argv, cwd and environment are read from `tmux_state`, never from a running process.
+
+**Route state.** `fx.runner` is the shared `FakeRunner`; `fx.calls("git")` and `fx.calls("tmux")` return the argv the product sent. `FakeTmux` (`set_screen`, `on_popup`, `add_client`, `pane_exit`, `click`) and the git `Universe` (`Repo`: `write`, `commit`, `branch`, `push`, `bare_origin`, `keyed`) are reachable from `Fx` for what a fixture does not cover.
+
+**Refusals at drop.** A `git` subcommand or flag the route does not model answers `fake-git: unsupported: <subcommand> [<flag>]` (exit 1) and is recorded; `Fx` fails the test at drop when that list is not empty. A call that no `fx.fake(..)` rule and no route answers (a `tmux` or `git` call out of script included) is unscripted and fails the test at drop, unless the test says `fx.allow_unscripted()`.
+
 ### The in-process test kit
 
 PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command that starts a process, waits on time or draws a view, with no exec, no sleep and no real external. Names are those of `TestEnv`, so a migration is a rename; where merged code differs from this text, the code wins.
@@ -337,7 +360,7 @@ PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command th
 - **Virtual time.** `fx.advance(d)` advances the `ManualClock` by `d`. `fx.until(cond)` advances it in steps until `cond` holds, bounded by a virtual limit, and fails with the last state when the limit passes. They replace `wait_until`, `poll`, `wait_some` and `wait_screen`; no test sleeps or reads the wall clock (see `Time in tests`).
 - **Launched children.** A `cpd` child a command launches (a driver, a poll) is recorded by `FakeSpawn`, never started. The test takes it with `fx.take_launch(i)` and runs it itself with `fx.run_launch(..)`, which calls `run_with`.
 - **Screens.** `Screen` and `Keys` are helpers on `ratatui::backend::TestBackend` for the tui views: `Keys` feeds key and mouse events to the view's own handler, `Screen` reads the rendered buffer as text. They replace `capture-pane` and `send-keys`.
-- **Not in this PR.** The git and tmux fixtures (`Repo`, `Universe`, `FakeTmux` on `Fx`) are PR testkit-hosts; until then `Fx` has `fx.env` for them. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script: each file is one line of `scripts/tripwire/shell-tests.txt` (`<file> # <reason>`), the named exception list.
+- **Not in this PR.** The git and tmux fixtures are in `The git and tmux fixtures of Fx`. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script: each file is one line of `scripts/tripwire/shell-tests.txt` (`<file> # <reason>`), the named exception list.
 
 ## The Gate leak check
 

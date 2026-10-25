@@ -123,6 +123,16 @@ fn incident_row(store: &mut Store) -> Option<(String, String, String, i64)> {
         .unwrap()
 }
 
+/// The one `incident` row's `lead` column, if any (raw SQL: the column the migration adds).
+fn incident_lead(store: &mut Store) -> Option<String> {
+    store
+        .read(|c| {
+            Ok(c.query_row("SELECT lead FROM incident WHERE id = 1", [], |r| r.get::<_, Option<String>>(0)).optional()?)
+        })
+        .unwrap()
+        .flatten()
+}
+
 /// The one `incident` row's `(until_plan, until_pr)`, if any.
 fn incident_until(store: &mut Store) -> Option<(Option<String>, Option<String>)> {
     store
@@ -734,5 +744,80 @@ fn incident_start_on_a_live_incident_refuses_a_non_manager() {
     assert_eq!(err.exit().code(), 3, "manager_only is exit 3");
     assert_eq!(plan_set(&mut f.store), ["pay"], "a refused update leaves the set");
     assert_eq!(events(&mut f.store).len(), before, "a refused update appends no Event");
+}
+
+/// D1 (hs-d678): a fresh start stores the `lead_session` of the first `--plan` argument's Plan in
+/// `incident.lead`; a live start whose set is unchanged (only the argument order differs) leaves it.
+#[test]
+fn incident_start_stores_the_first_plans_lead() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    // The first named Plan is `pay` (`lead_session` `lead1`).
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the first --plan's lead_session");
+
+    // The same set reordered is no set change: the stored lead stays.
+    incident::start(&mut f.store, Some(&mgr), &[ops, pay], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "a reordered set is unchanged");
+}
+
+/// D1 (hs-d678): a live start whose set changes recomputes `lead` from the new first `--plan`
+/// argument's Plan; a live start whose set is only reordered does not.
+#[test]
+fn incident_start_on_a_live_incident_recomputes_the_lead_when_the_set_changes() {
+    let mut f = fixture();
+    let mgr = SessionId::parse("mgr").unwrap();
+    let pay = PlanId::parse("pay").unwrap();
+    let ops = PlanId::parse("ops").unwrap();
+
+    // `pay` leaves, `ops` stays: the new first Plan is `ops` (`lead_session` `lead2`).
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the fresh start's lead");
+    incident::start(&mut f.store, Some(&mgr), &[ops.clone()], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead2"), "the changed set recomputes the lead");
+
+    // `pay` joins again: the set changed, and its first Plan is `pay` (`lead1`).
+    incident::start(&mut f.store, Some(&mgr), &[pay.clone(), ops.clone()], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "the changed set recomputes the lead again");
+
+    // The same set reordered is not a change: the stored lead stays.
+    incident::start(&mut f.store, Some(&mgr), &[ops, pay], "why", None).unwrap();
+    assert_eq!(incident_lead(&mut f.store).as_deref(), Some("lead1"), "a reordered set is unchanged");
+}
+
+/// A2 (hs-d678): a row written before the migration has a null `lead`; the click resolves the
+/// alphabetically first Plan's `lead_session` from `incident_plans`. With no incident row, none.
+#[test]
+fn the_incident_lead_falls_back_to_the_alphabetically_first_plan() {
+    let mut f = fixture();
+
+    f.store
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, 't', 'mgr', 'why', cpd_txn())",
+                [],
+            )?;
+            tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES ('pay', cpd_txn())", [])?;
+            tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES ('ops', cpd_txn())", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+    // `ops` sorts before `pay`, so its `lead_session` `lead2` is the fallback (`pay`'s is `lead1`).
+    let lead = f.store.read(|c| incident::lead(c)).unwrap();
+    assert_eq!(lead.map(|s| s.as_str().to_owned()).as_deref(), Some("lead2"), "the alphabetically first Plan's Lead");
+
+    // With no incident row there is no Lead to resolve.
+    f.store
+        .write("fixture", |tx| {
+            tx.execute("DELETE FROM incident_plans", [])?;
+            tx.execute("DELETE FROM incident WHERE id = 1", [])?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(f.store.read(|c| incident::lead(c)).unwrap(), None, "no incident row, no Lead");
 }
 

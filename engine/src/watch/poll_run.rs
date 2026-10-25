@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use cpd_core::clock::Clock;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::ports::Ports;
 
 use super::report::Failure;
 
@@ -33,8 +34,10 @@ impl PollRun {
     pub(super) fn start_on(clock: Arc<dyn Clock>, job: impl FnOnce() -> Result<Value, Failure> + Send + 'static) -> PollRun {
         let (tx, rx) = channel();
         let ended_by = Arc::clone(&clock);
+        // The job reads `Ports::current()`: this thread's scope is not the poll thread's.
+        let ports = Ports::current();
         let spawned = std::thread::Builder::new().name("cpd-pr-poll".to_owned()).spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(job)).unwrap_or_else(|payload| {
+            let result = catch_unwind(AssertUnwindSafe(|| Ports::scope(&ports, job))).unwrap_or_else(|payload| {
                 let text = payload.downcast_ref::<&str>().map(|s| (*s).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned());
                 Err(Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("The PR poll panicked: {}.", text.unwrap_or_else(|| "no message".to_owned())))))
             });

@@ -16,7 +16,6 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 
 use super::engine::{Engine, incident_holds};
 use super::pr::printed;
@@ -27,8 +26,9 @@ use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::Failed;
-use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::host::runner::Runner;
 use cpd_core::config::PiInstall;
+use cpd_core::ports::Ports;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -66,7 +66,7 @@ pub(super) fn run(engine: &mut Engine) {
             }
         };
         engine.team.running = None;
-        engine.team.last_end = Some(Instant::now());
+        engine.team.last_end = Some(engine.ports.clock.now());
         match answer.and_then(|value| store(engine, &value)) {
             Ok(posts) => {
                 engine.log.line(&format!("E11: cached {posts} post(s) of the team channel"));
@@ -77,14 +77,14 @@ pub(super) fn run(engine: &mut Engine) {
         return;
     }
     let period = Duration::from_secs(u64::from(engine.config.watch.team_review_seconds));
-    if engine.team.last_end.is_some_and(|end| end.elapsed() < period) {
+    if engine.team.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < period) {
         return;
     }
     match start(engine) {
         Ok(running) => engine.team.running = Some(running),
         Err(failure) => {
             // The next try is a period away, as after a run that failed.
-            engine.team.last_end = Some(Instant::now());
+            engine.team.last_end = Some(engine.ports.clock.now());
             engine.fail(Step::E11, About::Machine, failure);
         }
     }
@@ -93,7 +93,7 @@ pub(super) fn run(engine: &mut Engine) {
 /// Starts the helper on its own thread; returns where its answer will arrive.
 fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let pi = locate_pi().map_err(|e| Failure::from(&e))?;
-    start_with(Arc::new(SystemRunner), engine, &pi, &node())
+    start_with(Ports::current().runner, engine, &pi, &node())
 }
 
 /// [`start`] on `runner`, with pi located as `pi` and pi's Node `node`.
@@ -151,7 +151,7 @@ fn store(engine: &Engine, answer: &Value) -> Result<usize, Failure> {
     };
     let cache = json!({
         "version": 1,
-        "polled_at": timestamp(OffsetDateTime::now_utc()),
+        "polled_at": timestamp(engine.ports.clock.utc()),
         "channel": engine.config.inbox.team_channel,
         "read": read,
         "posts": posts,

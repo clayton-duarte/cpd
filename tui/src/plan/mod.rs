@@ -29,6 +29,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
+use ratatui::Terminal;
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Span};
@@ -48,7 +50,7 @@ use super::pace::{self, Reads};
 use crate::pump::{Pump, Schedule, Signal, SAFETY};
 use crate::read::watch::Watch;
 use super::runner::{ViewError, kept};
-use super::view_ports::{frame_now, wall_ms};
+use super::view_ports::{Ctx, Input as ViewInput, Tty, frame_now, run_view_with, wall_ms};
 use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -144,7 +146,7 @@ struct Snapshot {
 
 /// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
 fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
-    snapshot_timed(&Ports::real(), store, width, now_ms, false)
+    snapshot_timed(&Ports::current(), store, width, now_ms, false)
 }
 
 /// [`snapshot`]'s chart, with the spinner frame and the time read on the clock of `ports`.
@@ -411,31 +413,71 @@ pub fn draw_first_frame(store: &mut Store, f: &mut Frame, now_ms: i64) -> Result
     Ok(())
 }
 
+/// What the view reads before it draws: the home, its first snapshot, the poll, the reader and the actions.
+type Opened = (CpdHome, Snapshot, Duration, Arc<Mutex<pace::Owned<read::Follow>>>, Arc<Actions>);
+
+/// The first read, for a pane `width` columns wide (the terminal's, which `width` asks for): a failure is the command's
+/// error, with the screen untouched.
+fn open(ports: &Ports, run_command: RunCommand, width: impl FnOnce() -> Result<u16, CpdError>) -> Result<Opened, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let snap = snapshot_timed(ports, &mut store, width()?, now_ms(ports), false)?;
+    let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
+    // the reads after the first run on the reader thread, with a store of its own (R4)
+    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+    Ok((home, snap, poll, reader, actions))
+}
+
 pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdError> {
     run_view_on(
         ports,
         "plan",
         Capture::Mouse,
         || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let width = ratatui::crossterm::terminal::size()
-                .map_err(|e| {
+            open(ports, run_command, || {
+                ratatui::crossterm::terminal::size().map(|size| size.0).map_err(|e| {
                     CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
                         .with("command", "tui view plan")
-                })?
-                .0;
-            let snap = snapshot_timed(ports, &mut store, width, now_ms(ports), false)?;
-            let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
-            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
-            // the reads after the first run on the reader thread, with a store of its own (R4)
-            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-            Ok((home, snap, poll, reader, actions))
+                })
+            })
         },
-        |ctx, (home, mut snap, poll, reader, actions)| show(ctx.ports, &mut ctx.terminal, &home, &mut snap, poll, reader, &actions),
+        |ctx, opened| show(ctx, opened, Driven::No),
     )
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn. The loop is driven by `input`
+/// (nothing is read on a thread, nothing waits in real time) and watches no directory: it polls.
+pub fn run_on<B: Backend, W: io::Write>(
+    ports: &Ports,
+    run_command: RunCommand,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn ViewInput,
+) -> Result<Output, CpdError> {
+    let width = terminal.size().map(|size| size.width);
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "plan",
+        Capture::Mouse,
+        || open(ports, run_command, || width.map_err(|e| CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}.")))),
+        |ctx, opened| show(ctx, opened, Driven::Yes),
+    )
+}
+
+/// Whether the loop is driven by the [`Ctx`]'s input ([`run_on`]) or reads the terminal on a thread and watches the store's directory.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Driven {
+    Yes,
+    No,
 }
 
 /// Now, in Unix ms, on the clock of `ports`.
@@ -454,15 +496,12 @@ fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<Strin
 }
 
 /// Draws, follows Events and takes input until the terminal fails.
-fn show(
-    ports: &Ports,
-    terminal: &mut ratatui::DefaultTerminal,
-    home: &CpdHome,
-    snap: &mut Snapshot,
-    poll: Duration,
-    reader: Arc<Mutex<pace::Owned<read::Follow>>>,
-    actions: &Arc<Actions>,
+fn show<B: Backend>(
+    ctx: &mut Ctx<B>,
+    (home, mut snap, poll, reader, actions): Opened,
+    driven: Driven,
 ) -> Result<(), ViewError> {
+    let (ports, home, snap, actions) = (ctx.ports, &home, &mut snap, &actions);
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
     let log = ViewLog::of(home, "plan");
@@ -480,13 +519,15 @@ fn show(
     // a failed poll is made again at the next read, a failed snapshot likewise; both are shown (runner::kept), the
     // snapshot's error first, then the watcher's (lasting)
     let (mut snapshot_error, mut follow_error) = (None, None);
-    let pump = Pump::new(event::read);
-    let (watch, watch_error) = match Watch::start(home.root(), pump.waker()) {
-        Ok(w) => (Some(w), None),
-        Err(e) => (None, Some(format!("no commit watcher: {}; polling every {} ms", e.message(), poll.as_millis()))),
+    let pump = if driven == Driven::Yes { Pump::undriven() } else { Pump::new(event::read) };
+    // a driven loop (a test's) watches nothing, says nothing of it and polls
+    let (watch, watch_error) = match (driven, Watch::start(home.root(), pump.waker())) {
+        (Driven::Yes, _) => (None, None),
+        (Driven::No, Ok(w)) => (Some(w), None),
+        (Driven::No, Err(e)) => (None, Some(format!("no commit watcher: {}; polling every {} ms", e.message(), poll.as_millis()))),
     };
     let _watch = watch; // lives as long as the loop
-    let mut schedule = Schedule::new(ports.clock.now(), if watch_error.is_some() { poll } else { SAFETY });
+    let mut schedule = Schedule::new(ports.clock.now(), if watch_error.is_some() || driven == Driven::Yes { poll } else { SAFETY });
     if watch_error.is_some() {
         ui.error = watch_error.clone();
     }
@@ -507,6 +548,7 @@ fn show(
             let shown = ui.error.clone();
             kept(done.poll, &mut follow_error);
             if let Some(result) = done.snapshot {
+                ctx.snapshot_read();
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let next = kept(result.map(|s| {
@@ -533,7 +575,7 @@ fn show(
             redraw |= ui.error != shown;
         }
         if let Some(kind) = schedule.take(ports.clock.now()) {
-            let width = terminal.size().map_or(0, |s| s.width);
+            let width = ctx.terminal.size().map_or(0, |s| s.width);
             let (timed, shared, ports) = (trace.is_on(), Arc::clone(&reader), ports.clone());
             let watching = Watching::of(snap.centre.as_ref(), snap.pulse.as_ref());
             let retry = snapshot_error.is_some();
@@ -562,7 +604,7 @@ fn show(
         }
         if redraw {
             let (drawn, written) = trace.draw(epoch, &log, frame, || {
-                terminal.draw(|f| ui.draw_snapshot(f, snap)).map(drop)
+                ctx.draw(|f| ui.draw_snapshot(f, snap))
             });
             drawn?;
             if let Err(why) = written {
@@ -576,7 +618,11 @@ fn show(
         // a scroll offset not yet saved (held back by SAVE_EVERY) wakes the loop when it may be written
         let save_at = offsets.due_at(&ui.remembered);
         let until = crate::pump::wake(now, wall_ms, &needs(snap, taken), [schedule.deadline(now), save_at].into_iter().flatten().min());
-        let input = match pump.wait(until) {
+        let signal = match driven {
+            Driven::No => pump.wait(until),
+            Driven::Yes => pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out() || worker.busy()),
+        };
+        let input = match signal {
             Signal::Input(input) => input,
             Signal::InputFailed(e) => return Err(e.into()),
             Signal::Commit => {

@@ -6,6 +6,8 @@
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use cpd_core::ports::Ports;
+
 type Job<T> = Box<dyn FnOnce() -> T + Send>;
 
 pub(crate) struct Background<T> {
@@ -36,6 +38,11 @@ impl<T: Send + 'static> Background<T> {
         Some(result)
     }
 
+    /// Whether a job is running or waits: its result is still to be taken.
+    pub(crate) fn busy(&self) -> bool {
+        self.running
+    }
+
     fn start(&mut self) {
         if self.running {
             return;
@@ -44,9 +51,11 @@ impl<T: Send + 'static> Background<T> {
         self.running = true;
         let tx = self.tx.clone();
         let waker = self.waker.clone();
+        // The job reads `Ports::current()`: this thread's scope is not the new thread's.
+        let ports = Ports::current();
         std::thread::spawn(move || {
             // the receiver is gone only when the view ended
-            let _ = tx.send(job());
+            let _ = tx.send(Ports::scope(&ports, job));
             waker.read_done();
         });
     }

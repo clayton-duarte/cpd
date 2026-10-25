@@ -29,10 +29,11 @@ use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
+use crate::ports::Ports;
 
 use super::deadline::Failed;
-use super::runner::{Runner, SystemRunner};
-use super::spawn::{Pid as ProcessId, ProcessSpawn, Spawn as ProcessPort};
+use super::runner::Runner;
+use super::spawn::{Pid as ProcessId, Spawn as ProcessPort};
 use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
@@ -309,7 +310,8 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// `Incident Mode: ` followed by the elapsed duration in colour 9 with reverse video and the `italics`
 /// attribute, follows the fill before the workers pill, joined to it by a single `\u{2500}`; the
 /// fill and the long-form test are shorter by its width (a join, two caps and the 15-cell label, 18
-/// cells) and it has no click range.
+/// cells); the range `incident` wraps the whole pill, caps included, and a click opens the
+/// incident's Lead.
 ///
 /// Colours follow §6.1.1 (hs-d534): the reset, legend and logs buttons take the bright pair of
 /// dango ([`DANGO`], 13, 15 and 10, hs-d671), the workers and version pills bg 8,
@@ -320,9 +322,9 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(base)), "", glyph)))
     };
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
-    // The incident pill is red on a red block even though it is not clickable: the contract (§6.1.1) gives it the
+    // The incident pill is red on a red block in the `incident` click range: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
-    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}"));
+    let incident = pill::range("incident", &format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}")));
     format!(
         "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}{alert},{plain}}}{join}",
         join = join!(),
@@ -503,7 +505,7 @@ struct Procs(Arc<dyn ProcessPort>);
 
 impl Default for Procs {
     fn default() -> Procs {
-        Procs(Arc::new(ProcessSpawn))
+        Procs(Ports::current().spawn)
     }
 }
 
@@ -551,7 +553,7 @@ struct Handle(Arc<dyn Runner>);
 
 impl Default for Handle {
     fn default() -> Handle {
-        Handle(Arc::new(SystemRunner))
+        Handle(Ports::current().runner)
     }
 }
 
@@ -790,7 +792,7 @@ impl Tmux {
     /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
     /// unlinked executable: unverified).
     pub fn pid_exe(pid: u32) -> Option<PathBuf> {
-        Tmux::pid_exe_with(&ProcessSpawn, pid)
+        Tmux::pid_exe_with(&*Ports::current().spawn, pid)
     }
 
     /// [`Tmux::pid_exe`] asking `spawn` (`Spawn::exe_of`) whether the process exists and what it runs. On Linux the real
@@ -1059,7 +1061,7 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
-    installed_version_with(&SystemRunner)
+    installed_version_with(&*Ports::current().runner)
 }
 
 /// [`installed_version`], the call run by `runner`.
@@ -1214,6 +1216,9 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 
 pub mod pill;
+
+#[cfg(test)]
+mod pill_lines_tests;
 
 #[cfg(test)]
 mod pill_tests;

@@ -274,7 +274,7 @@ pub fn wait_for_lead(
     target: &Target,
     log: &dyn Fn(&str),
 ) -> Result<Option<Fork>, CpdError> {
-    wait_for_lead_with(&Ports::real(), store, config, dirs, target, log)
+    wait_for_lead_with(&Ports::current(), store, config, dirs, target, log)
 }
 
 /// [`wait_for_lead`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the Lead's file is read on its `utc()`.
@@ -412,7 +412,7 @@ pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), 
 /// [`kill_window`] for Attempt `id` of `plan`: the one A9 kill, shared by the
 /// driver, E2 and R.
 pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
-    kill_attempt_window_with(&Ports::real(), config, tmux, plan, id)
+    kill_attempt_window_with(&Ports::current(), config, tmux, plan, id)
 }
 
 /// [`kill_attempt_window`] on `ports`: the pause between two tries of `kill-window` naps on `ports.clock`.

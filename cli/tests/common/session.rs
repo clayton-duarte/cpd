@@ -4,9 +4,11 @@
 //! SQL a test writes itself is `env.sql(..)`, the harness's one fixture writer.
 
 use std::fs;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{PlanId, SessionId};
 use serde_json::{Value, json};
 
@@ -27,6 +29,33 @@ impl Cpd for TestEnv {
 impl Cpd for Fx {
     fn cpd(&self, args: &[&str]) -> Run {
         Fx::cpd(self, args)
+    }
+}
+
+/// The `pi` of a test that runs the command tree in this process: a route of the `FakeRunner` that answers every call
+/// of `pi` with the one [`Reply`] it holds now ([`FakePi::say`]), so a test changes the answer between two runs. What
+/// pi was given (argv, stdin, environment, cwd) is the `FakeRunner`'s record: `fx.calls("pi")`.
+pub struct FakePi {
+    reply: Mutex<Reply>,
+}
+
+impl FakePi {
+    /// Routes the `pi` of `fx`'s `FakeRunner` to a new `FakePi` that exits 0 with an empty answer.
+    pub fn install(fx: &Fx) -> Arc<FakePi> {
+        let pi = Arc::new(FakePi { reply: Mutex::new(Reply::ok("")) });
+        let _ = (*fx.fakes.runner).clone().route("pi", pi.clone());
+        pi
+    }
+
+    /// pi's answer from now on: its exit, stdout and stderr, or `Reply::io(..)` when it cannot start.
+    pub fn say(&self, reply: Reply) {
+        *self.reply.lock().unwrap_or_else(PoisonError::into_inner) = reply;
+    }
+}
+
+impl Handler for FakePi {
+    fn handle(&self, _: &Call) -> Reply {
+        self.reply.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 

@@ -196,6 +196,17 @@ fn a_reply_that_takes_nothing_leaves_the_clock_alone() {
 }
 
 #[test]
+fn a_signal_reply_ends_on_that_signal_with_no_exit_code_and_its_output() {
+    use std::os::unix::process::ExitStatusExt;
+    let (runner, clock) = fake();
+    let runner = runner.on("sh", any, Reply::signal(9, "started\n", "cut\n"));
+    let out = run(&runner, "sh", &[]).unwrap();
+    assert_eq!((out.status.code(), out.status.signal()), (None, Some(9)));
+    assert_eq!((out.stdout, out.stderr), (b"started\n".to_vec(), b"cut\n".to_vec()));
+    assert_eq!(clock.elapsed(), Duration::ZERO);
+}
+
+#[test]
 fn an_io_reply_is_an_io_failure_of_that_kind() {
     let (runner, _) = fake();
     let runner = runner.on("git", any, Reply::io(ErrorKind::PermissionDenied));

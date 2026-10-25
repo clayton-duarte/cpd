@@ -20,7 +20,7 @@ pub struct Env {
 impl Env {
     /// Opens `$CPD_HOME` from this process's environment (see [`CpdHome::from_env`]) on the real ports.
     pub fn open() -> Result<Env, CpdError> {
-        Env::open_with(&Ports::real())
+        Env::open_with(&Ports::current())
     }
 
     /// [`Env::open`] on `ports`: what a test hands in.
@@ -31,7 +31,7 @@ impl Env {
     /// The config and the store of `home`, in that order: `config_missing` or
     /// `config_invalid` come before any store failure. On the real ports.
     pub fn open_home(home: CpdHome) -> Result<Env, CpdError> {
-        Env::open_home_with(&Ports::real(), home)
+        Env::open_home_with(&Ports::current(), home)
     }
 
     /// [`Env::open_home`] on `ports`: the waits of the open (the setup lock another cpd holds while it migrates) sleep
@@ -47,7 +47,7 @@ impl Env {
     pub fn open_home_persistent(home: CpdHome, persist: Persist) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
         let store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist)?;
-        Ok(Env { home, config, store, ports: Ports::real() })
+        Ok(Env { home, config, store, ports: Ports::current() })
     }
 }
 

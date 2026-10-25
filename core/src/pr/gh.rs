@@ -751,6 +751,11 @@ mod tests {
 
     const ARGS: [&str; 4] = ["api", "graphql", "-f", "query=Q"];
 
+    /// A runner that answers nothing: the tests that use it make no call.
+    fn runner() -> crate::host::runner::FakeRunner {
+        crate::host::runner::FakeRunner::new(crate::clock::ManualClock::new())
+    }
+
     fn reply(stdout: &str, exit: i32) -> Output {
         Output { stdout: stdout.to_owned(), stderr: "gh: boom".to_owned(), exit: Some(exit) }
     }
@@ -1011,7 +1016,7 @@ mod tests {
         }
         let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
         assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
-        assert_eq!(read_absent(&SystemRunner, Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]
@@ -1039,8 +1044,9 @@ mod tests {
     #[test]
     fn a_repo_that_is_not_owner_name_is_refused_before_gh_runs() {
         let nowhere = Path::new("/nonexistent");
+        let runner = runner();
         for repo in ["", "a", "a/", "/b", "a/b/c", "a b/c", "o/n\"}) { x", "o\"/n", "ö/n"] {
-            let e = lookup(&SystemRunner, nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
+            let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{repo:?}");
             assert!(e.message().contains("owner/name"), "{repo:?}: {}", e.message());
         }
@@ -1048,7 +1054,7 @@ mod tests {
 
     #[test]
     fn an_empty_lookup_makes_no_call() {
-        assert_eq!(lookup(&SystemRunner, Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]

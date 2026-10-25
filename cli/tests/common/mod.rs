@@ -47,9 +47,13 @@ use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
 
+pub mod engine;
 pub mod fx;
+pub mod healthy;
+pub mod pi;
 pub mod screen;
 pub mod session;
+pub mod tree;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
@@ -426,6 +430,102 @@ pub fn copy_executable(from: &str, to: &Path) {
     fs::rename(&temp, to).expect("rename executable over its target");
 }
 
+/// A fake holographic bridge (docs/research/context-holographic.md `## Bridge`): a shell script
+/// cpd spawns as `<context_engine_python> <context_engine_bridge> [--db <path>]`, speaking JSON
+/// lines. It logs every request to [`FakeBridge::requests`] and answers each command with the
+/// content of `<responses>/<cmd>` (or `<responses>/<cmd>-<n>`, n from 1, for the nth call of a
+/// repeated command such as `search`). A command with no response file answers `{"ok":true}`.
+/// The caller scripts the engine's answers; a test never runs holographic.
+pub struct FakeBridge {
+    /// The directory the fake and its files live in.
+    pub root: PathBuf,
+    /// The script cpd runs as the bridge.
+    pub script: PathBuf,
+    /// `requests.jsonl`: every request line, in order.
+    pub log: PathBuf,
+    /// One file per command (and `<cmd>-<n>` per repeated call).
+    pub responses: PathBuf,
+    /// `context_engine_dir`: the fake's data directory; the fake ignores it.
+    pub data_dir: PathBuf,
+}
+
+/// The shell body of [`FakeBridge`] (see its documentation).
+const BRIDGE_SHIM: &str = r#"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
+  no_space=$(printf '%s' "$line" | tr -d ' ')
+  cmd=$(printf '%s' "$no_space" | sed -n 's/.*"cmd":"\([A-Za-z_]*\)".*/\1/p')
+  if [ "$cmd" = "search" ]; then
+    n=$(cat "$resp/count-search" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    printf '%s' "$n" > "$resp/count-search"
+    f="$resp/search-$n"
+    [ -f "$f" ] || f="$resp/search"
+  else
+    f="$resp/$cmd"
+  fi
+  if [ -f "$f" ]; then cat "$f"; else printf '%s\n' '{"ok":true}'; fi
+done
+"#;
+
+impl FakeBridge {
+    /// Writes the fake under `env.root()` and returns it.
+    pub fn new(env: &TestEnv) -> FakeBridge {
+        let root = env.root().join("fake-bridge");
+        let bridge = FakeBridge {
+            script: root.join("bridge.py"),
+            log: root.join("requests.jsonl"),
+            responses: root.join("responses"),
+            data_dir: root.join("engine"),
+            root,
+        };
+        fs::create_dir_all(&bridge.responses).expect("create the fake bridge responses");
+        fs::create_dir_all(&bridge.data_dir).expect("create the fake engine data dir");
+        bridge.install(BRIDGE_SHIM);
+        bridge
+    }
+
+    /// Writes the bridge script with `body` as its shell body (the shim, or a failing one).
+    pub fn install(&self, body: &str) {
+        write_executable(&self.script, &format!("#!/bin/sh\nlog={}\nresp={}\n{body}\n", sh_quote(&self.log.to_string_lossy()), sh_quote(&self.responses.to_string_lossy())));
+    }
+
+    /// Answers the first call of `cmd` with the one-line `json`.
+    pub fn reply(&self, cmd: &str, json: &str) {
+        fs::write(self.responses.join(cmd), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Answers the `n`th (1-based) call of `cmd` with the one-line `json`.
+    pub fn reply_n(&self, cmd: &str, n: usize, json: &str) {
+        fs::write(self.responses.join(format!("{cmd}-{n}")), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Every request line the fake answered, parsed.
+    pub fn requests(&self) -> Vec<Value> {
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("a request line is not JSON ({e}): {line}")))
+            .collect()
+    }
+
+    /// The `cmd` of every request the fake answered, in order.
+    pub fn commands(&self) -> Vec<String> {
+        self.requests().iter().map(|request| request["cmd"].as_str().unwrap_or_default().to_owned()).collect()
+    }
+
+    /// The `config.toml` keys that point cpd at this fake: the bridge, `/bin/sh` as the interpreter,
+    /// and the fake's data directory, with the engine enabled.
+    pub fn config(&self) -> String {
+        format!(
+            "context_engine_enabled = true\ncontext_engine_bridge = \"{}\"\ncontext_engine_python = \"/bin/sh\"\ncontext_engine_dir = \"{}\"\n",
+            self.script.display(),
+            self.data_dir.display()
+        )
+    }
+}
+
 /// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`
 /// returns once the child has exec'd (or failed to), so the shared lock covers
 /// the whole window in which the child holds copies of this process's descriptors.
@@ -438,6 +538,32 @@ pub fn spawn(cmd: &mut Command) -> io::Result<Child> {
 /// [`spawn`]: the lock is released before the child is waited for.
 pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
+}
+
+/// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
+/// the wait: the child is killed and reaped when it outlives `deadline`, and
+/// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],
+/// which nulls stdin.
+pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> io::Result<Output> {
+    use std::io::Write;
+    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let _ = pipe.write_all(stdin);
+        // Dropping the pipe closes it: the child sees EOF.
+    }
+    let until = Instant::now() + deadline;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
@@ -729,6 +855,9 @@ fn has_flock() -> bool {
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
+    /// Whether `TMUX_TMPDIR` is `<root>/tmux` whatever the root's length: set by an `Fx` on fake ports, whose tmux has no
+    /// socket (the 100-character limit of [`tmux_tmpdir_for`] is a real server's) and must not share `/tmp`.
+    pub(crate) tmux_in_root: bool,
     /// The env's process group: the reaper's pid; none for a [`TestEnv::bare`] env, which starts no process.
     pgid: Option<u32>,
     /// The reaper ([`TestEnv::empty`]), until the teardown stops it; none for a [`TestEnv::bare`] env.
@@ -834,7 +963,7 @@ impl TestEnv {
             .expect("write teardown script");
             start_reaper(&script)
         });
-        let env = TestEnv { dir, tmux_socket, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
+        let env = TestEnv { dir, tmux_socket, tmux_in_root: false, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -919,6 +1048,9 @@ impl TestEnv {
 
     /// The `TMUX_TMPDIR` of this env's private tmux server: in the env, or `/tmp` when its socket path would be too long.
     pub fn tmux_tmpdir(&self) -> PathBuf {
+        if self.tmux_in_root {
+            return self.root().join("tmux");
+        }
         env_tmux_tmpdir(self.root(), self.tmux_socket())
     }
 
@@ -1392,6 +1524,16 @@ impl Locale {
             Locale::EmptyLang => cmd.env("LANG", ""),
             Locale::LangC => cmd.env("LANG", "C"),
             Locale::LcAllC => cmd.env("LC_ALL", "C"),
+        }
+    }
+
+    /// This locale's variables, to set on a call that runs in this process (`Fx::cpd_with`).
+    pub fn vars(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Locale::Unset => &[],
+            Locale::EmptyLang => &[("LANG", "")],
+            Locale::LangC => &[("LANG", "C")],
+            Locale::LcAllC => &[("LC_ALL", "C")],
         }
     }
 

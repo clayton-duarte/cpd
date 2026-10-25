@@ -110,6 +110,8 @@ pub struct Call {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
     Exit { code: i32, stdout: Vec<u8>, stderr: Vec<u8>, takes: Duration },
+    /// The program ended on the signal `signal` (no exit code): `ExitStatus::signal()` says which.
+    Signal { signal: i32, stdout: Vec<u8>, stderr: Vec<u8> },
     Io(ErrorKind),
 }
 
@@ -121,6 +123,10 @@ impl Reply {
     pub fn exit(code: i32, stdout: &str, stderr: &str) -> Reply {
         Reply::Exit { code, stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), takes: Duration::ZERO }
     }
+    /// The program was killed by `signal` after printing `stdout` and `stderr`.
+    pub fn signal(signal: i32, stdout: &str, stderr: &str) -> Reply {
+        Reply::Signal { signal, stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() }
+    }
     /// The program could not be started: `Failed::Io(kind)`.
     pub fn io(kind: ErrorKind) -> Reply {
         Reply::Io(kind)
@@ -129,7 +135,7 @@ impl Reply {
     pub fn takes(self, d: Duration) -> Reply {
         match self {
             Reply::Exit { code, stdout, stderr, .. } => Reply::Exit { code, stdout, stderr, takes: d },
-            io @ Reply::Io(_) => io,
+            other => other,
         }
     }
 }
@@ -268,6 +274,7 @@ impl FakeRunner {
         match self.answer(&call) {
             None => Err(Failed::Io(ErrorKind::NotFound.into())),
             Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
+            Some(Reply::Signal { signal, stdout, stderr }) => Ok(Output { status: ExitStatus::from_raw(signal), stdout, stderr }),
             Some(Reply::Exit { takes, .. }) if takes >= deadline => {
                 self.clock.sleep(deadline);
                 let argv = std::iter::once(call.program).chain(call.args).collect();

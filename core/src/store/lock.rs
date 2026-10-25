@@ -12,11 +12,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::spawn::{Pid, ProcessSpawn, Spawn};
+use crate::host::spawn::Pid;
 use crate::lock as flock;
+use crate::ports::Ports;
 
 /// The longest a waiter waits for a holder that says it migrates, counted from
 /// the marker's `started_unix_ms` (contract §4.2). Not a config key.
@@ -48,7 +49,7 @@ impl Marker {
     /// released the `flock` by itself; a marker of a dead pid under a lock
     /// someone else holds is not a migration.
     fn live(&self) -> bool {
-        self.migrating && ProcessSpawn.alive(Pid(self.pid))
+        self.migrating && Ports::current().spawn.alive(Pid(self.pid))
     }
 
     fn migrated_for(&self) -> Duration {
@@ -206,6 +207,7 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+    use crate::clock::SystemClock;
 
     fn home() -> (tempfile::TempDir, CpdHome) {
         let dir = tempfile::tempdir().unwrap();

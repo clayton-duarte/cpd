@@ -67,7 +67,7 @@ pub fn run(ports: &Ports, home: &CpdHome, args: &Args) -> Outcome {
 /// The command of the binary: [`run`] on the real ports and `$CPD_HOME`.
 pub fn command(args: Args) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
-    let out = run(&Ports::real(), &home, &args);
+    let out = run(&Ports::current(), &home, &args);
     print!("{}", out.stdout);
     eprint!("{}", out.stderr);
     if out.exit != 0 {
