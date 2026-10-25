@@ -24,7 +24,7 @@ pub(crate) mod pulse;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -354,16 +354,11 @@ impl Offsets {
         Ok(())
     }
 
-    /// Replaces the file: a temporary file beside it, then a rename.
+    /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
         let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
         let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
-        let dir = self.path.parent().unwrap_or(Path::new("."));
-        fs::create_dir_all(dir)?;
-        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
-        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        cpd_core::atomic::write_atomic(&self.path, text)
     }
 }
 
