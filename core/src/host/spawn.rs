@@ -1,15 +1,23 @@
 //! The process seam of what [`Runner`](super::runner::Runner) is not: a child that outlives the call, is waited for
 //! later, is signalled, or replaces the process (docs/implementing.md, "Ports, Spawn and run_with").
 //! [`ProcessSpawn`] is the real one; [`FakeSpawn`] starts nothing and records.
-//!
-//! STUBS of PR ports2's red Job: every body is `todo!()`; Job ports-2 implements them.
 
-use std::io::{self, BufRead};
-use std::os::fd::RawFd;
+use std::collections::HashMap;
+use std::io::{self, BufRead, BufReader};
+use std::os::fd::{BorrowedFd, RawFd};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
-use std::process::ExitStatus;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::error::CpdError;
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+use nix::sys::signal::{self, kill};
+use nix::unistd::Pid as NixPid;
+
+use super::exe;
+use super::priority::idle_prefix;
+use crate::error::{CpdError, ErrorCode};
 
 /// A process id, as `Spawn` hands it out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -59,100 +67,332 @@ pub trait Spawn: Send + Sync {
 /// The real one: `Command`, `setsid`, `kill(2)`, `/proc` or `libproc`, `exec`.
 pub struct ProcessSpawn;
 
+/// The descriptor a driver finds its lock on (`hand_over`).
+const HAND_OVER_FD: RawFd = 3;
+
+/// The exit status of each child `spawn` and `stream` started, `None` while it runs: a thread per child waits for it
+/// (the reaper), so it never stays a zombie, and `try_wait` reads what the thread found.
+type Reaped = Arc<Mutex<Option<ExitStatus>>>;
+
+fn reaped() -> &'static Mutex<HashMap<u32, Reaped>> {
+    static TABLE: OnceLock<Mutex<HashMap<u32, Reaped>>> = OnceLock::new();
+    TABLE.get_or_init(Mutex::default)
+}
+
+/// The `Command` of `l`, stdin from `/dev/null`; stdout and stderr are the caller's to set.
+fn command(l: &Launch) -> Command {
+    let prefix: &[&str] = if l.idle { idle_prefix() } else { &[] };
+    let mut command = match prefix.split_first() {
+        Some((first, rest)) => {
+            let mut c = Command::new(first);
+            c.args(rest).arg(&l.program);
+            c
+        }
+        None => Command::new(&l.program),
+    };
+    command.args(&l.args);
+    for (k, v) in &l.env_set {
+        command.env(k, v);
+    }
+    for k in &l.env_remove {
+        command.env_remove(k);
+    }
+    if let Some(cwd) = &l.cwd {
+        command.current_dir(cwd);
+    }
+    command.stdin(Stdio::null());
+    let (setsid, fd) = (l.setsid, l.hand_over);
+    if setsid || fd.is_some() {
+        // SAFETY: the closure runs in the forked child before exec and only makes async-signal-safe system calls; it
+        // allocates nothing.
+        unsafe {
+            command.pre_exec(move || {
+                if setsid {
+                    nix::unistd::setsid().map_err(io::Error::from)?;
+                }
+                if let Some(fd) = fd {
+                    if fd != HAND_OVER_FD {
+                        Errno::result(nix::libc::dup2(fd, HAND_OVER_FD)).map_err(io::Error::from)?;
+                    }
+                    // dup2 clears close-on-exec; when fd already was 3 it did not run.
+                    fcntl(BorrowedFd::borrow_raw(HAND_OVER_FD), FcntlArg::F_SETFD(FdFlag::empty())).map_err(io::Error::from)?;
+                }
+                Ok(())
+            });
+        }
+    }
+    command
+}
+
+/// Starts the reaper of `child`: it waits for it on a thread of its own and keeps the status.
+fn reap(mut child: std::process::Child) -> Pid {
+    let pid = child.id();
+    let status: Reaped = Arc::default();
+    reaped().lock().unwrap_or_else(|e| e.into_inner()).insert(pid, Arc::clone(&status));
+    std::thread::spawn(move || {
+        let found = child.wait().ok();
+        *status.lock().unwrap_or_else(|e| e.into_inner()) = found;
+    });
+    Pid(pid)
+}
+
+fn raw(p: Pid) -> Option<NixPid> {
+    // 0 and the negatives would signal a process group, not a process.
+    i32::try_from(p.0).ok().filter(|p| *p > 0).map(NixPid::from_raw)
+}
+
 impl Spawn for ProcessSpawn {
-    fn spawn(&self, _l: &Launch) -> io::Result<Pid> {
-        todo!("ProcessSpawn::spawn (Job ports-2)")
+    fn spawn(&self, l: &Launch) -> io::Result<Pid> {
+        let mut command = command(l);
+        match &l.stdout_to {
+            Some(path) => {
+                let log = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+                command.stdout(log.try_clone()?).stderr(log);
+            }
+            None => {
+                command.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        }
+        Ok(reap(command.spawn()?))
     }
-    fn try_wait(&self, _p: Pid) -> io::Result<Option<ExitStatus>> {
-        todo!("ProcessSpawn::try_wait (Job ports-2)")
+
+    fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>> {
+        let table = reaped().lock().unwrap_or_else(|e| e.into_inner());
+        let status = table.get(&p.0).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("process {} is not a child of this process", p.0)))?;
+        let found = *status.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(found)
     }
-    fn signal(&self, _p: Pid, _s: Signal) -> io::Result<()> {
-        todo!("ProcessSpawn::signal (Job ports-2)")
+
+    fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
+        let pid = raw(p).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a process id", p.0)))?;
+        let s = match s {
+            Signal::Term => signal::Signal::SIGTERM,
+            Signal::Kill => signal::Signal::SIGKILL,
+        };
+        kill(pid, s).map_err(io::Error::from)
     }
-    fn alive(&self, _p: Pid) -> bool {
-        todo!("ProcessSpawn::alive (Job ports-2)")
+
+    /// Whether process `pid` runs: `kill(pid, 0)` finds it (a process of another user, `EPERM`, exists too) and it is
+    /// not a zombie (ended, not yet reaped). Linux reads `/proc/<pid>/stat`; macOS reads the BSD status through
+    /// `libproc` (`SZOMB`).
+    fn alive(&self, p: Pid) -> bool {
+        let Some(pid) = raw(p) else { return false };
+        if matches!(kill(pid, None), Err(Errno::ESRCH)) {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use libproc::bsd_info::BSDInfo;
+            // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
+            const SZOMB: u32 = 5;
+            match libproc::proc_pid::pidinfo::<BSDInfo>(pid.as_raw(), 0) {
+                Ok(info) => info.pbi_status != SZOMB,
+                // `kill` found it, `libproc` does not: it was reaped between the two.
+                Err(_) => false,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", p.0)) else { return true };
+            // `pid (comm) state …`; comm may hold spaces and parentheses.
+            stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+        }
     }
-    fn exe_of(&self, _p: Pid) -> Option<PathBuf> {
-        todo!("ProcessSpawn::exe_of (Job ports-2)")
+
+    #[cfg(target_os = "macos")]
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        libproc::proc_pid::pidpath(i32::try_from(p.0).ok()?).ok().map(PathBuf::from)
     }
-    fn cmdline(&self, _p: Pid) -> Option<String> {
-        todo!("ProcessSpawn::cmdline (Job ports-2)")
+
+    #[cfg(not(target_os = "macos"))]
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{}/exe", p.0)).ok()
     }
-    fn exec(&self, _l: &Launch) -> io::Error {
-        todo!("ProcessSpawn::exec (Job ports-2)")
+
+    /// macOS: `libproc` has no argv reader (only the name and path), so `ps -o command=` gives it.
+    #[cfg(target_os = "macos")]
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        let out = Command::new("ps").args(["-o", "command=", "-p", &p.0.to_string()]).output().ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        (!line.is_empty()).then_some(line)
     }
-    fn stream(&self, _l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
-        todo!("ProcessSpawn::stream (Job ports-2)")
+
+    /// `/proc/<pid>/cmdline`, its arguments joined by spaces.
+    #[cfg(not(target_os = "macos"))]
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        let raw = std::fs::read(format!("/proc/{}/cmdline", p.0)).ok()?;
+        let words: Vec<String> = raw.split(|&b| b == 0).filter(|w| !w.is_empty()).map(|w| String::from_utf8_lossy(w).into_owned()).collect();
+        (!words.is_empty()).then(|| words.join(" "))
     }
+
+    fn exec(&self, l: &Launch) -> io::Error {
+        let mut command = command(l);
+        if let Some(path) = &l.stdout_to {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|f| Ok((f.try_clone()?, f))) {
+                Ok((out, err)) => {
+                    command.stdout(out).stderr(err);
+                }
+                Err(e) => return e,
+            }
+        }
+        command.exec()
+    }
+
+    fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
+        let mut command = command(l);
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let out = child.stdout.take().ok_or_else(|| io::Error::other("no stdout pipe"))?;
+        Ok((reap(child), Box::new(BufReader::new(out))))
+    }
+
     fn self_exe(&self) -> Result<PathBuf, CpdError> {
-        todo!("ProcessSpawn::self_exe (Job ports-2)")
+        exe::started_as().map(PathBuf::from)
     }
+
     fn kind(&self) -> &'static str {
         "ProcessSpawn"
     }
 }
 
+/// What `FakeSpawn` knows of a pid it handed out.
+enum Fate {
+    Running,
+    Exited(ExitStatus),
+}
+
+#[derive(Default)]
+struct Table {
+    last_pid: u32,
+    launches: Vec<Launch>,
+    signals: Vec<(Pid, Signal)>,
+    pids: HashMap<Pid, Fate>,
+    self_exe: Option<PathBuf>,
+    exes: HashMap<Pid, PathBuf>,
+    cmdlines: HashMap<Pid, String>,
+}
+
+impl Table {
+    /// Records `l` and hands out the next pid, running.
+    fn start(&mut self, l: &Launch) -> Pid {
+        self.launches.push(l.clone());
+        self.last_pid += 1;
+        let pid = Pid(self.last_pid);
+        self.pids.insert(pid, Fate::Running);
+        pid
+    }
+}
+
 /// The fake: pids from a counter, a table of launches and their state, the record of signals. Starts nothing.
 /// Configured through `&self`, so a test can hold it in an `Arc` beside the `Ports` that share it.
-#[derive(Default)]
-pub struct FakeSpawn {}
+pub struct FakeSpawn {
+    table: Mutex<Table>,
+}
+
+impl Default for FakeSpawn {
+    fn default() -> FakeSpawn {
+        FakeSpawn::new()
+    }
+}
+
+/// The first pid the fake hands out: well above 1, which is never a cpd child.
+const FIRST_FAKE_PID: u32 = 1000;
 
 impl FakeSpawn {
     pub fn new() -> FakeSpawn {
-        todo!("FakeSpawn::new (Job ports-2)")
+        FakeSpawn { table: Mutex::new(Table { last_pid: FIRST_FAKE_PID - 1, ..Table::default() }) }
     }
-    /// Every `Launch` that `spawn` and `stream` received, in order.
+
+    fn table(&self) -> std::sync::MutexGuard<'_, Table> {
+        self.table.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Every `Launch` that `spawn`, `stream` and `exec` received, in order.
     pub fn launches(&self) -> Vec<Launch> {
-        todo!("FakeSpawn::launches (Job ports-2)")
+        self.table().launches.clone()
     }
+
     /// Every `(pid, signal)` that `signal` received, in order.
     pub fn signals(&self) -> Vec<(Pid, Signal)> {
-        todo!("FakeSpawn::signals (Job ports-2)")
+        self.table().signals.clone()
     }
+
     /// Marks `pid` exited with `code`: `try_wait` then returns the status and `alive` is false.
-    pub fn exit(&self, _pid: Pid, _code: i32) {
-        todo!("FakeSpawn::exit (Job ports-2)")
+    pub fn exit(&self, pid: Pid, code: i32) {
+        self.table().pids.insert(pid, Fate::Exited(ExitStatus::from_raw(code << 8)));
     }
+
     /// What `self_exe` returns; until it is called `self_exe` is an `Err`.
-    pub fn set_self_exe(&self, _path: impl Into<PathBuf>) {
-        todo!("FakeSpawn::set_self_exe (Job ports-2)")
+    pub fn set_self_exe(&self, path: impl Into<PathBuf>) {
+        self.table().self_exe = Some(path.into());
     }
+
     /// What `exe_of(pid)` returns.
-    pub fn set_exe_of(&self, _pid: Pid, _path: impl Into<PathBuf>) {
-        todo!("FakeSpawn::set_exe_of (Job ports-2)")
+    pub fn set_exe_of(&self, pid: Pid, path: impl Into<PathBuf>) {
+        self.table().exes.insert(pid, path.into());
     }
+
     /// What `cmdline(pid)` returns.
-    pub fn set_cmdline(&self, _pid: Pid, _line: &str) {
-        todo!("FakeSpawn::set_cmdline (Job ports-2)")
+    pub fn set_cmdline(&self, pid: Pid, line: &str) {
+        self.table().cmdlines.insert(pid, line.to_owned());
     }
 }
 
 impl Spawn for FakeSpawn {
-    fn spawn(&self, _l: &Launch) -> io::Result<Pid> {
-        todo!("FakeSpawn::spawn (Job ports-2)")
+    fn spawn(&self, l: &Launch) -> io::Result<Pid> {
+        Ok(self.table().start(l))
     }
-    fn try_wait(&self, _p: Pid) -> io::Result<Option<ExitStatus>> {
-        todo!("FakeSpawn::try_wait (Job ports-2)")
+
+    fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>> {
+        match self.table().pids.get(&p) {
+            Some(Fate::Running) => Ok(None),
+            Some(Fate::Exited(status)) => Ok(Some(*status)),
+            None => Err(io::Error::new(io::ErrorKind::NotFound, format!("process {} was not started by this FakeSpawn", p.0))),
+        }
     }
-    fn signal(&self, _p: Pid, _s: Signal) -> io::Result<()> {
-        todo!("FakeSpawn::signal (Job ports-2)")
+
+    fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
+        let mut table = self.table();
+        table.signals.push((p, s));
+        let number = match s {
+            Signal::Term => signal::Signal::SIGTERM,
+            Signal::Kill => signal::Signal::SIGKILL,
+        } as i32;
+        match table.pids.get_mut(&p) {
+            Some(fate) => {
+                // A pid that already exited stays as it exited.
+                if matches!(fate, Fate::Running) {
+                    *fate = Fate::Exited(ExitStatus::from_raw(number));
+                }
+                Ok(())
+            }
+            None => Err(io::Error::new(io::ErrorKind::NotFound, format!("process {} was not started by this FakeSpawn", p.0))),
+        }
     }
-    fn alive(&self, _p: Pid) -> bool {
-        todo!("FakeSpawn::alive (Job ports-2)")
+
+    fn alive(&self, p: Pid) -> bool {
+        matches!(self.table().pids.get(&p), Some(Fate::Running))
     }
-    fn exe_of(&self, _p: Pid) -> Option<PathBuf> {
-        todo!("FakeSpawn::exe_of (Job ports-2)")
+
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        self.table().exes.get(&p).cloned()
     }
-    fn cmdline(&self, _p: Pid) -> Option<String> {
-        todo!("FakeSpawn::cmdline (Job ports-2)")
+
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        self.table().cmdlines.get(&p).cloned()
     }
-    fn exec(&self, _l: &Launch) -> io::Error {
-        todo!("FakeSpawn::exec (Job ports-2)")
+
+    fn exec(&self, l: &Launch) -> io::Error {
+        self.table().launches.push(l.clone());
+        io::Error::other("faked exec")
     }
-    fn stream(&self, _l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
-        todo!("FakeSpawn::stream (Job ports-2)")
+
+    fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
+        let pid = self.table().start(l);
+        Ok((pid, Box::new(io::Cursor::new(Vec::new()))))
     }
+
     fn self_exe(&self) -> Result<PathBuf, CpdError> {
-        todo!("FakeSpawn::self_exe (Job ports-2)")
+        self.table().self_exe.clone().ok_or_else(|| CpdError::new(ErrorCode::SpawnFailed, "The FakeSpawn has no self_exe configured."))
     }
 }
