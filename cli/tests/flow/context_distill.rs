@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
 
+use common::fx::Fx as InProcess;
 use common::{CPD, Run, pi_says, TestEnv, refused, wait_until};
 use cpd_core::context::{By, Draft, PlanRef, Record};
 use cpd_core::home::CpdHome;
@@ -23,8 +24,8 @@ struct Fx {
     env: TestEnv,
 }
 
-fn fx() -> Fx {
-    let env = TestEnv::new();
+/// The config, the fake `pi`, `node`, `gh` and `cpd` and pi's install directory of every test here.
+fn configure(env: &TestEnv) {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -50,9 +51,54 @@ fn fx() -> Fx {
     // poll searches count whole ticks (`wait_whole_ticks`).
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
+}
+
+fn fx() -> Fx {
+    let env = TestEnv::new();
+    configure(&env);
     let fx = Fx { env };
     fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme"]).ok();
     fx
+}
+
+/// [`fx`] with the command tree in this process: for a test that never reaches `pi` or another process.
+fn fast() -> InProcess {
+    let fx = InProcess::new();
+    configure(&fx.env);
+    fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme"]).ok();
+    fx
+}
+
+/// What the helpers below need of a fixture, whichever way it runs `cpd`.
+trait Distill {
+    fn env(&self) -> &TestEnv;
+}
+
+impl Distill for Fx {
+    fn env(&self) -> &TestEnv {
+        &self.env
+    }
+}
+
+impl Distill for InProcess {
+    fn env(&self) -> &TestEnv {
+        &self.env
+    }
+}
+
+fn home(env: &TestEnv) -> CpdHome {
+    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+}
+
+fn store(env: &TestEnv) -> Store {
+    Store::open(&home(env), 5000).unwrap()
+}
+
+/// Writes a record straight into the index with a chosen time (the commands write `at` as now).
+fn insert(env: &TestEnv, context: &str, id: &str, at: &str, text: &str, draft: Draft) {
+    let record = Record { id: RecordId::parse(id).unwrap(), at: at.into(), by: By { session: None, plan: None }, text: text.into(), draft };
+    let context = ContextId::parse(context).unwrap();
+    store(env).write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
 }
 
 fn ago(minutes: i64) -> String {
@@ -72,11 +118,11 @@ impl Fx {
     }
 
     fn home(&self) -> CpdHome {
-        CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap()
+        home(&self.env)
     }
 
     fn store(&self) -> Store {
-        Store::open(&self.home(), 5000).unwrap()
+        store(&self.env)
     }
 
     fn digests(&self) -> PathBuf {
@@ -94,11 +140,8 @@ impl Fx {
         names
     }
 
-    /// Writes a record straight into the index with a chosen time (the commands write `at` as now).
     fn insert(&self, context: &str, id: &str, at: &str, text: &str, draft: Draft) {
-        let record = Record { id: RecordId::parse(id).unwrap(), at: at.into(), by: By { session: None, plan: None }, text: text.into(), draft };
-        let context = ContextId::parse(context).unwrap();
-        self.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+        insert(&self.env, context, id, at, text, draft);
     }
 
     fn decide(&self, text: &str) -> String {
@@ -224,7 +267,7 @@ fn a_second_run_of_a_context_is_refused_while_the_first_is_alive() {
 
 #[test]
 fn the_context_is_required_and_must_exist() {
-    let fx = fx();
+    let fx = fast();
     refused(&fx.cpd(&["context", "distill"]), "context_required", 2);
     refused(&fx.cpd(&["context", "distill", "--context", "nope"]), "context_not_found", 4);
 }
@@ -236,8 +279,8 @@ const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],
 // ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
 
 /// The rows of `record_curations`: `(record, topic, short, doc_candidate)`, by record.
-fn curation_rows(fx: &Fx) -> Vec<(String, String, String, Option<String>)> {
-    fx.env.read(|conn| {
+fn curation_rows(fx: &impl Distill) -> Vec<(String, String, String, Option<String>)> {
+    fx.env().read(|conn| {
         let mut statement = conn.prepare("SELECT record, topic, short, doc_candidate FROM record_curations WHERE context = 'ctx' ORDER BY record")?;
         let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         rows.collect()
@@ -915,8 +958,8 @@ fn a_failed_pi_run_fails_the_run_with_no_second_step() {
 // ---- The curation floor (contract §8.1, §8.2, §4.6; hs-d592) ----
 
 /// Sets `context_curation_min_records` in the fixture's config.toml.
-fn set_floor(fx: &Fx, floor: u32) {
-    let path = fx.env.cpd_home().join("config.toml");
+fn set_floor(fx: &impl Distill, floor: u32) {
+    let path = fx.env().cpd_home().join("config.toml");
     let text: String = fs::read_to_string(&path)
         .unwrap()
         .lines()
@@ -927,14 +970,14 @@ fn set_floor(fx: &Fx, floor: u32) {
 }
 
 /// `n` notes in the Context, oldest first.
-fn floor_notes(fx: &Fx, n: usize) {
+fn floor_notes(fx: &impl Distill, n: usize) {
     for i in 1..=n {
-        fx.insert(CONTEXT, &format!("hs-n{i}"), &ago(100), &format!("Note number {i}."), Draft::Note);
+        insert(fx.env(), CONTEXT, &format!("hs-n{i}"), &ago(100), &format!("Note number {i}."), Draft::Note);
     }
 }
 
-fn events_count(fx: &Fx) -> i64 {
-    fx.env.read(|conn| conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)))
+fn events_count(fx: &impl Distill) -> i64 {
+    fx.env().read(|conn| conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)))
 }
 
 fn files_named(dir: &std::path::Path, names: &[&str], found: &mut Vec<PathBuf>) {
@@ -950,18 +993,18 @@ fn files_named(dir: &std::path::Path, names: &[&str], found: &mut Vec<PathBuf>) 
 }
 
 /// Nothing a skipped run must not leave: no pi call, no row, no Event (compared with `events_before`), no lock or log file.
-fn assert_nothing_done(fx: &Fx, events_before: i64) {
-    assert_eq!(fx.pi_calls(), 0, "the fake pi was never called");
+fn assert_nothing_done(fx: &impl Distill, events_before: i64) {
+    assert_eq!(fx.env().calls("pi").len(), 0, "the fake pi was never called");
     assert_eq!(curation_rows(fx), vec![], "no record_curations row");
     assert_eq!(events_count(fx), events_before, "no Event appended");
     let mut found = Vec::new();
-    files_named(&fx.env.cpd_home(), &["distill.lock", "distill.log"], &mut found);
-    files_named(&fx.env.home(), &["distill.lock", "distill.log"], &mut found);
+    files_named(&fx.env().cpd_home(), &["distill.lock", "distill.log"], &mut found);
+    files_named(&fx.env().home(), &["distill.lock", "distill.log"], &mut found);
     assert_eq!(found, Vec::<PathBuf>::new(), "no lock or log file");
 }
 
-fn archive_context(fx: &Fx) {
-    fx.store()
+fn archive_context(fx: &impl Distill) {
+    store(fx.env())
         .write("fixture", |tx| {
             tx.execute("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = ?1", [CONTEXT])?;
             Ok::<(), cpd_core::error::CpdError>(())
@@ -971,7 +1014,7 @@ fn archive_context(fx: &Fx) {
 
 #[test]
 fn an_archived_context_is_skipped_by_distill() {
-    let fx = fx().one_step();
+    let fx = fast();
     set_floor(&fx, 1);
     floor_notes(&fx, 3);
     archive_context(&fx);
@@ -990,7 +1033,7 @@ fn an_archived_context_is_skipped_by_distill() {
 
 #[test]
 fn a_context_under_the_floor_is_skipped_by_distill() {
-    let fx = fx().one_step();
+    let fx = fast();
     set_floor(&fx, 5);
     floor_notes(&fx, 4);
     let before = events_count(&fx);
