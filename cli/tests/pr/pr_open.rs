@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::TestEnv;
+use common::fx::Fx as Lock;
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -32,7 +32,8 @@ fn plan() -> PlanId {
 /// A repo `pay` (keyed `acme/pay`), the Lead worktree of Plan `pay`, PR `repo` (`dispatch`,
 /// title set) and its `open` Job `open-repo` with Attempt `open-repo-a1` (`running`).
 struct Fx {
-    env: TestEnv,
+    /// Holds the process's environment (`PATH` with the env's fake `gh`) for the test: `merge` runs in this process.
+    fx: Lock,
     home: CpdHome,
     repo: PathBuf,
     lead: PathBuf,
@@ -40,7 +41,8 @@ struct Fx {
 }
 
 fn fixture(policy: &str) -> Fx {
-    let env = TestEnv::new();
+    let fx = Lock::new();
+    let env = &fx.env;
     let repo = env.git_repo("pay").canonicalize().unwrap();
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
         env.git(&repo, &["config", key, value]);
@@ -74,12 +76,12 @@ fn fixture(policy: &str) -> Fx {
         made.path.display(),
         made.base_sha
     ));
-    Fx { env, home, repo, lead, work: made.path }
+    Fx { fx, home, repo, lead, work: made.path }
 }
 
 impl Fx {
     fn submit(&self) -> common::Run {
-        self.env.cpd_in(&self.work, &["attempt", "submit", ATTEMPT, "--plan", PLAN])
+        self.fx.env.cpd_in(&self.work, &["attempt", "submit", ATTEMPT, "--plan", PLAN])
     }
 
     fn merge(&self) -> merge::Merge {
@@ -101,11 +103,11 @@ impl Fx {
 #[test]
 fn the_open_jobs_merge_runs_the_pr_gate() {
     let fx = fixture("");
-    let marker = fx.env.root().join("pr-gate-ran");
-    fx.env.repo_policy("acme", "pay", &format!("[gate]\npr = \"local\"\n\n[hooks]\npre-merge = \"touch {}\"\n", marker.display()));
+    let marker = fx.fx.env.root().join("pr-gate-ran");
+    fx.fx.env.repo_policy("acme", "pay", &format!("[gate]\npr = \"local\"\n\n[hooks]\npre-merge = \"touch {}\"\n", marker.display()));
     fs::write(fx.work.join("a.txt"), "a\n").unwrap();
-    fx.env.git(&fx.work, &["add", "-A"]);
-    fx.env.git(&fx.work, &["commit", "-q", "-m", "a"]);
+    fx.fx.env.git(&fx.work, &["add", "-A"]);
+    fx.fx.env.git(&fx.work, &["commit", "-q", "-m", "a"]);
 
     // Submit runs no Gate: the open Job's Gate is at its merge.
     fx.submit().ok();
