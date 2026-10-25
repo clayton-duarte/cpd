@@ -10,6 +10,8 @@ import { AssistantMessageComponent, initTheme, type ExtensionAPI, type Extension
 import chalk from "chalk";
 chalk.level = 3;
 initTheme("dark", false);
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-reload-agent-"));
 test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
 
@@ -30,10 +32,10 @@ const EXPANDED = [
 	"│ built.",
 	"│",
 	"│ Then decide what the fold should hold.",
-	"╰\u{F0B2C} collapse",
+	"╰\u{F0B2C} collapse · 03:11",
 	"done",
 ];
-const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand", "done"];
+const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand · 03:11", "done"];
 
 type Controller = { dispose(): void };
 let transform: ((markdown: string, context: unknown) => string) | undefined;
@@ -58,7 +60,7 @@ async function reloaded(count: number, start0 = 1): Promise<Controller> {
 
 function chat(thinking = TEXT, reply = "done") {
 	const message = new AssistantMessageComponent({
-		content: [{ type: "thinking", thinking }, { type: "text", text: reply }], stopReason: "stop",
+		content: [{ type: "thinking", thinking }, { type: "text", text: reply }], stopReason: "stop", timestamp: TIME_MS,
 	} as never, false, undefined, undefined, 1, [(m: string, c: unknown) => transform!(m, c)] as never);
 	const draw = () => message.render(80);
 	const click = () => { const lines = draw(); return (message as any).handleMouse({ type: "click", button: "left", x: 3, y: 1, width: 80, height: lines.length }); };

@@ -25,6 +25,10 @@ async function loadHarness() {
 	return loaded;
 }
 
+// The machine-local time is the process timezone's: pin it, so `03:11` is the same on every machine.
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
 const EXPAND = "\u{F0B26}";
 const COLLAPSE = "\u{F0B2C}";
 const HEAD = " \u256D\u2500"; // " ╭─"
@@ -69,7 +73,7 @@ interface Drawn { running: string[]; done: string[] }
 
 /** One of the tools run to its end on the extension's own defaults (no file), drawn while it runs and with its result. */
 async function draw(name: string, expanded = false): Promise<Drawn> {
-	const { advance, announce, CASES, loadExtension, makeRow, shutdown } = await loadHarness();
+	const { advance, announce, CASES, loadExtension, makeRow, setNow, shutdown } = await loadHarness();
 	const harness = await loadExtension({}, { defaults: true });
 	try {
 		const id = `defaults-${name}-${expanded}`;
@@ -78,6 +82,7 @@ async function draw(name: string, expanded = false): Promise<Drawn> {
 		const row = makeRow(name, id, outcome.args, harness.definitions.get(name));
 		row.setExpanded(expanded);
 		row.setArgsComplete();
+		setNow(TIME_MS);
 		harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: name, args: outcome.args });
 		row.markExecutionStarted();
 		const running = row.render(100).map(plain);
@@ -103,7 +108,7 @@ test("with no file a compact row opens with ╭ and closes with ╰ U+F0B26 expa
 	for (const name of SEVEN) {
 		const { done } = await draw(name);
 		assert.ok(firstLine(done).startsWith(HEAD), `${name}: ${firstLine(done)}`);
-		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${EXPAND} expand · Done in 0\\.300s`, "u"), name);
+		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${EXPAND} expand · 03:11 · Done in 0\\.300s`, "u"), name);
 		assert.ok(done.every((line) => !line.includes("\u2514")), `${name}: no └ left`);
 	}
 });
@@ -111,7 +116,7 @@ test("with no file a compact row opens with ╭ and closes with ╰ U+F0B26 expa
 test("with no file an expanded row closes with ╰ U+F0B2C collapse · Done in … under its │ body", async () => {
 	for (const name of ["bash", "read", "edit"]) {
 		const { done } = await draw(name, true);
-		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${COLLAPSE} collapse · Done in 0\\.300s`, "u"), name);
+		assert.match(lastLine(done), new RegExp(`^ ${CLOSE}${COLLAPSE} collapse · 03:11 · Done in 0\\.300s`, "u"), name);
 		assert.ok(done.some((line) => line.startsWith(" \u2502 ")), `${name}: the body rail`);
 	}
 });

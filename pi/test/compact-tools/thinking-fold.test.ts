@@ -11,47 +11,61 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
-import { initTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, initTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ThinkingCycleController } from "../../compact-tools/extensions/compact-tools-thinking.ts";
 
 initTheme("dark", false);
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 // The user's own settings.json (hideThinkingBlock) must not decide the view these tests draw: an empty agent directory of their own.
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-fold-agent-"));
 test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
 
-const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
+const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
 const EXPAND = "\u{F0B26}";
 const COLLAPSE = "\u{F0B2C}";
 const NERD = { expand: EXPAND, collapse: COLLAPSE };
 const ESC = "\x1b[";
-const rows = (block: string) => block.split("\n").map((line) => plain(line).trim());
+const rows = (block: string) => block.split("\n").map((line) => plain(line).trim()).filter((line) => line !== "");
 
 const SOURCE = "Weighing the options.\n\n**Check the code**\nInspect the renderer.\n\n## Next\nKeep the cache.";
 const PARAGRAPH = "The user wants the pill to be one and to expand, so I will look at how the title is built and then decide what the fold should hold.";
 
-/** The block as the extension's Markdown transformer draws it; press() is Ctrl+T as the user presses it. */
+/**
+ * The block as pi draws it: the AssistantMessageComponent renders the thinking via the registered
+ * transformer, so the updateContent wrapper (thinkingBehavior) reads the message's timestamp and the
+ * toggle row carries the local time. press() is Ctrl+T as the user presses it.
+ */
 function thinking(source: string) {
 	let transform: ((markdown: string, context: unknown) => string) | undefined;
 	let terminalInput: ((data: string) => unknown) | undefined;
 	const pi = { on: () => {}, registerMarkdownTransformer: (handler: typeof transform) => { transform = handler; } } as unknown as ExtensionAPI;
 	const controller = new ThinkingCycleController(pi, () => true, () => NERD);
+	let message: AssistantMessageComponent | undefined;
 	controller.bind({
 		ui: {
 			theme,
-			setHiddenThinkingLabel: () => {},
+			setHiddenThinkingLabel: (label?: string) => { if (label !== undefined) message?.setHiddenThinkingLabel(label); },
 			onTerminalInput: (handler: typeof terminalInput) => { terminalInput = handler; return () => {}; },
 		},
 	} as unknown as ExtensionContext);
-	const draw = () => transform!(source, { messageType: "assistant-thinking", isStreaming: false, availableWidth: 80 });
+	message = new AssistantMessageComponent(
+		{ content: [{ type: "thinking", thinking: source }], stopReason: "stop", timestamp: TIME_MS } as never,
+		false, undefined, undefined, 1,
+		[(m: string, c: unknown) => transform!(m, c)] as never,
+	);
+	const draw = () => message!.render(80);
 	return { draw, press: () => terminalInput!("\x14"), end: () => controller.dispose() };
 }
 
+const nonEmpty = (lines: string[]): string[] => lines.filter((line) => plain(line).trim() !== "");
+
 function folded(source: string): string {
 	const block = thinking(source);
-	try { return block.draw(); } finally { block.end(); }
+	try { return nonEmpty(block.draw()).join("\n"); } finally { block.end(); }
 }
 
 function expanded(source: string): string {
@@ -59,13 +73,13 @@ function expanded(source: string): string {
 	try {
 		block.draw(); // the controller learns the block has detail on its first draw, as in Pi
 		block.press();
-		return block.draw();
+		return nonEmpty(block.draw()).join("\n");
 	} finally { block.end(); }
 }
 
 test("a thinking block folds to one Thinking pill and an expand toggle", () => {
 	for (const source of [SOURCE, PARAGRAPH]) {
-		assert.deepEqual(rows(folded(source)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`], source);
+		assert.deepEqual(rows(folded(source)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand · 03:11`], source);
 	}
 });
 
@@ -111,7 +125,7 @@ test("an expanded thinking block shows its whole text on rails 8 in text 7", () 
 test("an expanded thinking block ends with the collapse toggle", () => {
 	const lines = expanded(SOURCE).split("\n");
 	const last = lines.at(-1)!;
-	assert.equal(plain(last).trim(), `╰${COLLAPSE} collapse`, "the toggle alone, no hint");
+	assert.equal(plain(last).trim(), `╰${COLLAPSE} collapse · 03:11`, "the toggle alone, no hint");
 	assert.ok(last.indexOf("╰") > 0 && last.slice(0, last.indexOf("╰")).endsWith(`${ESC}90m`), "╰ is 8");
 	const glyph = last.indexOf(COLLAPSE);
 	assert.ok(last.slice(last.indexOf("╰"), glyph).includes(`${ESC}37m`), "the toggle is 7");
@@ -151,5 +165,5 @@ test("hideThinkingBlock true in settings.json starts the view folded", () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 	// The first step out of hidden: visible again, a one-paragraph block is the one pill and the toggle.
-	assert.deepEqual(rows(folded(PARAGRAPH)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`]);
+	assert.deepEqual(rows(folded(PARAGRAPH)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand · 03:11`]);
 });

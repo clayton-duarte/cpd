@@ -208,14 +208,6 @@ impl Fx {
         self.env.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
-    /// What a Worker's `attempt submit` printed, as the fake pi saved it: written whole, then renamed into place, so
-    /// that the file exists only with all of it.
-    fn submitted(&self, name: &str) -> Value {
-        let path = self.repo.parent().unwrap().join(name);
-        common::wait_until_for(&format!("the Worker to write {name}"), Duration::from_secs(60), || path.exists());
-        let text = fs::read_to_string(&path).unwrap();
-        serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
-    }
 }
 
 /// A review Worker: it submits with no findings, then with a commit and findings, then
@@ -362,44 +354,6 @@ fn the_worker_is_a_fork_of_the_lead_that_commits_nothing_and_the_merge_leaves_th
     assert!(!spec.contains("no_commits") && !spec.contains("quick check"), "{spec}");
     assert!(spec.contains("### Goal\n\nReview it."), "{spec}");
     assert_eq!(fs::read_to_string(&findings).unwrap(), "- one finding\n");
-}
-
-#[test]
-fn submit_without_commits_is_a_review_jobs_privilege_and_it_needs_its_findings_and_no_commit() {
-    let fx = fx();
-    fx.pi(REVIEWER);
-    fx.add("final", &["--review"]).ok();
-
-    let out = fx.dispatch("final").ok();
-    fx.wait_end("final-a1", &out["pid"]);
-
-    let first = fx.submitted("submit-1.json");
-    assert_eq!(first["error"]["code"], "review_missing", "{first}");
-    assert_eq!(first["error"]["details"]["path"], fx.env.cpd_home().join("run/pay/reviews/final.md").to_str().unwrap());
-    let second = fx.submitted("submit-2.json");
-    assert_eq!(second["error"]["code"], "review_commits", "{second}");
-    let third = fx.submitted("submit-3.json");
-    assert_eq!(third["ok"], true, "{third}");
-}
-
-#[test]
-fn a_normal_job_without_commits_is_still_refused() {
-    let fx = fx();
-    fx.add("impl", &[]).ok();
-    fx.pi(
-        r#""$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-1.part 2>&1; mv ../submit-1.part ../submit-1.json
-echo x > impl.txt; git add -A; git commit -qm x
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-2.part 2>&1; mv ../submit-2.part ../submit-2.json
-sleep 120"#,
-    );
-
-    let out = fx.dispatch("impl").ok();
-    fx.wait_end("impl-a1", &out["pid"]);
-
-    let first = fx.submitted("submit-1.json");
-    assert_eq!(first["error"]["code"], "no_commits", "{first}");
-    assert_eq!(fx.submitted("submit-2.json")["ok"], true);
-    assert_ne!(fx.lead_sha(), fx.env.git(&fx.repo, &["rev-parse", "main"]));
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! One transaction for every PR missing one; nothing is written when none is, so the step is idempotent.
 
 use super::SOURCE;
-use super::engine::Engine;
+use super::engine::{Engine, incident_holds};
 use super::report::{About, Step};
 use cpd_core::error::CpdError;
 use cpd_core::ids::{PlanId, PrKey};
@@ -23,6 +23,10 @@ const MISSING: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.
   ORDER BY p.created_at, r.plan, r.key";
 
 pub(super) fn run(engine: &mut Engine) {
+    if incident_holds(engine, Step::E4) {
+        engine.log.line("E4: holding: incident mode is on");
+        return;
+    }
     let missing = engine.store.read(|conn| {
         let mut stmt = conn.prepare(MISSING)?;
         let rows = stmt

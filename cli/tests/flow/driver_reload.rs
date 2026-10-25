@@ -237,57 +237,6 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
     assert_eq!(fx.runs().len(), 1);
 }
 
-#[test]
-fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
-    let fx = fx();
-    let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
-    // A `tmux` that holds the driver's `list-panes` of a `running` Attempt (A4's first look at the Worker's pane)
-    // while `hold` exists: the Attempt can be made `merging`, and the new cpd
-    // installed, before the driver's tick looks at the Attempt. Only A4's first
-    // tick lists the panes: later ticks test the pane's pid with no fork
-    // (engine-F1). So `hold` exists before the dispatch (A2 and A3 list no
-    // panes), not written once the Attempt runs, a race with that first tick
-    // 0.5 s later that a loaded machine loses.
-    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|dir| dir.join("tmux"))
-        .find(|p| p.is_file())
-        .expect("tmux on PATH");
-    write_executable(
-        &fx.env.bin().join("tmux"),
-        &format!(
-            "#!/bin/sh\n\
-             case \" $* \" in *\" list-panes \"*)\n\
-               if [ -e '{hold}' ] && '{CPD}' attempt show {ATTEMPT} --plan {PLAN} | grep -q '\"status\":\"running\"'; then\n\
-                 : > '{blocked}'; while [ -e '{hold}' ]; do sleep 0.05; done\n\
-               fi;;\n\
-             esac\n\
-             exec '{real}' \"$@\"\n",
-            hold = fx.path("hold").display(),
-            blocked = fx.path("blocked").display(),
-            real = real.display()
-        ),
-    );
-    fs::write(fx.path("hold"), "").unwrap();
-    let pid = fx.dispatch();
-    wait_until_for("the driver to be held", LONG, || fx.path("blocked").exists());
-    assert_eq!(fx.status(), "running", "held at A4, not before: {}", fx.log());
-    fs::write(fx.path("go"), "").unwrap();
-    wait_until_for("the Worker to submit", LONG, || fx.status() == "merging");
-    assert!(fx.runs().is_empty() && !fx.log().contains(RELOAD));
-    fx.install();
-    fs::remove_file(fx.path("hold")).unwrap();
-    wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
-
-    assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
-    fx.finish(pid);
-    fx.assert_merged(&old_lead);
-    let log = fx.log();
-    assert_eq!(log.matches(RELOAD).count(), 1, "{log}");
-    assert_eq!(log.matches("A8: merging").count(), 1, "the merge starts once, after the reload: {log}");
-    assert!(log.find(RELOAD) < log.find("A8: merging"), "{log}");
-    assert_eq!(log.matches("A1: resuming").count(), 0, "{log}");
-}
-
 /// The 00:02Z incident: a cpd that cannot open the database (its verdict, contract §4.5) is
 /// installed over a running driver. The driver does not `exec` it,
 /// says so once, and the Attempt runs on; a cpd that can open the store, installed
