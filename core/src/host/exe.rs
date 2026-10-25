@@ -12,8 +12,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::error::{CpdError, ErrorCode};
+use crate::ports::Ports;
 use super::deadline::Failed;
-use super::runner::{Runner, SystemRunner};
+use super::runner::Runner;
 
 /// What tells one installed file from another: device, inode and modification time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,7 +134,7 @@ impl Exe {
         if self.refused.get() == Some(now) {
             return Err(Refusal::Known);
         }
-        asks_to_open_store_with(&SystemRunner, &self.path, timeout).map_err(|reason| {
+        asks_to_open_store_with(&*Ports::current().runner, &self.path, timeout).map_err(|reason| {
             self.refused.set(Some(now));
             Refusal::New(reason)
         })
@@ -163,7 +164,7 @@ impl Exe {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.exec_with(&super::spawn::ProcessSpawn, args)
+        self.exec_with(&*Ports::current().spawn, args)
     }
 }
 

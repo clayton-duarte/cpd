@@ -26,7 +26,7 @@ use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
 use crate::host::limit::limit;
 use crate::host::git_guard;
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::ports::Ports;
 use crate::host::spawn::{Pid as SpawnPid, Signal as SpawnSignal, Spawn};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
@@ -321,7 +321,7 @@ pub(super) fn patiently_with<T>(
 /// doubling to 5 s. The pane says once what it waits for and why; the wrapper
 /// never ends for it. Any other result, error or not, is returned as it is.
 pub(super) fn patiently<T>(what: &str, access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
-    patiently_with(&SystemClock, what, access)
+    patiently_with(&*Ports::current().clock, what, access)
 }
 
 /// `wrong_pane` unless this process runs in a pane of cpd's tmux server whose

@@ -135,6 +135,19 @@ fn a_missing_tmux_tmpdir_is_exit_1_with_the_error_creating_text_and_no_stdout() 
 }
 
 #[test]
+fn the_tmux_tmpdir_a_call_does_not_name_is_the_one_the_process_inherited_as_a_child_would() {
+    let none = call(None, None, &["list-sessions"]);
+    assert_eq!(super::route::tmux_tmpdir(&none, Some("/inherited".into())).as_deref(), Some("/inherited"));
+    assert_eq!(super::route::tmux_tmpdir(&none, None), None);
+    // The call's own entry wins; a removed variable (`None`) is unset whatever the process has.
+    let own = call(Some(Path::new("/own")), None, &["list-sessions"]);
+    assert_eq!(super::route::tmux_tmpdir(&own, Some("/inherited".into())).as_deref(), Some("/own"));
+    let mut removed = call(None, None, &["list-sessions"]);
+    removed.envs.push(("TMUX_TMPDIR".into(), None));
+    assert_eq!(super::route::tmux_tmpdir(&removed, Some("/inherited".into())), None);
+}
+
+#[test]
 fn an_empty_tmux_tmpdir_is_exit_1_with_the_error_creating_text_and_no_stdout() {
     let mut empty = call(None, None, &["list-sessions"]);
     empty.envs.push(("TMUX_TMPDIR".into(), Some(String::new())));

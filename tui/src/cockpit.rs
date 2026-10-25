@@ -517,7 +517,7 @@ fn command(run: RunFn, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
 /// Replaces this process with `tmux -L <socket> attach -t <cockpit>`, run by
 /// `program` (default: `tmux` on `PATH`); returns only when that fails.
 fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
-    exec_attach_with(&Ports::real(), tmux, cockpit, program)
+    exec_attach_with(&Ports::current(), tmux, cockpit, program)
 }
 
 /// [`exec_attach`] through `ports.spawn.exec`.
@@ -592,7 +592,7 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
 /// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
 /// still to come; a failure is one line on stderr.
 fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
-    tmux_version_with(&Ports::real(), home, config, store, tmux, restart)
+    tmux_version_with(&Ports::current(), home, config, store, tmux, restart)
 }
 
 /// [`tmux_version`] with the installed tmux asked of `ports.runner`.

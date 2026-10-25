@@ -22,7 +22,7 @@ impl ViewLog {
 
     /// Appends `<RFC 3339 time> <line>`; `Err` with the reason when the file cannot be written.
     pub fn append(&self, line: &str) -> Result<(), String> {
-        self.append_with(&Ports::real(), line)
+        self.append_with(&Ports::current(), line)
     }
 
     /// [`ViewLog::append`] stamped by the clock of `ports`.

@@ -715,6 +715,9 @@ fn has_flock() -> bool {
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
+    /// Whether `TMUX_TMPDIR` is `<root>/tmux` whatever the root's length: set by an `Fx` on fake ports, whose tmux has no
+    /// socket (the 100-character limit of [`tmux_tmpdir_for`] is a real server's) and must not share `/tmp`.
+    pub(crate) tmux_in_root: bool,
     /// The env's process group: the reaper's pid; none for a [`TestEnv::bare`] env, which starts no process.
     pgid: Option<u32>,
     /// The reaper ([`TestEnv::empty`]), until the teardown stops it; none for a [`TestEnv::bare`] env.
@@ -820,7 +823,7 @@ impl TestEnv {
             .expect("write teardown script");
             start_reaper(&script)
         });
-        let env = TestEnv { dir, tmux_socket, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
+        let env = TestEnv { dir, tmux_socket, tmux_in_root: false, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -905,6 +908,9 @@ impl TestEnv {
 
     /// The `TMUX_TMPDIR` of this env's private tmux server: in the env, or `/tmp` when its socket path would be too long.
     pub fn tmux_tmpdir(&self) -> PathBuf {
+        if self.tmux_in_root {
+            return self.root().join("tmux");
+        }
         env_tmux_tmpdir(self.root(), self.tmux_socket())
     }
 

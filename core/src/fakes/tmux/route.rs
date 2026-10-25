@@ -47,6 +47,13 @@ impl Default for TmuxRoute {
 /// What the `tmux` client prints when the `TMUX_TMPDIR` it needs is not set.
 const NO_TMPDIR: &str = "error creating /tmp/tmux-<uid> (TMUX_TMPDIR is not set)\n";
 
+/// The `TMUX_TMPDIR` a real tmux would see: the call's own entry (`None` is a removed variable), else the one the
+/// process `inherited`, as a child does. Empty is unset.
+pub(super) fn tmux_tmpdir(call: &Call, inherited: Option<String>) -> Option<String> {
+    let own = call.envs.iter().find(|(k, _)| k == "TMUX_TMPDIR").map(|(_, v)| v.clone());
+    own.unwrap_or(inherited).filter(|d| !d.is_empty())
+}
+
 impl Handler for TmuxRoute {
     fn handle(&self, call: &Call) -> Reply {
         if let Some((_, reply)) = self.scripted.iter().find(|(matches, _)| matches(&call.args)) {
@@ -55,8 +62,8 @@ impl Handler for TmuxRoute {
         if call.args == ["-u", "-V"] {
             return Reply::ok(&format!("tmux {VERSION}\n"));
         }
-        let tmpdir = call.envs.iter().find_map(|(k, v)| (k == "TMUX_TMPDIR").then_some(v.as_deref()).flatten()).filter(|d| !d.is_empty());
-        let Some(tmux_tmpdir) = tmpdir else {
+        let tmpdir = tmux_tmpdir(call, std::env::var("TMUX_TMPDIR").ok());
+        let Some(tmux_tmpdir) = tmpdir.as_deref() else {
             return Reply::exit(1, "", NO_TMPDIR);
         };
         // A command with no directory of its own runs in the process's.

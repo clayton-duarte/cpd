@@ -16,6 +16,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
+use crate::ports::Ports;
 use crate::store::Store;
 
 // The merge's causes are the shared `Cause`; `Failure` is the name its callers know.
@@ -340,7 +341,7 @@ fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> 
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict (after
 /// `git rebase --abort`); `None` when it rebased.
 fn rebase(worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    rebase_with(&crate::host::runner::SystemRunner, worktree, onto)
+    rebase_with(&*Ports::current().runner, worktree, onto)
 }
 
 /// [`rebase`] on `runner` (a test passes a `FakeRunner`).
