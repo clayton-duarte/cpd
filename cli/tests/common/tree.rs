@@ -14,7 +14,7 @@
 use std::fs::File;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -24,9 +24,11 @@ use cpd_core::clock::Clock;
 use cpd_core::error::CpdError;
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_tui::palette::SPINNER;
 use cpd_tui::view_ports::Input;
 use nix::fcntl::{Flock, FlockArg};
+use ratatui::Terminal;
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use super::fx::Fx;
@@ -53,6 +55,8 @@ struct Remote {
     pending: Option<Event>,
     /// Whether a poll while a command runs is a poll like any other.
     eager: Arc<AtomicBool>,
+    /// How many snapshots the loop said it took ([`Input::snapshot_read`]).
+    snapshots: Arc<AtomicUsize>,
 }
 
 impl Remote {
@@ -86,6 +90,10 @@ impl Input for Remote {
     fn ready_while_busy(&mut self) -> io::Result<bool> {
         if self.eager.load(Ordering::SeqCst) { self.ask(Duration::ZERO) } else { Ok(false) }
     }
+
+    fn snapshot_read(&mut self) {
+        self.snapshots.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// The tree view, running, and the test's hand on it.
@@ -97,24 +105,42 @@ pub struct Tree {
     cmds: Option<Sender<Cmd>>,
     idle: Receiver<()>,
     eager: Arc<AtomicBool>,
+    snapshots: Arc<AtomicUsize>,
     thread: Option<JoinHandle<Result<Output, CpdError>>>,
 }
 
+/// A view's entry: what [`Tree::run`] calls on the view's thread (`cpd_tui::<view>::run_on`, its arguments bound).
+pub type Entry = dyn FnOnce(&Ports, &mut FakeTty, &mut Bytes, Terminal<Display>, &mut dyn Input) -> Result<Output, CpdError> + Send;
+
 impl Tree {
-    /// Runs the view in a `width` x `height` terminal on the `Fx`'s fake ports and returns when it first waits for input.
+    /// Runs the tree view in a `width` x `height` terminal on the `Fx`'s fake ports and returns when it first waits for input.
     pub fn start(fx: &Fx, width: u16, height: u16) -> Tree {
+        Tree::run(fx, "tree", width, height, Box::new(|ports, tty, out, terminal, input| cpd_tui::tree::run_on(ports, tty, out, terminal, input)))
+    }
+
+    /// Runs the view `name`, which `entry` runs (its `run_on`), in a `width` x `height` terminal on the `Fx`'s fake ports and
+    /// returns when it first waits for input. What is said of the tree here holds of any view.
+    pub fn run(fx: &Fx, name: &str, width: u16, height: u16, entry: Box<Entry>) -> Tree {
         let (display, out) = (Display::new(width, height), Bytes::default());
         let (cmds, from_test) = channel();
         let (to_test, idle) = channel();
         let eager = Arc::new(AtomicBool::new(false));
+        let snapshots = Arc::new(AtomicUsize::new(0));
         let ports = fx.fakes.ports.clone();
-        let mut remote = Remote { clock: ports.clock.clone(), idle: to_test, cmds: from_test, pending: None, eager: eager.clone() };
+        let mut remote = Remote {
+            clock: ports.clock.clone(),
+            idle: to_test,
+            cmds: from_test,
+            pending: None,
+            eager: eager.clone(),
+            snapshots: snapshots.clone(),
+        };
         let (shown, written) = (display.clone(), out.clone());
         let thread = thread::Builder::new()
-            .name("tree view".to_owned())
+            .name(format!("{name} view"))
             .spawn(move || {
                 let mut written = written;
-                cpd_tui::tree::run_on(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote)
+                entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote)
             })
             .expect("a thread for the view");
         let mut tree = Tree {
@@ -125,6 +151,7 @@ impl Tree {
             cmds: Some(cmds),
             idle,
             eager,
+            snapshots,
             thread: Some(thread),
         };
         tree.settle();
@@ -270,6 +297,16 @@ impl Tree {
     /// Whether a row of the screen has `text`.
     pub fn shows(&self, text: &str) -> bool {
         self.screen().iter().any(|r| r.contains(text))
+    }
+
+    /// How many times the view flushed its terminal so far: one per frame it drew, even a frame that changed nothing.
+    pub fn flushes(&self) -> usize {
+        self.display.flushes()
+    }
+
+    /// How many snapshots of the store the loop took so far (the first read, before the first frame, is not one).
+    pub fn snapshots(&self) -> usize {
+        self.snapshots.load(Ordering::SeqCst)
     }
 
     /// Everything the view wrote to its terminal outside its frame: the modes it set, and unset.

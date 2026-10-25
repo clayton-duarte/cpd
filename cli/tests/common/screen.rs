@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -226,16 +227,25 @@ impl Input for Script {
 /// it drew last, also while the view still runs (from a [`Step::Do`], or from the test while a view on another thread waits
 /// for its input).
 #[derive(Clone)]
-pub struct Display(Arc<Mutex<TestBackend>>);
+pub struct Display {
+    backend: Arc<Mutex<TestBackend>>,
+    flushes: Arc<AtomicUsize>,
+}
 
 impl Display {
     /// A `width` x `height` display.
     pub fn new(width: u16, height: u16) -> Display {
-        Display(Arc::new(Mutex::new(TestBackend::new(width, height))))
+        Display { backend: Arc::new(Mutex::new(TestBackend::new(width, height))), flushes: Arc::default() }
     }
 
     fn backend(&self) -> std::sync::MutexGuard<'_, TestBackend> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.backend.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// How many times the view flushed its terminal: one per `terminal.draw`, even with an empty diff (what `syscw` of
+    /// the process counted when the views ran in a pane).
+    pub fn flushes(&self) -> usize {
+        self.flushes.load(Ordering::SeqCst)
     }
 
     /// A terminal that draws on this display.
@@ -283,6 +293,7 @@ impl Backend for Display {
         self.backend().window_size()
     }
     fn flush(&mut self) -> Result<(), Self::Error> {
+        self.flushes.fetch_add(1, Ordering::SeqCst);
         self.backend().flush()
     }
 }

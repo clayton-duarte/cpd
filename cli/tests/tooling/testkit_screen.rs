@@ -178,6 +178,18 @@ fn display_shows_what_a_terminal_made_of_it_drew_while_the_test_holds_a_handle()
 }
 
 #[test]
+fn display_counts_a_flush_for_every_draw_even_one_that_changes_nothing() {
+    let display = Display::new(8, 2);
+    let mut terminal = display.terminal();
+    assert_eq!(display.flushes(), 0);
+
+    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+    terminal.draw(|frame| frame.render_widget(Paragraph::new("one"), frame.area())).expect("draw");
+
+    assert_eq!(display.flushes(), 2);
+}
+
+#[test]
 fn fake_tty_says_whether_there_is_a_terminal_and_logs_raw_mode_in_order() {
     let mut tty = FakeTty::new(true);
     assert!(tty.is_terminal() && !FakeTty::new(false).is_terminal());

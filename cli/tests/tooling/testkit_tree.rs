@@ -39,6 +39,22 @@ fn a_tree_draws_before_start_returns_and_a_nap_moves_the_clock_and_its_drop_ends
 }
 
 #[test]
+fn a_view_is_run_by_its_entry_and_its_flushes_and_snapshots_are_counted() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    let mut tree = Tree::start(&fx, 40, 6);
+    let flushes = tree.flushes();
+    assert!(flushes > 0 && tree.snapshots() == 0, "the first frame is drawn, and the first read is no snapshot of the loop");
+    tree.keys(&["j"]);
+    assert!(tree.flushes() > flushes, "a key is a frame");
+    fx.env.sql(
+        "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'session-state', 'fixture', '{}');",
+    );
+    tree.until_that("a snapshot", |tree| tree.snapshots() > 0);
+    assert_eq!(tree.snapshots(), 1, "one Event, one snapshot");
+}
+
+#[test]
 fn a_key_is_the_event_the_loop_reads_and_the_names_are_tmuxs() {
     assert_eq!(named("Enter"), key(KeyCode::Enter));
     assert_eq!(named("Escape"), key(KeyCode::Esc));
