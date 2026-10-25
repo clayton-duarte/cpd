@@ -25,7 +25,7 @@ mod resolve;
 mod resume;
 mod retier;
 mod report;
-mod retitle;
+pub(crate) mod retitle;
 mod row;
 pub(crate) mod run;
 mod send;

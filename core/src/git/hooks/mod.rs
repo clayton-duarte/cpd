@@ -7,6 +7,8 @@
 
 mod def;
 mod exec;
+#[cfg(test)]
+mod exec_runner_tests;
 mod template;
 
 use std::fmt;
@@ -21,6 +23,7 @@ use super::worktree::{list, worktree_of_branch};
 use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
+use crate::host::runner::SystemRunner;
 
 pub use def::{HookCommand, Pipeline, parse_value};
 pub use exec::is_withheld;
@@ -181,8 +184,7 @@ fn run_with_branch(
 
 /// Runs rendered `blocks` in `cwd` and writes the output to `log` (opened as `mode` says).
 fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)], timeout: Duration, log: &Path, mode: Log) -> HookResult {
-    // The log is opened first and written as the output arrives (a killed hook
-    // or driver still leaves it, and `tail -f` works).
+    // The log is opened first, so a killed driver still leaves it; a hook's output is written when the hook ends.
     let open = || match mode {
         Log::Truncate => fs::File::create(log),
         Log::Append => fs::File::options().create(true).append(true).open(log),
@@ -194,7 +196,7 @@ fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)]
             return HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None };
         }
     };
-    let done = exec::execute(blocks, cwd, timeout, env, file, TAIL_LINES);
+    let done = exec::run_with(&SystemRunner, blocks, cwd, timeout, env, file, TAIL_LINES);
     let tail = Some(done.tail.join("\n"));
 
     let written = match done.log_error {

@@ -10,7 +10,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
@@ -23,6 +22,8 @@ use crate::config::{Letter, Tier, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::host::deadline::Failed;
+use crate::host::runner::{Call, Runner, SystemRunner};
 use crate::ids::SessionId;
 use crate::output::Output;
 
@@ -228,26 +229,36 @@ fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, 
     let model = catalog.model_arg(Tier::new(Letter::G, 0).expect("GX"))?;
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
-    let mut command = Command::new("pi");
-    command.args(["--print", "--no-session", "--no-extensions", "--model", &model, "--", &prompt(limit)]);
-    for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CPD_")) {
-        command.env_remove(key);
-    }
-    command.env("PI_SKIP_VERSION_CHECK", "1").current_dir(&dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|e| title_failed(id, Reason::Spawn, format_args!("pi could not start: {e}")))?;
-    // At most 8 000 characters, under a pipe's buffer: the write never waits for pi to read.
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let written = stdin.write_all(text.as_bytes());
-    drop(stdin);
-    let out = child.wait_with_output().map_err(|e| title_failed(id, Reason::Spawn, format_args!("pi could not be waited for: {e}")))?;
+    let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+    run_pi_with(&SystemRunner, id, &model, &dir, text, limit, &environ)
+}
+
+pub(crate) use crate::host::runner::NO_DEADLINE;
+
+/// Steps 3 and 4 on `runner`: pi on `model` in `dir` (its stderr is the `Output`'s, passed on to this run's stderr), the conversation
+/// `text` as stdin, under [`NO_DEADLINE`]. The variables of `environ` that start with `CPD_` are removed.
+pub(crate) fn run_pi_with(runner: &dyn Runner, id: &SessionId, model: &str, dir: &Path, text: &str, limit: usize, environ: &[String]) -> Result<Title, CpdError> {
+    let mut envs: Vec<(String, Option<String>)> = environ.iter().filter(|k| k.starts_with("CPD_")).map(|k| (k.clone(), None)).collect();
+    envs.push(("PI_SKIP_VERSION_CHECK".to_owned(), Some("1".to_owned())));
+    let call = Call {
+        tool: "pi".to_owned(),
+        program: "pi".to_owned(),
+        args: ["--print", "--no-session", "--no-extensions", "--model", model, "--", &prompt(limit)].map(str::to_owned).to_vec(),
+        envs,
+        cwd: Some(dir.to_path_buf()),
+        deadline: NO_DEADLINE,
+        stdin: Some(text.as_bytes().to_vec()),
+        stderr_to: None,
+    };
+    let out = runner.run(&call).map_err(|e| match e {
+        Failed::Io(e) => title_failed(id, Reason::Spawn, format_args!("pi could not start: {e}")),
+        Failed::Timeout(e) => e,
+    })?;
     let _ = io::stderr().write_all(&out.stderr);
     let tail = tail(&out.stderr);
     if !out.status.success() {
         let how = out.status.code().map_or_else(|| format!("was ended by {}", out.status), |c| format!("exited with status {c}"));
         return Err(title_failed(id, Reason::Exit, format_args!("pi {how}")).with("exit", out.status.code()).with("tail", tail));
-    }
-    if let Err(e) = written {
-        return Err(title_failed(id, Reason::Spawn, format_args!("pi did not read the conversation: {e}")).with("tail", tail));
     }
     sanitise(&String::from_utf8_lossy(&out.stdout), limit).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
 }

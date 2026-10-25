@@ -65,6 +65,8 @@ fn every_call_is_recorded_in_order_with_what_the_command_carries() {
                 envs: vec![("GIT_TERMINAL_PROMPT".into(), Some("0".into())), ("TMUX".into(), None)],
                 cwd: Some(PathBuf::from("/repo")),
                 deadline: Duration::from_secs(60),
+                stdin: None,
+                stderr_to: None,
             },
             Call {
                 tool: "tmux".into(),
@@ -73,6 +75,8 @@ fn every_call_is_recorded_in_order_with_what_the_command_carries() {
                 envs: vec![],
                 cwd: None,
                 deadline: Duration::from_secs(10),
+                stdin: None,
+                stderr_to: None,
             },
         ]
     );
@@ -274,6 +278,8 @@ fn the_handler_sees_the_calls_program_args_envs_and_cwd() {
             envs: vec![("TMUX".into(), None), ("TMUX_TMPDIR".into(), Some("/t".into()))],
             cwd: Some(PathBuf::from("/w")),
             deadline: DEADLINE,
+            stdin: None,
+            stderr_to: None,
         }]
     );
 }

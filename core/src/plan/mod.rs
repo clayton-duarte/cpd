@@ -17,7 +17,7 @@ pub mod fingerprint;
 pub mod jobs;
 mod lead;
 mod list;
-mod lock;
+pub(crate) mod lock;
 mod new;
 mod outline;
 mod overlap;
