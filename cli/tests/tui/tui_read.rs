@@ -480,7 +480,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     // No item: no filled dot, whatever the state (a blocked Session is idle until the engine opens its dialog).
     let all = dots(&mut store);
     assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
-    assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working, Dot::Idle, Dot::Stopped));
+    assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working(None), Dot::Idle, Dot::Stopped));
     // A Lead waiting for an agent (hs-d303) shows the waiting dot: not the idle glyph, and never red.
     assert_eq!(dot(&all, "l-wai"), Dot::Waiting);
 
@@ -504,10 +504,10 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     for (id, want) in [
         ("l-red", Dot::Red),
         ("l-yel", Dot::Yellow), // the Plan's own Lead shows the Plan's pull request item
-        ("f-yel", Dot::Working), // a fork shows no item of the Plan
+        ("f-yel", Dot::Working(None)), // a fork shows no item of the Plan
         ("l-mag", Dot::Magenta),
         ("l-whi", Dot::White),
-        ("l-wrk", Dot::Working), // working shows the spinner, not its red dialog
+        ("l-wrk", Dot::Working(None)), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
         ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
@@ -566,11 +566,11 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
     assert!(!Dot::Fixing.needs_you(), "the loader is no needs-you dot");
     // (iv) no failed Job: the cyan loader
-    assert_eq!(dot(&mut store, "l-nf"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-nf"), Dot::Working(None));
     // (v) idle, waiting, stopped: their usual dot
     assert_eq!((dot(&mut store, "l-idl"), dot(&mut store, "l-wai"), dot(&mut store, "l-stp")), (Dot::Idle, Dot::Waiting, Dot::Stopped));
     // (vi) a working fork is not the Plan's Lead
-    assert_eq!(dot(&mut store, "f-fk"), Dot::Working);
+    assert_eq!(dot(&mut store, "f-fk"), Dot::Working(None));
 
     inbox(
         &mut store,
@@ -585,16 +585,16 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     assert_eq!(dot(&mut store, "l-fxr"), Dot::Red);
     assert_eq!(dot(&mut store, "l-fxw"), Dot::Fixing);
     // (iv) no failed Job: own state first, whatever the items (hs-d183)
-    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working(None));
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
 
     // (viii) an archived Lead keeps its glyph
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'l-arc';");
-    assert_eq!(dot(&mut store, "l-arc"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-arc"), Dot::Working(None));
 
     // (vii) the failed Job is queued again: the cyan loader
     sql(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE plan = 'fx';");
-    assert_eq!(dot(&mut store, "l-fx"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Working(None));
 }
 
 #[test]

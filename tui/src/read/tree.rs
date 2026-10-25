@@ -123,7 +123,8 @@ pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [Se
     for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
         let lead_of = s.plan.as_ref().filter(|_| s.plan_lead);
         let failed = lead_of.is_some_and(|p| heads.iter().any(|h| h.id == *p && h.counts.failed >= 1));
-        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed);
+        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed, None);
+        // the phase (from `heads`) is ignored until the implementation Job reads it (red test: phase_dot_tests).
     }
 }
 
@@ -177,7 +178,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let managers: BTreeMap<ContextId, (Dot, Place, bool)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
             .into_iter()
             .map(|s| {
-                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false);
+                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false, None);
                 { let asleep = s.is_asleep(); (s.context, (dot, s.place, asleep)) }
             })
             .collect();

@@ -174,7 +174,7 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     // the colour of a mark that has a meaning, and the colourless text: bright and 15 when the PR is owned (clickable)
     let mark = |m| if owned { palette::fg_clickable(m) } else { palette::fg(m) };
     let text = if owned { palette::clickable_text() } else { palette::read_only_text() };
-    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed), frame, false));
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed, None), frame, false));
     let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + look.conflict.map_or(0, |(word, _)| 1 + word.chars().count());
     let mut spans = vec![
         "  ".into(),

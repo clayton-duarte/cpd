@@ -150,7 +150,7 @@ pub(crate) fn sections() -> Vec<Section> {
     ]);
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
-    let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
+    let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working(None), f, false)).collect::<Vec<_>>());
     let fixing = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Fixing, f, false)).collect::<Vec<_>>());
     let dots = Section {
         title: DOTS_TITLE,

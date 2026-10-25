@@ -472,7 +472,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Working(_) => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
@@ -659,9 +659,9 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
-        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working(None), f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
-        assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
+        assert_eq!(dot_span(Dot::Working(None), 2, false).style, Style::new().fg(Color::LightCyan));
         assert_eq!(SPINNER.len(), 28);
         assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
         assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[14], SPINNER[14], SPINNER[0]));
@@ -711,7 +711,7 @@ mod tests {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
         for f in 0..SPINNER.len() {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
+            assert_eq!(dot_span(Dot::Working(None), f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
         }
     }
 

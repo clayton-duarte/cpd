@@ -149,7 +149,7 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed), frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, None), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
