@@ -204,7 +204,7 @@ fn needs_on_a_cancelled_job_are_not_drawn() {
     assert!(text.contains("gone"), "the cancelled Job is drawn:\n{text}");
     let inside = box_inside(&screen, "api ·").join("\n");
     assert!(
-        !inside.contains(['─', '┬', '┴', '├', '┤', '┼', '╭', '╮', '╰', '╯', '󱦳']),
-        "no arrow or link between the pills:\n{text}"
+        !inside.contains(['─', '┬', '┴', '├', '┤', '┼', '╭', '╮', '╰', '╯']),
+        "no line or link between the pills:\n{text}"
     );
 }

@@ -14,7 +14,7 @@ use cpd_core::error::CpdError;
 use cpd_core::ids::{ContextId, RecordId};
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;

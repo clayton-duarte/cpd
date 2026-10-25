@@ -467,6 +467,16 @@ impl NewEvent {
     pub fn error(text: impl Into<String>, source: &str, code: &str, message: &str, details: impl Serialize) -> NewEvent {
         make(Kind::Error, text, json!({"source": source, "code": code, "message": message, "details": details}))
     }
+
+    /// `incident-started` (contract §5.2, commands.md §25.1).
+    pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str) -> NewEvent {
+        make(Kind::IncidentStarted, text, json!({"by": by, "reason": reason, "started_at": started_at}))
+    }
+
+    /// `incident-ended` (contract §5.2, commands.md §25.2).
+    pub fn incident_ended(text: impl Into<String>, by: &str, ended_at: &str) -> NewEvent {
+        make(Kind::IncidentEnded, text, json!({"by": by, "ended_at": ended_at}))
+    }
 }
 
 #[cfg(test)]
@@ -565,6 +575,8 @@ mod tests {
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
             Kind::ReviewOpened => vec![NewEvent::review_opened(T, s, s, s, 1)],
             Kind::ReviewClosed => vec![NewEvent::review_closed(T, s, s)],
+            Kind::IncidentStarted => vec![NewEvent::incident_started(T, s, s, s)],
+            Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s)],
         }
     }
 

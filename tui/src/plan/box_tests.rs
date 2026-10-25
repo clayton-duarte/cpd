@@ -62,3 +62,41 @@ fn a_pr_box_title_follows_the_corner_and_one_dash() {
     let text: String = under[usize::from(body)..].concat();
     assert!(text.starts_with("no Jobs"), "`no Jobs` starts at column {body}: {text:?}");
 }
+
+fn text(c: &flow::Chart) -> String {
+    let buf = &c.buf;
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a_need_connector_reaches_the_top_border_with_no_arrowhead() {
+    use cpd_core::ids::{JobKey, PrKey};
+
+    let mut web = sample_pr("web");
+    web.needs = vec![PrKey::parse("api").unwrap()];
+    let prs = [sample_pr("api"), web];
+    let mut b = sample_job("api", "b");
+    b.needs = vec![JobKey::parse("a").unwrap()];
+    let jobs = [sample_job("api", "a"), b, sample_job("web", "c")];
+    let c = boxes::layout(&prs, &jobs, &read::NeedsUser::default(), 0).chart;
+
+    let want = "\
+╭─ api · api-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1─────󰝦 b│S1             │
+╰─────────────────┬─────────────────╯
+                  │
+                  │
+╭─ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 c│S1                          │
+╰───────────────────────────────────╯";
+    let got = text(&c);
+    assert_eq!(got, want, "\n{got}");
+    assert!(!got.contains('\u{F19B3}'), "the 󱦳 arrowhead is gone: {got:?}");
+    let rows: Vec<&str> = got.lines().collect();
+    assert_eq!(rows[4], "                  │", "the routed line reaches the cell above web's top border: {got:?}");
+    assert!(rows[0].contains('\u{F19B0}'), "the TO title arrow is still in api's top row");
+    assert!(rows[5].contains('\u{F19B0}'), "the TO title arrow is still in web's top row");
+}

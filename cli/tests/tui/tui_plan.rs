@@ -313,7 +313,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     env.sql(&s);
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('╯'));
-    // web below api, the arrow from api's bottom border into web's top border
+    // web below api, the line from api's bottom border into web's top border
     // `web` waits for `api`, which has not merged (hs-d521): its title says on what
     let (merged_row, queued_row) = (
         format!(" │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                 │"),
@@ -325,7 +325,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
         merged_row.as_str(),
         " ╰───────────────────┬───────────────────╯",
         "                     │",
-        "                     󱦳",
+        "                     │",
         " ╭─ web · web 󱦰 develop · waiting on api ╮",
         queued_row.as_str(),
         " ╰───────────────────────────────────────╯",

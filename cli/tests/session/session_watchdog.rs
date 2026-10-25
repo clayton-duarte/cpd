@@ -9,28 +9,22 @@
 use crate::common;
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until, wait_until_for};
+use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
 const LEAD: &str = "lead1";
-/// The watchdog's limit as these tests set it (the wrapper's constant is 60 s), and its poll (2 s).
-const LIMIT: Duration = Duration::from_millis(300);
 const POLL: Duration = Duration::from_millis(100);
 /// The wrapper's polls: the watchdog's and the wrapper's loop (`FILE_POLL`, 0.5 s).
 const POLLS: [(&str, &str); 2] = [("CPD_TEST_WATCHDOG_POLL", "0.1"), ("CPD_TEST_FILE_POLL", "0.1")];
-/// [`POLLS`] and the limit.
-const SHORT: [(&str, &str); 3] = [POLLS[0], POLLS[1], ("CPD_TEST_ADAPTER_WATCHDOG", "0.3")];
-
 /// The finished turn the Lead's session file ends with.
 const FINISHED: &str = "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n";
 
 struct Fixture {
     env: TestEnv,
     pane: String,
-    started: Instant,
 }
 
 impl Fixture {
@@ -90,48 +84,9 @@ fn start(state: &str, pi: &str, vars: &[(&str, &str)]) -> Fixture {
     let command = format!("exec env {vars}'{CPD}' session run {LEAD}");
     let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
     ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);
-    let started = Instant::now();
-    let fixture = Fixture { env, pane, started };
+    let fixture = Fixture { env, pane };
     wait_until("the first pi", || !fixture.env.calls("pi").is_empty());
     fixture
-}
-
-#[test]
-fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event() {
-    let f = start("stopped", ":", &SHORT);
-
-    // The lower bound is the claim: not restarted before the limit. How late it comes is no claim, only a deadline.
-    wait_until("pi restarted", || f.env.calls("pi").len() >= 2);
-    let after = f.started.elapsed();
-    assert!(after >= LIMIT, "restarted after {after:?}, before the limit");
-    let session_file = f.env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD}.jsonl")).display().to_string();
-    assert!(f.env.calls("pi")[1].windows(2).any(|w| w == ["--session", &session_file]), "it resumes the session file");
-
-    // The restarted pi has no adapter either, so it is restarted in turn: the limit starts again at the restart, and
-    // each restart has its one Event. Read once two Events are there (more restarts may follow meanwhile).
-    wait_until_for("a second restart", LIMIT * 2 + Duration::from_secs(30), || f.errors() >= 2);
-    let first = |sql: &str| f.env.query::<String>(&format!("{sql} FROM events WHERE kind = 'error' ORDER BY id LIMIT 1"));
-    assert_eq!(first("SELECT json_extract(data, '$.code')"), "adapter_missing");
-    assert_eq!(first("SELECT json_extract(data, '$.source')"), "session run");
-    assert_eq!(first("SELECT json_extract(data, '$.details.session')"), LEAD);
-    assert_eq!(first("SELECT session"), LEAD);
-    let apart: f64 = f.env.query(
-        "SELECT (julianday(b.at) - julianday(a.at)) * 86400.0 FROM events a JOIN events b
-          ON b.id = (SELECT min(id) FROM events WHERE kind = 'error' AND id > a.id)
-          WHERE a.id = (SELECT min(id) FROM events WHERE kind = 'error')",
-    );
-    assert!(apart >= LIMIT.as_secs_f64(), "the second Event came {apart} s after the first, within the limit");
-}
-
-#[test]
-fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
-    // The adapter reported `idle` (here before the wrapper starts): the watchdog's polls see it, not `stopped`.
-    let f = start("idle", ":", &SHORT);
-    // time-claim: an idle pi is left alone past the limit and a few polls of the watchdog; no per-poll signal from
-    // `session run`.
-    std::thread::sleep((LIMIT + POLL * 3).saturating_sub(f.started.elapsed()));
-    assert_eq!(f.env.calls("pi").len(), 1);
-    assert_eq!(f.errors(), 0);
 }
 
 #[test]

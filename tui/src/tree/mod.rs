@@ -37,6 +37,8 @@ mod kinds;
 #[cfg(test)]
 mod look;
 #[cfg(test)]
+mod manager_tests;
+#[cfg(test)]
 mod margin_tests;
 #[cfg(test)]
 mod scroll_tests;

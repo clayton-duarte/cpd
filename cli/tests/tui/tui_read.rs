@@ -688,6 +688,36 @@ fn a_context_row_fills_only_from_its_managers_items() {
     assert_eq!(rows(&mut store)[0], ("alpha".into(), Dot::Stopped));
 }
 
+/// An archived Context carries its archived Manager in `archived_managers`; a live Context's list is empty while its
+/// dot still comes from its live Manager (commands.md §17; hs-d630, hs-d633).
+#[test]
+fn the_tree_reads_an_archived_manager_of_an_archived_context() {
+    let (_env, mut store) = fixture();
+    // `alpha` is live and gets a live Manager; `zeta` is an archived Context with its archived Manager.
+    sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
+    sql(&mut store, &context("zeta"));
+    sql(
+        &mut store,
+        &format!(
+            "{}\n             UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'zeta';\n             UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'm-zeta';",
+            session_row("m-zeta", "manager", "zeta", "", None, "idle", None, "2026-01-02T00:00:06.000Z")
+        ),
+    );
+
+    let tree = read::tree(&mut store).unwrap();
+    let by = |id: &str| tree.contexts.iter().find(|c| c.id.as_str() == id).unwrap();
+    let alpha = by("alpha");
+    assert_eq!(alpha.dot, Dot::Idle, "a live Context's dot is still its live Manager's");
+    assert!(alpha.archived_managers.is_empty(), "a live Context has no archived Manager");
+    let zeta = by("zeta");
+    assert!(zeta.is_archived());
+    assert_eq!(
+        zeta.archived_managers.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["m-zeta"],
+        "the archived Context's archived Manager"
+    );
+}
+
 #[test]
 fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
     let (env, mut store) = fixture();
@@ -769,9 +799,9 @@ fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
     let c = ship.head.counts;
     assert_eq!((c.draft, c.queued, c.running, c.merging, c.failed, c.merged, c.cancelled), (1, 1, 1, 1, 1, 1, 1));
     assert_eq!(c.total(), 7);
-    assert_eq!(c.counters(), [1, 1, 1, 1, 1], "queued, running, merging, failed, merged; cancelled is not shown");
+    assert_eq!(c.counters(), [2, 2, 1, 1], "planned (drafts and queued), active (running and merging), failed, done; cancelled is not shown");
     let sketch = &tree.contexts[0].plans[1];
-    assert_eq!(sketch.head.counts.counters(), [2, 0, 0, 0, 0], "the first counter is the drafts when there are any");
+    assert_eq!(sketch.head.counts.counters(), [2, 0, 0, 0], "the planned role is the drafts plus queued");
     assert_eq!((ship.head.open_escalations, ship.head.review_pending, sketch.head.review_pending), (1, true, false));
 }
 

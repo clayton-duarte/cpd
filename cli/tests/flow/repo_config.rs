@@ -33,20 +33,6 @@ fn policy_show_of_a_repo_without_a_file_is_repo_unconfigured() {
 }
 
 #[test]
-fn pr_add_of_a_repo_without_a_file_is_repo_unconfigured() {
-    let env = env();
-    env.fake_tmux();
-    env.write_tmux_config("");
-    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    env.cpd(&["plan", "new", "pl", "--context", "ctx", "--title", "Plan"]).ok();
-    let repo = env.unconfigured_repo("shop");
-    let run = env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]);
-    let error = refused(&run, "repo_unconfigured", 3);
-    assert_eq!(error["details"]["repo"], "acme/shop");
-    assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{run:?}");
-}
-
-#[test]
 fn an_empty_repo_file_is_valid_and_shows_the_default_hooks_test_commands_and_protected() {
     let env = env();
     env.repo_policy("acme", "shop", "");

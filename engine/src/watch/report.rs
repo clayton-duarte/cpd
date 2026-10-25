@@ -41,6 +41,7 @@ pub(super) enum Step {
     E11,
     E12,
     E13,
+    E14,
 }
 
 impl fmt::Display for Step {
@@ -59,6 +60,7 @@ impl fmt::Display for Step {
             Step::E11 => "E11 (team review poll)",
             Step::E12 => "E12 (Worker archive)",
             Step::E13 => "E13 (Sleep)",
+            Step::E14 => "E14 (Lead archive)",
         })
     }
 }
