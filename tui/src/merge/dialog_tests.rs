@@ -9,7 +9,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 
 use super::{Action, Pull, draw, on_mouse, popup_args};
 use crate::palette;
@@ -77,7 +77,7 @@ fn the_dialog_is_one_rounded_frame_with_the_title_pill_the_pull_request_its_titl
     }
     // frame colour 8, the title pill is pill_static()
     for (x, y) in [(0, 0), (1, 0), (59, 0), (0, 1), (59, 1), (0, 6), (59, 6), (0, 7), (30, 7), (59, 7), (50, 0)] {
-        assert_eq!(buf[(x, y)].fg, Color::DarkGray, "frame colour at ({x}, {y})");
+        assert_eq!(buf[(x, y)].fg, palette::muted_text().fg.unwrap(), "frame colour at ({x}, {y})");
     }
     let pill = palette::pill_static();
     for x in 2..=8 {
