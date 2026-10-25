@@ -663,6 +663,8 @@ fn display_message(cx: &mut Cx, args: &[String]) -> R<()> {
 #[cfg(test)]
 mod gaps_tests;
 #[cfg(test)]
+mod kit;
+#[cfg(test)]
 mod nested_tests;
 #[cfg(test)]
 mod state_tests;
