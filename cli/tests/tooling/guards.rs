@@ -117,7 +117,7 @@ fn every_wait_polls_through_the_harness() {
 /// (cross-process writers, exec of the binary, `--version`), which takes it to nothing and removes this table. An exact
 /// match, as the other ratchets (`scripts/tripwire/allow.txt`, `pi/test/sleep-allow.txt`): a new call fails, and a call
 /// that goes away fails until its number is lowered here.
-const STORE_TESTENV_DEBT: &[(&str, usize)] = &[("events.rs", 5), ("store.rs", 20), ("store_window.rs", 1)];
+const STORE_TESTENV_DEBT: &[(&str, usize)] = &[("store.rs", 8), ("store_window.rs", 1)];
 
 /// How each `store/` file differs from `debt`, as `file: n calls (allowed m)`; empty when the counts are exact.
 /// `lines` are the (path, line number, line) of the test files; a comment line calls nothing.
@@ -168,4 +168,106 @@ fn the_store_scan_fails_a_store_test_that_calls_testenv_new_and_passes_the_exact
     assert_eq!(store_testenv_mismatches(&lines, &[("store.rs", 2)]), Vec::<String>::new(), "the exact debt passes");
     assert_eq!(store_testenv_mismatches(&lines, &[("store.rs", 3)]), ["store.rs: 2 calls (allowed 3)"], "a call gone fails until lowered");
     assert_eq!(store_testenv_mismatches(&lines, &[("store.rs", 2), ("gone.rs", 1)]), ["gone.rs: 0 calls (allowed 1)"]);
+}
+
+/// The problems of the exception list `scripts/tripwire/shell-tests.txt` as `text` says it: a line is `<path> # <reason>`,
+/// the path is a file of the repository at `root`, and no path is listed twice.
+fn shell_test_list_problems(root: &std::path::Path, text: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut problems = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')) {
+        let Some((path, reason)) = line.split_once(" # ") else {
+            problems.push(format!("{line}: not `<path> # <reason>`"));
+            continue;
+        };
+        if reason.trim().is_empty() {
+            problems.push(format!("{path}: no reason"));
+        }
+        if !root.join(path).is_file() {
+            problems.push(format!("{path}: not a file of the repository"));
+        }
+        if !seen.insert(path) {
+            problems.push(format!("{path}: listed twice"));
+        }
+    }
+    problems
+}
+
+#[test]
+fn every_shell_test_exception_names_an_existing_file_once_with_a_reason() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let text = std::fs::read_to_string(root.join("scripts/tripwire/shell-tests.txt")).unwrap();
+    let problems = shell_test_list_problems(&root, &text);
+    assert!(problems.is_empty(), "scripts/tripwire/shell-tests.txt:\n{}", problems.join("\n"));
+    assert!(text.lines().filter(|l| !l.starts_with('#')).count() > 5, "the list is read from the right file");
+}
+
+#[test]
+fn the_shell_test_list_scan_names_a_missing_file_a_missing_reason_and_a_repeat() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let text = "# a comment\ncli/tests/tooling/guards.rs # fine\ncli/tests/tooling/guards.rs # again\nnowhere.rs # gone\ncli/tests/tooling/smoke.rs #  \nno separator\n";
+    assert_eq!(
+        shell_test_list_problems(&root, text),
+        [
+            "cli/tests/tooling/guards.rs: listed twice",
+            "nowhere.rs: not a file of the repository",
+            "cli/tests/tooling/smoke.rs: no reason",
+            "no separator: not `<path> # <reason>`",
+        ]
+    );
+}
+
+/// The `path:line: text` of every merge-conflict marker in `text`: a line starting with `<<<<<<< ` or `>>>>>>> `, and
+/// a line equal to `=======` when the same text also has a `<<<<<<< ` line (a lone `=======` is a legal setext heading
+/// or markdown table line).
+fn conflict_marker_lines(path: &str, text: &str) -> Vec<String> {
+    let has_open = text.lines().any(|l| l.starts_with("<<<<<<< "));
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> ") || (has_open && *l == "======="))
+        .map(|(n, l)| format!("{path}:{}: {l}", n + 1))
+        .collect()
+}
+
+/// Every file of the tree at `dir` with a source extension, skipping `target/`, `node_modules/`, `.git/` and the
+/// worktrees (`.cpd/`, `.worktrees/`, `worktrees/`). std `fs` only: no git, no process.
+fn source_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+    const SKIP: [&str; 6] = ["target", "node_modules", ".git", ".cpd", ".worktrees", "worktrees"];
+    const EXTENSIONS: [&str; 7] = ["rs", "md", "toml", "sh", "ts", "json", "txt"];
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if !SKIP.contains(&name.as_str()) {
+                source_files(&path, found);
+            }
+        } else if path.extension().is_some_and(|e| EXTENSIONS.iter().any(|x| e == *x)) {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn no_tracked_source_file_carries_a_merge_conflict_marker() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    source_files(&root, &mut files);
+    assert!(files.len() > 200, "the scan saw {} files under {}: it scans the wrong directory", files.len(), root.display());
+    let marked: Vec<String> = files
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok().map(|text| (path, text)))
+        .flat_map(|(path, text)| conflict_marker_lines(&path.display().to_string(), &text))
+        .collect();
+    assert!(marked.is_empty(), "merge-conflict markers committed:\n{}", marked.join("\n"));
+}
+
+#[test]
+fn the_conflict_marker_scan_names_each_marker_and_spares_a_lone_setext_line() {
+    let conflict = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> origin/main\n";
+    assert_eq!(
+        conflict_marker_lines("f.rs", conflict),
+        ["f.rs:2: <<<<<<< HEAD", "f.rs:4: =======", "f.rs:6: >>>>>>> origin/main"]
+    );
+    assert!(conflict_marker_lines("f.md", "Title\n=======\n\n| a |\n").is_empty());
+    assert!(conflict_marker_lines("f.md", "x <<<<<<< y\n  >>>>>>> z\n").is_empty());
 }

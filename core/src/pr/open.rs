@@ -1,6 +1,6 @@
-//! `pr open` (commands.md §9.1, contract §7.6): the Gate on the Lead Branch's
-//! tip G in a gate worktree, the push of G by rule P, the PR, for one PR of the
-//! Plan. No lock and no R (hs-d243).
+//! `pr open` (commands.md §9.1, contract §7.6): the PR's `open` Job, whose merge runs
+//! the Gate in its Attempt worktree and opens the pull request, for one PR of the Plan.
+//! No lock and no R (hs-d243).
 
 use std::path::Path;
 
@@ -12,11 +12,11 @@ use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
 use super::start::base_pr;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, gate_then, illegal_phase, pr_policy, short};
+use super::{Args, Env, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
-use crate::host::runner::SystemRunner;
+use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::output::Output;
 use crate::job;
@@ -81,8 +81,9 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 /// A stacked PR's base branch, its base PR's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
 /// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
 /// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
-fn require_base_on_remote(env: &mut Env, plan: &PlanId, repo: &Path, pr: &PrRow, then: &str) -> Result<(), CpdError> {
-    let Some(base_pr) = env.store.read(|conn| base_pr(conn, plan, pr))? else { return Ok(()) };
+/// A stacked PR's base is on the remote: the PR's base PR, read from `store` by [`base_check`].
+fn require_base_on_remote_pr(repo: &Path, pr: &PrRow, base_pr: Option<&str>, then: &str) -> Result<(), CpdError> {
+    let Some(base_pr) = base_pr else { return Ok(()) };
     if !git::run::has_origin(repo)? {
         return Ok(());
     }
@@ -103,6 +104,23 @@ fn require_base_on_remote(env: &mut Env, plan: &PlanId, repo: &Path, pr: &PrRow,
             .with("exit", code)
             .with("stderr", listed.stderr)),
     }
+}
+
+/// The `open` or `update` Job's base check at its merge (contract §7.7; hs-d679): a stacked PR's base is on the remote, and
+/// `sha` does not conflict with the freshly fetched base. It runs before the Gates, so nothing is pushed or opened when it refuses.
+pub fn base_check(
+    conn: &rusqlite::Connection,
+    plan: &PlanId,
+    repo: &Path,
+    worktree: &Path,
+    pr: &PrRow,
+    sha: &str,
+    again: &str,
+) -> Result<(), CpdError> {
+    let base_pr = base_pr(conn, plan, pr)?;
+    require_base_on_remote_pr(repo, pr, base_pr.as_deref(), &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
+    let base_sha = fresh_base(repo, &pr.base)?;
+    require_no_conflict(repo, worktree, pr, &base_sha, sha, again, "your branch")
 }
 
 /// B (contract §7.6 `pr open` step 1): `origin/<base>` after `git fetch origin <base>`, read once; a repo with no
@@ -229,7 +247,7 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let created_at = match gh::lookup(&SystemRunner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+    let created_at = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
         Some(looked_up) => looked_up.created_at,
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
@@ -258,7 +276,7 @@ fn merged_row(lead: &Path, head: &gh::HeadPr) -> Result<PolledPr, CpdError> {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", head.url))
             .with("url", head.url.as_str())
     })?;
-    match gh::lookup(&SystemRunner, lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
+    match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), head.number)])?.into_iter().next().flatten() {
         Some(looked_up) if looked_up.state == PrState::Merged => Ok(looked_up),
         Some(other) => Err(CpdError::new(
             ErrorCode::GhFailed,
@@ -364,13 +382,12 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
     Ok(Some(Phase::Done))
 }
 
-/// What an `open` or `update` Job's `attempt submit` checks after the quick check (contract §7.7 "An `open` or `update` Job at submit",
-/// hs-d340), in this order, each refusal changing nothing: for an `open` Job the stored title (`pr_title_required`) and the newest pull request of
-/// the Lead Branch not closed without a merge (`pr_closed`; a merged one is adopted by the Job's merge, so nothing below it runs, as `pr open`
-/// runs no Gate for it); for an `update` Job the PR is `open`; the PR's policy resolves; the Lead Branch's tip is an ancestor of HEAD
-/// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds); the base check (`base_not_found`, and
-/// `base_conflict` by `git merge-tree` on a freshly fetched base, hs-d490: it is merged only on a conflict); and, when the PR's `pr.gate` is
-/// `local`, the Gate on HEAD in a gate worktree and a test slot (`gate_failed`, `gate_error`). `root` is the Attempt worktree, `sha` its HEAD.
+/// What an `open` or `update` Job's `attempt submit` checks (contract §7.7 "An `open` or `update` Job at submit", hs-d340), in this
+/// order, each refusal changing nothing: for an `open` Job the stored title (`pr_title_required`) and the newest pull request of the Lead
+/// Branch not closed without a merge (`pr_closed`; a merged one is adopted by the Job's merge, so nothing below it runs, as `pr open` runs no
+/// Gate for it); for an `update` Job the PR is `open`; the PR's policy resolves; and the Lead Branch's tip is an ancestor of HEAD
+/// (`lead_branch_moved`: a Job merged into it since this Attempt began, and A8 never rebases these kinds). The base check and the Gates run
+/// at the merge (§7.4 step 6, hs-d679). `root` is the Attempt worktree, `sha` its HEAD.
 pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jobs::Job, root: &Path, sha: &str) -> Result<(), CpdError> {
     let key = PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
     let prs = env.plan(plan)?;
@@ -393,7 +410,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
         }
     }
     // 2. The policy resolves, as for `pr open`.
-    let policy = pr_policy(env, plan, &key)?;
+    let _policy = pr_policy(env, plan, &key)?;
     if adopting {
         return Ok(());
     }
@@ -424,12 +441,8 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
                 .with("stderr", git::tail(&contained.stderr, git::TAIL_LINES)));
         }
     }
-    // 4. The base check: a stacked PR's base is on the remote; the base is merged only on a conflict.
-    require_base_on_remote(env, plan, repo, pr, &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
-    let base_sha = fresh_base(repo, &pr.base)?;
-    require_no_conflict(repo, root, pr, &base_sha, sha, &again, "your branch")?;
-    // 5. The Gate on HEAD, when the PR's policy runs it here: in a gate worktree, in a test slot.
-    gate_then(env, &policy, plan, pr, sha, "Fix what the Gate reports (details.tail, details.log), commit, and submit again.")
+    // The base check and the Gate run at the merge (§7.4 step 6, hs-d679), not at submit.
+    Ok(())
 }
 
 /// `[{key, number, url, merged_at}]` of every `merged` PR, in key order (`plan-done`'s `prs`).

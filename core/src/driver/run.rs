@@ -196,7 +196,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A1: before anything opens a file, so fd 3 cannot be one of ours. Held
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
-    let exe = Exe::current()?;
+    // This executable as the ports tell it (the real ones: the path recorded at process start), so that a test can stand
+    // a file of its own for it and replace that file.
+    let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
@@ -416,7 +418,10 @@ impl Driver {
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
-        let failed = self.exe.exec_with(&*self.ports.spawn, std::env::args_os().skip(1));
+        // The argv this driver was started with (`start` makes it so), from its own fields: a driver run in a test has no process argv.
+        let id = self.id.to_string();
+        let args = ["attempt", "run", id.as_str(), "--plan", self.plan.as_str()];
+        let failed = self.exe.exec_with(&*self.ports.spawn, args);
         // Still here: the `exec` failed. Do not leak the lock to the children.
         let _ = self.lock.close_on_exec();
         Err(failed)
@@ -564,7 +569,8 @@ impl Driver {
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
             let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &stall::descendants, &file, pi, span_open)) {
+            let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
+            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, &file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
@@ -756,7 +762,8 @@ impl Driver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::spawn::ProcessSpawn;
+    use crate::driver::ports_tests::process;
+    use crate::host::spawn::FakeSpawn;
 
     #[test]
     fn a1_takes_up_starting_running_and_merging() {
@@ -768,17 +775,16 @@ mod tests {
 
     #[test]
     fn a_zombie_or_reaped_process_is_not_alive() {
-        assert!(ProcessSpawn.alive(SpawnPid(std::process::id())));
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
+        // The look at a pane asks `Spawn::alive`; the fake's process that ended is the zombie, then the reaped one.
+        let spawn = FakeSpawn::new();
+        let pid = process(&spawn);
+        assert!(spawn.alive(pid));
         // Not reaped yet: a zombie once it has exited.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while ProcessSpawn.alive(SpawnPid(pid)) {
-            assert!(std::time::Instant::now() < deadline, "{pid} still alive");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        child.wait().unwrap();
-        assert!(!ProcessSpawn.alive(SpawnPid(pid)));
+        spawn.exit(pid, 0);
+        assert!(!spawn.alive(pid));
+        assert_eq!(spawn.try_wait(pid).unwrap().map(|s| s.success()), Some(true), "waited for: reaped");
+        assert!(!spawn.alive(pid));
+        assert!(!spawn.alive(SpawnPid(4_000_000)), "a pid nobody started");
     }
 
     #[test]

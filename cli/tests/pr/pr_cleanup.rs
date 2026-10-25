@@ -6,7 +6,7 @@ use crate::common;
 
 use std::fs;
 use std::ops::Deref;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
@@ -224,32 +224,6 @@ impl Fx {
     /// `UPDATE attempts SET <set>` for one Attempt of the Plan.
     fn set_attempt(&self, id: &str, set: &str) {
         self.store().write("fixture", |tx| Ok(tx.execute(&format!("UPDATE attempts SET {set} WHERE plan = 'pay' AND id = ?1"), [id])?)).unwrap();
-    }
-
-    /// A gate worktree of PR `key` for process `pid`, as `pr push` adds it: detached and locked.
-    fn gate_worktree(&self, key: &str, pid: u32) -> PathBuf {
-        let path = gate_worktree_path(&self.repo, &plan(), &PrKey::parse(key).unwrap(), pid).unwrap();
-        let reason = format!("cpd gate {pid}");
-        self.git(&self.repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", &reason, path.to_str().unwrap(), "main"]);
-        path
-    }
-
-    /// The paths of the repo's worktrees.
-    fn worktrees(&self) -> Vec<PathBuf> {
-        let list = self.git(&self.repo, &["worktree", "list", "--porcelain"]);
-        list.lines().filter_map(|l| l.strip_prefix("worktree ")).map(PathBuf::from).collect()
-    }
-
-    /// Sets the repo file's `[hooks]` to `toml`, and pushes an empty commit of PR `key`'s Lead Branch.
-    fn hooks(&self, key: &str, toml: &str) {
-        let pr = self.pr(key);
-        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
-        self.git(&pr.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
-        self.git(&pr.lead, &["push", "-q", "origin", &pr.lead_branch]);
-    }
-
-    fn remote_sha(&self, branch: &str) -> String {
-        self.git(&self.repo, &["ls-remote", "origin", &format!("refs/heads/{branch}")])
     }
 
     /// The `data` of the Plan's `error` Events, in order.
@@ -529,42 +503,6 @@ fn a_held_driver_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
 }
 
 #[test]
-fn a_gate_worktree_whose_pid_is_dead_is_removed_and_one_whose_pid_lives_is_kept() {
-    let fx = fx(&["api"]);
-    let dead = fx.gate_worktree("api", fx.ended_pid());
-    let live = fx.gate_worktree("api", fx.started());
-    fx.github(&[], &["api"]);
-
-    fx.poll();
-
-    assert!(!dead.exists(), "the leftover of a killed Gate goes");
-    assert!(!fx.worktrees().contains(&dead), "and its registration");
-    assert!(live.exists() && fx.worktrees().contains(&live), "a running Gate keeps its worktree");
-    assert_eq!(fx.gone("api"), (true, true));
-    assert_eq!(fx.errors(), Vec::<Value>::new());
-
-    // A gate worktree left on disk keeps the PR in the later polls' retries, silently.
-    fx.poll();
-    assert!(live.exists());
-    assert_eq!(fx.errors(), Vec::<Value>::new());
-}
-
-#[test]
-fn a_dead_gate_worktree_of_a_pr_cleaned_up_earlier_is_swept_by_a_later_poll() {
-    let fx = fx(&["api"]);
-    fx.github(&[], &["api"]);
-    fx.poll();
-    assert_eq!(fx.gone("api"), (true, true));
-
-    // A Gate that was running at the merge was killed since.
-    let dead = fx.gate_worktree("api", fx.ended_pid());
-    fx.poll();
-
-    assert!(!dead.exists() && !fx.worktrees().contains(&dead));
-    assert_eq!(fx.errors(), Vec::<Value>::new());
-}
-
-#[test]
 fn a_lead_worktree_a_merge_left_stale_is_brought_up_to_date_and_removed() {
     let fx = fx(&["api"]);
     let api = fx.pr("api");
@@ -586,124 +524,4 @@ fn a_lead_worktree_a_merge_left_stale_is_brought_up_to_date_and_removed() {
     assert_eq!(fx.errors(), Vec::<Value>::new());
 }
 
-/// The `Spawn` of the Gate test: the `FakeSpawn`, and this test process's own pid alive (`pr push` runs in this
-/// process, so its gate worktree is named for the test's pid, which no `FakeSpawn` started).
-struct OwnPidAlive(Arc<dyn Spawn>);
 
-impl Spawn for OwnPidAlive {
-    fn spawn(&self, l: &Launch) -> std::io::Result<Pid> {
-        self.0.spawn(l)
-    }
-    fn try_wait(&self, p: Pid) -> std::io::Result<Option<std::process::ExitStatus>> {
-        self.0.try_wait(p)
-    }
-    fn signal(&self, p: Pid, s: Signal) -> std::io::Result<()> {
-        self.0.signal(p, s)
-    }
-    fn alive(&self, p: Pid) -> bool {
-        p.0 == std::process::id() || self.0.alive(p)
-    }
-    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
-        self.0.exe_of(p)
-    }
-    fn cmdline(&self, p: Pid) -> Option<String> {
-        self.0.cmdline(p)
-    }
-    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
-        self.0.with_env(key, value)
-    }
-    fn ppid(&self, p: Pid) -> Option<Pid> {
-        self.0.ppid(p)
-    }
-    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
-        self.0.env_of(p, key)
-    }
-    fn exec(&self, l: &Launch) -> std::io::Error {
-        self.0.exec(l)
-    }
-    fn stream(&self, l: &Launch) -> std::io::Result<(Pid, Box<dyn std::io::BufRead + Send>)> {
-        self.0.stream(l)
-    }
-    fn self_exe(&self) -> Result<PathBuf, cpd_core::error::CpdError> {
-        self.0.self_exe()
-    }
-}
-
-/// The `pre-merge` hook, paused mid-run: `sh -c paused-gate` reaches `started`, then waits at `go`: two barriers, no sleep.
-struct PausedGate {
-    started: Barrier,
-    go: Barrier,
-}
-
-impl Handler for PausedGate {
-    fn handle(&self, call: &Call) -> Reply {
-        assert_eq!(call.args[1], "paused-gate", "the only hook of the test");
-        self.started.wait();
-        self.go.wait();
-        Reply::ok("")
-    }
-}
-
-/// Lets a paused Gate go when it drops, so a failed assertion does not leave the `pr push` thread blocked for ever.
-struct Release<'a>(Option<&'a PausedGate>);
-
-impl Release<'_> {
-    fn release(&mut self) {
-        if let Some(gate) = self.0.take() {
-            gate.go.wait();
-        }
-    }
-}
-
-impl Drop for Release<'_> {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
-#[test]
-fn a_pr_merged_during_its_gate_loses_its_lead_worktree_but_not_the_gate_worktree() {
-    // hs-n124: the clean-up once removed the Lead worktree under a running Gate. The Gate now runs
-    // in a gate worktree of its own, which the clean-up leaves alone while its pid lives.
-    let mut fx = fx(&["api"]);
-    // `pr push` runs in this process: its pid is the test's, alive for the sweep.
-    fx.kit.fakes.ports.spawn = Arc::new(OwnPidAlive(fx.kit.fakes.ports.spawn.clone()));
-    // The Gate runs only under `pr.gate = "local"` (contract §8.3).
-    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-    let api = fx.pr("api");
-    fx.hooks("api", "pre-merge = \"paused-gate\"\n");
-    let before = fx.remote_sha(&api.lead_branch);
-    let gate = Arc::new(PausedGate { started: Barrier::new(2), go: Barrier::new(2) });
-    let _ = (*fx.fakes.runner).clone().route("sh", gate.clone());
-    let gate_path = gate_worktree_path(&fx.repo, &plan(), &PrKey::parse("api").unwrap(), std::process::id()).unwrap();
-    let ports = fx.fakes.ports.clone();
-
-    let push = std::thread::scope(|s| {
-        let push = s.spawn(move || {
-            let argv = ["cpd", "pr", "push", "--plan", "pay", "--pr", "api"].map(std::ffi::OsString::from);
-            let mut stdout = Vec::new();
-            cpd::run_with(&ports, argv, &mut stdout);
-            String::from_utf8(stdout).unwrap()
-        });
-        let mut release = Release(Some(&gate));
-        gate.started.wait();
-        fx.github(&[], &["api"]);
-
-        let out = fx.poll();
-
-        let during = (out["merged"].clone(), fx.gone("api"), gate_path.exists(), fx.errors());
-        release.release();
-        (push.join().unwrap(), during)
-    });
-    let (stdout, (merged, gone, gate_kept, errors)) = push;
-
-    assert_eq!(merged, json!([{"plan": "pay", "pr": "api"}]));
-    assert_eq!(gone, (true, true), "the Lead worktree goes: no Gate runs there");
-    assert!(gate_kept, "the running Gate's worktree stays");
-    assert_eq!(errors, Vec::<Value>::new());
-
-    let out: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stdout}"));
-    assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
-    assert_eq!(fx.remote_sha(&api.lead_branch), before, "nothing pushed");
-    assert!(!gate_path.exists(), "pr push removes its own gate worktree");
-}

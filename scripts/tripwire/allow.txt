@@ -3,13 +3,9 @@
 # docs/research/tests-mock-*.md (over-approximate on purpose); a migration Job deletes its lines.
 # Never add a line for a hit: migrate the test to the fake tmux instead.
 # Exception: a test that landed after the inventory may be listed in an urgent PR, by its full name, and is migrated later.
-cpd::engine watch_curate_inbox::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_distill_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_sleep::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_titles_width::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_worker_archive::  # m-engine: engine tests on a real tmux server
 cpd::engine watch::  # m-engine: engine tests on a real tmux server
-cpd::store events::  # m-engine: store commands that may reach a real tmux
 cpd::store store_asleep::  # m-engine: store commands that may reach a real tmux
 cpd::store store_local_needs::  # m-engine: store commands that may reach a real tmux
 cpd::store store_window::  # m-engine: store commands that may reach a real tmux
@@ -20,21 +16,14 @@ cpd::session pill_lines::  # m-session: session tests on a real tmux server
 cpd::session plannotator_env::  # m-session: session tests on a real tmux server
 cpd::session session_asleep::  # m-session: session tests on a real tmux server
 cpd::session session_first_message::  # m-session: session tests on a real tmux server
-cpd::session session_reload::  # m-session: session tests on a real tmux server
-cpd::session session_retier::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
 cpd::session session_watchdog::  # m-session: session tests on a real tmux server
 cpd::session session::  # m-session: session tests on a real tmux server
+cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_digest::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_manager_by_user::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_manager::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_pending_waiting::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_idle::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_reload::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan_new_by_user::  # m-flow: flow commands that may reach a real tmux
@@ -48,41 +37,33 @@ cpd::tooling fake_tmux::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling gate_run::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling harness::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling install_script::  # m-tooling: tooling test that may reach a real tmux
-cpd::tooling no_repo_lock::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::pr git_guard::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr git::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr merge::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
-cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_worker::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui inbox_rules::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_tree::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_tree_delete::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_tree_archive_manager::  # m-tui-t: cockpit view driven on a real tmux server
+cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
+cpd::tui tui_logs::  # m-tui-r: view driven through a pane
+cpd::tui tui_merge::  # m-tui-t: cockpit view driven on a real tmux server
+cpd::tui tui_plan::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_tree_asleep::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_widgets::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_plan::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_merge::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui tui_logs::  # m-tui-r: view driven through a pane
 cpd::tui tui_chat_pad::  # m-tui-r: view driven through a pane
 cpd::tui tui_history::  # m-tui-r: view driven through a pane
 cpd::tui tui_titles::  # m-tui-r: view driven through a pane
 cpd-core context::  # m-units: unit tests that may start a real tmux
-cpd-core driver::  # m-units: unit tests that may start a real tmux
 cpd-core host::  # m-units: unit tests that may start a real tmux
 cpd-core lock::  # m-units: unit tests that may start a real tmux
 cpd-core merge::  # m-units: unit tests that may start a real tmux
 cpd-core plan::  # m-units: unit tests that may start a real tmux
 cpd-core pr::  # m-units: unit tests that may start a real tmux
-cpd-core session::  # m-units: unit tests that may start a real tmux
 cpd-core store::  # m-units: unit tests that may start a real tmux
 cpd-engine watch::  # m-units: unit tests that may start a real tmux
 cpd-tui background::  # m-units: unit tests that may start a real tmux
 cpd-tui cockpit::  # m-units: unit tests that may start a real tmux
-cpd-tui dialog::  # m-units: unit tests that may start a real tmux
 cpd-tui merge::  # m-units: unit tests that may start a real tmux
 cpd-tui pace_tests::  # m-units: unit tests that may start a real tmux
 cpd-tui plan::  # m-units: unit tests that may start a real tmux

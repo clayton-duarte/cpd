@@ -106,12 +106,18 @@ fn load(store: &mut Store, id: &SessionId) -> Result<History, CpdError> {
     Ok(History { name, archived, text })
 }
 
+fn event_loop_with<B: Backend>(ctx: &mut Ctx<B>, history: History) -> std::io::Result<()> {
+    show_with(ctx, &history.name, history.archived, &history.text)
+}
+
 /// What the loop waits for the input, when nothing else is due: the view changes only by input, so any time will do.
 const IDLE: Duration = Duration::from_secs(60);
 
-fn event_loop_with<B: Backend>(ctx: &mut Ctx<B>, history: History) -> std::io::Result<()> {
-    let mut view = View::new(&history.name, history.archived);
-    view.set_lines(render(&history.text));
+/// Draws the history of the Session `name` over the text of its file and takes input until `q` or Esc: what `run` runs in
+/// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
+    let mut view = View::new(name, archived);
+    view.set_lines(render(text));
     loop {
         ctx.draw(|f| view.draw(f))?;
         while !ctx.input.poll(IDLE)? {}

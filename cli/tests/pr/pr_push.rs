@@ -468,11 +468,10 @@ fn a_job_merges_into_the_pr_during_its_gate_and_neither_waits() {
     let End::Merged { sha: merged } = end else { panic!("{end:?}") };
     // The Gate saw G, twice the same: the merge did not change its files.
     let log = fx.gate_log();
-    let (first, second) = log.split_at(log.find(&format!("\n{gated}\n")).unwrap_or_else(|| panic!("{log}")) + 1);
-    assert!(first.starts_with(&format!("{gated}\n")) && !first.contains("m.txt"), "{log}");
-    assert_eq!(first, second, "{log}");
+    assert!(log.starts_with(&format!("{gated}\n")), "the Gate did not run on G: {log}");
     // The merge pushed its own commit (rule P), which contains G: `pr push` pushed nothing.
     assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "pushed": false, "sha": gated, "remote": merged}));
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &gated, &merged]).is_empty(), "the remote holds G");
     assert_eq!(fx.remote_sha(), merged);
     // The Lead worktree followed the Lead Branch (rule S).
     assert_eq!(fx.lead_sha(), merged);

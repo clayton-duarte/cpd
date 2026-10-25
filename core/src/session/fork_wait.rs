@@ -2,7 +2,7 @@
 //! the pane waits until the source Lead has finished its turn, and the two
 //! tests of "finished" that a reload and a review Worker's fork share.
 
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -50,7 +50,7 @@ pub(super) fn wait_for_source_with(
             print!("\n  The source Lead {source} is stopped and has no session file, so it will never finish a turn.\n  Press Enter to retry.\n");
             let _ = std::io::stdout().flush();
             let mut line = String::new();
-            match std::io::stdin().lock().read_line(&mut line) {
+            match crate::host::input::read_line(&mut line) {
                 Ok(0) | Err(_) => return Ok(None),
                 Ok(_) => {}
             }

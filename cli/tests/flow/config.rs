@@ -46,12 +46,10 @@ fn config_defaults_context_distill_tier_to_gx() {
             "machine": "hs",
             "host": "hs",
             "concurrency": 3,
-            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
-            "context_recent_days": 1,
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
             "open_tier": "H3",
@@ -88,6 +86,18 @@ fn config_defaults_context_distill_tier_to_gx() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// hs-d679: the test-slot pool is gone, so `test_concurrency` is not a config key: it is refused
+/// like every unknown key, with its key path.
+#[test]
+fn test_concurrency_is_not_a_config_key() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &format!("{MINIMAL}test_concurrency = 2\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "test_concurrency");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -180,7 +190,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -200,8 +210,6 @@ version = 1
 machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
-test_concurrency = 64
-context_recent_days = 3650
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
@@ -253,7 +261,6 @@ work_session = "w"
     let out = config_with(&fx, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
-    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
@@ -1063,27 +1070,6 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     );
 }
 
-/// Contract §8.2 (hs-d549, hs-d551): `context_recent_days`, default 1, an integer >= 1.
-#[test]
-fn context_recent_days_defaults_to_1_and_refuses_0() {
-    let fx = Fx::new();
-    let out = config_with(&fx, MINIMAL).ok();
-    assert_eq!(out["config"]["context_recent_days"], 1, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "default", "{out}");
-
-    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 7, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "file", "{out}");
-
-    for bad in ["0", "-1", "1.5", "\"2\""] {
-        let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = {bad}\n"));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{bad}");
-        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
-        assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
-    }
-}
-
 /// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
 #[test]
 fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
@@ -1105,16 +1091,3 @@ fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integ
     }
 }
 
-/// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
-#[test]
-fn context_recent_days_above_3650_is_refused() {
-    let fx = Fx::new();
-    let out = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
-
-    let run = config_with(&fx, &format!("{MINIMAL}context_recent_days = 3651\n"));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid", "{err}");
-    assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
-}

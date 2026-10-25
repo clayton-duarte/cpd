@@ -38,9 +38,6 @@ pub struct Config {
     pub host: HostName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
-    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
-    /// (§7.6 "The test slot", hs-d336, hs-d301).
-    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -48,8 +45,6 @@ pub struct Config {
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
     pub context_distill_tier: Tier,
-    /// The days of curated records the digest takes as relevant (§4.6, §8.2, hs-d549, hs-d551).
-    pub context_recent_days: u32,
     /// The records a Context holds before it is curated (hs-d592).
     pub context_curation_min_records: u32,
     /// The loop-guard breaker trips when more than this many self-started turns run in 600 ms (§3.6, §8.2, hs-d552, hs-d571).
@@ -280,7 +275,6 @@ impl Config {
         let host_default = HostName::parse(machine.as_str()).expect("a machine name is a valid host name");
         let host = r.get("host", host_default, |v| HostName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
-        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
@@ -294,7 +288,6 @@ impl Config {
             }
             Ok(tier)
         })?;
-        let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
         let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
         let open_tier = r.get("open_tier", Tier::parse("H3").expect("a valid Tier"), |v| {
@@ -402,12 +395,10 @@ impl Config {
             machine,
             host,
             concurrency,
-            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,
             context_distill_tier,
-            context_recent_days,
             context_curation_min_records,
             loop_guard_turns,
             open_tier,

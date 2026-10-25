@@ -1,11 +1,9 @@
 //! Sessions (contract §3.6, §6.4, §6.7; commands.md §10 with §19 amendments
-//! 1–3). Every test of `fork`, `open`, `park`, `close`, `history`, `rename`, `archive` and `unarchive`, the engine's E2 on
-//! a dead Lead pane, the short ids, and the ones that start no tmux, run the command tree in this process (`Fx`; on
-//! `Fx::with_ports` when tmux is reached: the cockpit is `Fx::cockpit` on the fake tmux, a pane's program is what the
-//! fake server recorded for it, a pane whose program ends is `Fx::pane_exit`, the engine's tick is `Fx::engine_tick`, a
-//! refusing `tmux` is a rule of the `FakeRunner`). The wrapper's tests (a `session run` in a pane, `fork` waiting for
-//! its source, the user's quit) stay on `TestEnv` — the built binary against a private tmux server, with fake `pi` and
-//! `cpd` scripts on `PATH` — until their Job migrates them.
+//! 1–3), every test in this process (`Fx`, on `Fx::with_ports`): the cockpit is `Fx::cockpit` on the fake tmux, a pane's
+//! program is what the fake server recorded for it, a pane whose program ends is `Fx::pane_exit`, the engine's tick is
+//! `Fx::engine_tick`, a refusing `tmux` is a rule of the `FakeRunner`. The wrapper's tests (a `session run` in a pane,
+//! `fork` waiting for its source, the user's quit) run the wrapper on a thread of the test, on virtual time
+//! (`common::wrapper`): its pi is a pid of the `FakeSpawn` and its Enter is typed by the test.
 
 use crate::common;
 
@@ -17,9 +15,10 @@ use std::time::Duration;
 
 use common::fx::{Fx, PaneRow};
 use common::session::{Cpd, events, home, setup, show};
-use common::{Run, SLEEP_SECONDS, TestEnv, backdate, refused, wait_until};
+use common::wrapper::{Pane, Wrapper, installed_cpd};
+use common::{Run, TestEnv, refused};
 use cpd_core::host::runner::Reply;
-use cpd_core::host::tmux::SERVER_OPTIONS;
+use cpd_core::host::spawn::{Launch, Pid};
 use cpd_core::ids::{PlanId, SessionId};
 use serde_json::{Value, json};
 
@@ -34,58 +33,9 @@ fn sid(id: &str) -> SessionId {
 
 // ---------- tmux ----------
 
-/// A fake `pi` that creates its session file (when given `--session-id`) and
-/// then runs `then`.
-pub(crate) fn fake_pi(env: &TestEnv, then: &str) {
-    env.fake_pi(&format!(
-        "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
-         if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
-         printf '{{\"type\":\"session\"}}\\n' > \"$HOME/.pi/agent/sessions/g/2026_$id.jsonl\"; fi\n{then}"
-    ));
-}
-
-/// The polls of `session run` as these tests set them (contract §1.2 "Test overrides"): the fork's wait for its
-/// source (`SOURCE_POLL`, 2 s) in every pane, the wrapper's loop (`FILE_POLL`, 0.5 s) with [`fast_wrapper`].
-const POLL: Duration = Duration::from_millis(100);
-
-/// Every `session run` started from now on runs its loop every [`POLL`], for a test that waits for what the loop
-/// sees (pi's exit, a new pi). Not the default: each pane's loop would cost the other tests CPU.
-fn fast_wrapper(env: &TestEnv) {
-    let out = env.tmux(&["set-environment", "-g", "CPD_TEST_FILE_POLL", &POLL.as_secs_f64().to_string()]);
-    assert!(out.status.success(), "tmux set-environment: {}", String::from_utf8_lossy(&out.stderr));
-}
-
-/// The cockpit of a test still on `TestEnv` (the migrated ones: `Fx::cockpit`): session `cpd`, window `main` with a tree pane and the
-/// placeholder in the chat slot, on a server started with cpd's
-/// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
-/// a pane whose program exits stays, dead, instead of taking the chat slot with it.
-/// Every pane started later waits for a fork's source every [`POLL`].
-pub(crate) fn cockpit(env: &TestEnv) {
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let sleep = format!("sleep {SLEEP_SECONDS}");
-    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().map(String::as_str).chain([";"])).collect();
-    args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
-    let tree = ok(&args);
-    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
-    ok(&["set-environment", "-g", "CPD_TEST_SOURCE_POLL", &POLL.as_secs_f64().to_string()]);
-}
-
-/// A tmux server a test reads: the private one of a [`TestEnv`] (a real tmux) or the fake of an [`Fx`] on fake ports, so
-/// the readers below serve a file that is migrated and one that is not yet.
+/// A tmux server a test reads: the fake of an [`Fx`] on fake ports.
 trait Server {
     fn tmux(&self, args: &[&str]) -> Output;
-}
-
-impl Server for TestEnv {
-    fn tmux(&self, args: &[&str]) -> Output {
-        TestEnv::tmux(self, args)
-    }
 }
 
 impl Server for Fx {
@@ -165,10 +115,6 @@ fn ok_with_panes<E: Server + Cpd>(env: &E, args: &[&str]) -> Value {
         panic!("cpd {args:?} failed: {run:?}\npanes:\n{}", panes_report(env));
     }
     run.ok()
-}
-
-pub(crate) fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
-    env.calls("pi").into_iter().filter(|c| c.iter().any(|a| a == flag)).collect()
 }
 
 // ---------- list, show ----------
@@ -570,66 +516,116 @@ fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
     assert_eq!(panes(&fx), panes_before);
 }
 
+// ---------- the wrapper of a fork: `session run` waits for its source ----------
+
+/// A finished turn (the last `message` is an assistant's `stop`), what pi's session file of a Lead at its idle ends with.
+const FINISHED_TURN: &str = "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n";
+
+/// The pane of `Fx::cockpit` that a `session open` or `session fork` made, with a `session run <id>` started in it: the
+/// wrapper runs on a thread of the test, stepped by it. Drops the wrapper, then the pane.
+struct Running {
+    w: Wrapper,
+    pane: Pane,
+}
+
+impl Running {
+    /// `session run <id>` in `pane`, a pane of the fake server a command made.
+    fn attach(fx: &Fx, pane: &str, id: &str) -> Running {
+        let pane = Pane::at(fx, pane, &installed_cpd(fx));
+        let w = pane.run(&["session", "run", id]);
+        Running { w, pane }
+    }
+
+    /// A new window of the cockpit for `id`, the row has its pane (as when cpd started it), and its first pi started.
+    fn start(fx: &Fx, id: &str) -> Running {
+        let pane = Pane::new(fx, id, &installed_cpd(fx));
+        fx.env.sql(&format!("UPDATE sessions SET tmux_pane = '{}' WHERE id = '{id}'", pane.pane));
+        let w = pane.run(&["session", "run", id]);
+        let mut running = Running { w, pane };
+        running.until_pis(1);
+        running
+    }
+
+    /// Steps the wrapper until `n` pis have started.
+    fn until_pis(&mut self, n: usize) {
+        let pane = &self.pane;
+        self.w.until(&format!("pi number {n}"), || pane.spawn.pis().len() >= n);
+    }
+
+    /// Steps the wrapper until the pane shows `text`.
+    fn until_screen(&mut self, text: &str) {
+        let pane = &self.pane;
+        self.w.until(&format!("{text:?} on the screen"), || pane.screen().contains(text));
+    }
+
+    /// The `Launch` of the pi number `i` (from 0).
+    fn pi(&self, i: usize) -> Launch {
+        self.pane.spawn.pis().get(i).cloned().unwrap_or_else(|| panic!("pi {i} did not start"))
+    }
+
+    /// The last pi ends with `status`, as the User's `/quit` (0) or a crash (1) would.
+    fn pi_exits(&self, fx: &Fx, status: i32) {
+        let pi: Pid = *self.pane.spawn.pids().last().expect("a pi runs");
+        fx.fakes.spawn.exit(pi, status);
+    }
+}
+
+/// The argument after `flag` in a pi's argv.
+fn after(argv: &[String], flag: &str) -> String {
+    argv[argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag} in {argv:?}")) + 1].clone()
+}
+
 /// Fork when idle (§6.7): the fork waits while the source has no file, then
 /// while it is busy, and forks once it is idle; pi exiting offers a resume.
 #[test]
 fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, "exit 1");
-    cockpit(&env);
-    fast_wrapper(&env);
-    env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
-    let message = env.root().join("message.md");
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    fx.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
+    let message = fx.env.root().join("message.md");
     fs::write(&message, "Review the tests.").unwrap();
 
-    let out = env.cpd(&["session", "fork", LEAD1, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
+    let out = fx.cpd(&["session", "fork", LEAD1, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
-    let pane = out["session"]["pane"].as_str().unwrap().to_owned();
-    let capture = || String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", &pane]).stdout).unwrap();
-    wait_until("the waiting line", || capture().contains("Waiting for the source Lead to finish its turn, then forking it as \"side\""));
+    let mut fork = Running::attach(&fx, out["session"]["pane"].as_str().unwrap(), &new);
+    fork.until_screen("Waiting for the source Lead to finish its turn, then forking it as \"side\"");
 
-    // No file yet, and busy.
-    // time-claim: the fork does not happen while the source is busy and has no file, over three polls of the
-    // source; no per-poll signal from `session run` (it only reads the store and the file).
-    std::thread::sleep(POLL * 3);
-    assert!(env.calls("pi").is_empty());
+    // No file yet, and busy: three polls of the source (2 s each, on the wrapper's clock), and no pi.
+    fork.w.steps(3);
+    assert!(fork.pane.spawn.pis().is_empty());
     // A file with a finished turn, but still busy.
-    let sessions = env.home().join(".pi/agent/sessions/g");
+    let sessions = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();
     let source_file: PathBuf = sessions.join("2026_lead1.jsonl");
-    fs::write(
-        &source_file,
-        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
-    )
-    .unwrap();
+    fs::write(&source_file, FINISHED_TURN).unwrap();
     // Quiet for long enough and finished: only the busy source is in the way.
-    backdate(&source_file, Duration::from_secs(3600));
-    // time-claim: the fork does not happen while the source is busy, over three polls of the source;
-    // no per-poll signal from `session run`.
-    std::thread::sleep(POLL * 3);
-    assert!(env.calls("pi").is_empty(), "the source is still working");
+    fx.backdate(&source_file, Duration::from_secs(3600));
+    fork.w.steps(3);
+    assert!(fork.pane.spawn.pis().is_empty(), "the source is still working");
 
-    env.cpd(&["session", "state", "idle", "--session", LEAD1]).ok();
-    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
-    let fork = &pi_calls_with(&env, "--fork")[0];
-    let after = |flag: &str| fork[fork.iter().position(|a| a == flag).unwrap() + 1].clone();
-    assert_eq!(after("--fork"), source_file.display().to_string());
-    assert_eq!(after("--session-id"), new);
-    assert_eq!(after("-n"), "side");
-    assert_eq!(after("--model"), "github-copilot/claude-opus-5.5:medium");
-    let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
-    assert_eq!(fork[fork.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
+    fx.cpd(&["session", "state", "idle", "--session", LEAD1]).ok();
+    fork.until_pis(1);
+    let pi = fork.pi(0).args;
+    assert_eq!(after(&pi, "--fork"), source_file.display().to_string());
+    assert_eq!(after(&pi, "--session-id"), new);
+    assert_eq!(after(&pi, "-n"), "side");
+    assert_eq!(after(&pi, "--model"), "github-copilot/claude-opus-5.5:medium");
+    let copied = home(&fx.env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
+    assert_eq!(pi[pi.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
 
     // pi created the fork's file: it is recorded; pi exited: the pane offers a resume.
-    let fork_file = sessions.join(format!("2026_{new}.jsonl")).display().to_string();
-    wait_until("the recorded file", || show(&env, &new)["file"] == json!(fork_file));
-    wait_until("the resume prompt", || capture().contains("pi exited. Press Enter to resume side here."));
-    assert_eq!(show(&env, &new)["state"], "stopped");
-    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
-    wait_until("the resume", || !pi_calls_with(&env, "--session").is_empty());
-    let resume = &pi_calls_with(&env, "--session")[0];
+    let fork_file = sessions.join(format!("2026_{new}.jsonl"));
+    fs::write(&fork_file, "{\"type\":\"session\"}\n").unwrap();
+    let fork_file = fork_file.display().to_string();
+    fork.w.until("the recorded file", || fx.env.query::<Option<String>>(&format!("SELECT file FROM sessions WHERE id = '{new}'")).as_deref() == Some(fork_file.as_str()));
+    assert_eq!(show(&fx, &new)["file"], json!(fork_file));
+    fork.pi_exits(&fx, 1);
+    fork.until_screen("pi exited. Press Enter to resume side here.");
+    assert_eq!(show(&fx, &new)["state"], "stopped");
+    fork.w.enter();
+    fork.until_pis(2);
+    let resume = fork.pi(1).args;
     // hs-d506: a resume names the row's Tier's model (`--model`) before the file.
     assert_eq!(resume[..4], ["--model".to_owned(), "github-copilot/claude-opus-5.5:medium".to_owned(), "--session".to_owned(), fork_file]);
     assert!(!resume.iter().any(|a| a == "--fork" || a == "--"), "{resume:?}");
@@ -639,92 +635,82 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
 /// offers Enter to retry, and forks once the source has a finished turn (hs-d196).
 #[test]
 fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, "exit 1");
-    cockpit(&env);
-    let message = env.root().join("message.md");
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    let message = fx.env.root().join("message.md");
     fs::write(&message, "Review the tests.").unwrap();
 
-    let out = env.cpd(&["session", "fork", LEAD2, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
-    let pane = out["session"]["pane"].as_str().unwrap().to_owned();
-    let capture = || String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", &pane]).stdout).unwrap();
-    wait_until("the refusal", || capture().contains("Press Enter to retry."));
-    assert!(capture().contains("is stopped and has no session file"), "{}", capture());
-    assert!(env.calls("pi").is_empty());
+    let out = fx.cpd(&["session", "fork", LEAD2, "--name", "side", "--message-file", message.to_str().unwrap()]).ok();
+    let new = out["session"]["id"].as_str().unwrap().to_owned();
+    let mut fork = Running::attach(&fx, out["session"]["pane"].as_str().unwrap(), &new);
+    fork.until_screen("Press Enter to retry.");
+    assert!(fork.pane.screen().contains("is stopped and has no session file"), "{}", fork.pane.screen());
+    assert!(fork.pane.spawn.pis().is_empty());
 
     // The source gets a file with a finished turn; Enter retries and forks.
-    let sessions = env.home().join(".pi/agent/sessions/g");
+    let sessions = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();
     let source_file: PathBuf = sessions.join("2026_lead2.jsonl");
-    fs::write(
-        &source_file,
-        "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
-    )
-    .unwrap();
-    backdate(&source_file, Duration::from_secs(3600));
-    env.tmux(&["send-keys", "-t", &pane, "Enter"]);
-    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
-    let fork = &pi_calls_with(&env, "--fork")[0];
-    assert_eq!(fork[fork.iter().position(|a| a == "--fork").unwrap() + 1], source_file.display().to_string());
-}
-
-/// A fake pi body that copies the file named by its last argument (`@<path>`) to `$CPD_HOME/read.copy`.
-/// The copy appears whole or not at all (cp to a temp name, then rename): a test waits for `read.copy` to exist.
-fn copy_last_file() -> String {
-    format!("for a in \"$@\"; do last=$a; done\ncp \"${{last#@}}\" \"$CPD_HOME/read.tmp\"\nmv \"$CPD_HOME/read.tmp\" \"$CPD_HOME/read.copy\"\nexec sleep {SLEEP_SECONDS}")
+    fs::write(&source_file, FINISHED_TURN).unwrap();
+    fx.backdate(&source_file, Duration::from_secs(3600));
+    fork.w.enter();
+    fork.until_pis(1);
+    assert_eq!(after(&fork.pi(0).args, "--fork"), source_file.display().to_string());
 }
 
 /// Bigger than one argv element may be (MAX_ARG_STRLEN, 131072 bytes; hs-n111).
+const MAX_ARG_STRLEN: usize = 131_072;
+
 fn big_message() -> String {
     "A line of a first message that is longer than one argument may be.\n".repeat(140_000 / 66 + 1)
+}
+
+/// What cpd owes the kernel's limit (E2BIG at `exec`, which is not ours): pi's argv is `--` and `@<file>`, every
+/// element under [`MAX_ARG_STRLEN`], and the file holds the whole text.
+fn assert_pi_reads_the_message_from(argv: &[String], file: &std::path::Path, message: &str) {
+    assert_eq!(argv[argv.len() - 2..], ["--".to_owned(), format!("@{}", file.display())]);
+    assert!(argv.iter().all(|a| a.len() < MAX_ARG_STRLEN), "an argument of pi is over {MAX_ARG_STRLEN} bytes: {argv:?}");
+    assert!(fs::read_to_string(file).unwrap() == message, "pi reads the whole file");
 }
 
 /// A Lead's first message goes to pi as `@<absolute path>`, so one over 128 KiB starts pi.
 #[test]
 fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, &copy_last_file());
-    cockpit(&env);
-    let path = home(&env).lead_message(&PlanId::parse("pay").unwrap());
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    let path = home(&fx.env).lead_message(&PlanId::parse("pay").unwrap());
     let message = big_message();
-    assert!(message.len() > 131_072);
+    assert!(message.len() > MAX_ARG_STRLEN);
     fs::write(&path, &message).unwrap();
 
-    env.cpd(&["session", "open", LEAD1]).ok();
-    wait_until("lead1's pi", || !env.calls("pi").is_empty());
-    let call = &env.calls("pi")[0];
-    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", path.display())]);
-    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
-    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
+    let out = fx.cpd(&["session", "open", LEAD1]).ok();
+    let mut lead = Running::attach(&fx, out["pane"].as_str().unwrap(), LEAD1);
+    lead.until_pis(1);
+    assert_pi_reads_the_message_from(&lead.pi(0).args, &path, &message);
 }
 
 /// The same for a fork with `--message-file` (`run/<plan>/messages/<session>.md`).
 #[test]
 fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
-    let env = TestEnv::new();
-    setup(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, &copy_last_file());
-    cockpit(&env);
-    pi_file(&env, LEAD2, true);
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    pi_file(&fx.env, LEAD2, true);
     // Quiet for `fork_quiet_seconds` already: this test is about the message, not the wait.
-    backdate(&env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD2}.jsonl")), Duration::from_secs(3600));
+    fx.backdate(&fx.env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD2}.jsonl")), Duration::from_secs(3600));
     let message = big_message();
-    let file = env.root().join("message.md");
+    let file = fx.env.root().join("message.md");
     fs::write(&file, &message).unwrap();
 
-    let out = env.cpd(&["session", "fork", LEAD2, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
+    let out = fx.cpd(&["session", "fork", LEAD2, "--plan", "pay", "--message-file", file.to_str().unwrap()]).ok();
     let new = out["session"]["id"].as_str().unwrap().to_owned();
-    let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
-    wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
-    let call = &pi_calls_with(&env, "--fork")[0];
-    assert_eq!(call[call.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
-    wait_until("the copy", || env.cpd_home().join("read.copy").exists());
-    assert!(fs::read_to_string(env.cpd_home().join("read.copy")).unwrap() == message, "pi read the whole file");
+    let copied = home(&fx.env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
+    let mut fork = Running::attach(&fx, out["session"]["pane"].as_str().unwrap(), &new);
+    fork.until_pis(1);
+    assert!(fork.pi(0).args.iter().any(|a| a == "--fork"), "{:?}", fork.pi(0));
+    assert_pi_reads_the_message_from(&fork.pi(0).args, &copied, &message);
 }
 
 // ---------- open, park ----------
@@ -1306,106 +1292,73 @@ fn open_replaces_a_dead_lead_in_the_chat_slot() {
 
 #[test]
 fn run_refusals() {
-    let env = TestEnv::new();
-    setup(&env);
-    refused(&env.cpd(&["session", "run", WORKER]), "not_a_lead", 3);
-    refused(&env.cpd(&["session", "run", "nobody"]), "session_not_found", 4);
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    refused(&fx.cpd(&["session", "run", WORKER]), "not_a_lead", 3);
+    refused(&fx.cpd(&["session", "run", "nobody"]), "session_not_found", 4);
     // Outside any pane of cpd's server.
-    let error = refused(&env.cpd(&["session", "run", LEAD1]), "wrong_pane", 3);
+    let error = refused(&fx.cpd(&["session", "run", LEAD1]), "wrong_pane", 3);
     assert_eq!(error["details"]["session"], LEAD1);
-    assert!(env.calls("pi").is_empty());
+    assert!(fx.fakes.spawn.launches().is_empty(), "pi was started");
 
     // In a pane of cpd's server that runs another Session.
-    cockpit(&env);
-    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    fx.cockpit();
+    let out = fx.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "cpd session run lead2"]);
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
-    env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD2]);
-    let server = String::from_utf8(env.tmux(&["display", "-p", "-t", &pane, "#{socket_path},1,0"]).stdout).unwrap();
-    let run = env.cpd_with(env.root(), &["session", "run", LEAD1], &[("TMUX", server.trim()), ("TMUX_PANE", &pane)]);
+    fx.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD2]);
+    let server = format!("{}/tmux-0/{},1,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket());
+    let run = fx.cpd_with(fx.env.root(), &["session", "run", LEAD1], &[("TMUX", &server), ("TMUX_PANE", &pane)]);
     let error = refused(&run, "wrong_pane", 3);
     assert_eq!((&error["details"]["pane"], &error["details"]["found"]), (&json!(pane), &json!(LEAD2)));
-    assert!(env.calls("pi").is_empty());
+    assert!(fx.fakes.spawn.launches().is_empty(), "pi was started");
 }
 
 // ---------- run: the plannotator environment ----------
 
-/// A fake `pi` that records `PLANNOTATOR_PORT` per Session and exits with status 1 (not a quit), and the
-/// session files of both Plans' Leads, so `session run` resumes them.
-fn port_fixture(env: &TestEnv) {
-    setup(env);
-    env.fake_cpd_views();
-    fake_pi(env, "echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 1");
-    cockpit(env);
-    let sessions = env.home().join(".pi/agent/sessions/g");
+/// The value of `key` in the environment `launch` gives its process: set by it (`env_set`), else `None`.
+fn env_set(launch: &Launch, key: &str) -> Option<String> {
+    launch.env_set.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+}
+
+/// `setup`, the cockpit and the session files of both Plans' Leads, so `session run` resumes them.
+fn port_fixture(fx: &Fx) {
+    setup(&fx.env);
+    fx.cockpit();
+    let sessions = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();
     for lead in [LEAD1, LEAD2] {
         fs::write(sessions.join(format!("2026_{lead}.jsonl")), "{\"type\":\"session\"}\n").unwrap();
     }
 }
 
-/// A new window running `cpd session run <id>`, with `PLANNOTATOR_PORT=1` in its
-/// environment (the port every Lead pane inherits from cpd's environment); returns its pane.
-fn run_lead(env: &TestEnv, id: &str) -> String {
-    run_lead_with(env, id, &[])
-}
-
-/// [`run_lead`] with more `NAME=value` variables in the pane's environment.
-fn run_lead_with(env: &TestEnv, id: &str, vars: &[&str]) -> String {
-    let command = format!("cpd session run {id}");
-    let mut args = vec!["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1"];
-    for var in vars {
-        args.extend(["-e", var]);
-    }
-    args.push(&command);
-    let out = env.tmux(&args);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
-    env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]);
-    pane
-}
-
-fn capture(env: &TestEnv, pane: &str) -> String {
-    String::from_utf8(env.tmux(&["capture-pane", "-p", "-t", pane]).stdout).unwrap()
-}
-
+/// Section 5 of the research: the review host `primary_ipv4` detects reads the kernel's routing table, so its rule
+/// (`host::addr::choose`, with the detector a closure) has the unit tests of `core/src/host/addr.rs`; here the
+/// override and `PLANNOTATOR_REMOTE=1` are what pi's launch carries.
 #[test]
 fn run_gives_the_lead_remote_and_the_review_host() {
-    let env = TestEnv::new();
-    port_fixture(&env);
-    fake_pi(&env, "echo \"$PLANNOTATOR_REMOTE ${PLANNOTATOR_URL_HOST-unset}\" >> \"$HOME/hosts.$CPD_SESSION\"\nexit 1");
-    let hosts = |id: &str| fs::read_to_string(env.home().join(format!("hosts.{id}"))).unwrap_or_default();
+    let fx = Fx::with_ports();
+    port_fixture(&fx);
 
     // The environment's `PLANNOTATOR_URL_HOST` is the override; the `PLANNOTATOR_REMOTE` it holds is replaced.
-    run_lead_with(&env, LEAD1, &["PLANNOTATOR_URL_HOST=review.test", "PLANNOTATOR_REMOTE=0"]);
-    wait_until("the first Lead's pi", || !hosts(LEAD1).is_empty());
-    assert_eq!(hosts(LEAD1), "1 review.test\n");
+    let first = Pane::new(&fx, LEAD1, &installed_cpd(&fx));
+    fx.export("PLANNOTATOR_URL_HOST", "review.test");
+    fx.export("PLANNOTATOR_REMOTE", "0");
+    let mut w1 = first.run(&["session", "run", LEAD1]);
+    w1.until("the first Lead's pi", || first.spawn.pis().len() == 1);
+    let launch = &first.spawn.pis()[0];
+    assert_eq!((env_set(launch, "PLANNOTATOR_REMOTE"), env_set(launch, "PLANNOTATOR_URL_HOST")), (Some("1".to_owned()), Some("review.test".to_owned())));
+    assert!(!launch.env_remove.iter().any(|k| k.starts_with("PLANNOTATOR_")), "{:?}", launch.env_remove);
 
-    // With no override the host is detected: an address or `localhost`, never unset.
-    run_lead(&env, LEAD2);
-    wait_until("the second Lead's pi", || !hosts(LEAD2).is_empty());
-    let hosts2 = hosts(LEAD2);
-    let (remote, host) = hosts2.trim_end().split_once(' ').unwrap();
-    assert_eq!(remote, "1");
-    assert!(host == "localhost" || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| !ip.is_loopback()), "{host}");
+    // The second Lead's pane has another override (a Plan's Lead too, whatever its caller holds).
+    let second = Pane::new(&fx, LEAD2, &installed_cpd(&fx));
+    fx.export("PLANNOTATOR_URL_HOST", "10.0.0.2");
+    let mut w2 = second.run(&["session", "run", LEAD2]);
+    w2.until("the second Lead's pi", || second.spawn.pis().len() == 1);
+    let launch = &second.spawn.pis()[0];
+    assert_eq!((env_set(launch, "PLANNOTATOR_REMOTE"), env_set(launch, "PLANNOTATOR_URL_HOST")), (Some("1".to_owned()), Some("10.0.0.2".to_owned())));
 }
 
 // ---------- run: the User's quit archives (commands.md §10.8) ----------
-
-/// A fake `pi` that waits for [`quit`], then exits with the status given there; on `SIGTERM` it
-/// exits 0, as pi 1.2.0 does (`interactive-mode.js`: `shutdown({fromSignal})` ends in `process.exit(0)`).
-fn quitting_pi(env: &TestEnv) {
-    fake_pi(
-        env,
-        "trap 'exit 0' TERM\nwhile [ ! -e \"$HOME/quit.$CPD_SESSION\" ]; do sleep 0.1; done\nexit $(cat \"$HOME/quit.$CPD_SESSION\")",
-    );
-}
-
-/// Makes `id`'s pi exit with `status`.
-fn quit(env: &TestEnv, id: &str, status: u8) {
-    let tmp = env.home().join(format!("quit.{id}.tmp"));
-    fs::write(&tmp, status.to_string()).unwrap();
-    fs::rename(tmp, env.home().join(format!("quit.{id}"))).unwrap();
-}
 
 /// pi's session file for `id`, so `session run` resumes it; `finished` ends it on a finished turn.
 fn pi_file(env: &TestEnv, id: &str, finished: bool) {
@@ -1416,153 +1369,154 @@ fn pi_file(env: &TestEnv, id: &str, finished: bool) {
 }
 
 /// The fixture of the quit tests: a side fork `side` of `lead1` and `side2` of `lead2`, both idle
-/// with a session file, a quitting pi and the cockpit.
-fn quit_fixture(env: &TestEnv) {
-    setup(env);
-    env.fake_cpd_views();
-    quitting_pi(env);
-    cockpit(env);
-    env.sql("INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
+/// with a session file, and the cockpit. The pi of a pane ends when the test says (`Running::pi_exits`), and exits 0
+/// at `SIGTERM`, as pi 1.2.0 does (`interactive-mode.js`: `shutdown({fromSignal})` ends in `process.exit(0)`).
+fn quit_fixture(fx: &Fx) {
+    setup(&fx.env);
+    fx.cockpit();
+    fx.env.sql("INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
            ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead1'),
            ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead2')",
     );
     for id in ["side", "side2", LEAD1, LEAD2] {
-        pi_file(env, id, false);
+        pi_file(&fx.env, id, false);
     }
 }
 
-/// [`run_lead`], and the Session's row has the pane, as when cpd started it.
-fn run_lead_with_pane(env: &TestEnv, id: &str) -> String {
-    let pane = run_lead(env, id);
-    env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
-    pane
+fn session_archived(fx: &Fx, id: &str) -> bool {
+    show(fx, id)["archived_at"].is_string()
 }
 
-fn session_archived(env: &TestEnv, id: &str) -> bool {
-    show(env, id)["archived_at"].is_string()
-}
-
-fn pane_exists(env: &TestEnv, pane: &str) -> bool {
-    panes(env).iter().any(|p| p.pane == pane)
+fn pane_exists(fx: &Fx, pane: &str) -> bool {
+    panes(fx).iter().any(|p| p.pane == pane)
 }
 
 #[test]
 fn quitting_pi_archives_a_side_fork_and_closes_its_pane() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
-    let pane = run_lead_with_pane(&env, "side");
-    wait_until("pi", || !env.calls("pi").is_empty());
-    quit(&env, "side", 0);
-    wait_until("the archive", || session_archived(&env, "side"));
-    wait_until("its pane to go", || !pane_exists(&env, &pane));
-    let row = show(&env, "side");
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
+    let mut side = Running::start(&fx, "side");
+    let pane = side.pane.pane.clone();
+    side.pi_exits(&fx, 0);
+    side.w.finish();
+    assert!(session_archived(&fx, "side"));
+    assert!(!pane_exists(&fx, &pane));
+    let row = show(&fx, "side");
     assert_eq!((&row["state"], &row["tmux_pane"], &row["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
-    assert_eq!(events(&env, "session-archived").len(), 1);
+    assert_eq!(events(&fx, "session-archived").len(), 1);
     // Nothing else was archived.
     for other in [LEAD1, LEAD2, "side2"] {
-        assert!(!session_archived(&env, other), "{other}");
+        assert!(!session_archived(&fx, other), "{other}");
     }
-    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(fx.env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
 fn quitting_a_plan_s_own_lead_archives_the_plan_with_its_fork() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
-    let lead = run_lead_with_pane(&env, LEAD2);
-    let fork = run_lead_with_pane(&env, "side2");
-    wait_until("both pi", || env.calls("pi").len() == 2);
-    quit(&env, LEAD2, 0);
-    wait_until("the archive", || session_archived(&env, LEAD2));
-    wait_until("both panes to go", || !pane_exists(&env, &lead) && !pane_exists(&env, &fork));
-    assert!(session_archived(&env, "side2"));
-    assert!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'other'").is_some());
-    assert_eq!(events(&env, "plan-archived").len(), 1);
-    assert_eq!(events(&env, "session-archived").len(), 2);
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
+    let mut lead = Running::start(&fx, LEAD2);
+    let fork = Running::start(&fx, "side2");
+    let (lead_pane, fork_pane) = (lead.pane.pane.clone(), fork.pane.pane.clone());
+    lead.pi_exits(&fx, 0);
+    lead.w.finish();
+    assert!(session_archived(&fx, LEAD2));
+    assert!(!pane_exists(&fx, &lead_pane) && !pane_exists(&fx, &fork_pane));
+    assert!(session_archived(&fx, "side2"));
+    assert!(fx.env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'other'").is_some());
+    assert_eq!(events(&fx, "plan-archived").len(), 1);
+    assert_eq!(events(&fx, "session-archived").len(), 2);
     // Another Plan is untouched.
-    assert!(!session_archived(&env, LEAD1));
-    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert!(!session_archived(&fx, LEAD1));
+    assert_eq!(fx.env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
 fn quitting_the_lead_in_the_chat_slot_parks_it_first_and_the_placeholder_holds_the_slot() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
-    env.cpd(&["session", "open", "side"]).ok();
-    let pane = slot(&env).pane;
-    assert_eq!(slot(&env).session, "side");
-    wait_until("pi", || !env.calls("pi").is_empty());
-    quit(&env, "side", 0);
-    wait_until("the archive", || session_archived(&env, "side"));
-    wait_until("its pane to go", || !pane_exists(&env, &pane));
-    let held = slot(&env);
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
+    fx.cpd(&["session", "open", "side"]).ok();
+    let pane = slot(&fx).pane;
+    assert_eq!(slot(&fx).session, "side");
+    let mut side = Running::attach(&fx, &pane, "side");
+    side.until_pis(1);
+    side.pi_exits(&fx, 0);
+    side.w.finish();
+    assert!(session_archived(&fx, "side"));
+    assert!(!pane_exists(&fx, &pane));
+    let held = slot(&fx);
     assert_eq!((held.session.as_str(), held.view.as_str()), ("", "chat"), "{held:?}");
-    assert_placeholders(&env, 1);
-    assert!(panes(&env).iter().all(|p| p.session != "side"));
-    assert_eq!(window_names(&env), ["main"], "the Lead's park window went with its pane");
+    assert_placeholders(&fx, 1);
+    assert!(panes(&fx).iter().all(|p| p.session != "side"));
+    assert_eq!(window_names(&fx), ["main"], "the Lead's park window went with its pane");
     // Parked first: `session-moved` to `parked`, then to none.
-    let places: Vec<Value> = events(&env, "session-moved").iter().filter(|e| e["session"] == "side").map(|e| e["data"]["place"].clone()).collect();
+    let places: Vec<Value> = events(&fx, "session-moved").iter().filter(|e| e["session"] == "side").map(|e| e["data"]["place"].clone()).collect();
     assert_eq!(places, [json!("chat"), json!("parked"), json!("none")]);
 }
 
 #[test]
 fn a_pi_that_exits_with_status_1_is_not_archived() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
-    let pane = run_lead_with_pane(&env, "side");
-    wait_until("pi", || !env.calls("pi").is_empty());
-    quit(&env, "side", 1);
-    wait_until("the resume prompt", || capture(&env, &pane).contains("pi exited. Press Enter to resume Side here."));
-    assert!(!session_archived(&env, "side"));
-    assert_eq!(show(&env, "side")["state"], "stopped");
-    assert!(pane_exists(&env, &pane));
-    assert_eq!(events(&env, "session-archived").len(), 0);
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
+    let mut side = Running::start(&fx, "side");
+    side.pi_exits(&fx, 1);
+    side.until_screen("pi exited. Press Enter to resume Side here.");
+    assert!(!session_archived(&fx, "side"));
+    assert_eq!(show(&fx, "side")["state"], "stopped");
+    assert!(pane_exists(&fx, &side.pane.pane));
+    assert_eq!(events(&fx, "session-archived").len(), 0);
 }
 
 #[test]
 fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
     // `pay` has a running Job; its Lead holds the chat slot.
-    env.cpd(&["session", "open", LEAD1]).ok();
-    let pane = slot(&env).pane;
-    wait_until("pi", || !env.calls("pi").is_empty());
-    quit(&env, LEAD1, 0);
-    wait_until("the resume prompt", || capture(&env, &pane).contains("pi exited. Press Enter to resume Lead one here."));
-    let shown = capture(&env, &pane);
+    fx.cpd(&["session", "open", LEAD1]).ok();
+    let pane = slot(&fx).pane;
+    let mut lead = Running::attach(&fx, &pane, LEAD1);
+    lead.until_pis(1);
+    lead.pi_exits(&fx, 0);
+    lead.until_screen("pi exited. Press Enter to resume Lead one here.");
+    let shown = lead.pane.screen();
     assert!(shown.contains("archive_blocked"), "{shown}");
     assert!(shown.contains("Job api of Plan pay is running."), "{shown}");
     // Nothing was archived, and the Lead was not parked.
-    assert!(!session_archived(&env, LEAD1));
-    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
-    assert_eq!(events(&env, "session-archived").len() + events(&env, "plan-archived").len(), 0);
-    assert_eq!((slot(&env).pane, slot(&env).session), (pane, LEAD1.to_owned()));
+    assert!(!session_archived(&fx, LEAD1));
+    assert_eq!(fx.env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(events(&fx, "session-archived").len() + events(&fx, "plan-archived").len(), 0);
+    assert_eq!((slot(&fx).pane, slot(&fx).session), (pane, LEAD1.to_owned()));
 }
 
 #[test]
 fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
-    let env = TestEnv::new();
-    quit_fixture(&env);
+    let fx = Fx::with_ports();
+    quit_fixture(&fx);
     // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
-    pi_file(&env, "side", true);
-    backdate(&env.home().join(".pi/agent/sessions/g/2026_side.jsonl"), Duration::from_secs(3600));
-    env.sql("UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    pi_file(&fx.env, "side", true);
+    fx.backdate(&fx.env.home().join(".pi/agent/sessions/g/2026_side.jsonl"), Duration::from_secs(3600));
+    fx.env.sql("UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
     // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
-    let current = env.home().join(".pi/agent/install/current-version");
+    let current = fx.env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
     fs::write(&current, "1.2.0\n").unwrap();
-    fast_wrapper(&env);
-    let pane = run_lead_with_pane(&env, "side");
-    wait_until("pi", || env.calls("pi").len() == 1);
+    let mut side = Running::start(&fx, "side");
+    side.pane.spawn.exit_on_term(0);
+    let (pane, old_pi) = (side.pane.pane.clone(), side.pane.spawn.pids()[0]);
 
-    // A new pi, as pi's own update installs it.
+    // A new pi, as pi's own update installs it: the wrapper stops pi (SIGTERM, which pi answers with exit 0) and
+    // restarts itself, and the new process starts pi again.
     let next = current.with_extension("tmp");
     fs::write(&next, "1.3.0\n").unwrap();
     fs::rename(&next, &current).unwrap();
-    wait_until("pi, started again", || env.calls("pi").len() == 2);
-    assert!(pane_exists(&env, &pane));
-    assert!(!session_archived(&env, "side"));
-    assert_eq!(events(&env, "session-archived").len(), 0);
+    side.w.finish();
+    let restart = side.w.exec().clone();
+    assert_eq!(side.pane.spawn.signals(), [(old_pi, cpd_core::host::spawn::Signal::Term)], "pi got SIGTERM once");
+    side.w = side.pane.resume(&restart);
+    side.until_pis(2);
+    assert!(pane_exists(&fx, &pane));
+    assert!(!session_archived(&fx, "side"));
+    assert_eq!(events(&fx, "session-archived").len(), 0);
 }
 
 // ---------- short ids (commands.md §1.3, hs-a3) ----------

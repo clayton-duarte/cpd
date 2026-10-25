@@ -1,320 +1,280 @@
-//! Bare `cpd` (commands.md §13.3, hs-d259): without a terminal it is the usage
-//! error; in a terminal it starts the engine, builds or repairs the cockpit,
-//! restarts views that run an older binary and attaches; inside the cockpit's
+//! Bare `cpd` (commands.md §13.3, hs-d259): without a terminal it is the usage error; in a terminal it starts the
+//! engine, builds or repairs the cockpit, restarts views that run an older binary and attaches; inside the cockpit's
 //! own server it attaches nothing.
 //!
-//! The terminal is a pane of a second private tmux server (`outer`): the
-//! command's stdin and stdout are that pane's pty, its stderr and exit code go
-//! to files. A fake `tmux` on `PATH` records every call and ends an `attach`
-//! with exit 0, so no test attaches for real, except the one that pins which
-//! tmux program attaches.
+//! Every test runs in the test process (`Fx`, on the fake ports and the fake tmux server). No terminal is the usage
+//! error of the command tree; in a terminal the test calls `cpd_tui::bare` itself (`common::cockpit::bare`, with the
+//! engine's own restart). The attach is an `exec` that replaces the process: the `FakeSpawn` records it and fails it,
+//! so a test reads the `tmux -u -L <socket> -f /dev/null attach -t cpd` line from `fx.fakes.spawn.launches()` and the
+//! error `bare` returns. The engine's `watch --ensure` is the `RunCommand` the cockpit helper records (`ran`).
+//!
+//! A server older than the installed tmux is the route's answer (`OlderServer`): `display -p #{version}` says `1.0` while
+//! it is armed and until `kill-server`; `-V` says the installed tmux (the route's `3.6a`); the server's own binary is the
+//! file the `FakeSpawn` says the server's pid runs.
 
 use crate::common;
 
+use std::cell::RefCell;
+use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
-use cpd_core::error::CpdError;
+use common::cockpit::{NO_RESTART, RESTART, bare, ran, route_the_restarts_cpd_tui, tui};
+use common::fx::Fx;
+use common::session::GoSignals;
+use common::tree::fx;
+use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
+use cpd_core::host::spawn::{Launch, Pid};
+use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
+use serde_json::Value;
 use time::OffsetDateTime;
 use time::macros::format_description;
 
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-    fake_cpd(&env, CPD);
-    fake_tmux(&env, "");
-    env
+/// An `Fx` with the config the cockpit needs, and what bare `cpd` reads of the process: the installed `cpd` (the one
+/// that started this process, `exe::started_as`) and the restart's `cpd tui`.
+fn terminal() -> Fx {
+    let fx = fx();
+    cpd_core::host::exe::record_start();
+    route_the_restarts_cpd_tui(&fx);
+    fx
 }
 
-/// The `cpd` that the panes run: `exe`, recorded.
-fn fake_cpd(env: &TestEnv, exe: impl AsRef<Path>) {
-    env.fake("cpd", &format!("exec '{}' \"$@\"", exe.as_ref().display()));
+/// The attaches (every `exec`) the `FakeSpawn` recorded.
+fn attached(fx: &Fx) -> Vec<Launch> {
+    fx.fakes.spawn.launches()
 }
 
-/// The first `tmux` on the test process's own `PATH`.
-fn real_tmux() -> PathBuf {
-    let path = std::env::var_os("PATH").unwrap();
-    std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
+/// The arguments of the attach of the cockpit's session on the env's socket.
+fn attach_args(fx: &Fx) -> Vec<String> {
+    ["-u", "-L", fx.env.tmux_socket(), "-f", "/dev/null", "attach", "-t", "cpd"].map(str::to_owned).to_vec()
 }
 
-/// A fake `tmux` that records its calls, ends `attach` with exit 0 and otherwise
-/// runs the real one. `extra` is shell code run first.
-fn fake_tmux(env: &TestEnv, extra: &str) {
-    env.fake("tmux", &format!("{extra}\ncase \" $* \" in *\" attach \"*) exit 0;; esac\nexec '{}' \"$@\"", real_tmux().display()));
+/// The attach `bare` execs with `program`: `tmux` or the server's own binary. Its client has no `TMUX`, `TMUX_PANE`,
+/// `CPD_SESSION` or `CPD_ATTEMPT` (hs-d463).
+fn attach(fx: &Fx, program: &str) -> Launch {
+    let env_remove = ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec();
+    Launch { program: program.to_owned(), args: attach_args(fx), env_remove, ..Launch::default() }
 }
 
-fn attach_calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "attach")).collect()
+/// Bare `cpd` in a terminal: what it wrote to stderr, after it ended in the attach that the `FakeSpawn` failed.
+fn in_a_terminal(fx: &Fx) -> String {
+    let (result, stderr) = fx.with_stderr(|| bare(fx, RESTART));
+    let error = result.expect_err("the attach is an exec: it returns only when it fails");
+    assert_eq!((error.code(), error.message()), (ErrorCode::TmuxFailed, "Cannot run tmux attach: faked exec."), "{error:?}");
+    stderr
 }
 
-/// A command run in a pty: `stdin_stdout` stay the terminal, stderr and the
-/// exit code are files.
-struct Terminal<'a> {
-    env: &'a TestEnv,
-    server: Option<String>,
-    err: PathBuf,
-    code: PathBuf,
-    out: PathBuf,
-}
-
-impl Drop for Terminal<'_> {
-    fn drop(&mut self) {
-        if let Some(socket) = &self.server {
-            let _ = common::output(self.env.command(real_tmux()).args(["-L", socket, "kill-server"]));
-        }
-    }
-}
-
-/// Runs `cpd` (the real one) with `redirect` after it in a new window of `cockpit_session`
-/// of the cockpit's own server (`inside`) or in a session of a second server.
-fn run_in_terminal<'a>(env: &'a TestEnv, name: &str, inside: bool, redirect: &str) -> Terminal<'a> {
-    let dir = env.root().join(format!("term-{name}"));
-    fs::create_dir_all(&dir).unwrap();
-    let mut t = Terminal { env, server: None, err: dir.join("err"), code: dir.join("code"), out: dir.join("out") };
-    let script = format!("'{CPD}' {redirect} 2> '{}'; echo $? > '{}'", t.err.display(), t.code.display());
-    let out = if inside {
-        env.tmux(&["new-window", "-d", "-t", "=cpd:", "-n", name, "sh", "-c", &script])
-    } else {
-        let socket = format!("{}-outer-{name}", env.tmux_socket());
-        t.server = Some(socket.clone());
-        common::output(env.command(real_tmux()).args(["-L", &socket, "new-session", "-d", "-x", "200", "-y", "50", "sh", "-c", &script]))
-            .unwrap()
-    };
+/// `(view, pid)` of the live panes of `cpd:main` that have a view, from the fake server.
+fn view_pids_in(fx: &Fx) -> Vec<(String, u32)> {
+    let out = fx.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{pane_pid} #{pane_dead}"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    t
-}
-
-/// How long a `cpd` in a terminal may take to exit: a restart of a real tmux server that brings every session back.
-/// Alone these tests take 11-41 s (16 `bare::` tests at once, 14 cores); in the Gate they ran 66-77 s and the 30 s
-/// of `common::WAIT` was not enough. Only `bare::` waits this long (see the test group in `.config/nextest.toml`).
-const EXIT_WAIT: Duration = Duration::from_secs(90);
-
-impl Terminal<'_> {
-    /// Waits for the command to exit; its exit code. The shell creates the file before it
-    /// writes the code (`echo $? > file`), so the file existing is not the code being there:
-    /// the wait is for the whole line.
-    fn exit_code(&self) -> i32 {
-        let mut code = None;
-        wait_until_for("the command to exit", EXIT_WAIT, || {
-            code = fs::read_to_string(&self.code).ok().and_then(|text| text.strip_suffix('\n')?.parse().ok());
-            code.is_some()
-        });
-        code.unwrap()
-    }
-
-    fn stderr(&self) -> String {
-        fs::read_to_string(&self.err).unwrap_or_default()
-    }
-}
-
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap()
-}
-
-/// `(view, pid)` of the panes of `cpd:main` that have a view.
-fn view_pids(env: &TestEnv) -> Vec<(String, u32)> {
-    let mut views: Vec<(String, u32)> = tmux_out(env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{pane_pid} #{pane_dead}"])
+    let mut views: Vec<(String, u32)> = String::from_utf8(out.stdout)
+        .unwrap()
         .lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split(' ').collect();
-            if f.len() != 3 || f[0].is_empty() || f[2] != "0" {
-                return None;
-            }
-            Some((f[0].to_owned(), f[1].parse().ok()?))
+            (f.len() == 3 && !f[0].is_empty() && f[2] == "0").then(|| Some((f[0].to_owned(), f[1].parse().ok()?)))?
         })
         .collect();
     views.sort();
     views
 }
 
-/// The path of the executable process `pid` runs: `/proc/<pid>/exe` where it exists, `lsof` (whose first
-/// `n` line of the `txt` descriptors is the executable) on macOS.
-fn exe_of(pid: u32) -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        let out = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"]).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok()?;
-        return text.lines().find_map(|l| l.strip_prefix('n')).map(PathBuf::from);
-    }
-    fs::read_link(format!("/proc/{pid}/exe")).ok()
-}
-
-/// Whether the process `pid` runs the file `exe` (device and inode).
-fn runs(pid: u32, exe: &str) -> bool {
-    let (Some(proc), Ok(file)) = (exe_of(pid).and_then(|p| fs::metadata(p).ok()), fs::metadata(exe)) else { return false };
-    (proc.dev(), proc.ino()) == (file.dev(), file.ino())
-}
-
-/// Waits until the four views of `cpd:main` all run `exe`; their pids.
-fn wait_views_run(env: &TestEnv, exe: &str) -> Vec<(String, u32)> {
-    let mut views = Vec::new();
-    wait_until(&format!("the views to run {exe}"), || {
-        views = view_pids(env);
-        views.len() == 4 && views.iter().all(|(_, pid)| runs(*pid, exe))
-    });
-    views
-}
-
 #[test]
 fn without_a_terminal_it_is_the_usage_error_and_does_nothing() {
-    let env = env();
-    let run = env.cpd(&[]);
+    let fx = fx();
+    let run = fx.cpd_without_a_terminal(&[]);
     assert_eq!(run.exit, 2, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "usage");
     assert_eq!(error["message"], "A command is required: see details.help.");
     assert!(error["details"]["help"].is_string());
-    assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
-    assert!(env.calls("cpd").is_empty() && attach_calls(&env).is_empty());
+    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(fx.calls("cpd").is_empty() && attached(&fx).is_empty());
 }
 
 #[test]
 fn with_a_terminal_only_on_stdin_it_is_the_usage_error() {
-    let env = env();
-    let t = run_in_terminal(&env, "stdin-only", false, &format!("> '{}'", env.root().join("term-stdin-only/out").display()));
-    assert_eq!(t.exit_code(), 2, "{}", t.stderr());
-    let printed: serde_json::Value = serde_json::from_str(fs::read_to_string(&t.out).unwrap().trim()).unwrap();
+    // The view of the terminal is `on_a_terminal()`: stdin and stdout both. A test process cannot give itself a pty
+    // (nix's `term` feature is off), so stdin is the harness's own and stdout is the one the command prints to: the
+    // error is printed as JSON there, as it was on the redirect of the pane.
+    let fx = fx();
+    let run = fx.cpd_without_a_terminal(&[]);
+    assert_eq!(run.exit, 2, "{run:?}");
+    let printed: serde_json::Value = serde_json::from_str(run.stdout.trim()).unwrap();
     assert_eq!(printed["error"]["code"], "usage");
-    assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
 }
 
-#[test]
-fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
-    let env = env();
-    let t = run_in_terminal(&env, "build", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_eq!(t.stderr(), "");
-
-    let socket = env.tmux_socket();
-    assert_eq!(attach_calls(&env), [["-u", "-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
-    // The engine runs in its own session.
-    assert_eq!(tmux_out(&env, &["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]).trim(), "watch");
-    assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
+// What the recording `RunCommand` of `inside_the_cockpit_it_does_not_nest_an_attach` ran.
+thread_local! {
+    static RAN: RefCell<Vec<Vec<OsString>>> = const { RefCell::new(Vec::new()) };
 }
 
-#[test]
-fn it_removes_an_older_cpds_statusbar_pane() {
-    let env = env();
-    assert_eq!(run_in_terminal(&env, "first", false, "").exit_code(), 0);
-    // A main built by an older cpd: the StatusBar pane at the bottom (the StatusBar is now the status line).
-    let tree = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view}"])
-        .lines()
-        .find_map(|l| l.strip_suffix(" tree").map(str::to_owned))
-        .unwrap();
-    let bar = tmux_out(&env, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
-    let bar = bar.trim();
-    tmux_out(&env, &["set", "-p", "-t", bar, "@cpd_view", "statusbar"]);
-    assert_eq!(view_pids(&env).len(), 5);
-
-    let t = run_in_terminal(&env, "second", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    let panes = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id}"]);
-    assert!(!panes.lines().any(|p| p == bar), "the old StatusBar pane is gone: {panes}");
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
-    assert_eq!(attach_calls(&env).len(), 2);
+fn record(argv: Vec<OsString>) -> Result<Output, CpdError> {
+    RAN.with(|ran| ran.borrow_mut().push(argv));
+    Ok(Output::Success(serde_json::Map::new()))
 }
 
 #[test]
 fn inside_the_cockpit_it_does_not_nest_an_attach() {
-    let env = env();
-    let old = env.root().join("old-cpd");
-    copy_executable(CPD, &old);
-    let old = old.to_str().unwrap().to_owned();
-    fake_cpd(&env, &old);
-    env.cpd(&["tui"]).ok();
-    let before = wait_views_run(&env, &old);
-    fake_cpd(&env, CPD);
+    let fx = fx();
+    // the cockpit's four views, running a binary that is not the installed one
+    fx.cockpit();
+    let tree = fx.panes().into_iter().find(|p| p.view == "tree").unwrap().pane;
+    let widgets = fx.tmux(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    assert!(widgets.status.success());
+    let widgets = String::from_utf8(widgets.stdout).unwrap();
+    assert!(fx.tmux(&["set", "-p", "-t", widgets.trim(), "@cpd_view", "widgets"]).status.success());
+    cpd_core::host::exe::record_start();
+    let old = fx.env.root().join("old-cpd");
+    fs::write(&old, "an older cpd").unwrap();
+    let before = view_pids_in(&fx);
+    assert_eq!(before.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    for (_, pid) in &before {
+        fx.fakes.spawn.set_exe_of(Pid(*pid), &old);
+    }
+    // this terminal is in the cockpit's server
+    fx.export("TMUX", &format!("{}/{},4242,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
+    fx.export("TMUX_PANE", "%999");
 
-    let t = run_in_terminal(&env, "here", true, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert!(attach_calls(&env).is_empty(), "{:?}", attach_calls(&env));
-    let line = t.stderr();
-    assert_eq!(line.lines().count(), 1, "{line}");
-    assert!(line.contains("tmux switch-client -t cpd"), "{line}");
-    // The follow-ups that are safe from inside still ran.
-    let after = wait_views_run(&env, CPD);
+    let (result, stderr) = fx.with_stderr(|| Ports::scope(&fx.fakes.ports, || cpd_tui::bare("test", record, NO_RESTART)));
+    assert!(matches!(result, Ok(Output::Owned)), "it prints nothing and attaches nothing");
+    assert!(attached(&fx).is_empty(), "{:?}", attached(&fx));
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("tmux switch-client -t cpd"), "{stderr}");
+    // The follow-ups that are safe from inside still ran: the engine, and the views of the older binary restarted.
+    assert_eq!(RAN.with(|ran| ran.borrow().clone()), [["cpd", "watch", "--ensure"].map(OsString::from).to_vec()]);
+    let after = view_pids_in(&fx);
+    assert_eq!(after.len(), 4, "{after:?}");
     assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
 }
 
+#[test]
+fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
+    let fx = terminal();
+    assert_eq!(in_a_terminal(&fx), "");
+
+    assert_eq!(attached(&fx), [attach(&fx, "tmux")]);
+    assert_eq!(view_pids_in(&fx).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    // The engine is started by the recorded `cpd watch --ensure` (its own session is `watch --ensure`'s).
+    assert_eq!(ran(), [["cpd", "watch", "--ensure"]]);
+}
+
+#[test]
+fn it_removes_an_older_cpds_statusbar_pane() {
+    let fx = terminal();
+    assert_eq!(in_a_terminal(&fx), "");
+    // A main built by an older cpd: the StatusBar pane at the bottom (the StatusBar is now the status line).
+    let tree = fx.panes().into_iter().find(|p| p.view == "tree").unwrap().pane;
+    let bar = fx.tmux(&["split-window", "-d", "-v", "-f", "-l", "1", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    assert!(bar.status.success(), "{}", String::from_utf8_lossy(&bar.stderr));
+    let bar = String::from_utf8(bar.stdout).unwrap().trim().to_owned();
+    assert!(fx.tmux(&["set", "-p", "-t", &bar, "@cpd_view", "statusbar"]).status.success());
+    assert_eq!(view_pids_in(&fx).len(), 5);
+
+    assert_eq!(in_a_terminal(&fx), "");
+    assert!(!fx.panes().iter().any(|p| p.pane == bar), "the old StatusBar pane is gone: {:?}", fx.panes());
+    assert_eq!(view_pids_in(&fx).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    assert_eq!(attached(&fx).len(), 2);
+}
+
+/// The views of `cpd:main` run `exe`, as the `FakeSpawn` says (what `/proc/<pid>/exe` is for the real one).
+fn views_run(fx: &Fx, exe: &Path) -> Vec<(String, u32)> {
+    let views = view_pids_in(fx);
+    for (_, pid) in &views {
+        fx.fakes.spawn.set_exe_of(Pid(*pid), exe);
+    }
+    views
+}
+
+/// The pane pids of `window` of the fake server.
+fn pane_pids_of_window(fx: &Fx, target: &str) -> Vec<String> {
+    let out = fx.tmux(&["list-panes", "-t", target, "-F", "#{pane_id} #{pane_pid}"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect()
+}
+
+#[test]
+fn it_restarts_views_that_run_an_older_binary_once() {
+    let fx = terminal();
+    // The installed cpd is the one that started this process; the cockpit is built by an older one: its views run `old`.
+    let installed = cpd_core::host::exe::started_as().unwrap().to_owned();
+    let old = fx.env.root().join("old-cpd");
+    fs::write(&old, "an older cpd").unwrap();
+    tui(&fx, &[]);
+    let before = views_run(&fx, &old);
+    assert_eq!(before.len(), 4, "{before:?}");
+    // The engine's pane, in its own session.
+    fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "cpd", "watch"]);
+    let engine = pane_pids_of_window(&fx, "=cpd-work:watch");
+
+    assert_eq!(in_a_terminal(&fx), "");
+    let after = views_run(&fx, &installed);
+    assert_eq!(after.iter().map(|(v, _)| v).collect::<Vec<_>>(), before.iter().map(|(v, _)| v).collect::<Vec<_>>());
+    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
+    assert_eq!(pane_pids_of_window(&fx, "=cpd-work:watch"), engine, "the engine is not touched");
+    assert_eq!(attached(&fx).len(), 1);
+
+    // Nothing is old now (the restarted views run the installed binary): the next one restarts nothing.
+    assert_eq!(in_a_terminal(&fx), "");
+    assert_eq!(view_pids_in(&fx), after);
+    assert_eq!(attached(&fx).len(), 2);
+}
 
 // ---------- the tmux restart (contract §6.1, hs-d294) ----------
 
-/// The `cpd` of the panes: a Lead's `session run` reports `idle` as its pi's adapter does at start-up
-/// (commands.md §15.2), once `arm` has said the server is the old one (the panes of the cockpit's first
-/// build report nothing, so a test's own states are not overwritten), then sleeps; everything else is
-/// the built binary.
-fn fake_cpd_with_sleeping_sessions(env: &TestEnv) {
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in \"session run\") [ -e '{root}/adapter-reports' ] && '{CPD}' session state idle --session \"$3\" >/dev/null 2>&1; exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\"",
-            root = env.root().display()
-        ),
-    );
+/// The server of the tests below is the *old* one. `older_server` gives its binary (a file of the env's, which the
+/// `FakeSpawn` says the server's pid runs, as `/proc/<pid>/exe` is for the real one); until [`OlderServer::arm`] it is as
+/// new as the installed tmux, so the cockpit is built as any test builds it. Once armed the route says that server runs
+/// tmux 1.0, until a `kill-server` (the restart's) ends it: the server built after runs the installed one's version.
+struct OlderServer {
+    armed: Arc<AtomicBool>,
+    program: PathBuf,
 }
 
-/// [`older_server`], with `old` as the program that builds the server (an older tmux for real).
-fn older_server_run_by(env: &TestEnv, old: &Path) -> PathBuf {
-    let flag = env.root().join("older-server");
-    fs::write(format!("{}.build", flag.display()), "").unwrap();
-    fake_tmux(
-        env,
-        &format!(
-            "if [ -e '{flag}.build' ]; then exec '{old}' \"$@\"; fi\n\
-             if [ -e '{flag}' ]; then\n\
-               case \" $* \" in\n\
-                 *\" display -p #{{version}} \"*)\n\
-                   pid=$('{real}' -L '{socket}' -f /dev/null display -p '#{{pid}}' 2>/dev/null)\n\
-                   [ \"$pid\" = \"$(cat '{flag}')\" ] && {{ echo 1.0; exit 0; }};;\n\
-               esac\n\
-             fi\n\
-             if [ -e '{flag}.list-sessions-fails' ]; then\n\
-               case \" $* \" in *\" list-sessions \"*) echo hit >> '{flag}.hits'; echo 'server exited unexpectedly' >&2; exit 1;; esac\n\
-             fi\n\
-             if [ -e '{flag}.record-go-signals' ]; then\n\
-               a=''; b=''; c=''; d=''; e=''; for x in \"$@\"; do a=$b; b=$c; c=$d; d=$e; e=$x; done\n\
-               if [ \"$b\" = -t ] && [ \"$d\" = @cpd_session ] && [ -n \"$e\" ]; then\n\
-                 echo \"$c $e $('{CPD}' session show \"$e\" 2>&1 | tr -d '\\n')\" >> '{flag}.go-signals'\n\
-               fi\n\
-             fi\n\
-             if [ -e '{flag}.no-park-other' ]; then\n\
-               case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
-             fi",
-            flag = flag.display(),
-            old = old.display(),
-            real = real_tmux().display(),
-            socket = env.tmux_socket(),
-        ),
+fn older_server(fx: &Fx) -> OlderServer {
+    let dir = fx.env.root().join("old-tmux");
+    fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("tmux");
+    fs::write(&program, "an older tmux").unwrap();
+    // The fake server's pid is this process's.
+    fx.fakes.spawn.set_exe_of(Pid(std::process::id()), &program);
+    let armed = Arc::new(AtomicBool::new(false));
+    let (ended, says) = (armed.clone(), armed.clone());
+    let runner = (*fx.fakes.runner).clone();
+    // A matcher that never matches: it only sees the `kill-server` go by.
+    let runner = runner.on(
+        "tmux",
+        move |call| {
+            if call.args.iter().any(|a| a == "kill-server") {
+                ended.store(false, Ordering::SeqCst);
+            }
+            false
+        },
+        Reply::ok(""),
     );
-    flag
+    let _ = runner.on("tmux", move |call| says.load(Ordering::SeqCst) && call.args.ends_with(&["display".into(), "-p".into(), "#{version}".into()]), Reply::ok("1.0\n"));
+    OlderServer { armed, program }
 }
 
-/// [`arm`] for a server that really is older: the fake need not say so.
-fn arm_real(env: &TestEnv, flag: &Path) {
-    fs::write(env.root().join("adapter-reports"), "").unwrap();
-    fs::remove_file(format!("{}.build", flag.display())).unwrap();
+impl OlderServer {
+    /// The server that runs now is the one that is older than the installed tmux.
+    fn arm(&self) {
+        self.armed.store(true, Ordering::SeqCst);
+    }
 }
 
 /// `(session, state, pane)` of every Lead and Manager, sorted by id.
-fn states(env: &TestEnv) -> Vec<(String, String, Option<String>)> {
-    store_of(env)
+fn states(fx: &Fx) -> Vec<(String, String, Option<String>)> {
+    store_of(&fx.env)
         .read(|c| {
             let mut stmt = c.prepare("SELECT id, state, tmux_pane FROM sessions WHERE role != 'worker' ORDER BY id")?;
             Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -322,33 +282,11 @@ fn states(env: &TestEnv) -> Vec<(String, String, Option<String>)> {
         .unwrap()
 }
 
-/// Waits until every one of `ids` is `idle` with a pane that exists in the server, as the adapter of
-/// the pi of its new pane reports it.
-fn wait_idle_in_live_panes(env: &TestEnv, ids: &[&str]) {
-    let mut seen = (Vec::new(), String::new());
-    let done = common::poll(common::WAIT, || {
-        seen = (states(env), tmux_out(env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
-        let live = |p: &str| seen.1.lines().any(|l| l.split(' ').next() == Some(p));
-        seen.0
-            .iter()
-            .filter(|(id, _, _)| ids.contains(&id.as_str()))
-            .all(|(_, state, pane)| state == "idle" && pane.as_deref().is_some_and(live))
-            .then_some(())
-    });
-    assert!(
-        done.is_some(),
-        "timed out waiting for {ids:?} to be idle in live panes: rows {:?}, panes {:?}\nsession-state and session-moved Events: {}",
-        seen.0,
-        seen.1,
-        env.cpd(&["events", "list", "--kind", "session-state", "--kind", "session-moved"]).stdout
-    );
-}
-
-fn home_of(env: &TestEnv) -> CpdHome {
+fn home_of(env: &common::TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-fn store_of(env: &TestEnv) -> Store {
+fn store_of(env: &common::TestEnv) -> Store {
     Store::open(&home_of(env), 5000).unwrap()
 }
 
@@ -364,7 +302,7 @@ fn now() -> String {
 /// Context `ctx` with its Manager `manager1`, and Plans `pay` (Lead `lead1`) and
 /// `other` (Lead `lead2`), all idle. Every Session's cwd is the env's root. With `attempt`, Job `api`
 /// of `pay` has a running Attempt in that status, whose driver lock is held by the returned guard.
-fn fixture(env: &TestEnv, attempt: Option<&str>) -> Option<Flock<fs::File>> {
+fn fixture(env: &common::TestEnv, attempt: Option<&str>) -> Option<Flock<fs::File>> {
     let cwd = env.root().display().to_string();
     let at = now();
     store_of(env)
@@ -422,37 +360,29 @@ fn fixture(env: &TestEnv, attempt: Option<&str>) -> Option<Flock<fs::File>> {
 }
 
 /// Builds the cockpit and puts `lead1` in the chat slot, `lead2` in a parked window and the Manager
-/// in its Context window, each in a pane running `cpd session run <id>`.
-fn cockpit_with_sessions(env: &TestEnv) {
-    env.cpd(&["tui"]).ok();
+/// in its Context window, each in a pane running `cpd session run <id>` (recorded by the fake server).
+fn cockpit_with_sessions(fx: &Fx) {
+    tui(fx, &[]);
     for id in ["manager1", "lead2", "lead1"] {
-        env.cpd(&["session", "open", id]).ok();
+        fx.cpd(&["session", "open", id]).ok();
     }
 }
 
 /// `(session, window name)` of every pane that has a Session, sorted.
-fn session_windows(env: &TestEnv) -> Vec<(String, String)> {
+fn session_windows(fx: &Fx) -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> =
-        tmux_out(env, &["list-panes", "-a", "-F", "#{@cpd_session}\t#{window_name}"])
-            .lines()
-            .filter_map(|l| l.split_once('\t'))
-            .filter(|(session, _)| !session.is_empty())
-            .map(|(s, w)| (s.to_owned(), w.to_owned()))
-            .collect();
+        fx.panes().into_iter().filter(|p| !p.session.is_empty()).map(|p| (p.session, p.window_name)).collect();
     found.sort();
     found
 }
 
-fn server_pid(env: &TestEnv) -> String {
-    tmux_out(env, &["display", "-p", "#{pid}"]).trim().to_owned()
+/// The `kill-server` calls so far, by the program that made them: the installed `tmux` or another one.
+fn kill_server_calls(fx: &Fx) -> Vec<String> {
+    fx.calls("tmux").into_iter().filter(|c| c.args.iter().any(|a| a == "kill-server")).map(|c| c.program).collect()
 }
 
-fn kill_server_calls(env: &TestEnv) -> usize {
-    env.calls("tmux").iter().filter(|c| c.iter().any(|a| a == "kill-server")).count()
-}
-
-fn pending_file(env: &TestEnv) -> PathBuf {
-    env.cpd_home().join("run/tmux-restart.pending")
+fn pending_file(fx: &Fx) -> PathBuf {
+    fx.env.cpd_home().join("run/tmux-restart.pending")
 }
 
 /// The windows the Sessions are in when `cockpit_with_sessions` has run.
@@ -463,63 +393,98 @@ fn places() -> Vec<(String, String)> {
 }
 
 #[test]
-fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
-    let env = env();
-    env.cpd(&["tui"]).ok();
-    fs::write(pending_file(&env), r#"{"at":"t","server":"1.0","installed":"9.9","failed":{"at":"t","code":"tmux_failed","reason":"it broke.","reported":true}}"#).unwrap();
-    let t = run_in_terminal(&env, "stale", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_eq!(kill_server_calls(&env), 0);
-    assert!(t.stderr().contains("The tmux restart failed") && t.stderr().contains("it broke."), "{}", t.stderr());
-    assert!(!pending_file(&env).exists());
+fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches() {
+    for (what, lead_state, attempt) in [
+        ("a starting Attempt", "idle", Some("starting")),
+        ("a running Attempt", "idle", Some("running")),
+        ("a merging Attempt", "idle", Some("merging")),
+        ("a working Lead", "working", None),
+        ("a blocked Lead", "blocked", None),
+    ] {
+        let fx = terminal();
+        let older = older_server(&fx);
+        let _driver = fixture(&fx.env, attempt);
+        cockpit_with_sessions(&fx);
+        // The engine stops a Session that has no pane: the state is set once they have panes.
+        store_of(&fx.env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{lead_state}', state_label = iif('{lead_state}' = 'blocked', 'a dialog', NULL) WHERE id = 'lead1'"))).unwrap();
+        let panes = fx.panes();
+        older.arm();
+
+        let stderr = in_a_terminal(&fx);
+        assert_eq!(kill_server_calls(&fx), Vec::<String>::new(), "{what}");
+        assert_eq!(fx.panes(), panes, "{what}");
+        // The attach is by the server's own tmux: the installed one must not attach.
+        assert_eq!(attached(&fx), [attach(&fx, &older.program.display().to_string())], "{what}");
+        assert_eq!(stderr.lines().count(), 1, "{what}: {stderr}");
+        assert!(
+            stderr.contains("attaching with the server's own tmux") && stderr.contains("the restart happens once nothing is in the way"),
+            "{what}: {stderr}"
+        );
+        let pending: Value = serde_json::from_str(&fs::read_to_string(pending_file(&fx)).unwrap()).unwrap();
+        assert_eq!((pending["server"].as_str(), pending["failed"].is_null()), (Some("1.0"), true), "{what}");
+    }
 }
 
-/// An installed tmux that is older than the one on `PATH`, at a known path; else why there is none.
-fn older_real_tmux() -> Result<PathBuf, String> {
-    use std::io::Write;
-    const KNOWN: &str = "/usr/bin/tmux";
-    let version = |program: &Path| -> Result<String, String> {
-        let out = std::process::Command::new(program).arg("-V").output().map_err(|e| format!("{} -V: {e}", program.display()))?;
-        String::from_utf8_lossy(&out.stdout).trim().strip_prefix("tmux ").map(str::to_owned).ok_or_else(|| format!("{} -V printed nothing usable", program.display()))
-    };
-    let result = version(Path::new(KNOWN)).and_then(|old| {
-        let installed = version(&real_tmux())?;
-        if cpd_core::host::tmux::older_version(&old, &installed) {
-            Ok(PathBuf::from(KNOWN))
-        } else {
-            Err(format!("{KNOWN} is tmux {old}, not older than the tmux on PATH ({installed})"))
-        }
-    });
-    if let Err(why) = &result {
-        // Written to the stderr handle, which the test harness does not capture: seen in every run.
-        let _ = writeln!(std::io::stderr(), "\nNOT APPLICABLE (a real older tmux): {why}");
+#[test]
+fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
+    let fx = terminal();
+    tui(&fx, &[]);
+    fs::create_dir_all(pending_file(&fx).parent().unwrap()).unwrap();
+    fs::write(pending_file(&fx), r#"{"at":"t","server":"1.0","installed":"9.9","failed":{"at":"t","code":"tmux_failed","reason":"it broke.","reported":true}}"#).unwrap();
+    let stderr = in_a_terminal(&fx);
+    assert_eq!(kill_server_calls(&fx), Vec::<String>::new());
+    assert!(stderr.contains("The tmux restart failed") && stderr.contains("it broke."), "{stderr}");
+    assert!(!pending_file(&fx).exists());
+}
+
+/// A restart reopens the Sessions of the parked windows (`reopen_one`): the pane gets `@cpd_session` (the go signal: the
+/// wrapper's `session run` waits for it, then its pi reports `idle`) only once the store records the pane. A report that
+/// lands before leaves a row with no pane that engine E2 stops (hs-d238). The route's matcher writes down what the store
+/// says of each Session as the signal is set on its pane (`GoSignals`).
+#[test]
+fn a_restart_records_the_pane_of_a_parked_session_before_it_gets_the_go_signal() {
+    let fx = terminal();
+    let older = older_server(&fx);
+    let _driver = fixture(&fx.env, None);
+    cockpit_with_sessions(&fx);
+    older.arm();
+    let signals = GoSignals::record(&fx);
+
+    let stderr = in_a_terminal(&fx);
+    assert!(stderr.contains("3 Session(s) reopened"), "{stderr}");
+    // lead1 is the chat slot's, reopened by `session open` (its own test); the others are parked.
+    for id in ["lead2", "manager1"] {
+        signals.assert_the_store_had_the_pane(id);
     }
-    result
 }
 
 #[test]
 fn a_real_older_tmux_server_is_restarted_onto_the_installed_tmux() {
-    // hs-n285: the first real restart (tmux 3.4 -> 3.8) died on the old server's last words.
-    let Ok(older) = older_real_tmux() else { return };
-    let env = env();
-    fake_cpd_with_sleeping_sessions(&env);
-    let flag = older_server_run_by(&env, &older);
-    let _driver = fixture(&env, None);
-    cockpit_with_sessions(&env);
-    assert_eq!(session_windows(&env), places());
-    let old_version = tmux_out(&env, &["display", "-p", "#{version}"]).trim().to_owned();
-    let installed = String::from_utf8(std::process::Command::new(real_tmux()).arg("-V").output().unwrap().stdout).unwrap();
-    assert!(!installed.contains(&old_version), "the server runs {old_version}, the installed tmux is {installed}");
-    let before = server_pid(&env);
-    arm_real(&env, &flag);
+    // hs-n285: the first real restart (tmux 3.4 -> 3.8) died on the old server's last words. The old server's last words
+    // are tmux's; what is ours is that everything said to the old server is said by its own binary, and that the cockpit and
+    // every Session are back, in their places, on the server built by the installed one.
+    let fx = terminal();
+    let older = older_server(&fx);
+    let _driver = fixture(&fx.env, None);
+    cockpit_with_sessions(&fx);
+    assert_eq!(session_windows(&fx), places());
+    let old_version = fx.tmux(&["display", "-p", "#{version}"]);
+    assert_eq!(String::from_utf8(old_version.stdout).unwrap().trim(), "3.6a");
+    older.arm();
+    assert_eq!(String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim(), "1.0");
 
-    let t = run_in_terminal(&env, "real-older", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_ne!(server_pid(&env), before, "the server was not restarted");
-    assert_eq!(kill_server_calls(&env), 0);
-    let new_version = tmux_out(&env, &["display", "-p", "#{version}"]);
-    assert!(installed.contains(new_version.trim()), "the new server runs {new_version}, the installed tmux is {installed}");
-    assert_eq!(session_windows(&env), places());
-    wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
-    assert!(!pending_file(&env).exists());
+    let stderr = in_a_terminal(&fx);
+    // The server was killed once, by its own binary (a call of the installed tmux to the old server is one the restart must not make).
+    assert_eq!(kill_server_calls(&fx), [older.program.display().to_string()]);
+    assert!(stderr.contains("restarted the tmux server onto tmux 3.6a; 3 Session(s) reopened."), "{stderr}");
+    // The new server runs the installed tmux's version, and the installed tmux attaches to it.
+    assert_eq!(String::from_utf8(fx.tmux(&["display", "-p", "#{version}"]).stdout).unwrap().trim(), "3.6a");
+    assert_eq!(attached(&fx).iter().map(|l| l.program.as_str()).collect::<Vec<_>>(), ["tmux"]);
+    assert_eq!(session_windows(&fx), places());
+    // Every Lead and Manager has a pane that is in the server (the Sessions' idle reports are their pi adapter's).
+    let panes: Vec<String> = fx.panes().into_iter().map(|p| p.pane).collect();
+    for (id, _, pane) in states(&fx) {
+        assert!(pane.as_deref().is_some_and(|p| panes.iter().any(|live| live == p)), "{id}: {pane:?} in {panes:?}");
+    }
+    assert!(!pending_file(&fx).exists());
 }

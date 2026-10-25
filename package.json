@@ -7,7 +7,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; slot=; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/skills/skill.test.ts; if command -v cpd >/dev/null 2>&1 && cpd slot --help >/dev/null 2>&1; then slot='cpd slot --'; fi; fi; $slot node --test \"$@\"; }; t",
+    "test": "t() { f=; for a in \"$@\"; do case \"$a\" in -*) ;; *) f=1 ;; esac; done; if [ -z \"$f\" ]; then set -- \"$@\" pi/test/*.test.ts pi/test/compact-tools/*.test.ts pi/test/ask-user-question/*.test.ts pi/skills/skill.test.ts; fi; node --test \"$@\"; }; t",
     "pretypecheck": "scripts/npm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/npm-fresh.sh",

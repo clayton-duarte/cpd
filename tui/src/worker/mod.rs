@@ -145,7 +145,7 @@ struct Stamp {
 }
 
 /// The loop of the view: input, the clock and frames are the [`Ctx`]'s.
-pub(crate) fn event_loop_with<B: Backend>(
+pub fn event_loop_with<B: Backend>(
     ctx: &mut Ctx<B>,
     store: &mut Store,
     mut follow: read::Follow,

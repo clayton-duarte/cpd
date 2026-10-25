@@ -14,10 +14,14 @@ use std::time::Duration;
 use common::fx::Fx;
 use common::refused;
 use cpd_core::attempt::ledger;
+use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::driver::worker::render_spec;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
+use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::{AttemptId, HostName, PlanId};
+use cpd_core::merge::Ctx;
+use cpd_core::store::Store;
 use serde_json::json;
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
@@ -232,6 +236,25 @@ impl Core {
     fn commit_wt_toml(&self, text: &str) {
         self.commit_file(&self.lead, ".config/wt.toml", text, "wt.toml");
     }
+
+    /// The merge (A8) of `api-a1`, in this process, with the same store and config the driver uses. The Gate at the
+    /// merge (contract §7.4 step 6, hs-d679) is `gate.merge` (`pre-commit`) in the Attempt worktree at HEAD.
+    fn merge(&self) -> cpd_core::merge::Merge {
+        let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
+        let config = Config::load(&home).unwrap();
+        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+        let catalog = Catalog {
+            pi_version: "1.0.0".to_owned(),
+            o: model("p/opus"),
+            s: model("p/sonnet"),
+            h: model("p/haiku"),
+            g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+        };
+        let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "hooks test", metrics: &|_| None };
+        let attempt = AttemptId::parse("api-a1").unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        cpd_core::merge::merge(&mut store, &ctx, &plan(), &attempt).unwrap()
+    }
 }
 
 // ---------- the tests ----------
@@ -250,26 +273,24 @@ fn pre_start_of_the_repo_file_runs_in_the_lead_worktree_of_a_started_pr() {
 }
 
 #[test]
-fn the_quick_check_at_submit_is_the_pre_commit_of_the_repo_file() {
+fn the_merge_gate_is_the_pre_commit_of_the_repo_file() {
     let fx = core("dispatch");
-    let failing = "touch quick-check-ran; exit 7";
-    fx.env.repo_policy("acme", "pay", &hooks_file(failing, "true"));
+    let marker = fx.env.root().join("merge-gate-ran");
+    // The merge gate is the repo's `pre-commit` (the plan's A4/D5, hs-d679); the contract's §7.4 says
+    // `pre-merge`. The test pins the merge-time behavior, so it sets both and passes whichever runs.
+    let hook = format!("touch {}", marker.display());
+    fx.env.repo_policy("acme", "pay", &hooks_file(&hook, &hook));
     fx.commit_work();
     fx.fake_once("sh", Reply::exit(7, "", ""));
 
-    let error = refused(&fx.submit(), "check_failed", 3);
-
-    assert_eq!(commands(&fx), [failing], "the repo file's pre-commit did not run");
-    assert!(error["details"]["log"].as_str().unwrap().ends_with("logs/api-a1.pre-commit.log"), "{error}");
-    assert_eq!(fx.attempt_status(), "running");
-
-    // A passing pre-commit lets the submit through.
-    let passing = "touch quick-check-passed";
-    fx.env.repo_policy("acme", "pay", &hooks_file(passing, "true"));
-    fx.fake("sh", Reply::ok(""));
+    // Submit runs no quick check any more: the repo file's pre-commit is the merge gate, not the submit check.
     fx.submit().ok();
-    assert_eq!(commands(&fx), [failing, passing]);
+    assert!(!marker.exists(), "submit ran the repo file's pre-commit (the quick check)");
     assert_eq!(fx.attempt_status(), "merging");
+
+    fx.merge();
+
+    assert!(marker.exists(), "the repo file's pre-commit did not run at the Job merge");
 }
 
 #[test]
