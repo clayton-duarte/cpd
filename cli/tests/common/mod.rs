@@ -47,6 +47,7 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 pub mod fx;
+pub mod screen;
 pub mod session;
 
 /// The cpd binary Cargo built for this test run.

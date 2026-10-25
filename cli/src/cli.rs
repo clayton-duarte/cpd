@@ -114,8 +114,8 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
     run_with(&Ports::real(), argv)
 }
 
-/// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
-/// the Jobs that convert them to `Env::open_with` land.
+/// [`run`] on `ports`. Only `pr view` reads `ports` yet: the other areas open their `Env` with `Env::open`, the real
+/// ports, until the Jobs that convert them to `Env::open_with` land.
 pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     run_on(ports, argv, cpd_tui::on_a_terminal())
 }
@@ -152,7 +152,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
-        Command::Pr(c) => pr::run(c),
+        Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
