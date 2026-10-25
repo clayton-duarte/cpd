@@ -60,6 +60,8 @@ pub trait Spawn: Send + Sync {
     /// The value of `key` in the environment of `p`, `None` when it has none or the OS does not show it (on macOS an
     /// Apple platform binary hides its environment).
     fn env_of(&self, p: Pid, key: &str) -> Option<String>;
+    /// Every live descendant of `root`, not `root` itself, in pid order (the stall rule kills a Worker's tool call).
+    fn descendants(&self, root: Pid) -> Vec<Pid>;
     /// Returns only on failure.
     fn exec(&self, l: &Launch) -> io::Error;
     fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)>;
@@ -273,6 +275,10 @@ impl Spawn for ProcessSpawn {
         crate::driver::stall::stat(p.0).map(|(ppid, _)| Pid(ppid))
     }
 
+    fn descendants(&self, root: Pid) -> Vec<Pid> {
+        crate::driver::stall::descendants(root.0).into_iter().map(Pid).collect()
+    }
+
     /// macOS: `ps -E -p <pid> -o command=` prints the environment after the command.
     #[cfg(target_os = "macos")]
     fn env_of(&self, p: Pid, key: &str) -> Option<String> {
@@ -364,6 +370,8 @@ struct Table {
     cmdlines: HashMap<Pid, String>,
     /// The `env_set` of each launch that got a pid.
     envs: HashMap<Pid, Vec<(String, String)>>,
+    /// The parent of a pid, where a test said so (`FakeSpawn::add_process`).
+    parents: HashMap<Pid, Pid>,
 }
 
 impl Table {
@@ -431,6 +439,18 @@ impl FakeSpawn {
     pub fn set_cmdline(&self, pid: Pid, line: &str) {
         self.table().cmdlines.insert(pid, line.to_owned());
     }
+
+    /// A running process that no `Launch` started: a child of `parent` (a pid the test names, a pane's) whose `cmdline` is `line`.
+    /// It counts in `descendants(parent)` until it exits (`exit`, or a signal).
+    pub fn add_process(&self, parent: Pid, line: &str) -> Pid {
+        let mut table = self.table();
+        table.last_pid += 1;
+        let pid = Pid(table.last_pid);
+        table.pids.insert(pid, Fate::Running);
+        table.parents.insert(pid, parent);
+        table.cmdlines.insert(pid, line.to_owned());
+        pid
+    }
 }
 
 impl Spawn for FakeSpawn {
@@ -491,6 +511,28 @@ impl Spawn for FakeSpawn {
 
     fn ppid(&self, _p: Pid) -> Option<Pid> {
         None
+    }
+
+    fn descendants(&self, root: Pid) -> Vec<Pid> {
+        let table = self.table();
+        let mut found: Vec<Pid> = table
+            .parents
+            .keys()
+            .copied()
+            .filter(|pid| matches!(table.pids.get(pid), Some(Fate::Running)))
+            .filter(|pid| {
+                let mut up = table.parents.get(pid);
+                while let Some(parent) = up {
+                    if *parent == root {
+                        return true;
+                    }
+                    up = table.parents.get(parent);
+                }
+                false
+            })
+            .collect();
+        found.sort_unstable();
+        found
     }
 
     fn env_of(&self, p: Pid, key: &str) -> Option<String> {

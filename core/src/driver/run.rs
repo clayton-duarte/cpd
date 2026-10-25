@@ -564,7 +564,8 @@ impl Driver {
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
             let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &stall::descendants, &file, pi, span_open)) {
+            let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
+            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, &file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
