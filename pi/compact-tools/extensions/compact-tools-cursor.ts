@@ -5,9 +5,10 @@
  * On the off phase, and while unfocused, the fake-cursor markers are removed and the character stays plain.
  * When pi's hardware cursor is shown the extension draws and animates nothing.
  *
- * A keystroke pauses the 500 ms blink and the cursor holds the colour it had (hs-d673); each keystroke extends
- * an inverse-video highlight trail over the characters just typed in that held colour. After 500 ms idle the
- * trail shrinks from its left one character per 50 ms shrink tick; when it collapses the blink resumes.
+ * A keystroke pauses the 500 ms blink and the cursor holds the colour it had (hs-d676); each inserted character
+ * extends an inverse-video highlight trail over the characters just typed in that held colour, one per deleted
+ * character shrinks it, and a newline clears it. After 250 ms idle the trail collapses in one step; the blink
+ * then resumes on a visible phase, holding the same colour.
  */
 import { Editor } from "@earendil-works/pi-tui";
 import { onTick } from "./compact-tools-clock.ts";
@@ -20,13 +21,15 @@ const CURSOR_MARKER = "\x1b_pi:c\x07";
 const START = "\x1b_pi:fc\x07";
 const END = "\x1b_pi:/fc\x07";
 const DEFAULT = "\x1b[39m";
-/** The SGR pair that opens and closes the inverse-video keystroke trail (hs-d673). */
+/** The SGR pair that opens and closes the inverse-video keystroke trail (hs-d676). */
 const REVERSE = "\x1b[7m";
 const UNREVERSE = "\x1b[27m";
 /** One phase per 500 ms: visible then off, each 500 ms. */
 const PERIOD_MS = 500;
-/** The idle shrink tick, and the trail's step after 500 ms without a keystroke. */
-const SHRINK_MS = 50;
+/** The idle collapse check tick (hs-d676); a held trail is watched at this cadence. */
+const COLLAPSE_MS = 50;
+/** Keystroke idle after which a held trail collapses in one step (hs-d676). */
+const IDLE_MS = 250;
 /** The base indices of the cycle: magenta 5, white 7, green 2. */
 const CYCLE = [5, 7, 2] as const;
 
@@ -98,14 +101,14 @@ function highlight(rows: string[], index: number, trail: number): string[] {
 
 export class CursorController {
 	private stopTick: (() => void) | undefined;
-	private stopShrink: (() => void) | undefined;
+	private stopCollapse: (() => void) | undefined;
 	private phase = 0;
 	private bound = false;
 	/** The inverse-video trail length: 0 means the plain blink, positive means the trail is held. */
 	private trail = 0;
 	/** The colour the cursor holds while a trail is non-empty; undefined when no trail. */
 	private heldColour: number | undefined;
-	/** The wall clock of the last keystroke, used to start the idle shrink after 500 ms. */
+	/** The wall clock of the last keystroke, used to start the idle collapse after IDLE_MS. */
 	private lastKeystrokeAt = 0;
 	private tui: TuiLike | undefined;
 
@@ -128,35 +131,56 @@ export class CursorController {
 	private release(): void {
 		this.stopTick?.();
 		this.stopTick = undefined;
-		this.stopShrink?.();
-		this.stopShrink = undefined;
+		this.stopCollapse?.();
+		this.stopCollapse = undefined;
 		this.trail = 0;
 		this.heldColour = undefined;
 		this.lastKeystrokeAt = 0;
 	}
 
 	private input(self: unknown, args: unknown[], original: (...args: unknown[]) => unknown): unknown {
+		const before = (self as { getText: () => string }).getText();
 		const result = original.apply(self, args);
 		if (!this.bound || !editorFocused()) return result;
-		if (this.trail === 0) {
-			// Hold the colour the blink currently shows, and start watching for idle.
-			this.heldColour = CYCLE[Math.floor(this.phase / 2) % CYCLE.length]!;
-			this.stopShrink = onTick(() => this.shrink(), SHRINK_MS);
+		const after = (self as { getText: () => string }).getText();
+		if (after.split("\n").length > before.split("\n").length) {
+			// A newline was inserted: no highlight, exactly like idle.
+			this.trail = 0;
+			this.heldColour = undefined;
+			this.stopCollapse?.();
+			this.stopCollapse = undefined;
+		} else {
+			const delta = after.length - before.length;
+			if (delta > 0) {
+				if (this.trail === 0) {
+					// Hold the colour the blink currently shows, and start watching for idle.
+					this.heldColour = CYCLE[Math.floor(this.phase / 2) % CYCLE.length]!;
+					this.stopCollapse = onTick(() => this.collapse(), COLLAPSE_MS);
+				}
+				this.trail += delta;
+			} else if (delta < 0) {
+				this.trail = Math.max(0, this.trail + delta);
+				if (this.trail === 0) {
+					this.heldColour = undefined;
+					this.stopCollapse?.();
+					this.stopCollapse = undefined;
+				}
+			}
 		}
-		this.trail += 1;
 		this.lastKeystrokeAt = Date.now();
 		this.tui?.requestRender?.();
 		return result;
 	}
 
-	private shrink(): void {
-		if (Date.now() - this.lastKeystrokeAt < PERIOD_MS) return;
-		this.trail -= 1;
-		if (this.trail === 0) {
-			this.heldColour = undefined;
-			this.stopShrink?.();
-			this.stopShrink = undefined;
-		}
+	/** The idle collapse (hs-d676): one step to zero, the blink resumes visible in the held colour. */
+	private collapse(): void {
+		if (Date.now() - this.lastKeystrokeAt < IDLE_MS) return;
+		this.trail = 0;
+		this.heldColour = undefined;
+		// Make the resumed blink's phase even, so it shows the colour it held.
+		this.phase -= this.phase % 2;
+		this.stopCollapse?.();
+		this.stopCollapse = undefined;
 		this.tui?.requestRender?.();
 	}
 
