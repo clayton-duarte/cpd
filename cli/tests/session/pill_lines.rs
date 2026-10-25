@@ -45,7 +45,10 @@ fn status_line_pills_follow_the_rule() {
     let pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}}";
+    let italic_pill = |colour: &str, text: &str| {
+        format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
+    };
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,16,0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}\
@@ -53,6 +56,7 @@ fn status_line_pills_follow_the_rule() {
          #{{e|+:#{{?{long},#{{@cpd_workers_width}},#{{@cpd_workers_short_width}}}},1}}}}}}\
          #[default]#[align=right]\
          {}\
+         #{{?@cpd_incident,#[fg=colour8]\u{2500}{},}}\
          #{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}\
          {JOIN}",
         button("reset", cpd_core::host::tmux::RESET_GLYPH),
@@ -60,6 +64,7 @@ fn status_line_pills_follow_the_rule() {
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
+        italic_pill("colour9", " Incident Mode"),
         pill("colour8", "#{@cpd_version}"),
     );
     // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.

@@ -147,6 +147,16 @@ impl Engine {
     }
 }
 
+/// Whether incident mode holds `step` (contract §3.7): E4 (open Jobs), E7 (PR start), E9 (Context curation),
+/// E10 (Session titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1,
+/// E2, E5, E8, E12 and E13 run as usual. E3 is not held: it starts only urgent Jobs ([`schedule`]).
+pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
+    if !matches!(step, Step::E4 | Step::E7 | Step::E9 | Step::E10 | Step::E11) {
+        return false;
+    }
+    engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
+}
+
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
 /// another Plan too, and the base PR, if any, started), and not marked `start_failed_at` (§3.7). Oldest Plan first,
 /// then by key.
@@ -164,6 +174,10 @@ fn startable() -> String {
 /// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
+    if incident_holds(engine, Step::E7) {
+        engine.log.line("E7: holding: incident mode is on");
+        return;
+    }
     let waiting = engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
