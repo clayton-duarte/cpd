@@ -25,6 +25,8 @@ fn call(dir: Option<&Path>, cwd: Option<&str>, args: &[&str]) -> Call {
         envs,
         cwd: cwd.map(PathBuf::from),
         deadline: Duration::from_secs(10),
+        stdin: None,
+        stderr_to: None,
     }
 }
 
