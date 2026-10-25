@@ -18,6 +18,12 @@ pub(crate) use view::layout_sample;
 mod input_tests;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod pane;
+#[cfg(test)]
+mod pane_tests;
+#[cfg(test)]
+mod checklist_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -220,28 +226,37 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
         CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view dialog failed: {e}."))
             .with("command", "tui view dialog")
     })?;
+    write_result(&common.out, &dialog, &outcome)?;
+    Ok(Output::Owned)
+}
+
+/// Writes how `dialog` closed to `path`: `{approved, ticked, unticked}` for a checklist, the [`Outcome`] for the others.
+fn write_result(path: &Path, dialog: &Dialog, outcome: &Outcome) -> Result<(), CpdError> {
     match dialog.ticks() {
         Some((ticked, unticked)) => {
             let json = serde_json::json!({"approved": outcome.confirmed, "ticked": ticked, "unticked": unticked});
-            write_json(&common.out, &json.to_string())?;
+            write_json(path, &json.to_string())
         }
-        None => write_outcome(&common.out, &outcome)?,
+        None => write_outcome(path, outcome),
     }
-    Ok(Output::Owned)
 }
 
 /// Draws and takes input until the dialog closes.
 fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io::Result<Outcome> {
     loop {
         terminal.draw(|f| dialog.draw(f))?;
-        let closed = match event::read()? {
-            Event::Key(key) => dialog.press_key(key),
-            Event::Mouse(mouse) => dialog.press_mouse(mouse),
-            _ => None,
-        };
-        if let Some(outcome) = closed {
+        if let Some(outcome) = dispatch(dialog, event::read()?) {
             return Ok(outcome);
         }
+    }
+}
+
+/// What `event` does to `dialog`: the outcome that closes it, if any.
+fn dispatch(dialog: &mut Dialog, event: Event) -> Option<Outcome> {
+    match event {
+        Event::Key(key) => dialog.press_key(key),
+        Event::Mouse(mouse) => dialog.press_mouse(mouse),
+        _ => None,
     }
 }
 
