@@ -3,11 +3,9 @@
 # docs/research/tests-mock-*.md (over-approximate on purpose); a migration Job deletes its lines.
 # Never add a line for a hit: migrate the test to the fake tmux instead.
 # Exception: a test that landed after the inventory may be listed in an urgent PR, by its full name, and is migrated later.
-cpd::engine doctor::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_curate_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_distill_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_sleep::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_team::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_titles_width::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_worker_archive::  # m-engine: engine tests on a real tmux server
 cpd::engine watch::  # m-engine: engine tests on a real tmux server
@@ -20,6 +18,8 @@ cpd::session board::  # m-session: session tests on a real tmux server
 cpd::session host::  # m-session: session tests on a real tmux server
 cpd::session pill_lines::  # m-session: session tests on a real tmux server
 cpd::session plannotator_env::  # m-session: session tests on a real tmux server
+cpd::session session_asleep::  # m-session: session tests on a real tmux server
+cpd::session session_first_message::  # m-session: session tests on a real tmux server
 cpd::session session_reload::  # m-session: session tests on a real tmux server
 cpd::session session_retier::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
