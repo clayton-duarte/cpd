@@ -89,14 +89,34 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN 
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
-/// The linear vs parallel allocation E3 derives for Job `key` of `plan` (hs-d680/hs-d682/hs-d683), from the PR's live
-/// Attempts plus the Jobs being started in this tick in READY order: the first live sibling is `Linear`, the rest
-/// `Parallel`; a Job of a PR that already has a live Attempt is `Parallel`.
-///
-/// Stub for the red test of Job `wengine-tests`: it returns `Linear` always, so a live sibling is not yet `Parallel`;
-/// Job `wengine-impl` derives it from the store and the tick's Jobs.
-fn allocation(_plan: &PlanId, _key: &JobKey) -> Allocation {
-    Allocation::Linear
+/// The linear vs parallel allocation E3 derives for each Ready Job it is about to start
+/// (hs-d680/hs-d682/hs-d683), from the PR's live Attempts plus the Jobs being started in this tick in READY order: the
+/// first Job of a PR with no live Attempt is `Linear`, the rest `Parallel`; a Job of a PR that already has a live
+/// Attempt is `Parallel`. One entry per Job of `ready`, in its order.
+fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Allocation>, CpdError> {
+    let mut first: Vec<(String, String)> = Vec::new();
+    let mut out = Vec::with_capacity(ready.len());
+    for (plan, key) in ready {
+        let pr: String = conn.query_row(
+            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )?;
+        let live: i64 = conn.query_row(
+            "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended'",
+            params![plan.as_str(), pr.as_str()],
+            |r| r.get(0),
+        )?;
+        let pr_key = (plan.to_string(), pr);
+        if live > 0 || first.contains(&pr_key) {
+            out.push(Allocation::Parallel);
+        } else {
+            first.push(pr_key);
+            out.push(Allocation::Linear);
+        }
+    }
+    Ok(out)
 }
 
 pub(super) fn run(engine: &mut Engine) {
@@ -147,10 +167,14 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(catalog) => catalog,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    for (plan, key) in ready {
+    let allocations = match engine.store.read(|conn| allocations(conn, &ready)) {
+        Ok(allocations) => allocations,
+        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
+    };
+    for ((plan, key), allocation) in ready.into_iter().zip(allocations) {
         let about = About::Job(plan.clone(), key.clone());
         let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
-        match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation(&plan, &key))) {
+        match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
             Ok(started) => {
                 engine.log.line(&format!(
                     "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",

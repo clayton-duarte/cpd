@@ -248,7 +248,15 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
         |r| r.get(0),
     )?;
     // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
+    // A requested Linear while another Attempt of the PR is live cannot take the PR's one workflow worktree: CasLost,
+    // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
     let linear = match allocation {
+        Some(Allocation::Linear) if live > 0 => {
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of PR {} is live.", job.pr))
+                .with("plan", plan.as_str())
+                .with("job", key.as_str())
+                .with("pr", job.pr.as_str()));
+        }
         Some(Allocation::Linear) => true,
         Some(Allocation::Parallel) => false,
         None => live == 0,
