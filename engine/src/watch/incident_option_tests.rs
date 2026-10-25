@@ -1,52 +1,47 @@
 //! Red test for the engine's `@cpd_incident` option (contract §6.1, hs-d634, hs-d640): the
 //! status option step sets it to the elapsed time since the incident row's `started_at` while a
-//! row exists and unsets it while none does, like `@cpd_workers`. The tmux is a script that
-//! records its arguments, so the test reads what the step sends.
+//! row exists and unsets it while none does, like `@cpd_workers`. The tmux is the in-process one, whose runner records
+//! its arguments, so the test reads what the step sends.
 
-use std::os::unix::fs::PermissionsExt;
-
-use cpd_core::home::CpdHome;
-use cpd_core::host::Tmux;
 use time::Duration;
-use time::OffsetDateTime;
+use cpd_core::clock::{Clock, ManualClock};
 use time::format_description::well_known::Rfc3339;
 
-use super::engine::Engine;
+use super::testkit::Fx;
 use super::workers;
 
-/// `now - ago` as the RFC 3339 `started_at` the incident row holds.
-fn started_before(ago: Duration) -> String {
-    (OffsetDateTime::now_utc() - ago).format(&Rfc3339).expect("a time formats as RFC 3339")
+/// `now - ago` on `clock` as the RFC 3339 `started_at` the incident row holds.
+fn started_before(clock: &ManualClock, ago: Duration) -> String {
+    (clock.utc() - ago).format(&Rfc3339).expect("a time formats as RFC 3339")
 }
 
-/// One run of the status option step on a fresh home with an `incident` row whose `started_at`
-/// is `started_at` (None: no row). Returns what the step sent to tmux.
-fn sent(started_at: Option<&str>) -> String {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("home");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("config.toml"), "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"incident\"\n").unwrap();
-    let calls = dir.path().join("calls");
-    let program = dir.path().join("tmux");
-    std::fs::write(&program, format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n", calls.display())).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let home = CpdHome::resolve(Some(root.into()), None).unwrap();
-    let mut engine = Engine::for_test(home, Tmux::new("incident").with_program(&program));
-    if let Some(started_at) = started_at {
+/// One run of the status option step on a fresh home, on a `ManualClock`, with an `incident` row that started `ago` before the
+/// clock's now (None: no row). Returns what the step sent to tmux.
+fn sent(ago: Option<Duration>) -> String {
+    let clock = ManualClock::new();
+    let mut fx = Fx::new("");
+    fx.engine.ports.clock = std::sync::Arc::new(clock.clone());
+    let runner = fx.on_fake_tmux();
+    fx.tmux_server();
+    let engine = &mut fx.engine;
+    if let Some(ago) = ago {
+        let started_at = started_before(&clock, ago);
         engine
             .store
             .write("test", |tx| {
                 tx.execute(
                     "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, ?1, 'mgr', 'pager down', ?2)",
-                    rusqlite::params![started_at, tx.id()],
+                    rusqlite::params![&started_at, tx.id()],
                 )?;
                 Ok(())
             })
             .unwrap();
     }
-    workers::run(&mut engine);
-    std::fs::read_to_string(&calls).expect("the step called tmux")
+    let before = runner.calls().len();
+    workers::run(engine);
+    let sent: Vec<String> = runner.calls().into_iter().skip(before).map(|call| call.args.join(" ")).collect();
+    assert!(!sent.is_empty(), "the step called tmux");
+    sent.join("\n")
 }
 
 /// The elapsed duration the step set on `@cpd_incident`.
@@ -71,7 +66,7 @@ fn the_status_step_writes_the_elapsed_duration() {
         (Duration::days(2) + Duration::hours(4) + Duration::seconds(30), "2d 4h"),
     ];
     for (ago, want) in cases {
-        let on = sent(Some(&started_before(ago)));
+        let on = sent(Some(ago));
         assert!(on.contains("@cpd_incident"), "the option is named while incident mode is on: {on}");
         assert!(!on.contains("-gu @cpd_incident"), "it is set, not unset, while on: {on}");
         assert!(!on.contains("pager down"), "the option no longer carries the reason: {on}");

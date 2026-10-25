@@ -30,7 +30,7 @@ pub mod route;
 pub mod state;
 pub mod target;
 
-pub use route::TmuxRoute;
+pub use route::{PaneEnd, TmuxRoute};
 pub use state::{KeyLog, Pane, SessionRow, State, WindowRow};
 
 use crate::host::runner::{Runner, SystemRunner};

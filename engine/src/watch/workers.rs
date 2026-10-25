@@ -66,7 +66,8 @@ impl Counts {
 
 pub(super) fn run(engine: &mut Engine) {
     let limit = engine.config.concurrency;
-    let read = engine.store.read(|conn| Ok((Counts::read(conn, limit)?, incident(conn)?)));
+    let now = engine.ports.clock.utc();
+    let read = engine.store.read(|conn| Ok((Counts::read(conn, limit)?, incident(conn, now)?)));
     let (counts, incident) = match read {
         Ok(read) => read,
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
@@ -109,12 +110,12 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// The `@cpd_incident` text while incident mode is on (contract §6.1, hs-d640): the whole-minute
 /// duration from the one `incident` row's `started_at` to now. `None` while off.
-fn incident(conn: &rusqlite::Connection) -> Result<Option<String>, CpdError> {
+fn incident(conn: &rusqlite::Connection, now: time::OffsetDateTime) -> Result<Option<String>, CpdError> {
     if !is_on(conn) {
         return Ok(None);
     }
     let started_at = conn.query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| r.get::<_, String>(0)).optional()?;
-    started_at.map(|started_at| elapsed(&started_at, time::OffsetDateTime::now_utc())).transpose()
+    started_at.map(|started_at| elapsed(&started_at, now)).transpose()
 }
 
 /// The duration from the incident row's `started_at` to `now` (hs-d640, contract §6.1 and 6.1.1),

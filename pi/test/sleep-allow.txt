@@ -1,7 +1,6 @@
 # Debts of the static sleep checks: <path> <count>  # <tag>: <reason>. A line may only be lowered or removed, never raised, except the line named in its reason as a one-time raise.
 cli/tests/common/mod.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/engine/watch_distill_inbox.rs 1  # m-engine: sleep or wall-clock wait
-cli/tests/engine/watch.rs 2  # m-engine: sleep or wall-clock wait
 cli/tests/flow/config.rs 4  # m-flow: sleep or wall-clock wait
 cli/tests/flow/driver_reload.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/flow/driver.rs 1  # m-flow: sleep or wall-clock wait

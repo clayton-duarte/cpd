@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -15,10 +15,12 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
+use cpd_core::clock::Clock;
 use cpd_core::host::layout::WATCH_WINDOW;
 use cpd_core::host::tmux::{installed_version, supported_version};
 use cpd_core::host::{PaneId, Spawn, Tmux};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
@@ -37,6 +39,12 @@ const BACKOFF: Duration = Duration::from_secs(2);
 
 /// `watch --ensure`; `wait` is the supervising hooks' call (contract §6.6).
 pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
+    ensure_with(&Ports::current(), wait)
+}
+
+/// [`ensure`] on `ports`: the waits (the ensure lock, the engine's lock, the start, the back-off) read `ports.clock`, tmux is run by `ports.runner`.
+fn ensure_with(ports: &Ports, wait: bool) -> Result<Output, CpdError> {
+    let clock = &*ports.clock;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     // A home whose store is gone is one being removed (a test env's teardown, hygiene.md 3c): a late supervising call
@@ -49,17 +57,17 @@ pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
         .with("path", home.root().display().to_string())
         .with("next", "cpd watch --ensure"));
     }
-    let tmux = Tmux::new(config.tmux.socket.as_str());
+    let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());
     let work = config.tmux.work_session.as_str();
     // One call at a time, plain or supervising: a pane that dies at once makes its
     // hook run again while this call still starts it, and the next waits out the
     // back-off; and a plain call that probed the engine's lock beside a supervising
     // one would start a second window.
-    let _one_at_a_time = serialize(&home, wait)?;
-    if !free(&home, &tmux, work, wait)? {
+    let _one_at_a_time = serialize(&home, wait, clock)?;
+    if !free(&home, &tmux, work, wait, clock)? {
         return Ok(Output::success(json!({"started": false, "already": true})));
     }
-    let result = start(&home, &config, &tmux);
+    let result = start(&home, &config, &tmux, clock);
     if wait {
         // Nobody reads a hook's output (§6.6): its failures are in the engine's log.
         if let Ok(mut log) = Log::open(&home) {
@@ -69,7 +77,7 @@ pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
             }
         }
         if result.is_err() {
-            std::thread::sleep(BACKOFF);
+            clock.sleep(BACKOFF);
         }
     }
     result
@@ -157,7 +165,7 @@ fn verify_home(home: &CpdHome) -> Result<(), CpdError> {
 /// Takes `locks/watch-ensure.lock`, which every call holds while it checks and starts the
 /// engine. A supervising call (`wait`) waits for it without a limit; a plain call waits
 /// [`PLAIN_LIMIT`] and then fails.
-fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
+fn serialize(home: &CpdHome, wait: bool, clock: &dyn Clock) -> Result<File, CpdError> {
     let path = home.locks_dir().join("watch-ensure.lock");
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {e}.", path.display())).with("lock", path.display().to_string())
@@ -168,9 +176,9 @@ fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
         cpd_core::lock::blocking(&file).map_err(failed)?;
         return Ok(file);
     }
-    let deadline = Instant::now() + PLAIN_LIMIT;
+    let deadline = clock.now() + PLAIN_LIMIT;
     while !cpd_core::lock::try_lock(&file).map_err(failed)? {
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::WatchStartFailed,
                 format!("Another watch --ensure still holds {} after {}s.", path.display(), PLAIN_LIMIT.as_secs()),
@@ -178,7 +186,7 @@ fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
             .with("lock", path.display().to_string())
             .with("next", "cpd watch --ensure"));
         }
-        std::thread::sleep(POLL);
+        clock.sleep(POLL);
     }
     Ok(file)
 }
@@ -187,16 +195,16 @@ fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
 /// is the engine, except for a supervising call (`wait`) that finds no live pane
 /// in the engine's window: that engine's window is gone and its process is on
 /// its way out, so the call waits [`LOCK_LIMIT`] for the lock.
-fn free(home: &CpdHome, tmux: &Tmux, work: &str, wait: bool) -> Result<bool, CpdError> {
+fn free(home: &CpdHome, tmux: &Tmux, work: &str, wait: bool, clock: &dyn Clock) -> Result<bool, CpdError> {
     if !lock::held(home)? {
         return Ok(true);
     }
     if !wait || engine_panes(tmux, work)?.iter().any(|p| !p.dead) {
         return Ok(false);
     }
-    let deadline = Instant::now() + LOCK_LIMIT;
-    while Instant::now() < deadline {
-        std::thread::sleep(POLL);
+    let deadline = clock.now() + LOCK_LIMIT;
+    while clock.now() < deadline {
+        clock.sleep(POLL);
         if !lock::held(home)? {
             return Ok(true);
         }
@@ -209,7 +217,7 @@ fn engine_panes(tmux: &Tmux, work: &str) -> Result<Vec<cpd_core::host::Pane>, Cp
     Ok(tmux.list_panes()?.into_iter().filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW).collect())
 }
 
-fn start(home: &CpdHome, config: &Config, tmux: &Tmux) -> Result<Output, CpdError> {
+fn start(home: &CpdHome, config: &Config, tmux: &Tmux, clock: &dyn Clock) -> Result<Output, CpdError> {
     let work = config.tmux.work_session.as_str();
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
     let since = store.read(highest_id)?;
@@ -243,7 +251,7 @@ fn start(home: &CpdHome, config: &Config, tmux: &Tmux) -> Result<Output, CpdErro
             None => tmux.new_window(work, WATCH_WINDOW, &spawn)?.1,
         },
     };
-    match wait_started(tmux, &mut store, &pane, since) {
+    match wait_started(tmux, &mut store, &pane, since, clock) {
         Ok(()) => Ok(Output::success(json!({"started": true, "pane": pane.as_str()}))),
         // A concurrent call started an engine first: ours lost the lock and its
         // pane died. The engine runs, which is what the caller asked for.
@@ -261,8 +269,8 @@ fn start(home: &CpdHome, config: &Config, tmux: &Tmux) -> Result<Output, CpdErro
 /// Waits until the engine in `pane` has taken the lock, which it proves by
 /// appending `watch-started` with its pid (the pane's: tmux runs a command of
 /// several arguments without a shell). Fails early when the pane dies.
-fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64) -> Result<(), CpdError> {
-    let deadline = Instant::now() + START_LIMIT;
+fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64, clock: &dyn Clock) -> Result<(), CpdError> {
+    let deadline = clock.now() + START_LIMIT;
     let failed = |why: String| {
         CpdError::new(ErrorCode::WatchStartFailed, format!("The engine did not start in pane {pane}: {why}"))
             .with("pane", pane.as_str())
@@ -290,9 +298,9 @@ fn wait_started(tmux: &Tmux, store: &mut Store, pane: &PaneId, since: i64) -> Re
         if started {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return Err(failed(format!("its process did not take the lock within {}s.", START_LIMIT.as_secs())));
         }
-        std::thread::sleep(POLL);
+        clock.sleep(POLL);
     }
 }
