@@ -36,6 +36,9 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
+26. [`gate`](#26-gate)
+27. [`prune`](#27-prune)
+28. [`tag` and `version`](#28-tag-and-version)
 
 ## 1. Conventions
 
@@ -58,6 +61,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd gate finish` (§26) | the run's report on stderr, and its exit status | like `slot`: it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd slot` (§23) | what the command it runs prints, and its exit status | it runs a command inside a test slot and is transparent to it; only its own refusals print the envelope, on stderr |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>`, and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
@@ -201,6 +205,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd host repair` (§9.17) | Manager | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
@@ -208,6 +213,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
+| `cpd tag` (§26.1) | Lead | no | no |
+| `cpd version sync` (§26.2) | Lead | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -4819,3 +4826,132 @@ Output when on with auto-end:
 ```
 
 Idempotent: yes; read-only.
+
+## 26. `gate`
+
+The Gate's leak check (hs-d519, docs/research/hygiene.md "The Gate leak check", Plan tests-mock pro-d35). Area `core/src/gate/` and `cli/`.
+
+### 26.1 `gate finish`
+
+```
+cpd gate finish --run <id> --status <n>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--run <id>` | the run id (`GATE_RUN`, 6 characters). Required |
+| `--status <n>` | the exit status of the run's command. Required |
+
+Run by `scripts/gate-run.sh` after its command, with `TMPDIR` the run's directory. It lists what the run left: the processes that have `GATE_RUN=<id>` in their environment (`Spawn::with_env`), the tmux sockets named with the id (`/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`), the paths under `$TMPDIR`, and the lines of `$TMPDIR/tripwire.log`. A clean run prints nothing, removes the empty directory and exits with `--status`. Otherwise it prints `gate-run: FAIL: …` on stderr, `SIGKILL`s only the listed pids, removes only the listed sockets and the run's directory, and exits with `--status` when that is not 0, else 64. Another run's id never matches. Like `slot`, it prints no JSON of its own; a usage error is the envelope on stderr. Idempotent: yes.
+
+## 27. `prune`
+
+```
+cpd prune [--apply] [--drop <lead-branch>]... <repo>...
+```
+
+The successor of `scripts/prune-worktrees.sh` (hs-d138, hs-d143, hs-d144): the clean-up of leftover worktrees whose work reached `origin/main`, which the Manager runs by hand after a Plan. The script shrinks to `exec cpd prune "$@"`. A User's command at a shell: no callers, not cockpit, not internal.
+
+Flags and arguments:
+- `--apply`: do the removals. Without it nothing changes (apart from `git fetch origin`) and the command prints what it would do.
+- `--drop <lead-branch>`: repeatable. A worktree whose Lead Branch is one of the values is removed whether or not it is merged (rule `remove dropped`), unless it is protected.
+- `<repo>...`: one or more repos, at least one. A missing repo argument or an unknown flag is a usage error, exit 2.
+
+**Protected set.** Before anything else the command reads the store (no `cpd` child, no `jq`): for every Plan that is not done, the `lead_branch` of each PR whose status is not merged, and `cpd/<plan>--<attempt id>` for each Attempt of a Job of such a PR. If the store cannot be read the command exits 2 before touching anything. `git` and `gh` (authenticated) go through the `Runner`.
+
+**Rules.** Per worktree (the main one is skipped), the first rule that holds wins:
+
+```
+keep   active       the branch is protected (also with --drop)
+keep   dirty        `git status --porcelain` is not empty (untracked files included)
+remove dropped      the Lead Branch L is one of the --drop values (merged or not)
+remove              HEAD is an ancestor of origin/main
+remove              a merged PR P has a head branch equal to L or starting with `L/`, or,
+                    when L is `cpd/<plan>/<key>` (a legacy Lead Branch renamed locally),
+                    equal to `cpd/<plan>`; HEAD is an ancestor of P's head commit, and P
+                    reached main (its base is main, or the base is the head of a merged PR
+                    that reached main, at most 5 levels)
+keep   not merged   otherwise
+```
+
+L is the branch, or for a branch containing `--` the part before the first `--`. A detached HEAD has no L. Removal deletes the worktree and its local branch, never a remote branch.
+
+Effects per repo: `git fetch origin`, `gh pr list --state merged --limit 500` of the repo's `origin` slug, `git worktree list --porcelain`; with `--apply`, for each removal `git worktree remove --force`, `git branch -D` (only when no other worktree has the branch) and finally `git worktree prune`.
+
+Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `remove <path> (<branch|detached>)` or `remove <path> (<branch>): dropped`, `failed <path>: <error>`, then `<repo>: <n> remove, <m> keep`.
+
+Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
+
+Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
+## 28. `tag` and `version`
+
+The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
+
+### 28.1 `cpd tag`
+
+`cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
+
+Steps, each a git call through the `Runner`: `fetch --quiet origin main`; `show origin/main:Cargo.toml` (the first `version = "` under `[workspace.package]` is `<version>`); `ls-remote --tags origin refs/tags/v<version>` (output means the tag exists: exit 0, nothing more); `log -1 --first-parent -G'^version = ' --format=%H origin/main -- Cargo.toml` (the commit `<sha>`, whose `Cargo.toml` must carry `<version>`); then, when the local tag is absent, `tag -a v<version> <sha> -m v<version>` (a local tag that exists must point at `<sha>`); then `push --quiet origin refs/tags/v<version>`. A failed push is accepted only when `ls-remote --tags origin refs/tags/v<version>^{}` already answers `<sha>`.
+
+Output (stderr, one line each; the stream the script used):
+
+| Case | Line | Exit |
+|---|---|---|
+| tagged | `tag-version: tagged v<version> on <sha>` | 0 |
+| the remote has the tag | `tag-version: v<version> exists; nothing to do` | 0 |
+| fetch fails | `tag-version: cannot fetch origin/main` | 1 |
+| no `Cargo.toml` on origin/main | `tag-version: cannot read Cargo.toml on origin/main` | 1 |
+| no workspace version | `tag-version: no workspace version in Cargo.toml on origin/main` | 1 |
+| `ls-remote` fails | `tag-version: cannot list the tags of origin` | 1 |
+| `log` fails | `tag-version: cannot find the commit that set v<version>` | 1 |
+| `log` is empty | `tag-version: no commit on origin/main changed the version` | 1 |
+| the commit has another version | `tag-version: commit <sha> has version '<at>', not <version>` | 1 |
+| the local tag points elsewhere | `tag-version: local tag v<version> points at <have>, not <sha>` | 1 |
+| `tag -a` fails | `tag-version: cannot create v<version>` | 1 |
+| the push fails and the remote lacks `<sha>` | `tag-version: push of v<version> failed` | 1 |
+
+Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
+
+### 28.2 `cpd version sync [--print]`
+
+cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
+
+- `cpd version sync --print` prints the version (for example `0.13.45`) on stdout and writes nothing. Exit 0.
+- `cpd version sync` rewrites the first `version = "` under `[workspace.package]` of `Cargo.toml` and the `version` of the four workspace crates (`cpd`, `cpd-core`, `cpd-engine`, `cpd-tui`; never a package with a `source`) in `Cargo.lock`, then prints `sync-version: <version>`. Rerunning changes nothing.
+- Any other argument is a usage error: `usage: cpd version sync [--print]`, exit 2.
+- Failures print a `sync-version:` line on stderr and exit 1, writing nothing: `sync-version: no 'pub const PROTOCOL: u32 = <n>;' line in <kind.rs>.`, `sync-version: no .sql file in <dir>.`, `sync-version: no [workspace.package] in <Cargo.toml>.`, `sync-version: no version line under [workspace.package] in <Cargo.toml>.`
+
+The test that fails when `Cargo.toml` differs from the derived version (docs/implementing.md "The version string") stays; `cpd version sync` is what fixes it.
+
+## 28. `test`
+
+The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thin (`exec cpd test …`). The selection and the name classification are pure over `git diff` and `cargo metadata` output, read through the `Runner`; the commands start `cargo` through `scripts/cargo.sh` (the bootstrap that builds cpd). Callers: Manager, Lead, Worker; not cockpit, not internal. The command tree is pinned by `cli/tests/tooling/interface.rs`, and [docs/interface.md](interface.md) is regenerated.
+
+### 28.1 `test changed`
+
+```
+cpd test changed [--dry-run] [<base>]
+```
+
+Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
+
+### 28.2 `test run`
+
+```
+cpd test run <name>...
+```
+
+Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
+
+### 28.3 `test list` and `test build`
+
+```
+cpd test list <name>
+cpd test build
+```
+
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+
+### 28.4 The `scripts/tests.sh` contract
+
+`.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. The script is only the bootstrap: it builds cpd with `scripts/cargo.sh build -p cpd` (a no-op when cpd is current, so a stale cpd never answers), takes the newest `target/*/cpd` and runs `exec cpd test <command> "$@"`; `scripts/test-changed` does the same for `cpd test changed`. A process's output reaches the caller when that process ends, not line by line: the runner returns it whole.

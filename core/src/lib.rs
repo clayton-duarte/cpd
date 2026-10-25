@@ -25,6 +25,7 @@ pub mod config;
 pub mod context;
 pub mod driver;
 pub mod events;
+pub mod gate;
 pub mod git;
 pub mod host;
 pub mod host_repair;
@@ -40,11 +41,15 @@ pub mod policy;
 pub mod pill;
 pub mod ports;
 pub mod pr;
+pub mod prune;
 pub mod review;
 pub mod secret;
 pub mod session;
 pub mod spec;
 pub mod store;
+pub mod tag;
+pub mod testsel;
+pub mod version_sync;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
