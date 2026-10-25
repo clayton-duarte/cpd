@@ -36,8 +36,6 @@ cpd::flow context_manager_by_user::  # m-flow: flow commands that may reach a re
 cpd::flow context_manager::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_pending_waiting::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_idle::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_reload::  # m-flow: flow commands that may reach a real tmux
 cpd::flow driver::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
