@@ -44,7 +44,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "machine": "hs",
             "host": "hs",
             "concurrency": 3,
-            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
@@ -86,6 +85,18 @@ fn config_defaults_context_distill_tier_to_gx() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// hs-d679: the test-slot pool is gone, so `test_concurrency` is not a config key: it is refused
+/// like every unknown key, with its key path.
+#[test]
+fn test_concurrency_is_not_a_config_key() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &format!("{MINIMAL}test_concurrency = 2\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "test_concurrency");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -178,7 +189,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -198,7 +209,6 @@ version = 1
 machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
-test_concurrency = 64
 context_recent_days = 3650
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
@@ -251,7 +261,6 @@ work_session = "w"
     let out = config_with(&fx, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
-    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));

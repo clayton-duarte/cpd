@@ -570,6 +570,32 @@ fn the_tests_commands_are_not_given_a_test_slot() {
     assert_eq!(fx.seen("slot.txt").as_deref(), Some("slot=[]\n"));
 }
 
+/// hs-d679: the test-slot pool is gone. A Gate runs with no `run/test-<i>.lock` and no
+/// `CPD_TEST_SLOT`: today the Gate runs at submit (a later Job moves it to the merge), and its
+/// `pre-merge` hook must not find the slot variable set nor leave a slot lock behind.
+#[test]
+fn no_gate_takes_a_test_slot_lock_or_sets_cpd_test_slot() {
+    let fx = fixture_kind(&[], "open", None);
+    let seen = fx.env.root().join("gate-slot.txt");
+    // The open Job's Gate needs the PR's stored title and a `gh` that reports no pull request yet.
+    fx.env.sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+    fx.env.fake_gh("case \"$1 $2\" in \"pr list\") echo '[]' ;; *) exit 9 ;; esac");
+    fx.env.repo_policy(
+        "acme",
+        "pay",
+        &format!("[pr]\ngate = \"local\"\n[hooks.pre-merge]\ngate = \"echo [$CPD_TEST_SLOT] > {}\"\n", seen.display()),
+    );
+    fx.submit().ok();
+    // If a Gate ran, it saw no slot variable; and it took no slot lock either way.
+    if let Ok(slot) = fs::read_to_string(&seen) {
+        assert_eq!(slot.trim(), "[]", "the Gate must not set CPD_TEST_SLOT");
+    }
+    for i in 0..8 {
+        let lock = fx.home.root().join("run").join(format!("test-{i}.lock"));
+        assert!(!lock.exists(), "the Gate must not take {lock:?}");
+    }
+}
+
 #[test]
 fn list_refuses_a_name_that_matches_no_test_before_run_for_a_test_job() {
     let fx = fixture_kind(&[], "test", Some((r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#)));
