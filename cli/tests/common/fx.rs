@@ -25,17 +25,20 @@ use std::ffi::OsString;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::unistd::{dup, dup2_stdin, dup2_stdout};
 
+use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::host::spawn::Launch;
 use cpd_core::host::tmux::SERVER_OPTIONS;
-use cpd_core::ports::Fakes;
+use cpd_core::ports::{Fakes, Ports};
+use time::OffsetDateTime;
 
 use super::{Run, TestEnv};
 
@@ -432,6 +435,29 @@ impl Fx {
             .collect()
     }
 
+    /// Ends the program of `pane` with `status`, as a crash would: the fake marks the pane dead (`remain-on-exit`, as on
+    /// cpd's server) and runs the `pane-died` hook, which leaves a Lead's pane dead and respawns a view's.
+    pub fn pane_exit(&self, pane: &str, status: i32) {
+        let out = self.tmux(&["__ctl", "pane-exit", pane, "--status", &status.to_string()]);
+        assert!(out.status.success(), "tmux __ctl pane-exit {pane}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// Whether the fake server has `pane` and its program has ended.
+    pub fn pane_dead(&self, pane: &str) -> bool {
+        let state = self.tmux_state().expect("a server");
+        state.panes().into_iter().find(|p| p.id == pane).unwrap_or_else(|| panic!("no pane {pane}")).dead
+    }
+
+    /// One tick of the engine (`cpd watch`: E1-E5, E7-E14), run in this thread on the ports of this `Fx` through
+    /// `cpd_engine::watch::run_with`: the loop ends at its first nap, which is on the `ManualClock`. Starts no process;
+    /// what a step starts is recorded by the `FakeSpawn`, what it asks of tmux, `gh` or `cpd` is the `FakeRunner`'s.
+    pub fn engine_tick(&self) {
+        let until = Arc::new(AtomicBool::new(false));
+        let clock = Arc::new(StopAtFirstNap { inner: self.fakes.clock.clone(), until: until.clone() });
+        let ports = Ports { clock, runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
+        cpd_engine::watch::run_with(&ports, &until).unwrap_or_else(|e| panic!("the engine failed: {e:?}"));
+    }
+
     /// A `cpd` reply for `tui view chat` and `tui view history` that exits at once.
     pub fn fake_cpd_views(&self) {
         let _ = (*self.fakes.runner)
@@ -535,6 +561,25 @@ impl Drop for Fx {
     }
 }
 
+/// The clock of [`Fx::engine_tick`]: the `ManualClock`, whose first nap (the engine's wait between two ticks) ends the loop.
+struct StopAtFirstNap {
+    inner: Arc<ManualClock>,
+    until: Arc<AtomicBool>,
+}
+
+impl Clock for StopAtFirstNap {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        self.until.store(true, Ordering::SeqCst);
+    }
+    fn utc(&self) -> OffsetDateTime {
+        self.inner.utc()
+    }
+}
+
 /// The route of `op` ([`Fx::op`]): the reply of each subcommand, and the calls it answered.
 #[derive(Default)]
 pub struct OpRoute {
@@ -569,7 +614,6 @@ impl Handler for OpRoute {
 fn op_sub(call: &Call) -> &str {
     call.args.iter().skip_while(|arg| *arg != "item").nth(1).map_or("", String::as_str)
 }
-
 /// The program's file name: `/usr/bin/gh` is `gh`.
 fn file_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)

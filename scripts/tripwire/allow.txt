@@ -15,13 +15,14 @@ cpd::store store_local_needs::  # m-engine: store commands that may reach a real
 cpd::store store_window::  # m-engine: store commands that may reach a real tmux
 cpd::store store::  # m-engine: store commands that may reach a real tmux
 cpd::session board::  # m-session: session tests on a real tmux server
+cpd::session host::  # m-session: session tests on a real tmux server
+cpd::session pill_lines::  # m-session: session tests on a real tmux server
+cpd::session plannotator_env::  # m-session: session tests on a real tmux server
 cpd::session session_asleep::  # m-session: session tests on a real tmux server
 cpd::session session_first_message::  # m-session: session tests on a real tmux server
 cpd::session session_reload::  # m-session: session tests on a real tmux server
 cpd::session session_retier::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
-cpd::session session_titles_glance::  # m-session: session tests on a real tmux server
-cpd::session session_titles::  # m-session: session tests on a real tmux server
 cpd::session session_watchdog::  # m-session: session tests on a real tmux server
 cpd::session session::  # m-session: session tests on a real tmux server
 cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
