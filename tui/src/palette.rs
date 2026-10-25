@@ -357,7 +357,7 @@ pub const CHECKS_NONE: &str = "\u{F0374}";
 pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
     match (status, merging) {
         (JobStatus::Queued, _) => (QUEUED, Meaning::NotStarted),
-        (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
+        (JobStatus::Running, false) => (SPINNER[HOLLOW], Meaning::InProgress),
         (JobStatus::Running, true) => (MERGING, Meaning::Review),
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
         (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
@@ -401,17 +401,19 @@ pub fn phase(phase: Option<Phase>) -> Meaning {
 /// The 28 `moon_alt` phases of Nerd Fonts 3.5.1 (weather): U+E3E3 new, U+E3C8..U+E3CD waxing crescent 1-6, U+E3CE first quarter,
 /// U+E3CF..U+E3D4 waxing gibbous 1-6, U+E3D5 full, U+E3D6..U+E3DB waning gibbous 1-6, U+E3DC third quarter, U+E3DD..U+E3E2 waning
 /// crescent 1-6: the one loader of pi and the cockpit (hs-d616), one per [`frame`] of [`FRAME_MS`]. The working dot and a running
-/// Job's pill show one per frame; the idle dot is the first, the needs-you dot the full moon (frame 14).
+/// Job's pill show one per frame; the needs-you dot is the first (the filled disc), the idle dot the one at [`HOLLOW`] (the hollow ring).
 pub const SPINNER: [&str; 28] = ["\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}", "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}", "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}", "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}"];
 
-/// An idle Session: `moon_alt_new`, the first frame.
-pub const IDLE: &str = SPINNER[0];
-/// A stopped Session: the new moon, drawn dim.
+/// The index of the hollow ring (U+E3D5, `moon_alt_full`) in [`SPINNER`]; frame 0 (U+E3E3, `moon_alt_new`) is the filled disc.
+const HOLLOW: usize = 14;
+/// An idle Session: the hollow ring, nothing is needed.
+pub const IDLE: &str = SPINNER[HOLLOW];
+/// A stopped Session: the hollow ring, drawn dim.
 pub const STOPPED: &str = IDLE;
 /// A Session that waits for another agent (hs-d303): `nf-md-circle_opacity` (U+F1853), in `Meaning::Waiting`.
 pub const WAITING: &str = "\u{F1853}";
-/// A Session that needs the User (coloured by case): `moon_alt_full` (U+E3D5), frame 14.
-pub const NEEDS_YOU: &str = SPINNER[14];
+/// A Session that needs the User (coloured by case): the filled disc (U+E3E3, `moon_alt_new`), frame 0.
+pub const NEEDS_YOU: &str = SPINNER[0];
 
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
@@ -463,8 +465,8 @@ pub fn frame(now: SystemTime) -> usize {
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
 /// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working, red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan with a failed Job); [`WAITING`] in the colour of
-/// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the first
-/// frame when working), in colour 8.
+/// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the hollow
+/// ring when working or fixing), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
@@ -472,8 +474,8 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Cyan => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
-        Dot::Fixing => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
+        Dot::Working => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
         Dot::Stopped => (STOPPED, muted_text()),
@@ -597,7 +599,7 @@ mod tests {
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
             (JobStatus::Queued, false, QUEUED, Meaning::NotStarted),
-            (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
+            (JobStatus::Running, false, "\u{E3D5}", Meaning::InProgress),
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
             (JobStatus::Failed, false, FAILED, Meaning::Failed),
@@ -664,7 +666,7 @@ mod tests {
         assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
         assert_eq!(SPINNER.len(), 28);
         assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
-        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[14]));
+        assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[14], SPINNER[14], SPINNER[0]));
     }
 
     #[test]
@@ -711,7 +713,7 @@ mod tests {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
         for f in 0..SPINNER.len() {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled(SPINNER[0], grey), "frame {f}");
+            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
         }
     }
 

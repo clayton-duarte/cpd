@@ -232,3 +232,25 @@ fn a_failing_command_keeps_its_status_and_still_reports_leaks() {
     assert!(run.stderr.contains("gate-run: FAIL") && run.stderr.contains("cpd-test-left"), "the leak is not reported: {run:?}");
     assert_eq!(fx.tmp_entries(), Vec::<String>::new(), "the leak is removed");
 }
+
+#[test]
+fn the_tripwire_log_lines_fail_the_run_and_are_printed() {
+    let fx = Fx::new();
+    let line = "tripwire: real tmux called by cpd::x t::y: tmux ls";
+
+    let run = fx.gate_run(&format!("echo '{line}' >> \"$TMPDIR/tripwire.log\""));
+
+    assert_ne!(run.exit, 0, "{run:?}");
+    assert!(run.stderr.contains(line) || run.stdout.contains(line), "the line is not printed: {run:?}");
+}
+
+#[test]
+fn the_tripwire_log_empty_or_absent_leaves_the_run_unchanged() {
+    let fx = Fx::new();
+
+    let absent = fx.gate_run("exit 0");
+    let empty = fx.gate_run(": > \"$TMPDIR/tripwire.log\"");
+
+    assert_eq!((absent.exit, absent.stdout.as_str(), absent.stderr.as_str()), (0, "", ""), "{absent:?}");
+    assert_eq!((empty.exit, empty.stdout.as_str(), empty.stderr.as_str()), (0, "", ""), "{empty:?}");
+}

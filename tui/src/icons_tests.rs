@@ -50,8 +50,8 @@ let frames: [&str; 28] = [
 ];
     assert_eq!(palette::SPINNER.to_vec(), frames.to_vec());
     assert!(!palette::SPINNER.contains(&palette::WAITING));
-    assert_eq!(palette::IDLE, "\u{E3E3}");
-    assert_eq!(palette::NEEDS_YOU, "\u{E3D5}");
+    assert_eq!(palette::IDLE, "\u{E3D5}");
+    assert_eq!(palette::NEEDS_YOU, "\u{E3E3}");
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn the_legend_draws_the_new_glyphs() {
     assert!(sample("landing").contains('\u{F1464}'), "{}", sample("landing"));
     let dots = section_text("Session Dots");
     assert!(dots.contains('\u{F1853}'), "{dots:?}");
-    let precedence = "> \u{E3E3} > \u{F1853} > \u{E3E3} > \u{E3E3}";
+    let precedence = "> \u{E3E3} > \u{F1853} > \u{E3D5} > \u{E3D5}";
     assert!(dots.contains(precedence), "{dots:?}");
     let _ = Meaning::ALL;
     for s in &sections {

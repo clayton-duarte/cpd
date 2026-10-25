@@ -1,4 +1,4 @@
-//! The cockpit's loader is pi's: the 28 moon_alt phases at 50 ms (hs-d616). Expected glyphs are codepoints, never the constants'
+//! The cockpit's loader is pi's: the 28 moon_alt phases at 50 ms (hs-d616). Static dots (hs-d620): needs-you is the filled U+E3E3, idle and stopped the hollow U+E3D5. Expected glyphs are codepoints, never the constants'
 //! own values, so a wrong table cannot agree with itself.
 
 use std::time::{Duration, UNIX_EPOCH};
@@ -8,7 +8,7 @@ use ratatui::style::{Color, Style};
 
 use crate::palette::{self, Meaning, dot_span, frame};
 use crate::plan::flow::{FlowJob, Live, layout};
-use crate::read::Dot;
+use crate::read::{Dot, JobStatus};
 use crate::widgets::legend;
 
 const MOONS: [&str; 28] = [
@@ -17,9 +17,9 @@ const MOONS: [&str; 28] = [
     "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}",
     "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
 ];
-const NEW_MOON: &str = "\u{E3E3}";
+const FILLED: &str = "\u{E3E3}";
 const WAITING_GLYPH: &str = "\u{F1853}";
-const FULL_MOON: &str = "\u{E3D5}";
+const HOLLOW: &str = "\u{E3D5}";
 
 const ALL_DOTS: [Dot; 10] =
     [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working, Dot::Fixing, Dot::White, Dot::Cyan, Dot::Red, Dot::Yellow, Dot::Magenta];
@@ -57,11 +57,11 @@ fn the_frame_wraps_every_28_fiftieths_of_a_second_on_the_shared_clock() {
 }
 
 #[test]
-fn the_idle_and_stopped_dots_are_moon_alt_new_and_the_needs_you_dot_is_moon_alt_full() {
-    assert_eq!(dot_span(Dot::Idle, 0, false).content, NEW_MOON);
-    assert_eq!(dot_span(Dot::Stopped, 0, false).content, NEW_MOON);
+fn the_needs_you_dot_is_the_filled_moon_alt_new_and_the_idle_and_stopped_dots_the_hollow_moon_alt_full() {
+    assert_eq!(dot_span(Dot::Idle, 0, false).content, HOLLOW);
+    assert_eq!(dot_span(Dot::Stopped, 0, false).content, HOLLOW);
     for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White] {
-        assert_eq!(dot_span(dot, 0, false).content, FULL_MOON, "{dot:?}");
+        assert_eq!(dot_span(dot, 0, false).content, FILLED, "{dot:?}");
     }
     assert_eq!(dot_span(Dot::Idle, 0, false).style, Style::new().fg(Color::White), "idle: 15");
     assert_eq!(dot_span(Dot::Stopped, 0, false).style, Style::new().fg(Color::DarkGray), "stopped: 8");
@@ -103,11 +103,24 @@ fn the_queued_job_pill_keeps_the_circle_outline() {
 fn the_legend_shows_the_moon_alt_glyphs_for_every_dot() {
     let shown = legend_dots_text();
     assert!(shown.contains(&MOONS.concat()), "the frames row: {shown:?}");
-    for glyph in [FULL_MOON, WAITING_GLYPH, NEW_MOON] {
+    for glyph in [FILLED, WAITING_GLYPH, HOLLOW] {
         assert!(shown.contains(glyph), "U+{:X}: {shown:?}", glyph.chars().next().unwrap() as u32);
     }
-    let precedence = format!("white > {NEW_MOON} > {WAITING_GLYPH} > {NEW_MOON} > {NEW_MOON}");
+    let precedence = format!("white > {FILLED} > {WAITING_GLYPH} > {HOLLOW} > {HOLLOW}");
     assert!(shown.contains(&precedence), "the precedence line: {shown:?}");
+}
+
+#[test]
+fn an_archived_working_or_fixing_dot_and_a_running_jobs_still_icon_are_the_hollow_moon_alt_full() {
+    let grey = Style::new().fg(Color::DarkGray);
+    for f in 0..28 {
+        for dot in [Dot::Working, Dot::Fixing] {
+            assert_eq!(dot_span(dot, f, true), ratatui::text::Span::styled(HOLLOW, grey), "{dot:?} frame {f}: U+E3D5");
+        }
+    }
+    assert_eq!(palette::job_status(JobStatus::Running, false).0, HOLLOW);
+    assert_eq!(dot_span(Dot::Working, 0, false).content, FILLED);
+    assert_eq!(dot_span(Dot::Working, 14, false).content, HOLLOW);
 }
 
 #[test]

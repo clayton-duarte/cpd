@@ -662,10 +662,10 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
 use crate::common::{LOCALES, Locale, real_tmux};
 
 /// A program that runs the real tmux as a caller with the locale `locale` and nothing else would: `env -i`, `PATH` and
-/// `TMUX_TMPDIR` (which `Tmux::with_tmpdir` sets for the call).
+/// `TMUX_TMPDIR` (which `Tmux::with_tmpdir` sets for the call), and the variables the Gate's tripwire identifies the test by.
 fn tmux_as_caller_with(env: &TestEnv, name: &str, locale: Locale) -> std::path::PathBuf {
     let path = env.root().join(name);
-    let script = format!("#!/bin/sh\nexec env -i PATH=\"$PATH\" TMUX_TMPDIR=\"$TMUX_TMPDIR\" {} '{}' \"$@\"\n", locale.env_words(), real_tmux().display());
+    let script = format!("#!/bin/sh\nexec env -i PATH=\"$PATH\" TMUX_TMPDIR=\"$TMUX_TMPDIR\"{} {} '{}' \"$@\"\n", common::tripwire_env_words(), locale.env_words(), real_tmux().display());
     common::write_executable(&path, &script);
     path
 }

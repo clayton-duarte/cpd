@@ -972,8 +972,8 @@ mod tests {
         unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
-            let grey = (String::from(format!("{WORKING}")), color(Meaning::Nothing));
-            assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
+            let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
+            assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the hollow ring {:?}", lines(&buf));
             assert_eq!(cell(&buf, 1, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
             assert_eq!(cell(&buf, 2, 5), grey, "frame {frame}: its Plan row");
             assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");

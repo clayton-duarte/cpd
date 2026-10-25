@@ -92,6 +92,15 @@ finish() {
   count=0
   nl='
 '
+  # The tripwire's log (scripts/tripwire/tmux): any line means a test called the real tmux.
+  if [ -s "$TMPDIR/tripwire.log" ]; then
+    {
+      echo "gate-run: FAIL: a test called the real tmux:"
+      cat "$TMPDIR/tripwire.log"
+    } >&2
+    [ "$status" -ne 0 ] || status=1
+  fi
+  rm -f "$TMPDIR/tripwire.log"
   for p in $(run_pids); do
     related "$p" && continue
     if [ -d /proc/self ]; then
