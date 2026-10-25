@@ -302,7 +302,7 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
         // The red branch: the bright red clickable pair of the failed meaning, in the click range.
-        alert = format!("{}#[default]", pill::range("host", &pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
+        alert = pill::range("host", &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
         // The plain branch: the grey pill, only while `@cpd_version` is set.
         plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}", status(m.nothing, "#{@cpd_version}")),
     )
