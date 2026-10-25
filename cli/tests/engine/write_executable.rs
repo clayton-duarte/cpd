@@ -2,7 +2,7 @@
 //! use for writing: they must write a temp file and rename it over the target.
 //!
 //! Inferred, unverified: the audit1 Gate flake (`cpd::engine watch::a_tmux_failure_of_the_workers_step_
-//! is_one_error_and_the_engine_goes_on`, `write script: Text file busy`) is the same class: a file
+//! is_one_error_and_the_engine_goes_on`, `write script: the busy-executable error`) is the same class: a file
 //! opened for writing while it is being executed, in that case the execve window of the engine's
 //! `bin/tmux`. A *running* script is not text-busy (the kernel releases a script's write denial once
 //! its interpreter has exec'd), so that window has no deterministic trigger; a running ELF holds the
@@ -55,7 +55,7 @@ fn write_executable_over_a_running_script_does_not_fail() {
 
     // The precondition: a child that died early (identify or rules failed) would make
     // the rewrite pass for the wrong reason. A running ELF fails an open for writing
-    // with ETXTBSY (26) for as long as it lives.
+    // with the kernel's busy-executable error (26) for as long as it lives.
     let busy = fs::OpenOptions::new().write(true).open(&path);
     assert_eq!(
         busy.as_ref().err().and_then(|e| e.raw_os_error()),

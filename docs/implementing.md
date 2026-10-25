@@ -117,7 +117,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
 
   | binary (`cli/tests/<area>/`) | modules |
   |---|---|
-  | `engine` | `watch*`, `doctor` |
+  | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
   | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*` |
   | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env` |
