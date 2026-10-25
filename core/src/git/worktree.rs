@@ -556,7 +556,7 @@ pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setu
 /// [`create_lead_worktree`] running `pre_start`, the policy's `hooks.pre-start`; the one above runs no hook.
 pub fn create_lead_worktree_with(repo: &Path, plan: &PlanId, base: &str, setup: &Setup, pre_start: &Pipeline) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &lead_branch(plan), base, false, setup, pre_start).map_err(|f| f.error)?;
+    let prepared = prepare_pr_lead_worktree(repo, plan, &path, &lead_branch(plan), base, Cut::Base, setup, pre_start).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
