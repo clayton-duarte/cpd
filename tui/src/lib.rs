@@ -26,6 +26,7 @@ mod box_widget_tests;
 mod section_title_tests;
 mod chat;
 mod cockpit;
+mod host_click;
 pub mod dialog;
 pub mod fold;
 mod history;
