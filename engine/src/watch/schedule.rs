@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use cpd_core::clock::Clock;
-use cpd_core::driver::{self, StartCtx};
+use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::limit::limit;
 use cpd_core::ids::{JobKey, PlanId};
@@ -89,6 +89,16 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN 
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
+/// The linear vs parallel allocation E3 derives for Job `key` of `plan` (hs-d680/hs-d682/hs-d683), from the PR's live
+/// Attempts plus the Jobs being started in this tick in READY order: the first live sibling is `Linear`, the rest
+/// `Parallel`; a Job of a PR that already has a live Attempt is `Parallel`.
+///
+/// Stub for the red test of Job `wengine-tests`: it returns `Linear` always, so a live sibling is not yet `Parallel`;
+/// Job `wengine-impl` derives it from the store and the tick's Jobs.
+fn allocation(_plan: &PlanId, _key: &JobKey) -> Allocation {
+    Allocation::Linear
+}
+
 pub(super) fn run(engine: &mut Engine) {
     // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
     match restart::holding(&engine.home) {
@@ -140,7 +150,7 @@ pub(super) fn run(engine: &mut Engine) {
     for (plan, key) in ready {
         let about = About::Job(plan.clone(), key.clone());
         let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
-        match driver::start(&mut engine.store, &ctx, &plan, &key) {
+        match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation(&plan, &key))) {
             Ok(started) => {
                 engine.log.line(&format!(
                     "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",

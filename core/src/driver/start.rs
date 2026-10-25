@@ -67,6 +67,17 @@ pub struct Started {
     pub pid: u32,
 }
 
+/// How an Attempt of a PR is allocated (hs-d680/hs-d682/hs-d683): a **linear** Attempt reuses the PR's workflow worktree on
+/// its Lead Branch; a **parallel** one gets its own worktree and branch. E3 derives it and passes it to the starter, which
+/// enforces it atomically. `None` means the caller passed no allocation: the starter derives it from the PR's live Attempts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Allocation {
+    /// The workflow worktree on the PR's Lead Branch.
+    Linear,
+    /// Its own `cpd/<plan>--<attempt>` worktree and branch.
+    Parallel,
+}
+
 /// The Attempt the starter is about to insert, decided from one read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Next {
@@ -83,17 +94,30 @@ struct Next {
 /// changed meanwhile), `no_slot`. When the spawn fails the Attempt is ended
 /// `failed` / `crashed` and the result is `spawn_failed`.
 pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
-    start_with(&Ports::current(), store, ctx, plan, key)
+    start_with_allocation(&Ports::current(), store, ctx, plan, key, None)
 }
 
 /// [`start`] on `ports`: the driver is started through `ports.spawn` (`Spawn::spawn`, which a `FakeSpawn` only records),
 /// from `ports.spawn.self_exe()`.
 pub fn start_with(ports: &Ports, store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
-    let next = store.read(|conn| decide(conn, ctx.catalog, plan, key))?;
+    start_with_allocation(ports, store, ctx, plan, key, None)
+}
+
+/// [`start_with`] with the linear vs parallel allocation E3 derived (`None`: derive it here from the PR's live Attempts),
+/// which the starter enforces atomically in its write transaction.
+pub fn start_with_allocation(
+    ports: &Ports,
+    store: &mut Store,
+    ctx: &StartCtx<'_>,
+    plan: &PlanId,
+    key: &JobKey,
+    allocation: Option<Allocation>,
+) -> Result<Started, CpdError> {
+    let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
     store.write(ctx.command, |tx| {
-        if decide(tx, ctx.catalog, plan, key)? != next {
+        if decide(tx, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
@@ -147,8 +171,9 @@ pub fn start_with(ports: &Ports, store: &mut Store, ctx: &StartCtx<'_>, plan: &P
 }
 
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
-/// does not match its fingerprint.
-fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
+/// does not match its fingerprint. `allocation` is E3's derived linear vs parallel choice (`None`: derive it from the
+/// PR's live Attempts).
+fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, allocation: Option<Allocation>) -> Result<Next, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
@@ -222,7 +247,13 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
         params![plan.as_str(), job.pr.as_str(), attempt.to_string()],
         |r| r.get(0),
     )?;
-    let (branch, worktree) = if live == 0 {
+    // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
+    let linear = match allocation {
+        Some(Allocation::Linear) => true,
+        Some(Allocation::Parallel) => false,
+        None => live == 0,
+    };
+    let (branch, worktree) = if linear {
         let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
             "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
             params![plan.as_str(), job.pr.as_str()],
