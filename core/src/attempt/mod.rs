@@ -17,6 +17,9 @@ mod span;
 mod submit;
 
 #[cfg(test)]
+mod cancel_tests;
+
+#[cfg(test)]
 mod incident_tests;
 
 use crate::args::PlanArg;

@@ -3,6 +3,7 @@ import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts"
 import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { meaning, pill as drawPill } from "./pill.ts";
 import { isObject } from "./cpd.ts";
+import { localTime } from "./time.ts";
 import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
@@ -47,6 +48,11 @@ function oneLine(text: string): string {
   const first = stripTerminalSequences(text.replace(/\r\n?/g, "\n")).split("\n").find((l) => l.trim() !== "") ?? "";
   const line = first.replace(/[\x00-\x1f\x7f]/gu, " ").replace(/\s+/gu, " ").trim();
   return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : line;
+}
+
+/** `HH:MM` in the process's local time for a Unix-ms `timestamp`, or `undefined` when there is none. */
+function timeOf(timestamp: number | undefined): string | undefined {
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? localTime(new Date(timestamp).toISOString()) : undefined;
 }
 
 /** `Message from <name> (<id>) (<time>): …` or `Message from <id> (<time>): …` (delivery.ts `sessionMessage`): the sender's name, or its id. */
@@ -157,7 +163,7 @@ const COLLAPSE = "collapse";
 type Rows = { foldable: boolean; terminator: () => string[]; head: (width: number) => string[]; body: (width: number) => string[]; toggle: (width: number, expanded: boolean) => string[] };
 
 /** The fold's rows for one message. `body` is empty when `content` is. */
-function rowsOf(summary: string, content: string, theme: Theme): Rows {
+function rowsOf(summary: string, content: string, theme: Theme, time?: string): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
   const lead = `${MARGIN}${GREY8(TOP)}`;
@@ -178,7 +184,12 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
     body: text === "" ? () => [] : prefixedText(body, rail),
     foldable: text !== "",
     terminator: () => [`${MARGIN}${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
-    toggle: (_width, expanded) => [`${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
+    toggle: (width, expanded) => {
+      const base = `${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`;
+      const dated = time === undefined ? base : `${base} · ${time}`;
+      // A narrow pane drops the time rather than cutting it: the toggle row stays as it was.
+      return [`${time !== undefined && visibleWidth(dated) > width ? base : dated}\x1b[39m`];
+    },
   };
 }
 
@@ -200,7 +211,7 @@ export class Rendering {
     if (this.style === "off") return undefined;
     const content = contentOf(message);
     const summary = summaryOf(message, content);
-    const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
+    const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme, timeOf(message.timestamp));
     // No summary, and always the Plan review's summary, which the User reads to decide: the row is always open, with no closing row and no toggle (§15.9 "No summary").
     const open = summary === undefined || message.customType === SUMMARY_TYPE;
     const closes = open || !rows.foldable;

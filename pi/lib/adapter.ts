@@ -8,6 +8,7 @@ import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -33,6 +34,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
     // contract §6.1 Q3: an empty status entry makes pi's footer draw one empty last row (only `undefined` deletes it)
     if (ctx.mode === "tui") ctx.ui.setStatus("cpd-pad", "");
+    // contract §6.1 Q5: a header component that renders one empty line makes pi's header draw one empty first row
+    if (ctx.mode === "tui") ctx.ui.setHeader(() => ({ render: () => [""], invalidate() {} }));
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
@@ -64,6 +67,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
       const secret = secretBypass((event.input as { command: string }).command);
       if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const hostApprove = hostApproveBypass((event.input as { command: string }).command);
+      if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);

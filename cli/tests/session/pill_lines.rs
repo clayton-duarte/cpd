@@ -48,28 +48,29 @@ fn status_line_pills_follow_the_rule() {
     let italic_pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]#[italics]{text}#[noitalics]#[noreverse]\u{e0b4}#[default]")
     };
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,16,0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}\
-         #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},\
-         #{{e|+:#{{?{long},#{{@cpd_workers_width}},#{{@cpd_workers_short_width}}}},1}}}}}}\
-         #[default]#[align=right]\
+         #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
+         #[default]\
+         #{{?@cpd_incident,{}{JOIN},}}\
          {}\
-         #{{?@cpd_incident,#[fg=colour8]\u{2500}{},}}\
-         #{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}\
+         #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
          {JOIN}",
         button("reset", cpd_core::host::tmux::RESET_GLYPH),
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
+        italic_pill("colour9", "Incident Mode: #{@cpd_incident}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
-        italic_pill("colour9", " Incident Mode"),
+        pill("colour9", "#{@cpd_version}"),
         pill("colour8", "#{@cpd_version}"),
     );
     // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.
     let fill = want.find("#[fg=colour8]#{R:").expect("the fill") + "#[fg=colour8]".len();
-    let right = want.find("#[default]#[align=right]").expect("the right group");
+    let right = want.find("#[default]#{?@cpd_incident").expect("the right group");
     assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {}", *STATUS_FORMAT);
     assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {}", *STATUS_FORMAT);
     for old in ["colour236", "push-default", "pop-default"] {

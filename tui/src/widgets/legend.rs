@@ -10,7 +10,7 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
@@ -18,10 +18,14 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
+use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
+use crate::buffer::copy_cells;
+use crate::cells;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
+use crate::popup;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
 use crate::{Capture, run_view};
@@ -50,7 +54,7 @@ impl Section {
         (0..columns)
             .map(|c| {
                 let cells = self.rows.iter().filter_map(|r| r.get(c)).map(Line::width);
-                let head = self.header.map_or(0, |h| h.get(c).map_or(0, |t| t.chars().count()));
+                let head = self.header.map_or(0, |h| h.get(c).map_or(0, |t| cells::width(t)));
                 cells.chain(std::iter::once(head)).max().unwrap_or(0) as u16
             })
             .collect()
@@ -60,7 +64,7 @@ impl Section {
     fn width(&self) -> u16 {
         let w = self.column_widths();
         (w.iter().sum::<u16>() + COLUMN_SPACING * (w.len() as u16).saturating_sub(1))
-            .max(self.title.chars().count() as u16)
+            .max(cells::width(self.title) as u16)
     }
 
     /// The title row, the header row if any, and the rows.
@@ -149,14 +153,16 @@ pub(crate) fn sections() -> Vec<Section> {
     ]);
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
-    let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
-    let fixing = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Fixing, f, false)).collect::<Vec<_>>());
+    let loader = |d: Dot| Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>());
+    // the working loader once per phase (hs-d622): the cyan row is dispatch, which a Session with no Plan shares
+    let frames = loader(Dot::Working(None));
+    let fixing = loader(Dot::Fixing);
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working (one frame every 50 ms)")],
+            vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
             vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
@@ -166,6 +172,10 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Blue, 0), plain("blue: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
+            vec![loader(Dot::Working(Some(Phase::Grounding))), plain("the Lead is working, grounding (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Plan))), plain("the Lead is working, plan (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Deploy))), plain("the Lead is working, deploy (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Done))), plain("the Lead is working, done (one frame every 50 ms)")],
             vec![plain(""), plain(&precedence())],
         ],
     };
@@ -263,11 +273,7 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     f.render_widget(SectionTitle::new(INTRO, None), head);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
-    for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
-        for x in 0..window.width {
-            f.buffer_mut()[(window.x + x, window.y + y)] = buf[(x, y + scroll.offset() as u16)].clone();
-        }
-    }
+    copy_cells(&buf, Rect::new(0, scroll.offset() as u16, window.width, window.height), f.buffer_mut(), Position::new(window.x, window.y));
     if scroll.scrollable() {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
@@ -284,18 +290,15 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
 /// (plus the border), at most the client's size `(columns, rows)`.
 pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     let (w, h) = size();
-    [
-        "display-popup".to_owned(),
-        "-E".to_owned(),
-        "-T".to_owned(),
-        " legend ".to_owned(),
-        "-w".to_owned(),
-        (w + POPUP_BORDER).min(client.0).to_string(),
-        "-h".to_owned(),
-        (h + POPUP_BORDER).min(client.1).to_string(),
-        COMMAND.join(" "),
-    ]
-    .to_vec()
+    let size = ((w + POPUP_BORDER).min(client.0), (h + POPUP_BORDER).min(client.1));
+    popup::args(popup::Popup {
+        title: Some(" legend "),
+        border: false,
+        client: None,
+        dash: false,
+        size,
+        command: &COMMAND.join(" "),
+    })
 }
 
 /// `cpd tui view legend`: draws the legend until a key that does not scroll, or a click.
@@ -341,10 +344,15 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 }
 
 #[cfg(test)]
+#[path = "legend_width_tests.rs"]
+mod legend_width_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::section;
     use crate::read::Kind;
+    use crate::test_text::row;
 
     static CAP_L: &str = "\u{e0b6}";
     static CAP_R: &str = "\u{e0b4}";
@@ -499,7 +507,7 @@ mod tests {
     #[test]
     fn the_popup_is_sized_to_the_legend_and_capped_at_the_client() {
         let (w, h) = size();
-        let args = popup_args((215, 66));
+        let args = popup_args((215, 80));
         assert_eq!(
             args,
             ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
@@ -525,10 +533,6 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw_scrolled(f, f.area(), scroll)).unwrap();
         terminal.backend().buffer().clone()
-    }
-
-    fn row(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
     }
 
     #[test]

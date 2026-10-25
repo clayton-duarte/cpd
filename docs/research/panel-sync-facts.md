@@ -66,7 +66,7 @@ the **word and colour** are decided later in `tui/src/plan/boxes.rs`, `tui/src/w
 | Stored by the engine (a row or tmux option written on a tick) | Derived by each view on read |
 |---|---|
 | Inbox items (E8: `engine/src/watch/inbox.rs`, rules in `core/src/inbox/rules.rs`): `pr-ready`, `plan-review`, `dialog`, `unread`, `review-waiting` | Plan counters (F1), the dot after items (F2), PR word/colour (F4-F6), Job pill, ages (F11), the engine-down item (`read/tree.rs:218`, built in the view, not stored) |
-| `@cpd_workers`, `@cpd_workers_short`, `@cpd_workers_width`, `@cpd_workers_short_width` (`workers.rs:104`) | — (the views never draw `workers N/M`; they have `Slots` but no caller) |
+| `@cpd_workers`, `@cpd_workers_short` (`workers.rs:104`; their widths are measured by the format with `#{w:…}`) | — (the views never draw `workers N/M`; they have `Slots` but no caller) |
 | `sessions.title` / `@cpd_title` (a retitle run, at most per 10 min) | — |
 | Job/Attempt/PR rows (written by commands and `pr poll`, with Events, except `pull_requests`) | all of the above |
 

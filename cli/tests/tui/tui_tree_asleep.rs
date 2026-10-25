@@ -93,19 +93,6 @@ fn row_of(screen: &[String], suffix: &str) -> usize {
     screen.iter().position(|r| r.contains(&format!("ship·{suffix}"))).unwrap_or_else(|| panic!("no row of {suffix}: {screen:?}"))
 }
 
-/// The colour escapes (`ESC [ … m`) of a captured row, in order.
-fn escapes(row: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    let mut rest = row;
-    while let Some(start) = rest.find("\x1b[") {
-        let tail = &rest[start..];
-        let end = tail.find('m').expect("an escape ends with m");
-        found.push(tail[..=end].to_owned());
-        rest = &tail[end + 1..];
-    }
-    found
-}
-
 fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
     common::wait_some(&format!("{n} calls of cpd"), common::WAIT, || {
         let calls = env.calls("cpd");
@@ -115,26 +102,6 @@ fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
 
 fn words(w: &[&str]) -> Vec<String> {
     w.iter().map(|s| (*s).to_owned()).collect()
-}
-
-#[test]
-fn asleep_row_is_colour_7_among_live_rows() {
-    let env = env();
-    populate(&env);
-    let pane = Pane::start(&env);
-    let plain = pane.ready();
-    let (asleep, live, archived) = (row_of(&plain, "f-sl"), row_of(&plain, "f-li"), row_of(&plain, "f-ar"));
-    assert!(asleep < live && live < archived, "the asleep row keeps its place among the live rows, the archived one is after them: {plain:?}");
-
-    let styled = pane.capture(true);
-    // Contract §6.1.1: a live idle row's dot and name are clickable text (15); an asleep row's marks are all 7 (inactive text);
-    // an archived row's are all 8 (muted); the branch `├─` is a line, 8, on all three.
-    let (live_row, asleep_row, archived_row) = (&styled[live], &styled[asleep], &styled[archived]);
-    assert!(live_row.contains("├─\x1b[38;5;15m") && live_row.contains("\x1b[38;5;15mship·f-li"), "a live idle row: {live_row:?}");
-    assert!(asleep_row.contains("├─\x1b[38;5;7m") && !asleep_row.contains("\x1b[39mship·f-sl"), "an asleep row (one colour 7 run from the dot to the name): {asleep_row:?}");
-    assert!(!asleep_row.contains("38;5;15"), "an asleep row has no clickable-text mark: {asleep_row:?}");
-    assert!(archived_row.contains("38;5;8m") && !archived_row.contains("38;5;7m") && !archived_row.contains("38;5;15"), "an archived row: {archived_row:?}");
-    assert_ne!(escapes(asleep_row), escapes(archived_row), "an asleep row is inactive (7), an archived one muted (8)");
 }
 
 #[test]

@@ -7,6 +7,7 @@
 
 // Shared foundations (Job rs-workspace).
 pub mod args;
+pub mod atomic;
 pub mod clock;
 pub mod env;
 pub mod error;
@@ -26,6 +27,8 @@ pub mod driver;
 pub mod events;
 pub mod git;
 pub mod host;
+pub mod host_repair;
+pub mod host_repair_approval;
 pub mod inbox;
 pub mod incident;
 pub mod job;

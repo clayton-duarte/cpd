@@ -37,6 +37,8 @@ mod logs;
 mod look_tests;
 pub mod pr_look;
 mod pulse;
+#[cfg(test)]
+mod pulse_tests;
 mod shared;
 mod tree;
 mod widgets;

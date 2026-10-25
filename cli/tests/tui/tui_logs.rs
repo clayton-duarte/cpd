@@ -1,11 +1,13 @@
 //! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
-//! following and scrolling with ratatui's `TestBackend`, the view itself on a private tmux server, and the button's
+//! following and scrolling with ratatui's `TestBackend` over a store in this process (`Fx`: no process), the view
+//! itself on a private tmux server, and the button's
 //! `cpd tui action logs` (`tmux` on `PATH` is a fake that answers the client's size and records `display-popup`).
 
 use crate::common;
 
 use std::fs;
 
+use common::fx::Fx;
 use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -74,8 +76,8 @@ fn append_numbered(store: &mut Store, first: usize, n: usize) {
 
 #[test]
 fn the_log_lists_the_events_one_line_each_newest_last() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append(&mut store, 0, &[("context-created", ""), ("plan-phase", "Plan ship: dispatch"), ("error", "store busy")]);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events);
     let buf = render(34, 5, &mut log);
@@ -91,8 +93,8 @@ fn the_log_lists_the_events_one_line_each_newest_last() {
 
 #[test]
 fn a_long_event_is_cut_with_an_ellipsis_and_an_empty_log_says_so() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events);
     assert_eq!(rows(&render(20, 2, &mut log)), [" none yet", ""]);
     append(&mut store, 0, &[("plan-phase", "a very long event text indeed")]);
@@ -102,8 +104,8 @@ fn a_long_event_is_cut_with_an_ellipsis_and_an_empty_log_says_so() {
 
 #[test]
 fn the_snapshot_is_the_latest_500_events_oldest_first_and_follows_from_its_cursor() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 600);
     let snapshot = read::logs(&mut store, 500).unwrap();
     assert_eq!(snapshot.events.len(), 500);
@@ -120,8 +122,8 @@ fn the_snapshot_is_the_latest_500_events_oldest_first_and_follows_from_its_curso
 
 #[test]
 fn the_log_follows_while_it_shows_the_bottom_and_stops_when_scrolled_up() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 10);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events);
     let last = |buf: &Buffer| rows(buf).last().unwrap().clone();
@@ -153,8 +155,8 @@ fn the_log_follows_while_it_shows_the_bottom_and_stops_when_scrolled_up() {
 
 #[test]
 fn scrolling_moves_a_line_or_a_page_and_stops_at_both_ends() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 10);
     let mut log = Log::new(read::logs(&mut store, 500).unwrap().events);
     let first = |log: &mut Log| rows(&render(20, 4, log))[0].clone();
@@ -415,8 +417,8 @@ fn selected_rows(buf: &Buffer) -> Vec<u16> {
 
 #[test]
 fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_the_view_does_not_follow() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 30);
     let events = read::logs(&mut store, 500).unwrap().events;
     let id = events.iter().find(|e| e.text == "event 10").unwrap().id;
@@ -439,8 +441,8 @@ fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_t
 
 #[test]
 fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_the_bottom() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     append_numbered(&mut store, 0, 30);
     let events = read::logs(&mut store, 500).unwrap().events;
     let (first, last) = (events[0].id, events[29].id);

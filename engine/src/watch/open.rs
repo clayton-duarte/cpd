@@ -7,7 +7,7 @@
 //! One transaction for every PR missing one; nothing is written when none is, so the step is idempotent.
 
 use super::SOURCE;
-use super::engine::{Engine, incident_holds};
+use super::engine::{Engine, incident_holds_plan};
 use super::report::{About, Step};
 use cpd_core::error::CpdError;
 use cpd_core::ids::{PlanId, PrKey};
@@ -23,23 +23,36 @@ const MISSING: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.
   ORDER BY p.created_at, r.plan, r.key";
 
 pub(super) fn run(engine: &mut Engine) {
-    if incident_holds(engine, Step::E4) {
-        engine.log.line("E4: holding: incident mode is on");
-        return;
-    }
     let missing = engine.store.read(|conn| {
         let mut stmt = conn.prepare(MISSING)?;
         let rows = stmt
             .query_map([None::<&str>, None::<&str>], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.iter().map(|(plan, key)| Ok((PlanId::parse(plan)?, PrKey::parse(key)?))).collect::<Result<Vec<_>, CpdError>>()
+        let mut missing = Vec::new();
+        for (plan, key) in rows {
+            let plan = PlanId::parse(&plan)?;
+            let key = PrKey::parse(&key)?;
+            // Incident mode on: a held Plan's PR gets no open Job (contract §3.7 E4).
+            if !incident_holds_plan(conn, &plan) {
+                missing.push((plan, key));
+            }
+        }
+        Ok(missing)
     });
     let missing = match missing {
         Ok(missing) => missing,
         Err(e) => return engine.fail(Step::E4, About::Machine, &e),
     };
     let tier = engine.config.open_tier;
-    let promotable = match engine.store.read(|conn| promotable(conn, None)) {
+    let promotable = match engine.store.read(|conn| {
+        let mut found = promotable(conn, None)?;
+        // Incident mode on: a held Plan's draft open Job is not queued either (§3.7 E4).
+        found.retain(|(plan, _)| match PlanId::parse(plan) {
+            Ok(plan) => !incident_holds_plan(conn, &plan),
+            Err(_) => true,
+        });
+        Ok(found)
+    }) {
         Ok(p) => p,
         Err(e) => return engine.fail(Step::E4, About::Machine, &e),
     };

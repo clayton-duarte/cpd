@@ -126,6 +126,11 @@ impl Cause {
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
 pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+    // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract
+    // §3.7 E5). A feedback fix Job is the Lead's, and is queued as always.
+    if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
+        return Ok(None);
+    }
     let live: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'update' AND status IN ('queued', 'running'))",
         [plan.as_str(), pr.key.as_str()],
