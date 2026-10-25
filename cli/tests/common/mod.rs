@@ -1026,7 +1026,12 @@ impl TestEnv {
     /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
     /// (commands.md §4.6, §4.13; hs-d502). Run it right before `plan review`; the same outline twice changes nothing.
     pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        self.outline_with(plan, |args| self.cpd(args));
+    }
+
+    /// [`TestEnv::outline_for_review`] with the commands run by `cpd` (the binary, or an [`fx::Fx`]'s process).
+    pub fn outline_with(&self, plan: &str, cpd: impl Fn(&[&str]) -> Run) {
+        let shown = cpd(&["plan", "show", "--plan", plan]).ok();
         let mut done_when = serde_json::Map::new();
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
@@ -1036,7 +1041,7 @@ impl TestEnv {
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
         let path = self.root().join(format!("outline-{plan}.json"));
         fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
+        cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Runs `cpd <args>` from this env's root.

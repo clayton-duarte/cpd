@@ -237,10 +237,6 @@ impl Rows {
 }
 
 impl Fx {
-    fn home(&self) -> CpdHome {
-        CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap()
-    }
-
     fn store(&self) -> Store {
         store(&self.env)
     }
@@ -360,10 +356,6 @@ impl Fx {
     fn windows(&self) -> String {
         let out = self.env.tmux(&["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
         String::from_utf8_lossy(&out.stdout).into_owned()
-    }
-
-    fn txns(&self) -> i64 {
-        self.env.query("SELECT count(*) FROM txns")
     }
 }
 
@@ -984,41 +976,26 @@ fn stall_seconds_0_kills_nothing() {
     stop(&fx, &out, child);
 }
 
-// ---------- the open Job and the update Job (contract §7.4, §7.7; hs-d340, hs-d490, hs-d491, hs-d497) ----------
+// ---------- the update Job ----------
 
-/// The fake `gh`: no pull request of the branch yet, `pr create` answers [`PR_URL`], and the lookup of the pull request answers it.
-fn gh_creates(env: &TestEnv) {
-    fs::write(env.root().join("gh-lookup.json"), common::pay_lookup()).unwrap();
-    env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\
-           \"pr list\") echo '[]' ;;\n\
-           \"pr create\") echo '{PR_URL}' ;;\n\
-           \"api graphql\") cat '{}/gh-lookup.json' ;;\n\
-           *) echo \"unexpected gh call: $*\" >&2; exit 9 ;;\n\
-         esac",
-        env.root().display()
-    ));
-}
-
-impl Fx {
-    /// Job `key` of PR `repo` as cpd adds an `open` or `update` Job: `appended`, no Dependencies, `queued` with its fingerprint.
-    fn add_cpd_job(&self, key: &str, kind: &str) {
+impl Rows {
+    /// PR `repo` as `pr open` leaves it, the pull request open (812), the Plan in `deploy`, Job `api` merged and no `open` Job:
+    /// the policy `pr.gate = "local"` is the owner's.
+    fn open_pr(&self) {
+        self.fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         self.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
-        ));
-        let plan = PlanId::parse(PLAN).unwrap();
-        let all = self.store().read(|conn| jobs::load(conn, &plan)).unwrap();
-        let job = all.iter().find(|j| j.key == key).unwrap();
-        self.fixture(&format!(
-            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}';",
-            locked_fingerprint(job)
+            "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{}' WHERE key = 'api';
+             INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
+               VALUES ('acme/pay', 812, '{PR_URL}', '{PR_TITLE}', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
+             UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
+             UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
+            "1".repeat(40)
         ));
     }
 
     /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
     fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
-        self.store()
+        store(&self.fx.env)
             .read(|c| {
                 let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
                 let rows = stmt
@@ -1028,45 +1005,6 @@ impl Fx {
             })
             .unwrap()
     }
-
-}
-
-/// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
-/// `pr.gate = "local"` with a `pre-merge` hook that notes the slot and the commit it gates, Job `api` merged (its commit `api.txt` is on
-/// the Lead Branch, **not pushed**), a fake `gh` that creates pull request 812, and the PR's `open` Job `open-repo` queued. Returns the
-/// bare `origin`.
-fn open_fx() -> (Fx, PathBuf) {
-    let fx = fx();
-    let env = &fx.env;
-    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-    let origin = env.root().join("repos/origin.git");
-    env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.local_origin(&fx.repo, &origin);
-    env.git(&fx.repo, &["push", "-q", "origin", "main", "cpd/pay"]);
-    fs::write(fx.lead.join("api.txt"), "api\n").unwrap();
-    env.git(&fx.lead, &["add", "-A"]);
-    env.git(&fx.lead, &["commit", "-q", "-m", "api"]);
-    let merged = env.git(&fx.lead, &["rev-parse", "HEAD"]);
-    fx.fixture(&format!(
-        "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{merged}' WHERE key = 'api';"
-    ));
-    fx.hooks(&format!("[pre-merge]\ngate = \"echo slot=$CPD_TEST_SLOT head=$(git rev-parse HEAD) >> {}/gate.log\"\n", env.root().display()));
-    gh_creates(env);
-    fx.add_cpd_job("open-repo", "open");
-    (fx, origin)
-}
-
-/// The same with the pull request already open (812, as `pr open` leaves it), the Plan in `deploy`, and no `open` Job.
-fn open_pr_fx() -> (Fx, PathBuf) {
-    let (fx, origin) = open_fx();
-    fx.fixture(&format!(
-        "UPDATE jobs SET status = 'cancelled', cancel_reason = 'opened', cancel_requested_at = 't' WHERE key = 'open-repo';
-         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
-           VALUES ('acme/pay', 812, '{PR_URL}', '{PR_TITLE}', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
-         UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{PR_URL}', pr_opened_at = 'opened', pull_request = (SELECT id FROM pull_requests) WHERE key = 'repo';
-         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';"
-    ));
-    (fx, origin)
 }
 
 /// Runs Job `key` to its end: dispatches it, waits for its Attempt `<key>-a1` and its driver, returns the Attempt.
@@ -1079,23 +1017,24 @@ fn run_job(fx: &Fx, key: &str) -> Value {
 /// Job whatever the number of drafts, `reason` `feedback`, in the transaction of the approval. A draft of no open PR queues none.
 #[test]
 fn the_approval_of_a_review_queues_the_update_job_for_a_fix_draft_of_an_open_pr() {
-    let (fx, _origin) = open_pr_fx();
-    let spec = fx.env.root().join("fix-spec.json");
+    let fx = rows();
+    fx.open_pr();
+    let spec = fx.fx.env.root().join("fix-spec.json");
     fs::write(&spec, r#"{"goal": "Fix it.", "context": "A reviewer asked.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
     for key in ["fix", "fix2"] {
-        fx.env.cpd(&["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay", "--draft"]).ok();
+        fx.fx.cpd(&["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay", "--draft"]).ok();
     }
     let update_jobs = || -> Vec<(String, String)> {
-        fx.env.read(|c| {
+        fx.fx.env.read(|c| {
             let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE kind = 'update' ORDER BY key")?;
             Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     };
     assert_eq!(update_jobs(), Vec::<(String, String)>::new(), "a draft queues nothing");
-    fx.env.outline_for_review("pay");
-    let review = fx.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Fixes"]).ok();
+    fx.fx.env.outline_with("pay", |args| fx.fx.cpd(args));
+    let review = fx.fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Fixes"]).ok();
 
-    fx.env.cpd(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", "pay"]).ok();
+    fx.fx.cpd(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", "pay"]).ok();
 
     assert_eq!(update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
     let added: Vec<Value> = fx.plan_events("job-added").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
