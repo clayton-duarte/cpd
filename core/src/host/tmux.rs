@@ -78,25 +78,39 @@ pub const OPT_VIEW: &str = "@cpd_view";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
+/// The three view titles' base (unfocused) colours, in the cursor cycle order (hs-d648, hs-d671):
+/// `Context` (view tree) sakura 5, `Plan` (view plan) shiro 7, `Deploy` (view widgets) midori 2.
+/// They are read-only base indices: a clickable mark takes `spec().clickable(base)`, so the
+/// status buttons are 13, 15 and 10.
+const DANGO: [u8; 3] = [5, 7, 2];
+
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
 /// the placeholder say what they are; the views have their column titles; any
 /// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
 /// text (reversed) on a block with no padding, between a rounded cap on each
-/// side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 7, hs-d534)
-/// and blue on the focused pane, set in the format itself (`pane_active`), so the
+/// side, `\u{e0b6}` and `\u{e0b4}`. A Lead's, the Worker's and another pane's pill is grey
+/// (colour 7, hs-d534) and blue on the focused pane, set in the format itself (`pane_active`);
+/// the three view pills are dango ([`DANGO`], hs-d671) and keep their colour when focused, so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
 /// border line characters before the format; one `━` more in the pill's colour
 /// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
 /// private server).
 pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
-    let colour = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
-    let title = |text: &str| pill::pill(&colour, "━", text);
+    let plain = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
+    let view_colour = format!(
+        "#{{?#{{==:#{{@cpd_view}},tree}},{},#{{?#{{==:#{{@cpd_view}},plan}},{},#{{?#{{==:#{{@cpd_view}},widgets}},{},{}}}}}}}",
+        pill::fg(DANGO[0]),
+        pill::fg(DANGO[1]),
+        pill::fg(DANGO[2]),
+        plain
+    );
+    let title = |fg: &str, text: &str| pill::pill(fg, "━", text);
     format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
-        title("#{@cpd_title}"),
-        title(concat!(
+        title(&plain, "#{@cpd_title}"),
+        title(&view_colour, concat!(
             "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
             "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
         )),
@@ -296,12 +310,13 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// fill and the long-form test are shorter by its width (a join, two caps and the 15-cell label, 18
 /// cells) and it has no click range.
 ///
-/// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
+/// Colours follow §6.1.1 (hs-d534): the reset, legend and logs buttons take the bright pair of
+/// dango ([`DANGO`], 13, 15 and 10, hs-d671), the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
 pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let m = &spec().meanings;
-    let button = |range: &str, glyph: &str| {
-        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.plain)), "", glyph)))
+    let button = |range: &str, glyph: &str, base: u8| {
+        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(base)), "", glyph)))
     };
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     // The incident pill is red on a red block even though it is not clickable: the contract (§6.1.1) gives it the
@@ -310,9 +325,9 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}{alert},{plain}}}{join}",
         join = join!(),
-        reset = button("reset", reset_glyph!()),
-        legend = button("legend", legend_glyph!()),
-        logs = button("logs", logs_glyph!()),
+        reset = button("reset", reset_glyph!(), DANGO[0]),
+        legend = button("legend", legend_glyph!(), DANGO[1]),
+        logs = button("logs", logs_glyph!(), DANGO[2]),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
@@ -1239,9 +1254,9 @@ mod tests {
         format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{@cpd_workers_width}},14}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
     }
 
-    /// A button of the left group: its click range, its glyph between the two caps (3 cells), a block of colour 15.
-    fn button(range: &str, glyph: &str) -> String {
-        format!("#[range=user|{range}]#[fg=colour15]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
+    /// A button of the left group: its click range, its glyph between the two caps (3 cells), a block of the bright pair of `base`.
+    fn button(range: &str, glyph: &str, base: u8) -> String {
+        format!("#[range=user|{range}]#[fg=colour{}]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]", spec().clickable(base))
     }
 
     /// A pill of colour `colour`: its text between the caps, with no padding, in reverse video.
@@ -1270,7 +1285,7 @@ mod tests {
 
     /// What follows the logs button in the format.
     fn after_the_buttons() -> String {
-        let logs = button("logs", LOGS_GLYPH);
+        let logs = button("logs", LOGS_GLYPH, DANGO[2]);
         let f: &str = &STATUS_FORMAT;
         f[f.find(&logs).expect("the logs button") + logs.len()..].to_owned()
     }
@@ -1304,11 +1319,11 @@ mod tests {
     #[test]
     fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
         let f: &str = &STATUS_FORMAT;
-        let buttons = format!("{JOIN}{}{JOIN}{}{JOIN}{}", button("reset", RESET_GLYPH), button("legend", LEGEND_GLYPH), button("logs", LOGS_GLYPH));
+        let buttons = format!("{JOIN}{}{JOIN}{}{JOIN}{}", button("reset", RESET_GLYPH, DANGO[0]), button("legend", LEGEND_GLYPH, DANGO[1]), button("logs", LOGS_GLYPH, DANGO[2]));
         // the leading `─`, then the three buttons joined by a single `─` each: 3 joins and 3 buttons of 3 cells, 12 cells
         assert!(f.starts_with(&buttons), "{f}");
         assert_eq!(buttons.matches('\u{2500}').count() + 3 * 3, LEFT_WIDTH);
-        assert!(f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour15]\u{e0b6}")), "the leading line cell, grey, then a button's cap: {f}");
+        assert!(f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour13]\u{e0b6}")), "the leading line cell, grey, then a button's cap: {f}");
         // the right group ends with the version conditional, then the closing `─`, grey
         assert!(f.ends_with(&format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}{JOIN}", pill_of(8, "#{@cpd_version}"))), "{f}");
         // the right pills are joined by one `─` (never a space), and the left group by the buttons' own

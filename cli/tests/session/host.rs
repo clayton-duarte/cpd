@@ -155,13 +155,15 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
     }
 }
 
-/// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478): every title is a pill with no padding, grey
-/// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
-/// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
+/// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
+/// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Deploy midori 2) and
+/// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title`, the Worker's and the pane
+/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` in the pill's colour
+/// before the left cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
 #{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]\
+#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}━\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
 #[noreverse]\u{e0b4}}}}";
@@ -511,11 +513,11 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
             "#[fg=colour8]\u{2500}#[default]\
-             #[range=user|reset]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
              #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
-             #[range=user|logs]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
