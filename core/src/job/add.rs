@@ -311,7 +311,7 @@ pub(super) fn check_touches(pr: &PrRow, touches: &[String]) -> Result<(), CpdErr
         return Ok(());
     }
     let tree = if pr.lead_worktree.is_some() { pr.lead_branch.as_str() } else { pr.base.as_str() };
-    let listing = crate::git::run::ok(std::path::Path::new(&pr.repo), &["ls-tree", "-r", "--name-only", "-z", tree])?;
+    let listing = crate::git::run::ok_with(&*crate::ports::Ports::current().runner, std::path::Path::new(&pr.repo), &["ls-tree", "-r", "--name-only", "-z", tree])?;
     let files: Vec<&str> = listing.split('\0').filter(|f| !f.is_empty()).collect();
     let dirs: BTreeSet<&str> = files.iter().flat_map(|f| f.match_indices('/').map(move |(i, _)| &f[..i])).collect();
     let dir_exists = |dir: &str| dir.is_empty() || dirs.contains(dir);
