@@ -55,6 +55,12 @@ fn config_defaults_context_distill_tier_to_gx() {
             "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
+            "context_engine_enabled": true,
+            "context_engine_bridge": "",
+            "context_engine_python": "",
+            "context_engine_dir": "",
+            "context_engine_timeout_ms": 30000,
+            "context_engine_reindex_timeout_ms": 600000,
             "plannotator_ports": "19432-19456",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
@@ -219,6 +225,12 @@ context_distill_tier = "GX"
 open_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
+context_engine_enabled = false
+context_engine_bridge = "/b/bridge.py"
+context_engine_python = "/b/venv/bin/python"
+context_engine_dir = "/b/engine"
+context_engine_timeout_ms = 4294967295
+context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
 [tiers]
 O = "a/b/c"
@@ -258,7 +270,17 @@ work_session = "w"
         adapter = adapter.display(),
         socket = "s".repeat(32),
     );
+    let defaults = config_with(&fx, MINIMAL).ok();
     let out = config_with(&fx, &text).ok();
+    let source_keys = |v: &Value| -> Vec<String> { v["sources"].as_object().unwrap().keys().cloned().collect() };
+    // The table names every key of the schema: the defaults list them all, so a new key cannot be missed.
+    assert_eq!(source_keys(&out), source_keys(&defaults));
+    assert_eq!(out["config"]["context_engine_enabled"], false);
+    assert_eq!(out["config"]["context_engine_bridge"], "/b/bridge.py");
+    assert_eq!(out["config"]["context_engine_python"], "/b/venv/bin/python");
+    assert_eq!(out["config"]["context_engine_dir"], "/b/engine");
+    assert_eq!(out["config"]["context_engine_timeout_ms"], 4294967295u32);
+    assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
     assert_eq!(out["config"]["context_distill_tier"], "GX");
