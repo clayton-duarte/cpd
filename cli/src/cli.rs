@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, review, secret, session, slot, tag, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -95,6 +95,8 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// Remove the leftover worktrees whose work is on origin/main (commands.md §26)
+    Prune(prune::Args),
     /// Tag the commit that set the workspace version (commands.md §26.1)
     Tag,
     /// The release plumbing (commands.md §26.2)
@@ -117,8 +119,8 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
     run_with(&Ports::real(), argv)
 }
 
-/// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
-/// the Jobs that convert them to `Env::open_with` land.
+/// [`run`] on `ports`. Only `pr view` reads `ports` yet: the other areas open their `Env` with `Env::open`, the real
+/// ports, until the Jobs that convert them to `Env::open_with` land.
 pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     run_on(ports, argv, cpd_tui::on_a_terminal())
 }
@@ -155,7 +157,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
-        Command::Pr(c) => pr::run(c),
+        Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
@@ -171,6 +173,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
+        Command::Prune(a) => prune::command(a),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
         Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
     }

@@ -40,6 +40,7 @@ pub mod policy;
 pub mod pill;
 pub mod ports;
 pub mod pr;
+pub mod prune;
 pub mod review;
 pub mod secret;
 pub mod session;

@@ -114,6 +114,7 @@ pub const TABLE: &[Entry] = &[
     ("secret allow", &[Lead], false),
     ("gate finish", &[], false),
     ("host repair", &[Manager], false),
+    ("prune", &[], false),
     ("tag", &[Lead], false),
     ("version sync", &[Lead], false),
 ];

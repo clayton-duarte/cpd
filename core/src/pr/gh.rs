@@ -132,23 +132,18 @@ pub(super) struct Killed {
     pub(super) stderr: String,
 }
 
-/// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
-/// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
-fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
-    run_raw_with(&SystemRunner, cwd, args, timeout)
-}
-
 /// The `gh_failed` of a call killed after `timeout`.
 fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
     failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
 }
 
-/// [`run_raw`] on `runner`.
+/// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
+/// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
 pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
     run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
 }
 
-/// [`run_raw`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
+/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
 fn run_timed(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
     run_timed_with(&SystemRunner, cwd, args, timeout)
 }
@@ -171,7 +166,12 @@ pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], tim
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
 /// and a timeout (60 s) are `gh_failed`.
 fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let out = run_raw(cwd, args, TIMEOUT)?;
+    run_on(&SystemRunner, cwd, args)
+}
+
+/// [`run`] on `runner`.
+fn run_on(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let out = run_raw_with(runner, cwd, args, TIMEOUT)?;
     match out.exit {
         Some(0) => Ok(out.stdout),
         Some(code) => Err(failed(args, format!("gh {} exited {code}.", args[0]), Some(code), &out.stderr)),
@@ -229,10 +229,10 @@ pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) ->
     }
 }
 
-pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
+pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdError> {
     let n = number.to_string();
     let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"];
-    parse(&args, &run(cwd, &args)?)
+    parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `gh pr close <number> --repo <repo>`. A pull request that is already closed or merged is the
@@ -306,10 +306,10 @@ pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), C
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
-pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
+pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
     let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
     let args = ["api", endpoint.as_str(), "--paginate"];
-    let stdout = run(cwd, &args)?;
+    let stdout = run_on(runner, cwd, &args)?;
     let mut comments = Vec::new();
     for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
         comments.extend(page.map_err(|e| {
