@@ -535,6 +535,32 @@ pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
 }
 
+/// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
+/// the wait: the child is killed and reaped when it outlives `deadline`, and
+/// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],
+/// which nulls stdin.
+pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> io::Result<Output> {
+    use std::io::Write;
+    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let _ = pipe.write_all(stdin);
+        // Dropping the pipe closes it: the child sees EOF.
+    }
+    let until = Instant::now() + deadline;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
 /// (a session file nobody wrote to for a while): set the time, do not sleep until it has passed.
 pub fn backdate(path: &Path, by: Duration) {

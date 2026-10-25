@@ -14,7 +14,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 13] = [
+const NAMES: [&str; 14] = [
     "config",
     "store",
     "tamper",
@@ -28,6 +28,7 @@ const NAMES: [&str; 13] = [
     "pi_adapter",
     "lead_packages",
     "watch",
+    "holographic",
 ];
 
 const CODING_AGENT: &str = r#"

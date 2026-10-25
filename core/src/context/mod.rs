@@ -18,6 +18,7 @@ mod contexts;
 pub mod curation;
 pub mod digest;
 pub mod distill;
+pub mod engine;
 pub mod inforce;
 mod list;
 pub(crate) mod legacy;

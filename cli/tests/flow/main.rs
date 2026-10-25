@@ -10,6 +10,7 @@ mod config;
 mod context_curation;
 mod context_digest;
 mod context_distill;
+mod context_engine;
 mod context_manager;
 mod context_manager_by_user;
 mod context_pending;
