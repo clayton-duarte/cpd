@@ -45,6 +45,8 @@ mod layout_tree_tests;
 #[cfg(test)]
 mod input_box_tests;
 pub mod link;
+#[cfg(test)]
+mod read_source_tests;
 pub mod logs;
 pub mod menu;
 #[cfg(test)]

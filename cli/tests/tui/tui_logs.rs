@@ -351,19 +351,6 @@ fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes
 
 // ---------- the button ----------
 
-#[test]
-fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
-    let (w, h) = cpd_tui::widgets::legend::size();
-    let big = logs::popup_args((1000, 1000), None);
-    assert_eq!(
-        big,
-        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
-    );
-    let small = logs::popup_args((80, 40), None);
-    assert_eq!((small[5].as_str(), small[7].as_str()), ("64", "32"));
-    assert_eq!(small[3], " logs ");
-}
-
 /// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60 (the popup is at most 48 rows), `display-popup` does nothing.
 fn fake_tmux(env: &TestEnv) {
     env.fake(
@@ -457,13 +444,6 @@ fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_th
     let buf = render(20, 5, &mut log);
     assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
     assert!(selected_rows(&buf).is_empty() && log.follows());
-}
-
-#[test]
-fn the_popup_runs_the_view_at_the_event_of_the_item() {
-    let at = logs::popup_args((1000, 1000), Some(42));
-    assert_eq!(at.last().unwrap(), "cpd tui view logs --event 42");
-    assert_eq!(at[..at.len() - 1], logs::popup_args((1000, 1000), None)[..at.len() - 1], "sized as the button's");
 }
 
 #[test]

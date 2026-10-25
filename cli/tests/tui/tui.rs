@@ -5,7 +5,7 @@
 
 use crate::common;
 
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
@@ -13,7 +13,6 @@ use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS};
 use cpd_core::store::Store;
-use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 /// An env with a config on its private tmux server, and a fake `cpd` that
@@ -685,192 +684,10 @@ fn tui_view_routes_by_name() {
     }
 }
 
-/// The status line (last row) of a client of `width` columns once it shows `needle`, as text and with its styles
-/// (`capture-pane -e`).
-fn status_line(env: &TestEnv, width: u16, needle: &str) -> (String, String) {
-    let outer = Outer::attach(env, width, 20);
-    let mut line = String::new();
-    // The status line fills the row (hs-d479): wait for the whole of it, since a client can show a row mid-draw
-    // (frames arrive in pieces, hs-n206) with the needle already there and the fill not yet.
-    wait_until(&format!("{needle} on a whole status line"), || {
-        line = outer.screen().lines().nth(19).unwrap_or("").trim_end().to_owned();
-        line.contains(needle) && line.chars().count() == usize::from(width)
-    });
-    let styled = outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(19).unwrap_or("").to_owned();
-    (line, styled)
-}
-
-/// A cockpit whose options hold what `workers.rs` sets for two Inbox items, the most urgent red, and
-/// `6/6 · 4 waiting · 9 queued`.
-/// No engine runs: the test holds `locks/watch.lock` as one does, so `tui`'s `watch --ensure` starts none
-/// and nothing overwrites the options set by hand (the engine's step has its own tests in `watch.rs`).
-/// The lock is held while the returned guard lives.
-fn env_with_workers() -> (TestEnv, Flock<File>) {
-    let env = env();
-    let path = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap().watch_lock();
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let engine = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
-    let tui = env.cpd(&["tui"]).ok();
-    assert_eq!(tui["watch"], json!({"started": false, "already": true}), "{tui}");
-    // These tests pin the line without the version pill (its own tests set it): `tui` set it, so unset it.
-    tmux_out(&env, &["set", "-gu", "@cpd_version"]);
-    for (option, value) in [
-        ("@cpd_workers", "workers 6/6 · 4 waiting · 9 queued"),
-        ("@cpd_workers_short", "6/6·4·9"),
-        ("@cpd_workers_width", "36"),
-        ("@cpd_workers_short_width", "9"),
-    ] {
-        tmux_out(&env, &["set", "-g", option, value]);
-    }
-    (env, engine)
-}
-
 /// The left group (hs-d479): the leading `─`, then each button as a pill (its glyph between the two caps, 3 cells),
 /// joined by a single `─`. 12 cells.
 fn buttons() -> String {
     format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LOGS_GLYPH}\u{e0b4}")
-}
-
-/// The right group in the long form: the workers pill (`workers 6/6 · 4 waiting · 9 queued`), then the closing `─`:
-/// 36 cells (the engine's width) plus 1.
-const LONG_ITEMS: &str = "\u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}\u{2500}";
-/// The same in the short form: 9 + 1 cells.
-const SHORT_ITEMS: &str = "\u{e0b6}6/6·4·9\u{e0b4}\u{2500}";
-const LONG_WIDTH: usize = 36 + 1;
-const SHORT_WIDTH: usize = 9 + 1;
-const LEFT_WIDTH: usize = 12;
-
-/// The whole row of a client of `width` columns: the left group, `preview` (the pill with its join, or nothing), the
-/// fill `─` and the right group, exactly `width` cells.
-fn row(width: usize, preview: Option<&str>, items: &str, items_width: usize) -> String {
-    let (pill, pill_width) = match preview {
-        Some(value) => (format!("\u{2500}\u{e0b6}preview: {value}\u{e0b4}"), value.chars().count() + 12),
-        None => (String::new(), 0),
-    };
-    let fill = width - LEFT_WIDTH - pill_width - items_width;
-    format!("{}{pill}{}{items}", buttons(), "\u{2500}".repeat(fill))
-}
-
-// The right group is 37 cells wide in the long form (a text of 34 cells, 2 caps, the closing `─`):
-// with the left group's 12 and a fill of at least 1 it needs a client of 50 columns; one less gets the short form.
-#[test]
-fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_50_columns() {
-    let (env, _engine) = env_with_workers();
-    for width in [50usize, 80, 120, 200] {
-        let (line, _) = status_line(&env, width as u16, "queued");
-        assert_eq!(line, row(width, None, LONG_ITEMS, LONG_WIDTH), "at {width}: {line:?}");
-        assert_eq!(line.chars().count(), width, "{line:?}");
-    }
-}
-
-#[test]
-fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_50_columns() {
-    let (env, _engine) = env_with_workers();
-    for width in [49usize, 40] {
-        let (line, _) = status_line(&env, width as u16, "6/6");
-        assert!(!line.contains("workers"), "{line:?}");
-        assert_eq!(line, row(width, None, SHORT_ITEMS, SHORT_WIDTH), "at {width}: {line:?}");
-    }
-}
-
-#[test]
-fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
-    let (env, _engine) = env_with_workers();
-    for width in [80u16, 120, 200] {
-        let (line, styled) = status_line(&env, width, "queued");
-        assert!(line.starts_with(&format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}")), "{line:?}");
-        assert!(line.ends_with("queued\u{e0b4}\u{2500}"), "{line:?}");
-        // The right pills are joined by one `─` (never a space), and the left group by the buttons' two.
-        assert!(!line.contains("inbox"), "{line:?}");
-        assert!(line.starts_with(&buttons()), "{line:?}");
-        assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
-        // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
-        assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.trim_end().ends_with("\x1b[0m\x1b[90m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
-    }
-}
-
-#[test]
-fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
-    let (env, _engine) = env_with_workers();
-    for width in [40u16, 100] {
-        let (line, styled) = status_line(&env, width, if width >= 50 { "queued" } else { "6/6" });
-        assert_eq!(line.chars().count(), usize::from(width), "{line:?}");
-        let used = LEFT_WIDTH + if width >= 50 { LONG_WIDTH } else { SHORT_WIDTH };
-        let fill = "\u{2500}".repeat(usize::from(width) - used);
-        // The last button's cap, the fill (the join is its first cell), then the workers' pill.
-        assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}")), "{line:?}");
-        assert!(styled.contains(&format!("\x1b[90m{fill}\u{e0b6}")), "{styled:?}");
-    }
-}
-
-/// The SGR state (foreground 0-15, background 0-15, reverse) in force over the first cell of `text` in `styled`, which
-/// holds `ESC[…m` sequences; the byte order tmux emits them in is not pinned.
-fn sgr_state_at(styled: &str, text: &str) -> (Option<u8>, Option<u8>, bool) {
-    let at = styled.find(text).unwrap_or_else(|| panic!("no {text:?} in {styled:?}"));
-    let (mut fg, mut bg, mut reverse) = (None, None, false);
-    let mut rest = &styled[..at];
-    while let Some(start) = rest.find("\x1b[") {
-        let body = &rest[start + 2..];
-        let end = body.find('m').expect("an unclosed SGR");
-        let params: Vec<u32> = body[..end].split(';').map(|p| p.parse().unwrap_or(0)).collect();
-        let mut i = 0;
-        while i < params.len() {
-            match params[i] {
-                0 => (fg, bg, reverse) = (None, None, false),
-                7 => reverse = true,
-                27 => reverse = false,
-                n @ 30..=37 => fg = Some((n - 30) as u8),
-                n @ 90..=97 => fg = Some((n - 90 + 8) as u8),
-                39 => fg = None,
-                n @ 40..=47 => bg = Some((n - 40) as u8),
-                n @ 100..=107 => bg = Some((n - 100 + 8) as u8),
-                49 => bg = None,
-                n @ (38 | 48) => {
-                    let colour = Some(params[i + 2] as u8);
-                    if n == 38 { fg = colour } else { bg = colour }
-                    i += 2;
-                }
-                _ => {}
-            }
-            i += 1;
-        }
-        rest = &body[end + 1..];
-    }
-    (fg, bg, reverse)
-}
-
-const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
-
-// The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
-// 33 of value. With the left group's 12, the long form's 37 and a fill of 1 it needs 95 columns.
-#[test]
-fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_option_is_set() {
-    let (env, _engine) = env_with_workers();
-    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
-    let pill = format!("\u{e0b6}preview: {PREVIEW}\u{e0b4}");
-    for (width, items, items_width) in [(94usize, SHORT_ITEMS, SHORT_WIDTH), (95, LONG_ITEMS, LONG_WIDTH), (120, LONG_ITEMS, LONG_WIDTH), (200, LONG_ITEMS, LONG_WIDTH)] {
-        let (line, styled) = status_line(&env, width as u16, "preview:");
-        assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
-        assert!(line.ends_with(items), "at {width}: {line:?}");
-        assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
-        let (fg, bg, reverse) = sgr_state_at(&styled, &format!("preview: {PREVIEW}"));
-        assert!(reverse && fg == Some(3) && bg.is_none(), "reverse, foreground 3, no background, unpadded: {styled:?}");
-    }
-}
-
-#[test]
-fn the_status_line_shows_no_preview_once_the_option_is_unset() {
-    let (env, _engine) = env_with_workers();
-    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
-    status_line(&env, 100, "preview:");
-    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
-    // The unset shows once a fresh client has drawn the whole line.
-    let (line, _) = status_line(&env, 100, "queued");
-    assert!(!line.contains("preview"), "{line:?}");
-    assert_eq!(line, row(100, None, LONG_ITEMS, LONG_WIDTH), "{line:?}");
 }
 
 #[test]

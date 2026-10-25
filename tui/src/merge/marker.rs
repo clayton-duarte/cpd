@@ -130,13 +130,8 @@ mod tests {
         CpdHome::resolve(Some(dir.path().into()), None).unwrap()
     }
 
-    /// A pid that is not alive: a child that has ended and been waited for.
-    fn dead_pid() -> u32 {
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        pid
-    }
+    /// A pid that is not alive: above every platform's `pid_max` (Linux's is at most 2^22), so no process has it; `kill(pid, 0)` says `ESRCH`.
+    const DEAD_PID: u32 = 999_999_999;
 
     /// A marker file as the action leaves it, written by hand: `file` is its name in `run/tui/merging/`.
     fn put(dir: &tempfile::TempDir, file: &str, pid: u32) {
@@ -169,7 +164,7 @@ mod tests {
     #[test]
     fn writing_replaces_a_stale_marker_and_leaves_the_markers_of_other_pull_requests() {
         let dir = tempfile::tempdir().unwrap();
-        put(&dir, "acme__api__3.json", dead_pid());
+        put(&dir, "acme__api__3.json", DEAD_PID);
         put(&dir, "acme__web__4.json", std::process::id());
         write(&home(&dir), &pull("acme/api", 3)).unwrap();
         let text = std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
@@ -193,7 +188,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::new(), "no directory: none");
         put(&dir, "acme__api__3.json", std::process::id());
-        put(&dir, "acme__web__4.json", dead_pid());
+        put(&dir, "acme__web__4.json", DEAD_PID);
         assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::from(["acme/api#3".to_owned()]));
         // a restarted view reads the same files
         assert_eq!(live(&home(&dir), &BTreeSet::new()), live(&home(&dir), &BTreeSet::new()));
