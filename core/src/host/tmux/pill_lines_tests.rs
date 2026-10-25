@@ -20,8 +20,8 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
 
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const LEAD_CAP: &str = "#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]";
-    const VIEW_CAP: &str = "#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}━\u{e0b6}#[reverse]";
+    const LEAD_CAP: &str = "#[fg=colour7]━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]";
+    const VIEW_CAP: &str = "#[fg=colour7]━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]";
     let want = format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
          #{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{views}}}}}}}",
@@ -41,7 +41,7 @@ fn border_format_title_pills_follow_the_rule() {
 
 #[test]
 fn status_line_pills_follow_the_rule() {
-    const JOIN: &str = "#[fg=colour8]\u{2500}#[default]";
+    const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
     let button = |range: &str, colour: &str, glyph: &str| {
         format!("#[range=user|{range}]#[fg={colour}]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
     };
@@ -54,19 +54,19 @@ fn status_line_pills_follow_the_rule() {
     let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}\
-         #{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}\
-         #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
+         #{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}\
+         #[fg=colour8]#{{R:\u{2501},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
          #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
          {}\
-         #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
+         #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}}}\
          {JOIN}",
         button("reset", "colour13", super::RESET_GLYPH),
         button("legend", "colour15", super::LEGEND_GLYPH),
         button("logs", "colour10", super::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
-        italic_pill("colour9", "Incident Mode: #{@cpd_incident}"),
+        format!("#[range=user|incident]{}#[norange]", italic_pill("colour9", "Incident Mode: #{@cpd_incident}")),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
         pill("colour9", "#{@cpd_version}"),
         pill("colour8", "#{@cpd_version}"),
@@ -157,32 +157,32 @@ fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_
     assert!(STATUS_CLICK.starts_with("cpd tui action "), "{STATUS_CLICK}");
 }
 
-/// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
-/// three button pills each in its own range, joined by a single `─` outside the ranges; the optional unpadded
-/// preview pill after a join; the fill; then the workers' pill and the closing `─`
-/// (long form from `#{w:@cpd_workers}` plus its two caps and 14: the left group's 12, the closing `─` and a fill of 1).
+/// The status line's format, exactly (hs-d479): one grey `━` line across the row, starting and ending with a `━`; the
+/// three button pills each in its own range, joined by a single `━` outside the ranges; the optional unpadded
+/// preview pill after a join; the fill; then the workers' pill and the closing `━`
+/// (long form from `#{w:@cpd_workers}` plus its two caps and 14: the left group's 12, the closing `━` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
-            "#[fg=colour8]\u{2500}#[default]\
+            "#[fg=colour8]\u{2501}#[default]\
              #[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
-             #[fg=colour8]\u{2500}#[default]\
+             #[fg=colour8]\u{2501}#[default]\
              #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
-             #[fg=colour8]\u{2500}#[default]\
+             #[fg=colour8]\u{2501}#[default]\
              #[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             super::RESET_GLYPH,
             super::LEGEND_GLYPH,
             super::LOGS_GLYPH
         );
-    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
+    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2501}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]\
-         #{?@cpd_incident,#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[fg=colour8]\u{2500}#[default],}\
+         #{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[norange]#[fg=colour8]\u{2501}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
-         #{?#{@cpd_host_alert},#[fg=colour8]\u{2500}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
-         #[fg=colour8]\u{2500}#[default]";
+         #{?#{@cpd_host_alert},#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
+         #[fg=colour8]\u{2501}#[default]";
     let format = STATUS_FORMAT.as_str();
     assert!(format.starts_with(&prefix), "{format}");
     assert!(format.ends_with(suffix), "{format}");

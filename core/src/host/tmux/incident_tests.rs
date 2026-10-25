@@ -37,7 +37,7 @@ fn the_incident_pill_carries_the_incident_click_range() {
     let open = f[..label].rfind("#[range=user|incident]").expect("the incident pill's click range");
     let close = label + f[label..].find("#[norange]").expect("the pill's range close") + "#[norange]".len();
     assert!(f[open..].starts_with("#[range=user|incident]#[fg=colour9]\u{e0b6}"), "the range opens immediately before the left cap: {}", &f[open..close]);
-    assert!(f[close..].starts_with("#[fg=colour8]\u{2500}"), "the range closes before the following join: {}", &f[close..]);
+    assert!(f[close..].starts_with("#[fg=colour8]\u{2501}"), "the range closes before the following join: {}", &f[close..]);
     let pill = &f[open..close];
     assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
     assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");
