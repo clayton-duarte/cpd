@@ -296,27 +296,9 @@ fn counter_style(counts: &JobCounts, index: usize, n: usize) -> Style {
     palette::count_style(status, merging, n)
 }
 
-/// The display width of `text` in terminal columns (wide characters take two, combining marks none).
-pub fn width(text: &str) -> usize {
-    Span::raw(text).width()
-}
-
-/// `text` cut to `width` columns with a final `…`. Counted in display columns, not chars (names are free text).
-pub fn truncate(text: &str, width: usize) -> String {
-    if self::width(text) <= width {
-        return text.to_string();
-    }
-    let Some(room) = width.checked_sub(1) else { return String::new() };
-    let (mut cut, mut used) = (String::new(), 0);
-    for c in text.chars() {
-        used += self::width(c.encode_utf8(&mut [0; 4]));
-        if used > room {
-            break;
-        }
-        cut.push(c);
-    }
-    cut + "…"
-}
+// `width` and `truncate` live in `crate::cells`, the one place text is measured in display columns; the re-export
+// keeps this module's callers (`tree/view.rs`) and tests reading `rows::width` / `truncate`.
+pub(crate) use crate::cells::{truncate, width};
 
 /// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
@@ -650,13 +632,16 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Position;
     use ratatui::style::{Color, Modifier};
 
+    use crate::buffer::copy_cells;
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
     use cpd_core::plan::Phase;
     use cpd_core::session::State;
     use crate::palette::{IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED, color};
+    use crate::test_text::{row as text, rows as lines};
 
     const WORKING: &str = SPINNER[0];
     use crate::read::{Dot, Place};
@@ -688,20 +673,8 @@ mod tests {
         terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
         let full = terminal.backend().buffer();
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        for y in 0..height {
-            for x in 0..width {
-                buf[(x, y)] = full[(x, y)].clone();
-            }
-        }
+        copy_cells(full, Rect::new(0, 0, width, height), &mut buf, Position::new(0, 0));
         buf
-    }
-
-    fn text(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
-    }
-
-    fn lines(buf: &Buffer) -> Vec<String> {
-        (0..buf.area.height).map(|y| text(buf, y)).collect()
     }
 
     /// A row of an area `width` wide: `left`, then `right`, which ends `RIGHT_PAD` columns before the right edge.
@@ -938,7 +911,7 @@ mod tests {
     #[test]
     fn every_dot_is_drawn_as_the_palette_draws_it_on_a_session_row_and_its_context_and_no_phase_colours_it() {
         for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Deploy, Phase::Done] {
-            for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped] {
+            for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Working(None), Dot::Idle, Dot::Stopped] {
                 let mut p = with_dot("pp", dot);
                 p.head.phase = phase;
                 let t = tree(vec![managed(context("cc", vec![p]), dot)]);
@@ -965,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_on_session_rows_and_their_context() {
-        let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Working)]), Dot::Working)]);
+        let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Working(None))]), Dot::Working(None))]);
         let glyphs: Vec<(String, String)> = (0..=SPINNER.len())
             .map(|frame| {
                 let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
@@ -979,11 +952,11 @@ mod tests {
 
     #[test]
     fn an_archived_working_row_is_grey_and_does_not_turn() {
-        let mut p = with_dot("pp", Dot::Working);
+        let mut p = with_dot("pp", Dot::Working(None));
         p.head.archived_at = Some(WHEN.into());
-        let mut gone = managed(context("zz", vec![with_dot("qq", Dot::Working)]), Dot::Working);
+        let mut gone = managed(context("zz", vec![with_dot("qq", Dot::Working(None))]), Dot::Working(None));
         gone.archived_at = Some(WHEN.into());
-        let t = tree(vec![managed(context("cc", vec![p]), Dot::Working), gone]);
+        let t = tree(vec![managed(context("cc", vec![p]), Dot::Working(None)), gone]);
         let mut state = state_for(&t, &[], &[]);
         unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
@@ -1008,11 +981,11 @@ mod tests {
 
     #[test]
     fn a_context_row_shows_its_managers_dot_whatever_the_sessions_inside() {
-        let t = tree(vec![managed(context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)]), Dot::Working)]);
+        let t = tree(vec![managed(context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)]), Dot::Working(None))]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 4, false);
-        assert_eq!(cell(&buf, 1, 0), drawn_dot(Dot::Working));
+        assert_eq!(cell(&buf, 1, 0), drawn_dot(Dot::Working(None)));
         let collapsed = render(&t, &mut state_for(&t, &["cc"], &[]), 20, 1, false);
-        assert_eq!(cell(&collapsed, 1, 0), drawn_dot(Dot::Working), "collapsed too");
+        assert_eq!(cell(&collapsed, 1, 0), drawn_dot(Dot::Working(None)), "collapsed too");
         assert_eq!((cell(&buf, 2, 1), cell(&buf, 2, 2), cell(&buf, 2, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::Red), drawn_dot(Dot::White)), "while each Session row keeps its own");
     }
 
@@ -1111,7 +1084,7 @@ mod tests {
         assert_eq!((fg(&buf, 4, 1), fg(&buf, 7, 1)), (blue(), blue()), "the name is what turns blue");
         assert_eq!(text(&buf, 1).chars().next(), Some('├'), "the branch, not a mark");
         assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (grey, grey), "the branch");
-        assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working), "the dot");
+        assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working(None)), "the dot");
         // counters "2⋅2⋅5" end `RIGHT_PAD` columns before the edge
         let counters: Vec<Color> = [37, 39, 41].iter().map(|&x| fg(&buf, x, 1)).collect();
         assert_eq!(

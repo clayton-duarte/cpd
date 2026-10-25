@@ -72,7 +72,7 @@ function splitThinkingSections(markdown: string): ThinkingSection[] {
 	return [{ summary: "Thinking…", detail: normalized.trim() }];
 }
 
-function compactDetail(
+export function compactDetail(
 	detail: string,
 	availableWidth: number,
 	stylePrefix: (prefix: string) => string,
@@ -120,7 +120,7 @@ export function hasThinkingDetail(markdown: string): boolean {
 }
 
 /** `╰` (rail) then `<glyph> <label>` (toggle), then ` · <time>`, then ` · <hint>` when there is a hint. */
-function toggleRow(
+export function toggleRow(
 	style: (text: string) => string,
 	glyph: string,
 	label: string,

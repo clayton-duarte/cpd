@@ -110,12 +110,45 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
 }
 
-/// The text of the message of a stuck Job (contract §3.7 "A stuck Job"): `<T>` stays for the Manager to choose.
+/// The text of the one message for a PR's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
+/// Manager to choose.
 fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
     format!(
-        "Job pay/{key} failed {minutes} min ago ({cause}) and its Lead has not retried or cancelled it. \
-         Retry it (cpd job retry {key} --plan pay --tier <T>), nudge the Lead, or ask the User."
+        "Jobs of PR pay/repo failed and their Lead has not retried or cancelled them: \
+         pay/{key} ({minutes} min ago, {cause}). \
+         Retry each (cpd job retry <key> --plan pay --tier <T>), nudge the Lead, or ask the User."
     )
+}
+
+/// hs-d647: the stuck Jobs of one PR are ONE message to the Manager, oldest `job-failed` Event first, each Job with
+/// its own minutes and `failed_cause`; it is sent once, and no item opens (hs-d318).
+#[test]
+fn stuck_jobs_of_one_pr_are_one_message_to_the_manager() {
+    let mut fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
+    manager(&mut fx);
+    failed_job(&mut fx, "old", 2);
+    failed_job(&mut fx, "fresh", 2);
+
+    tick(&mut fx);
+    // Three ticks later: still the one message for the PR, and no item opened.
+    for _ in 0..3 {
+        tick(&mut fx);
+    }
+    assert_eq!(
+        messages(&mut fx),
+        [(
+            "mgr1".to_owned(),
+            None,
+            true,
+            "Jobs of PR pay/repo failed and their Lead has not retried or cancelled them: \
+             pay/old (2 min ago, crashed); pay/fresh (2 min ago, crashed). \
+             Retry each (cpd job retry <key> --plan pay --tier <T>), nudge the Lead, or ask the User."
+                .to_owned()
+        )]
+    );
+    assert_eq!(open_items(&mut fx), []);
+    assert_eq!(data(&mut fx, "inbox-opened"), Vec::<Value>::new());
 }
 
 /// hs-d318: a failed Job, `stuck_job_minutes` (here 1) after its `job-failed` Event and with its Lead not working, is one
@@ -417,5 +450,8 @@ fn a_stuck_job_wakes_its_context_manager() {
     assert_eq!(messages.len(), 1, "{messages:?}");
     let data = &messages[0];
     assert_eq!((fx.query::<String>("SELECT session FROM events WHERE kind = 'session-message'").as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
-    assert!(data["text"].as_str().unwrap().starts_with("Job pay/api failed "), "{data}");
+    // hs-d647: the stuck Jobs of a PR are one message (contract §3.7 "A stuck Job").
+    let text = data["text"].as_str().unwrap();
+    assert!(text.starts_with("Jobs of PR pay/repo failed "), "{data}");
+    assert!(text.contains("pay/api (2 min ago, crashed)"), "{data}");
 }

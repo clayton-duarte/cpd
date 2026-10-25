@@ -8,7 +8,7 @@ use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, SessionId};
 
 /// A Plan's phase (§3.1).
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
     Grounding,
     Plan,

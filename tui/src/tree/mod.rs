@@ -43,6 +43,8 @@ mod margin_tests;
 #[cfg(test)]
 mod scroll_tests;
 #[cfg(test)]
+mod width_tests;
+#[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
 mod new_context_tests;
@@ -96,7 +98,8 @@ use cpd_core::store::Store;
 use actions::{Failed, Runner};
 use folds::FoldsFile;
 use kinds::KINDS;
-use view::{Effect, View};
+pub(crate) use view::View;
+use view::Effect;
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 

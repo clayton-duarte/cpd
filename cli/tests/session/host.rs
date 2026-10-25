@@ -506,7 +506,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 /// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
 /// three button pills each in its own range, joined by a single `─` outside the ranges; the optional unpadded
 /// preview pill after a join; the fill; then the workers' pill and the closing `─`
-/// (long form from `@cpd_workers_width` + 14: the left group's 12, the closing `─` and a fill of 1).
+/// (long form from `#{w:@cpd_workers}` plus its two caps and 14: the left group's 12, the closing `─` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = format!(
@@ -522,12 +522,12 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
         );
     let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
-    let suffix = "#[default]#[align=right]\
+    let suffix = "#[default]\
          #{?@cpd_incident,#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[fg=colour8]\u{2500}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}\
+         #{?#{@cpd_host_alert},#[fg=colour8]\u{2500}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2500}#[default]";
     let format = cpd_core::host::tmux::STATUS_FORMAT.as_str();
     assert!(format.starts_with(&prefix), "{format}");

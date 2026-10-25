@@ -7,9 +7,10 @@ use super::STATUS_FORMAT;
 fn the_status_line_has_no_inbox_pill() {
     let format: &str = &STATUS_FORMAT;
     assert!(!format.contains("@cpd_inbox"), "no option of the Inbox counter is read (`@cpd_inbox`, `@cpd_inbox_tier`): {format}");
-    let right = &format[format.find("#[align=right]").expect("a right-aligned side") + "#[align=right]".len()..];
+    let marker = "#[default]#{?@cpd_incident";
+    let right = &format[format.find(marker).expect("the start of the right side") + "#[default]".len()..];
     let caps = right.matches('\u{e0b6}').count();
-    assert_eq!(caps, 3, "the right side is three pills, the incident's, the workers' and the version's: {right}");
+    assert_eq!(caps, 4, "the right side is the incident, the workers and the version pills (the version has two colour branches): {right}");
     let incident = right.find("Incident Mode: ").expect("the incident pill");
     let workers = right.find("#{@cpd_workers}").expect("the workers pill");
     let version = right.find("#{@cpd_version}").expect("the version pill");
