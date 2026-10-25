@@ -11,6 +11,7 @@
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
@@ -18,12 +19,15 @@ use std::time::{Duration, Instant};
 
 use cpd_core::clock::{Clock, ManualClock, timestamp};
 use cpd_core::error::CpdError;
+use cpd_core::events::{NewEvent, append};
+use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::ports::Ports;
+use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -146,14 +150,27 @@ impl Fx {
     /// catalog of pi 1.0.0 seeded): the Plan of the engine tests. Its repo and Lead worktree are paths that are not on disk:
     /// a step that runs git needs a repo of its own.
     pub fn engine_plan(&self) {
+        self.engine_plan_at(&self.env.root().join("pay"), &self.env.root().join("pay.pay"));
+    }
+
+    /// [`Fx::engine_plan`] with PR `repo` on the repo `repo` and the Lead worktree `lead` (a repo and a worktree of the fake git).
+    /// The pi release the catalog is of is the installed one (`install/current-version` and the release's entry points, which
+    /// E2's ladder looks for and nothing runs).
+    pub fn engine_plan_at(&self, repo: &Path, lead: &Path) {
+        let install = self.env.root().join("install");
+        std::fs::create_dir_all(&install).expect("create install/");
+        std::fs::write(install.join("current-version"), "1.0.0\n").expect("write current-version");
+        let scope = install.join("releases/1.0.0/node_modules/@earendil-works");
+        for package in ["pi-coding-agent", "pi-ai"] {
+            std::fs::create_dir_all(scope.join(package).join("dist")).expect("create dist");
+            std::fs::write(scope.join(package).join("dist/index.js"), "").expect("write index.js");
+        }
         let catalog: String = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")]
             .iter()
             .map(|(letter, model, efforts)| {
                 format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
             })
             .collect();
-        let repo = self.env.root().join("pay");
-        let lead = self.env.root().join("pay.pay");
         self.env.sql(&format!(
             "{catalog}
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -226,7 +243,8 @@ impl Fx {
             on_other_thread,
         };
         let ports = Ports { clock: Arc::new(stepped), runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
-        cpd_engine::watch::run_with(&ports, &until)
+        // The steps that reach git or tmux through the core's wrappers (E2's merge recovery, a Worker's window) read `Ports::current()`.
+        Ports::scope(&ports, || cpd_engine::watch::run_with(&ports, &until))
     }
 
     /// `cpd watch` on this `Fx`'s ports until the engine has napped `n` more times than before this call: `n` ticks, whatever
@@ -308,15 +326,21 @@ impl Fx {
     /// its driver pid 4242 and its worktree beside the repo's. The `starting → running` Event is at `started_at` when the
     /// Attempt is `running`.
     pub fn add_running(&self, key: &str, status: &str, started_at: &str) {
-        let event = if status == "running" {
-            format!(
-                "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
-                   VALUES (cpd_txn(), '{started_at}', 'attempt-status', 'ctx', '{PLAN}', '{key}', '{key}-a1', 'running',
-                           '{{\"from\":\"starting\",\"to\":\"running\"}}');"
-            )
-        } else {
-            String::new()
-        };
+        self.add_running_since(key, status, started_at, (status == "running").then_some(started_at));
+    }
+
+    /// [`Fx::add_running`] with the `starting → running` Event at `running_at` (none: the Attempt is still `starting`): a
+    /// review Job that waited for its Lead, or an Attempt that waited in `starting`.
+    pub fn add_running_since(&self, key: &str, status: &str, started_at: &str, running_at: Option<&str>) {
+        let event = running_at
+            .map(|at| {
+                format!(
+                    "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+                       VALUES (cpd_txn(), '{at}', 'attempt-status', 'ctx', '{PLAN}', '{key}', '{key}-a1', 'running',
+                               '{{\"from\":\"starting\",\"to\":\"running\"}}');"
+                )
+            })
+            .unwrap_or_default();
         let worktree = self.env.root().join(format!("pay.pay--{key}-a1"));
         self.add_job(
             key,
@@ -329,6 +353,14 @@ impl Fx {
                 worktree.display()
             ),
         );
+    }
+
+    /// Job `key` has a cancel request, as `cpd job cancel` of a running Job leaves it, made at the clock's now.
+    pub fn request_cancel(&self, key: &str) {
+        self.env.sql(&format!(
+            "UPDATE jobs SET cancel_reason = 'not needed', cancel_requested_at = '{}' WHERE plan = '{PLAN}' AND key = '{key}';",
+            self.stamp_ago(0)
+        ));
     }
 
     /// Holds Attempt `attempt`'s driver lock, as a live driver does: a `flock` on our own lock file of the temp home (kept real,
@@ -349,6 +381,110 @@ impl Fx {
     /// The server option `name` (`show -gv`), without its trailing newline: empty when it is not set.
     pub fn tmux_option(&self, name: &str) -> String {
         String::from_utf8_lossy(&self.tmux(&["show", "-gv", name]).stdout).trim_end().to_owned()
+    }
+}
+
+/// What becomes of the window `cpd-work:watch` that `cpd watch --ensure` makes ([`Fx::engine_window`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EngineWindow {
+    /// The engine starts: its pane has a process that holds `locks/watch.lock` and says `watch-started` with its pid.
+    Runs,
+    /// The command of the window exits with this status.
+    Exits(i32),
+    /// A signal killed the command of the window: tmux has no exit status for it.
+    IsKilled,
+}
+
+/// The engine that `cpd watch --ensure` waits for, simulated: the fake tmux runs no program, so the test says what the window's
+/// process does. Call [`Engines::at_nap`] from [`Fx::on_nap`]: `--ensure` naps while it waits for the engine, and the process
+/// of the window is "alive" (and has done what [`EngineWindow`] says) when it looks again. A real `flock` on our own lock file.
+#[derive(Clone)]
+pub struct Engines {
+    route: Arc<TmuxRoute>,
+    socket: String,
+    tmpdir: PathBuf,
+    cwd: PathBuf,
+    home: cpd_core::home::CpdHome,
+    how: EngineWindow,
+    /// `locks/watch.lock` while a simulated engine runs.
+    lock: Arc<Mutex<Option<Flock<File>>>>,
+}
+
+impl Engines {
+    /// `tmux <args>` on the fake server of the env's socket, not through the runner (it is no call of the product's).
+    fn tmux(&self, args: &[&str]) -> Option<String> {
+        let argv = ["-L", &self.socket].into_iter().chain(args.iter().copied()).map(str::to_owned).collect();
+        let out = self.route.fake().run(&Invocation { argv, tmux_tmpdir: self.tmpdir.clone(), cwd: self.cwd.clone(), env: Vec::new() });
+        (out.code == 0).then_some(out.stdout)
+    }
+
+    /// What the process of the engine window does by the time `--ensure` has napped once more.
+    pub fn at_nap(&self) {
+        // No server yet: the call has not made the window.
+        let Some(rows) = self.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{session_name}:#{window_name} #{pane_dead} #{pane_pid}"]) else {
+            return;
+        };
+        for row in rows.lines() {
+            let fields: Vec<&str> = row.split(' ').collect();
+            let [pane, window, dead, pid] = fields[..] else { panic!("a pane row: {row:?}") };
+            if window != "cpd-work:watch" || dead == "1" {
+                continue;
+            }
+            match self.how {
+                EngineWindow::Runs => self.runs(pid.parse().expect("a pane pid")),
+                EngineWindow::Exits(status) => {
+                    self.tmux(&["__ctl", "pane-exit", pane, "--status", &status.to_string()]).expect("pane-exit");
+                }
+                EngineWindow::IsKilled => {
+                    self.tmux(&["__ctl", "pane-exit", pane, "--signal"]).expect("pane-exit");
+                }
+            }
+        }
+    }
+
+    /// The process `pid` is the engine: it takes the lock and says it started, once.
+    fn runs(&self, pid: u32) {
+        let mut store = Store::open(&self.home, 5000).expect("open the store");
+        let known = store
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM events WHERE kind = 'watch-started' AND json_extract(data, '$.pid') = ?1)",
+                    [pid],
+                    |r| r.get::<_, bool>(0),
+                )?)
+            })
+            .expect("read the events");
+        if known {
+            return;
+        }
+        let path = self.home.watch_lock();
+        std::fs::create_dir_all(path.parent().expect("the lock's directory")).expect("create locks/");
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).expect("open the engine's lock");
+        let lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("the engine's lock is free when an engine starts");
+        *self.lock.lock().unwrap() = Some(lock);
+        store
+            .write("engine", |tx| append(tx, NewEvent::watch_started(format!("The engine started (pid {pid})."), pid)).map(|_| ()))
+            .expect("append watch-started");
+    }
+
+    /// The simulated engine dies: the kernel lets go of its lock.
+    pub fn stop(&self) {
+        self.lock.lock().unwrap().take();
+    }
+}
+
+impl Fx {
+    /// The engine of the window `watch --ensure` makes, simulated as `how` says ([`Engines`]).
+    pub fn engine_window(&self, how: EngineWindow) -> Engines {
+        Engines {
+            route: self.tmux_route.clone(),
+            socket: self.env.tmux_socket().to_owned(),
+            tmpdir: self.env.tmux_tmpdir().to_path_buf(),
+            cwd: self.env.root().to_path_buf(),
+            home: CpdHome::resolve(Some(self.env.cpd_home().into()), None).expect("the home"),
+            how,
+            lock: Arc::default(),
+        }
     }
 }
 
