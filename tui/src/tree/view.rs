@@ -2571,7 +2571,7 @@ mod tests {
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(50));
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"), "the tree is above it");
-        assert_eq!(rows[12], " ╰󰬪", "the tree's rows are its 12, then the section's empty row");
+        assert_eq!(rows[12], " ╰󰬪 new", "the tree's rows are its 12, then the section's empty row");
         assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
         assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
         assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
@@ -2707,7 +2707,7 @@ mod tests {
         let (view, rows) = shared(sample(), 3, false, 31);
         assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
         assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{rows:?}");
-        assert_eq!(rows[12], " ╰󰬪", "the tree's last row: {rows:?}");
+        assert_eq!(rows[12], " ╰󰬪 new", "the tree's last row: {rows:?}");
         assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
         assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰬪", ""), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
@@ -2971,7 +2971,7 @@ mod tests {
         starts(9, format!(" ╰─{IDLE} ship·f-id"));
         assert_eq!(rows[10], "");
         assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰬪").count(), 1, "no terminator line but the Context with no row's: {rows:#?}");
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰬪 new").count(), 1, "no terminator line but the live Context with no row's new row: {rows:#?}");
     }
 
     #[test]
@@ -2991,7 +2991,7 @@ mod tests {
         assert_eq!(rows[10], COLLAPSE, "the closing row of the expanded Context");
         assert_eq!(rows[11], "");
         assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[13], " ╰󰬪", "a Context with no row at all ends with the terminator");
+        assert_eq!(rows[13], " ╰󰬪 new", "a live Context with no row at all ends with the clickable new row");
         assert_eq!(rows[14], "");
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
         assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰬦 expand`");
@@ -3002,7 +3002,7 @@ mod tests {
     fn a_context_with_no_row_at_all_is_its_title_and_the_terminator() {
         let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
         let rows = drawn(&mut View::new(tree, true), 44, 10);
-        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), format!(" ╰{}", crate::fold::TERMINATOR)]);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰󰬪 new".to_owned()]);
     }
 
     #[test]
@@ -3031,7 +3031,7 @@ mod tests {
         // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
         let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
         assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[12], " ╰󰬪");
+        assert_eq!(rows[12], " ╰󰬪 new");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
         assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));

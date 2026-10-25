@@ -346,7 +346,7 @@ const FROZEN: [&[&str]; 6] = [
     r##"1*[" "|Reset|Reset|NONE] 1*["╰"|DarkGray|Reset|NONE] 1*["\u{f0b2c}"|Gray|Reset|NONE] 1*[" "|Gray|Reset|NONE] 1*["c"|Gray|Reset|NONE] 1*["o"|Gray|Reset|NONE] 2*["l"|Gray|Reset|NONE] 1*["a"|Gray|Reset|NONE] 1*["p"|Gray|Reset|NONE] 1*["s"|Gray|Reset|NONE] 1*["e"|Gray|Reset|NONE] 31*[" "|Reset|Reset|NONE]"##,
     r##"43*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["╭"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|DarkGray|Reset|BOLD] 1*[" "|Reset|Reset|BOLD] 1*["g"|White|Reset|BOLD] 1*["a"|White|Reset|BOLD] 2*["m"|White|Reset|BOLD] 1*["a"|White|Reset|BOLD] 34*[" "|Reset|Reset|NONE]"##,
-    r##"1*[" "|Reset|Reset|NONE] 1*["╰"|DarkGray|Reset|NONE] 1*["\u{f0b2a}"|DarkGray|Reset|NONE] 40*[" "|Reset|Reset|NONE]"##,
+    r##"1*[" "|Reset|Reset|NONE] 1*["╰"|DarkGray|Reset|NONE] 1*["\u{f0b2a}"|DarkGray|Reset|NONE] 1*[" "|White|Reset|NONE] 1*["n"|White|Reset|NONE] 1*["e"|White|Reset|NONE] 1*["w"|White|Reset|NONE] 36*[" "|Reset|Reset|NONE]"##,
     r##"43*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["╭"|DarkGray|Reset|NONE] 1*["\u{e3d5}"|DarkGray|Reset|BOLD] 1*[" "|DarkGray|Reset|BOLD] 1*["z"|DarkGray|Reset|BOLD] 1*["e"|DarkGray|Reset|BOLD] 1*["t"|DarkGray|Reset|BOLD] 1*["a"|DarkGray|Reset|BOLD] 34*[" "|DarkGray|Reset|NONE] 1*[" "|Reset|Reset|NONE]"##,
     r##"1*[" "|Reset|Reset|NONE] 1*["╰"|DarkGray|Reset|NONE] 1*["\u{f0b26}"|Gray|Reset|NONE] 1*[" "|Gray|Reset|NONE] 1*["e"|Gray|Reset|NONE] 1*["x"|Gray|Reset|NONE] 1*["p"|Gray|Reset|NONE] 1*["a"|Gray|Reset|NONE] 1*["n"|Gray|Reset|NONE] 1*["d"|Gray|Reset|NONE] 33*[" "|Reset|Reset|NONE]"##,
