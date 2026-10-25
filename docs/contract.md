@@ -623,7 +623,7 @@ The command surface of PRs; `commands.md` specifies each command in full.
 | `plan show` | any | lists the Plan's PRs, each with its fields (§2.2) and its Jobs |
 | `plan outline --file <outline.json>` | every phase | sets the Plan's outline (§2.2 Plan `outline`), replacing it whole; its `done_when` keys are PRs of the Plan that are not `cancelled`; it is in the plan fingerprint (§2.3) (`commands.md` §4.13, hs-d502) |
 
-**The plan view** (`PlanView`, the cockpit's centre top; A15): one box per PR that is not `cancelled`, showing its key, its repo's directory name, its base, and its pull request's number and state (or its status before it is open), with the chart of its Jobs and their Dependencies inside. The boxes are laid out left to right in the order of the needs graph and the base PRs of the Plan (a PR to the right of every PR it needs or is stacked on) and linked by arrows for the needs and, dashed, for a base PR. All references are within the Plan; a stacked PR shows `on <key>` (hs-d522). A Plan of one PR shows one box.
+**The plan view** (`PlanView`, the cockpit's centre top; A15): one box per PR that is not `cancelled`, showing its key, its repo's directory name, its base, and its pull request's number and state (or its status before it is open), with the chart of its Jobs and their Dependencies inside. The boxes are laid out left to right in the order of the needs graph and the base PRs of the Plan (a PR to the right of every PR it needs or is stacked on) and linked by lines for the needs and, dashed, for a base PR (plain box-drawing, no arrowhead; hs-d638). All references are within the Plan; a stacked PR shows `on <key>` (hs-d522). A Plan of one PR shows one box.
 
 ## 3. State machines
 
@@ -2501,8 +2501,8 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Job pill: cancelled | yes | block 8 inverted, caps 8 | `palette::pill(…)` |
 | Job pill text (icon, key, tier, `aN`) | part of the pill | inherits inversion | pill |
 | Selected Job pill | yes | block: 4 inverted, caps 4 | `palette::pill_focus()` |
-| Chart lines (`─`, `│`, junctions, arrows) | no | fg 8 | palette: muted |
-| PR box border and its `┬` exit and `󱦳` arrow | no | fg 8 | palette: muted |
+| Chart lines (`─`, `│`, junctions) | no | fg 8 | palette: muted |
+| PR box border and its `┬` exit and connector | no | fg 8 | palette: muted |
 | PR box title: the key (bold), ` · repo 󱦰 base · ` | no | fg 7 | palette: read-only text |
 | PR box title: `#12` | yes (inside the link) | fg 15 | palette: clickable text |
 | PR box title: state `open` | yes (the link) | fg 15; fg 11 when the PR is ready to merge | palette: clickable text, bright meaning |
