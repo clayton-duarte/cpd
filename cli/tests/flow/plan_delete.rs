@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
 use common::refused;
+use serde_json::Value;
 
 // ---------- fixtures ----------
 
@@ -126,6 +127,11 @@ fn world_ending(fx: &Fx, plan: &str, merged: bool) -> World {
     w
 }
 
+/// [`world`] whose PR is still `open`, with its pull request open.
+pub fn world_with_open_pr(fx: &Fx, plan: &str) -> World {
+    world_ending(fx, plan, false)
+}
+
 pub fn archive(fx: &Fx, plan: &str) {
     fx.cpd(&["plan", "archive", "--plan", plan]).ok();
 }
@@ -140,6 +146,10 @@ pub fn plan_rows(fx: &Fx, plan: &str) -> i64 {
     ["jobs", "attempts", "prs"].iter().map(|t| count(fx, &format!("SELECT count(*) FROM {t} WHERE plan = '{plan}'"))).sum::<i64>()
         + count(fx, &format!("SELECT count(*) FROM events WHERE plan = '{plan}' AND kind <> 'plan-deleted'"))
         + count(fx, &format!("SELECT count(*) FROM sessions WHERE plan = '{plan}' AND id NOT IN (SELECT lead_session FROM plans)"))
+}
+
+pub fn events(fx: &Fx, kind: &str) -> Vec<Value> {
+    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
 // ---------- tests ----------
@@ -184,6 +194,60 @@ fn refuses_a_plan_that_is_not_archived_or_asleep() {
 }
 
 #[test]
+fn refuses_with_live_work_or_an_unmerged_pr() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    let busy = world(&fx, "busy");
+    archive(&fx, "busy");
+    // a Session working after the archive: nothing running is a precondition of the delete itself
+    fixture(&fx, &format!("UPDATE sessions SET state = 'working' WHERE id = '{}'", busy.lead));
+    let error = refused(&fx.cpd(&["plan", "delete", "busy", "--yes"]), "archive_blocked", 3);
+    assert!(error["details"]["blockers"].as_array().is_some_and(|b| !b.is_empty()), "{error}");
+
+    let open = world_with_open_pr(&fx, "openpr");
+    archive(&fx, "openpr");
+    let error = refused(&fx.cpd(&["plan", "delete", "openpr", "--yes"]), "archive_blocked", 3);
+    assert!(error["details"]["blockers"].as_array().is_some_and(|b| !b.is_empty()), "{error}");
+
+    assert!(busy.run_dir.exists() && open.run_dir.exists() && open.lead_worktree.exists());
+    assert!(plan_rows(&fx, "busy") > 0 && plan_rows(&fx, "openpr") > 0);
+}
+
+#[test]
+fn deletes_rows_files_and_worktrees_of_an_archived_plan() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    let w = world(&fx, "pay");
+    let other = world(&fx, "other");
+    archive(&fx, "pay");
+
+    let out = fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+    assert_eq!((out["preview"].clone(), out["already"].clone()), (Value::Bool(false), Value::Bool(false)), "{out}");
+
+    assert_eq!(plan_rows(&fx, "pay"), 0, "the Plan's Jobs, Attempts, PRs, Events and Sessions are gone");
+    assert_eq!(count(&fx, "SELECT count(*) FROM escalations WHERE plan = 'pay'"), 0);
+    assert_ne!(fx.env.query::<Option<String>>("SELECT deleted_at FROM plans WHERE id = 'pay'"), None, "the Plan row is marked, never deleted");
+    assert!(!w.run_dir.exists(), "$CPD_HOME/run/pay/");
+    assert!(!w.lead_worktree.exists() && !w.attempt_worktree.exists(), "the worktrees");
+    let local = local_branches(&fx, &w);
+    assert!(!local.contains(&w.lead_branch()) && !local.contains(&w.attempt_branch()), "the local branches: {local:?}");
+
+    let deleted = events(&fx, "plan-deleted");
+    assert_eq!(deleted.len(), 1, "{deleted:?}");
+    assert_eq!(deleted[0]["data"]["attempts"], 1);
+
+    // another Plan is untouched
+    assert!(plan_rows(&fx, "other") > 0 && other.run_dir.exists() && other.lead_worktree.exists());
+    assert!(local_branches(&fx, &other).contains(&other.attempt_branch()));
+
+    // idempotent: a rerun writes nothing
+    let events_before = count(&fx, "SELECT count(*) FROM events");
+    let again = fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+    assert_eq!(again["already"], true, "{again}");
+    assert_eq!(count(&fx, "SELECT count(*) FROM events"), events_before);
+}
+
+#[test]
 fn deletes_the_plan_of_an_asleep_lead() {
     let fx = Fx::with_ports();
     base(&fx);
@@ -217,3 +281,26 @@ fn keeps_context_records_and_remote_branches() {
     assert!(fx.calls("gh").iter().all(|c| c.args.first().map(String::as_str) != Some("pr") || c.args.get(1).map(String::as_str) != Some("close")), "GitHub is left alone");
 }
 
+#[test]
+fn tamper_check_stays_clean_after_a_delete() {
+    let fx = Fx::with_ports();
+    base(&fx);
+    world(&fx, "pay");
+    let other = world(&fx, "other");
+    archive(&fx, "pay");
+
+    fx.cpd(&["plan", "delete", "pay", "--yes"]).ok();
+
+    // every DELETE is in `history` (the tamper check's record of the deleted ids), and the check finds nothing
+    assert!(count(&fx, "SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'delete'") > 0);
+    assert_eq!(fx.env.store().tamper().unwrap(), Vec::<Value>::new());
+    // the guard is not weakened for any other write: another Plan's rows cannot be deleted outside cpd
+    let raw = rusqlite::Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
+    assert!(raw.execute("DELETE FROM jobs WHERE plan = 'other'", []).is_err(), "a raw delete is still refused");
+    assert!(raw.execute("DELETE FROM events WHERE plan = 'other'", []).is_err(), "Events stay append-only");
+    assert!(plan_rows(&fx, "other") > 0 && other.run_dir.exists());
+    // the store still writes, and the deleted id is never reused
+    fx.cpd(&["context", "note", "After the delete.", "--context", "ctx"]).ok();
+    let again = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Again"]);
+    assert_ne!(again.exit, 0, "a deleted id is never reused: {again:?}");
+}
