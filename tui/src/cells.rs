@@ -10,6 +10,11 @@ pub(crate) fn width(text: &str) -> usize {
     Span::raw(text).width()
 }
 
+/// The display width of one character in terminal columns.
+pub(crate) fn char_width(c: char) -> usize {
+    width(c.encode_utf8(&mut [0; 4]))
+}
+
 /// `text` cut to `width` columns with a final `…`. Counted in display columns, not chars (names are free text).
 pub(crate) fn truncate(text: &str, width: usize) -> String {
     if self::width(text) <= width {
@@ -24,7 +29,7 @@ pub(crate) fn truncate(text: &str, width: usize) -> String {
 pub(crate) fn take(text: &str, columns: usize) -> &str {
     let mut used = 0;
     for (i, c) in text.char_indices() {
-        used += self::width(c.encode_utf8(&mut [0; 4]));
+        used += char_width(c);
         if used > columns {
             return &text[..i];
         }
