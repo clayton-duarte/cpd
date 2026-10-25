@@ -146,3 +146,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §27.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §27) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §27.2) | Lead | |
+| `cpd test` | The tests a change reaches, and named tests (commands.md §28) | | |
+| `cpd test changed` | Run the Rust tests the changed files can reach (§28.1) | Manager, Lead, Worker | |
+| `cpd test run` | Run the named tests (§28.2) | Manager, Lead, Worker | |
+| `cpd test list` | Exit 0 only when that one test exists (§28.3) | Manager, Lead, Worker | |
+| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§28.3) | Manager, Lead, Worker | |

@@ -46,6 +46,7 @@ pub mod session;
 pub mod spec;
 pub mod store;
 pub mod tag;
+pub mod testsel;
 pub mod version_sync;
 
 #[cfg(any(test, feature = "fakes"))]
