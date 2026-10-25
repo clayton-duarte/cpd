@@ -1178,7 +1178,7 @@ mod tests {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
+        assert!(ship.trim_end().ends_with("2⋅2⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
         let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
