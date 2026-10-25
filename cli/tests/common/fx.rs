@@ -74,6 +74,13 @@ impl Fx {
         fx
     }
 
+    /// Sets `key` in the process's environment until this `Fx` drops, which puts the environment back: for a test
+    /// that reads what the product does with a variable it inherits (the hooks withhold `TMUX`, `PI_*`, `CPD_*`).
+    pub fn export(&self, key: &str, value: &str) {
+        // SAFETY: under this `Fx`'s lock, as `enter`.
+        unsafe { std::env::set_var(key, value) };
+    }
+
     /// Scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
     pub fn fake(&self, program: &str, reply: Reply) {
         let _ = (*self.fakes.runner).clone().on(program, |_| true, reply);
