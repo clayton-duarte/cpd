@@ -16,7 +16,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, kill, sigaction};
 use nix::unistd::Pid;
@@ -25,6 +25,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::lock;
+use crate::ports::Ports;
 
 /// How long a caller that found every slot busy sleeps before it tries them all again (`GATE_SLOT_POLL_MS`).
 pub const POLL: Duration = Duration::from_millis(1000);
@@ -76,15 +77,21 @@ impl Slots {
     ///   then, every `still_waiting`, `<prefix>: still waiting for a slot (<s> s)`;
     /// - when taken, `<prefix>: slot <i> taken after <s> s` (also at once: `after 0 s`, with `waited` false).
     pub fn take(&self, prefix: &str, report: &mut dyn FnMut(&str, bool) -> Result<(), CpdError>) -> Result<Slot, CpdError> {
-        let begun = Instant::now();
+        self.take_with(&Ports::real(), prefix, report)
+    }
+
+    /// [`Slots::take`] with `ports.clock` for the elapsed time and the polls' naps.
+    pub fn take_with(&self, ports: &Ports, prefix: &str, report: &mut dyn FnMut(&str, bool) -> Result<(), CpdError>) -> Result<Slot, CpdError> {
+        let begun = ports.clock.now();
+        let elapsed = || ports.clock.now().saturating_duration_since(begun);
         let mut waiting = false;
         let mut next_notice = self.still_waiting;
         loop {
             if let Some(slot) = self.try_all()? {
-                report(&format!("{prefix}: slot {} taken after {} s", slot.index, begun.elapsed().as_secs()), waiting)?;
+                report(&format!("{prefix}: slot {} taken after {} s", slot.index, elapsed().as_secs()), waiting)?;
                 return Ok(slot);
             }
-            let waited = begun.elapsed();
+            let waited = elapsed();
             if !waiting {
                 waiting = true;
                 let n = self.paths.len();
@@ -95,13 +102,8 @@ impl Slots {
             }
             // time-claim: the poll of the contract (GATE_SLOT_POLL_MS); there is no event to wait for, as a blocked
             // flock cannot see another slot free or a raised test_concurrency.
-            std::thread::sleep(self.poll);
+            ports.clock.sleep(self.poll);
         }
-    }
-
-    /// [`Slots::take`] with `ports.clock` for the elapsed time and the polls' naps.
-    pub fn take_with(&self, _ports: &crate::ports::Ports, _prefix: &str, _report: &mut dyn FnMut(&str, bool) -> Result<(), CpdError>) -> Result<Slot, CpdError> {
-        todo!("the gate slot wait on Ports: now and sleep on ports.clock")
     }
 
     /// One pass over the slots in order, without blocking: the first that is free is taken.

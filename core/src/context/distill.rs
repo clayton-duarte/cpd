@@ -34,6 +34,7 @@ use crate::host::runner::{Call, Runner, SystemRunner};
 use crate::ids::{ContextId, RecordId};
 use crate::lock;
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// The `source` of the `error` Events of a failed run, and its `txns.command`.
@@ -106,7 +107,7 @@ pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
 }
 /// `context distill` (§3.12).
 pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env { home, config, mut store, ports } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let floor = config.context_curation_min_records;
@@ -119,7 +120,7 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     }
     let _lock = Lock::take(&home, &context)?;
     let state = store.read(|conn| State::read(conn, &context))?;
-    let run = Run { home: &home, config: &config, store: &mut store, context: &context };
+    let run = Run { home: &home, config: &config, store: &mut store, context: &context, ports: &ports };
     run.run(&state, usize::from(args.batch)).map(Output::success)
 }
 
@@ -179,6 +180,7 @@ struct Run<'a> {
     config: &'a Config,
     store: &'a mut Store,
     context: &'a ContextId,
+    ports: &'a Ports,
 }
 
 /// One problem of an output: `{id?, line?, what}`.
@@ -485,12 +487,14 @@ impl Run<'_> {
         // The tail of pi's stderr is what this run appended after this point.
         let offset = log_file.metadata().map_err(|e| io_failed("read", &log, &e))?.len();
         let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
-        let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
-        let started = Instant::now();
-        let waited = run_pi_with(&SystemRunner, &launch, &dir, &log, limit, &environ);
+        let timed = run_pi_timed_with(self.ports, &launch, &dir, &log, limit, &environ);
+        let (started_at, seconds, waited) = match timed {
+            Ok(Timed { started_at, seconds, waited }) => (started_at, seconds, Ok(waited)),
+            Err(e) => (crate::clock::timestamp(self.ports.clock.utc()), 0.0, Err(e)),
+        };
         let mut ran = Ran {
             started_at,
-            seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
+            seconds,
             model,
             tier,
             usage: None,
@@ -905,14 +909,18 @@ pub(crate) struct Timed {
 
 /// [`run_pi_with`] on `ports`, timed by `ports.clock` (`started_at` and `seconds` of the run log): what `Run::run_pi` calls.
 pub(crate) fn run_pi_timed_with(
-    _ports: &crate::ports::Ports,
-    _launch: &pi::Launch,
-    _dir: &Path,
-    _log: &Path,
-    _limit: Duration,
-    _environ: &[String],
+    ports: &Ports,
+    launch: &pi::Launch,
+    dir: &Path,
+    log: &Path,
+    limit: Duration,
+    environ: &[String],
 ) -> io::Result<Timed> {
-    todo!("the distill run's time on Ports: started_at and seconds from ports.clock")
+    let started_at = crate::clock::timestamp(ports.clock.utc());
+    let started = ports.clock.now();
+    let waited = run_pi_with(&*ports.runner, launch, dir, log, limit, environ)?;
+    let seconds = (ports.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0).round() / 1000.0;
+    Ok(Timed { started_at, seconds, waited })
 }
 
 /// The last [`TAIL_LINES`] lines of `log` after byte `offset`.
