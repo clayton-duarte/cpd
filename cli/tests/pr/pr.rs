@@ -6,14 +6,17 @@
 use crate::common;
 
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::fx::Fx as Kit;
 use common::{CPD, Run, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::store::Store;
 use cpd_tui::read::{self, Checks, PrState, ReviewDecision};
@@ -70,6 +73,58 @@ struct Fx {
     lock_pushed: String,
     /// The Lead Branch of PR `repo`: `cpd/pay`, or `cpd/pay/repo` where a second PR of the Plan exists (`fx_stacked`).
     branch: String,
+}
+
+/// The rows of Plan `pay` in `phase`, written straight into `store`: PR `repo` on Lead Branch `branch` (its Lead worktree
+/// `lead`, in `repo`) with its one Job `api`, `job` (`merged` at `merged_sha`, or `cancelled`), and what `pr open` writes of the
+/// pull request in the phases after it.
+fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path, lead: &Path, merged_sha: &str) {
+    let lead = format!("'{}'", lead.display());
+    let (locked, status, columns, values) = match phase {
+        "plan" => ("NULL", "waiting", "", String::new()),
+        "dispatch" => ("'t'", "dispatch", "", String::new()),
+        "deploy" => ("'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests)")),
+        "done" => ("'t'", "merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests), 'finished'")),
+        other => panic!("no phase {other}"),
+    };
+    let (worktree, done) = match phase {
+        "plan" => ("NULL", "NULL"),
+        "done" => (&lead[..], "'finished'"),
+        _ => (&lead[..], "NULL"),
+    };
+    // What `pr open` writes: the pull request's row, with the Plan's title, no review, no checks.
+    let pull_request = match phase {
+        "deploy" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"),
+        "done" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                           VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'merged', 'none', 'none', 'opened', 'finished', 'finished');"),
+        _ => String::new(),
+    };
+    let sql = format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
+         {pull_request}
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+        repo = repo.display(),
+        branch = branch,
+    );
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
+                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
+                         iif(?4 = 'merged', ?2, NULL), iif(?4 = 'cancelled', 'not needed', NULL), iif(?4 = 'cancelled', 't', NULL), ?3, 't')",
+                params!["f".repeat(64), merged_sha, tx.id(), job],
+            )?;
+            Ok(())
+        })
+        .unwrap();
 }
 
 fn fx(phase: &str) -> Fx {
@@ -136,87 +191,17 @@ fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
     if phase == "deploy" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", branch]);
     }
-    let lead = format!("'{}'", fx.lead.display());
-    let (locked, status, columns, values) = match phase {
-        "plan" => ("NULL", "waiting", "", String::new()),
-        "dispatch" => ("'t'", "dispatch", "", String::new()),
-        "deploy" => ("'t'", "open", ", pr_number, pr_url, pr_opened_at, pull_request", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests)")),
-        "done" => ("'t'", "merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests), 'finished'")),
-        other => panic!("no phase {other}"),
-    };
-    let (worktree, done) = match phase {
-        "plan" => ("NULL", "NULL"),
-        "done" => (&lead[..], "'finished'"),
-        _ => (&lead[..], "NULL"),
-    };
-    // What `pr open` writes: the pull request's row, with the Plan's title, no review, no checks.
-    let pull_request = match phase {
-        "deploy" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                         VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"),
-        "done" => format!("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                           VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'merged', 'none', 'none', 'opened', 'finished', 'finished');"),
-        _ => String::new(),
-    };
-    let sql = format!(
-        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
-         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
-           VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
-         {pull_request}
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
-        repo = fx.repo.display(),
-        branch = branch,
-    );
-    fx.store()
-        .write("fixture", |tx| {
-            tx.execute_batch(&sql)?;
-            tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, merged_sha, cancel_reason, cancel_requested_at, created_txn, created_at)
-                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?4, 0, ?1,
-                         iif(?4 = 'merged', ?2, NULL), iif(?4 = 'cancelled', 'not needed', NULL), iif(?4 = 'cancelled', 't', NULL), ?3, 't')",
-                params!["f".repeat(64), fx.merged_sha, tx.id(), job],
-            )?;
-            Ok(())
-        })
-        .unwrap();
+    seed_pay(fx.store(), phase, job, branch, &fx.repo, &fx.lead, &fx.merged_sha);
     fx
 }
 
-impl Fx {
+/// What both fixtures of this file read of the database: the Plan `pay` and its PR (`Fx` is the full exec one, `Poll` the
+/// in-process one of the poll tests).
+trait Rows {
+    fn home(&self) -> &CpdHome;
+
     fn store(&self) -> Store {
-        Store::open(&self.home, 5000).unwrap()
-    }
-
-    fn git(&self, dir: &Path, args: &[&str]) -> String {
-        self.env.git(dir, args)
-    }
-
-    fn pr(&self, command: &str) -> Run {
-        self.env.cpd(&["pr", command, "--plan", "pay"])
-    }
-
-    /// Sets what the fake `gh` answers: `list.json`, `create.out`, `search.json`, `lookup.json`, `lookup.exit`, `fail`.
-    fn gh(&self, file: &str, text: &str) {
-        fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
-    }
-
-    /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
-    /// empty commit on the Lead Branch.
-    fn hooks(&self, toml: &str) {
-        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
-        self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
-    }
-
-    fn remote_branch(&self, branch: &str) -> Option<String> {
-        let out = self.git(&self.origin, &["for-each-ref", "--format=%(objectname)", &format!("refs/heads/{branch}")]);
-        (!out.is_empty()).then_some(out)
-    }
-
-    fn lead_sha(&self) -> String {
-        self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
+        Store::open(self.home(), 5000).unwrap()
     }
 
     /// `(phase, pr_number, pr_url, pr_opened_at, pull_request, done_at)` of the Plan.
@@ -247,11 +232,6 @@ impl Fx {
             .unwrap()
     }
 
-    /// The `pull_request` of the Plan's PR, as `plan show` prints it.
-    fn shown_pull_request(&self) -> Value {
-        self.env.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
-    }
-
     /// How many write transactions have run: the rows of `txns`.
     fn txns(&self) -> i64 {
         self.store().read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
@@ -275,8 +255,23 @@ impl Fx {
             .unwrap()
     }
 
-    fn gh_calls(&self) -> Vec<Vec<String>> {
-        self.env.calls("gh")
+    /// How many Events there are, of any kind.
+    fn event_count(&self) -> i64 {
+        self.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// `(repo, number)` of every row of `pull_requests`, in order.
+    fn pull_requests(&self) -> Vec<(String, i64)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT repo, number FROM pull_requests ORDER BY id")?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap()
+    }
+
+    fn phase(&self) -> String {
+        self.plan_row().0
     }
 
     /// The `pre-merge` hook's output: the log without the Gate's own `gate: ...` lines at its head (the slot's, §7.6).
@@ -291,7 +286,57 @@ impl Fx {
 
     /// `run/pay/logs/pr-repo.<hook>.log`.
     fn pr_log(&self, hook: &str) -> String {
-        fs::read_to_string(self.home.plan_dir(&plan()).join(format!("logs/pr-repo.{hook}.log"))).unwrap_or_default()
+        fs::read_to_string(self.home().plan_dir(&plan()).join(format!("logs/pr-repo.{hook}.log"))).unwrap_or_default()
+    }
+
+    fn pr_status(&self, key: &str) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap()
+    }
+}
+
+impl Rows for Fx {
+    fn home(&self) -> &CpdHome {
+        &self.home
+    }
+}
+
+impl Fx {
+    fn git(&self, dir: &Path, args: &[&str]) -> String {
+        self.env.git(dir, args)
+    }
+
+    fn pr(&self, command: &str) -> Run {
+        self.env.cpd(&["pr", command, "--plan", "pay"])
+    }
+
+    /// Sets what the fake `gh` answers: `list.json`, `create.out`, `search.json`, `lookup.json`, `lookup.exit`, `fail`.
+    fn gh(&self, file: &str, text: &str) {
+        fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
+    }
+
+    /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
+    /// empty commit on the Lead Branch.
+    fn hooks(&self, toml: &str) {
+        self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
+        self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
+    }
+
+    fn remote_branch(&self, branch: &str) -> Option<String> {
+        let out = self.git(&self.origin, &["for-each-ref", "--format=%(objectname)", &format!("refs/heads/{branch}")]);
+        (!out.is_empty()).then_some(out)
+    }
+
+    fn lead_sha(&self) -> String {
+        self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
+    }
+
+    /// The `pull_request` of the Plan's PR, as `plan show` prints it.
+    fn shown_pull_request(&self) -> Value {
+        self.env.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
+    }
+
+    fn gh_calls(&self) -> Vec<Vec<String>> {
+        self.env.calls("gh")
     }
 
     /// No gate worktree is left: none on disk next to the repo, none known to git.
@@ -324,6 +369,49 @@ enum Web {
     Waiting,
 }
 
+/// The rows of PR `web` of Plan `pay` (repo `repo`, Lead worktree `lead`, its Job `ui` merged at `sha`) as `state` says.
+fn seed_web(mut store: Store, repo: &Path, lead: &Path, sha: &str, state: Web) {
+    let (status, worktree, started, open_columns, open_values, job, needs) = match state {
+        Web::Open => (
+            "open",
+            format!("'{}'", lead.display()),
+            "'t'",
+            ", pr_number, pr_url, pr_opened_at, pull_request",
+            format!(", 813, '{WEB_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 813)"),
+            "merged",
+            "",
+        ),
+        Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');"),
+    };
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "{row}
+                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
+                   VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
+                 {needs}",
+                repo = repo.display(),
+                row = if matches!(state, Web::Open) {
+                    format!(
+                        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                         VALUES ('acme/web', 813, '{WEB_URL}', 'Pay the bills (web)', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"
+                    )
+                } else {
+                    String::new()
+                },
+            ))?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
+                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?3, 0, ?1,
+                         iif(?3 = 'merged', ?2, NULL), ?4, 't')",
+                params!["f".repeat(64), sha, job, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
 impl Fx {
     /// A second PR `web` of Plan `pay` in its own repo with a bare `origin`: Lead Branch
     /// `cpd/pay/web`, Lead worktree `web.pay.web`, Job `ui`; the fake `gh` answers for it
@@ -350,45 +438,7 @@ impl Fx {
         fs::create_dir_all(&answers).unwrap();
         fs::write(answers.join("create.out"), format!("{WEB_URL}\n")).unwrap();
         fs::write(answers.join("lookup.json"), format!("{}\n", lookup_answer(&[Some(node("acme/web", 813, "OPEN", None, None))]))).unwrap();
-        let (status, worktree, started, open_columns, open_values, job, needs) = match state {
-            Web::Open => (
-                "open",
-                format!("'{}'", lead.display()),
-                "'t'",
-                ", pr_number, pr_url, pr_opened_at, pull_request",
-                format!(", 813, '{WEB_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 813)"),
-                "merged",
-                "",
-            ),
-            Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');"),
-        };
-        self.store()
-            .write("fixture", |tx| {
-                tx.execute_batch(&format!(
-                    "{row}
-                     INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
-                       VALUES ('pay', 'web', '{repo}', 'web', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
-                     {needs}",
-                    repo = repo.display(),
-                    row = if matches!(state, Web::Open) {
-                        format!(
-                            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                             VALUES ('acme/web', 813, '{WEB_URL}', 'Pay the bills (web)', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');"
-                        )
-                    } else {
-                        String::new()
-                    },
-                ))?;
-                tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, merged_sha, created_txn, created_at)
-                     VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?3, 0, ?1,
-                             iif(?3 = 'merged', ?2, NULL), ?4, 't')",
-                    params!["f".repeat(64), sha, job, tx.id()],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        seed_web(self.store(), &repo, &lead, &sha, state);
         lead
     }
 
@@ -396,13 +446,6 @@ impl Fx {
         self.env.cpd(&["pr", command, "--pr", key, "--plan", "pay"])
     }
 
-    fn phase(&self) -> String {
-        self.plan_row().0
-    }
-
-    fn pr_status(&self, key: &str) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| r.get(0))?)).unwrap()
-    }
 }
 
 fn code(run: &Run) -> (String, i32) {
@@ -439,21 +482,6 @@ impl Fx {
 }
 
 // ------------------------------------------------------------------ pr open
-
-#[test]
-fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
-    let fx = fx("deploy");
-    kept_attempt(&fx);
-    fx.search(&[]);
-    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE))]);
-    insert_pending_reviews(&fx.env, "pay");
-
-    let out = fx.poll();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
-    assert_reviews_superseded_before_done(&fx.env, "pay");
-}
 
 #[test]
 fn open_on_a_done_plan_is_already() {
@@ -844,6 +872,190 @@ fn rebase_waits_for_a_live_driver_to_record_its_merge() {
 }
 
 // ------------------------------------------------------------------ pr poll
+//
+// In-process: `cpd pr poll` runs on `run_with` over the fake ports (the git route, the clock, a `gh` handler), against a
+// Plan written straight into the database. The old tests drove the built binary against real git and a shell `gh`.
+
+/// One scripted answer of the fake `gh`.
+struct Slot(Mutex<Reply>);
+
+impl Slot {
+    fn new(reply: Reply) -> Slot {
+        Slot(Mutex::new(reply))
+    }
+
+    fn set(&self, reply: Reply) {
+        *self.0.lock().unwrap() = reply;
+    }
+
+    fn get(&self) -> Reply {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// The in-process `gh` of the poll tests: the search, the lookup of the pull requests no search lists, each answers its
+/// [`Slot`]; `fail`, when set, makes every call fail with its text on stderr; any other call exits 9.
+struct Gh {
+    search: Slot,
+    lookup: Slot,
+    fail: Mutex<Option<String>>,
+}
+
+impl Handler for Gh {
+    fn handle(&self, call: &Call) -> Reply {
+        if let Some(text) = self.fail.lock().unwrap().as_ref() {
+            return Reply::exit(1, "", &format!("{text}\n"));
+        }
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => self.search.get(),
+            ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => self.lookup.get(),
+            ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
+            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
+        }
+    }
+}
+
+/// The in-process env of the poll tests: fake ports (the git route, the `gh` above), repo `pay` with a bare `origin`, the
+/// Lead worktree of Plan `pay`, and the Plan in the database. It derefs to the [`Kit`] (`cpd`, `git`, `env`, `calls`, ...).
+struct Poll {
+    fx: Kit,
+    home: CpdHome,
+    repo: PathBuf,
+    lead: PathBuf,
+    merged_sha: String,
+    branch: String,
+    gh: Arc<Gh>,
+}
+
+impl Deref for Poll {
+    type Target = Kit;
+
+    fn deref(&self) -> &Kit {
+        &self.fx
+    }
+}
+
+impl Rows for Poll {
+    fn home(&self) -> &CpdHome {
+        &self.home
+    }
+}
+
+fn poll_fx(phase: &str) -> Poll {
+    poll_fx_with(phase, "")
+}
+
+fn poll_fx_with(phase: &str, config_extra: &str) -> Poll {
+    poll_fx_full(phase, config_extra, "merged")
+}
+
+/// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
+fn poll_fx_full(phase: &str, config_extra: &str, job: &str) -> Poll {
+    poll_fx_branch(phase, config_extra, job, "cpd/pay")
+}
+
+/// A Plan whose PR `repo` has the Lead Branch `cpd/pay/repo`: git cannot hold `cpd/pay` and `cpd/pay/web` both.
+fn poll_fx_stacked(phase: &str) -> Poll {
+    poll_fx_branch(phase, "", "merged", "cpd/pay/repo")
+}
+
+fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Poll {
+    let fx = Kit::with_ports();
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    let origin = fx.env.root().join("repos/origin.git");
+    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.local_origin(&repo, &origin);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
+    let lead = fx.scoped(|| {
+        if branch == "cpd/pay" {
+            create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path
+        } else {
+            let path = repo.parent().unwrap().join("pay.pay.repo");
+            let prepared = cpd_core::git::worktree::prepare_lead_worktree(&repo, &plan(), &path, branch, "main", &setup).map_err(|f| f.error).unwrap();
+            prepared.push().unwrap();
+            prepared.path
+        }
+    });
+    fx.git(&lead, &["config", "user.name", "cpd test"]);
+    fx.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
+    fx.commit_file(&lead, "api.txt", "api\n", "api");
+    let merged_sha = fx.git(&lead, &["rev-parse", "HEAD"]);
+
+    fx.env.write_config(&format!("version = 1\nmachine = \"t\"\n[timeouts]\n{config_extra}\n"));
+    let gh = Arc::new(Gh {
+        search: Slot::new(Reply::ok(&format!("{EMPTY_SEARCH}\n"))),
+        // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
+        lookup: Slot::new(if phase == "dispatch" { Reply::ok(&format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))) } else { Reply::ok("{\"data\":{}}\n") }),
+        fail: Mutex::new(None),
+    });
+    let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    // The PR's row before the Plan's: `fx.git` of the Lead worktree is all it needs of the repo.
+    let poll = Poll { fx, home, repo, lead, merged_sha, branch: branch.to_owned(), gh };
+    seed_pay(poll.store(), phase, job, branch, &poll.repo, &poll.lead, &poll.merged_sha);
+    poll
+}
+
+
+impl Poll {
+    /// `cpd pr <command> --plan pay`.
+    fn pr(&self, command: &str) -> Run {
+        self.cpd(&["pr", command, "--plan", "pay"])
+    }
+
+    /// What the fake `gh` answers to the search, as the text of its stdout.
+    fn search_raw(&self, text: &str) {
+        self.gh.search.set(Reply::ok(&format!("{text}\n")));
+    }
+
+    /// What the fake `gh` answers to the lookup, as the text of its stdout.
+    fn lookup_raw(&self, text: &str) {
+        self.gh.lookup.set(Reply::ok(&format!("{text}\n")));
+    }
+
+    /// Makes every call of the fake `gh` fail with `text` on stderr.
+    fn fail(&self, text: &str) {
+        *self.gh.fail.lock().unwrap() = Some(text.to_owned());
+    }
+
+    /// The `pull_request` of the Plan's PR, as `plan show` prints it.
+    fn shown_pull_request(&self) -> Value {
+        self.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
+    }
+
+    /// The argv, after `gh`, of every call of the fake `gh` so far.
+    fn gh_calls(&self) -> Vec<Vec<String>> {
+        self.calls("gh").into_iter().map(|call| call.args).collect()
+    }
+
+    /// `cpd pr <command> --pr <key> --plan pay`.
+    fn pr_cmd(&self, command: &str, key: &str) -> Run {
+        self.cpd(&["pr", command, "--pr", key, "--plan", "pay"])
+    }
+
+    /// A second PR `web` of Plan `pay`, waiting on PR `repo`, in its own repo: its rows and nothing on disk.
+    fn add_waiting_web(&self) {
+        let repo = self.keyed_repo("web").canonicalize().unwrap();
+        seed_web(self.store(), &repo, &repo, "", Web::Waiting);
+    }
+
+    /// The `base` of PR `web` of Plan `pay`.
+    fn web_base(&self) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+    }
+
+    fn web_status(&self) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+    }
+
+    /// The Lead Branch tip.
+    fn lead_sha(&self) -> String {
+        self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
+    }
+}
 
 /// A pull request as the search and the lookup print it. Its title and creation time are what the
 /// fixtures stored for 812 and 813, so that only the other fields can differ.
@@ -932,16 +1144,16 @@ fn feedback_merge(state: &str, checks: &str, decision: &str, mergeable: &str, me
            "mergeable": mergeable, "merge_state": merge_state, "conflict": reasons.contains(&"conflict"), "reasons": reasons})
 }
 
-impl Fx {
+impl Poll {
     /// What the fake `gh`'s search answers.
     fn search(&self, nodes: &[String]) {
-        self.gh("search.json", &search_answer(nodes, 4987));
+        self.search_raw(&search_answer(nodes, 4987));
     }
 
     /// What the fake `gh`'s search answers: `authored` in the `author:@me` search, `requested` in the
     /// `review-requested:@me` one.
     fn search_both(&self, authored: &[String], requested: &[String]) {
-        self.gh("search.json", &search_answer_with(authored, requested, 4987));
+        self.search_raw(&search_answer_with(authored, requested, 4987));
     }
 
     /// `(repo, number, authored, review_requested)` of every row of `pull_requests`, in order.
@@ -956,7 +1168,7 @@ impl Fx {
 
     /// What the fake `gh`'s lookup answers.
     fn lookup(&self, nodes: &[Option<String>]) {
-        self.gh("lookup.json", &lookup_answer(nodes));
+        self.lookup_raw(&lookup_answer(nodes));
     }
 
     /// `pr poll --plan pay`.
@@ -966,23 +1178,9 @@ impl Fx {
 
     /// `pr poll`, as engine E5 runs it.
     fn poll_all(&self) -> Value {
-        self.env.cpd(&["pr", "poll"]).ok()
+        self.cpd(&["pr", "poll"]).ok()
     }
 
-    /// How many Events there are, of any kind.
-    fn event_count(&self) -> i64 {
-        self.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?)).unwrap()
-    }
-
-    /// `(repo, number)` of every row of `pull_requests`, in order.
-    fn pull_requests(&self) -> Vec<(String, i64)> {
-        self.store()
-            .read(|c| {
-                let mut stmt = c.prepare("SELECT repo, number FROM pull_requests ORDER BY id")?;
-                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
-            })
-            .unwrap()
-    }
 }
 
 fn is_search(call: &[String]) -> bool {
@@ -995,7 +1193,7 @@ fn is_lookup(call: &[String]) -> bool {
 
 #[test]
 fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_ones() {
-    let fx = fx("dispatch");
+    let fx = poll_fx("dispatch");
     fx.search(&[node("acme/pay", 901, "OPEN", Some("APPROVED"), Some("SUCCESS")), node("acme/web", 902, "OPEN", None, None)]);
     let events = fx.event_count();
 
@@ -1032,7 +1230,7 @@ fn up(state: &str) -> String {
     node("acme/pay", 814, state, None, None)
 }
 
-impl Fx {
+impl Poll {
     /// Adds PR `up` of Plan `pay`, `open` with its pull request 814, stacked on PR `repo` (its base is `cpd/pay`).
     fn stack_up(&self) {
         let sql = format!(
@@ -1062,9 +1260,42 @@ impl Fx {
     }
 }
 
+/// PR `web` of Plan `pay`, stacked on its PR `repo` (its Lead Branch `fx.branch`, whose
+/// Lead worktree is `fx.lead`): started from that branch, one Merged Job's commit on it, its Lead Branch pushed.
+fn poll_stacked_pr(fx: &Poll) {
+    let path = fx.repo.parent().unwrap().join("pay.pay.web");
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
+    let prepared = fx.scoped(|| cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &plan(), &path, "cpd/pay/web", fx.branch.as_str(), &setup).map_err(|f| f.error).unwrap());
+    assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
+    fx.scoped(|| prepared.push().unwrap());
+    fx.git(&path, &["config", "user.name", "cpd test"]);
+    fx.git(&path, &["config", "user.email", "test@cpd.invalid"]);
+    fx.commit_file(&path, "web.txt", "web\n", "web");
+    let merged = fx.git(&path, &["rev-parse", "HEAD"]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pay' AND phase = 'done';
+                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                   VALUES ('pay', 'web', '{repo}', 'pay', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
+                repo = fx.repo.display(),
+                base = fx.branch,
+                path = path.display()
+            ))?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
+                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                params!["f".repeat(64), merged, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
 /// Plan `pay`: PR `repo` (812, base `main`) and PR `up` (814) stacked on it, both open, as a poll stored them.
-fn stacked() -> Fx {
-    let fx = fx("deploy");
+fn stacked() -> Poll {
+    let fx = poll_fx("deploy");
     fx.stack_up();
     fx.search(&[based(pay("OPEN", None, None), "main"), based(up("OPEN"), "cpd/pay")]);
     let out = fx.poll();
@@ -1164,7 +1395,7 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
     let (txns, events) = (fx.txns(), fx.event_count());
     assert_eq!(fx.poll()["base_changed"], json!([]));
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
-    let run = fx.env.cpd(&["pr", "cancel", "repo", "--plan", "pay"]);
+    let run = fx.cpd(&["pr", "cancel", "repo", "--plan", "pay"]);
     let error = common::refused(&run, "pr_in_use", 3);
     assert_eq!(error["details"]["prs"], json!(["up"]), "{error}");
     assert_eq!(fx.base_of("repo").0, "open");
@@ -1189,8 +1420,8 @@ fn web_unstacked(from: &str, by: &str) -> (String, Value) {
 
 #[test]
 fn poll_unstacks_a_dispatch_pr_in_the_transaction_that_records_its_base_prs_merge() {
-    let fx = fx_stacked("deploy");
-    stacked_pr(&fx);
+    let fx = poll_fx_stacked("deploy");
+    poll_stacked_pr(&fx);
     assert_eq!(fx.web_base(), fx.branch);
     // pay/repo merged (a pull request the search no longer lists); web has no pull request.
     fx.search(&[]);
@@ -1213,7 +1444,7 @@ fn poll_unstacks_a_dispatch_pr_in_the_transaction_that_records_its_base_prs_merg
 
 #[test]
 fn poll_does_not_tell_the_plan_of_failed_checks_when_the_policy_says_none() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.env.owner_policy("acme", "[pr.feedback]\nchecks = \"none\"\n");
     fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
 
@@ -1226,7 +1457,7 @@ fn poll_does_not_tell_the_plan_of_failed_checks_when_the_policy_says_none() {
 
 #[test]
 fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
 
     let out = fx.poll();
@@ -1251,7 +1482,7 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     assert_eq!(fx.events("pr-feedback").len(), 2);
 }
 
-impl Fx {
+impl Poll {
     /// `(key, status)` of every `update` Job of Plan `pay`, by key.
     fn update_jobs(&self) -> Vec<(String, String)> {
         self.store()
@@ -1274,7 +1505,7 @@ impl Fx {
 /// is no `pr-feedback`, and the PR stays `open`. The same conflict seen again writes nothing.
 #[test]
 fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.polled("MERGEABLE", "CLEAN");
     assert_eq!(fx.update_jobs(), Vec::<(String, String)>::new());
 
@@ -1311,7 +1542,7 @@ fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
 /// no cause, whatever `mergeable` says. The conflict that follows does queue the Job.
 #[test]
 fn poll_queues_no_update_job_for_a_base_that_merely_moved_and_one_for_the_conflict_that_follows() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.polled("MERGEABLE", "CLEAN");
 
     for (mergeable, state) in [("MERGEABLE", "BEHIND"), ("UNKNOWN", "BEHIND"), ("MERGEABLE", "BLOCKED"), ("MERGEABLE", "UNSTABLE")] {
@@ -1330,7 +1561,7 @@ fn poll_queues_no_update_job_for_a_base_that_merely_moved_and_one_for_the_confli
 /// that comes after the Job ended (`merged`) is a new cause, a new Job, `up-repo-2`.
 #[test]
 fn poll_queues_no_second_update_job_while_one_is_live_and_a_new_one_for_a_conflict_after_it_ended() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.polled("CONFLICTING", "DIRTY");
     assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
 
@@ -1354,7 +1585,7 @@ fn poll_queues_no_second_update_job_while_one_is_live_and_a_new_one_for_a_confli
 
 #[test]
 fn a_conflicting_pull_request_with_failed_checks_is_told_only_the_checks() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.search(&[merge_state(pay("OPEN", None, Some("FAILURE")), "CONFLICTING", "DIRTY")]);
 
     fx.poll();
@@ -1367,7 +1598,7 @@ fn a_conflicting_pull_request_with_failed_checks_is_told_only_the_checks() {
 
 #[test]
 fn a_conflicting_pull_request_no_plan_owns_gets_no_event() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.search(&[pay("OPEN", None, None), merge_state(node("acme/web", 902, "OPEN", None, None), "CONFLICTING", "DIRTY")]);
     let events = fx.event_count();
 
@@ -1385,7 +1616,7 @@ fn a_conflicting_pull_request_no_plan_owns_gets_no_event() {
 
 #[test]
 fn poll_tells_the_plan_once_that_changes_were_requested() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.search(&[pay("OPEN", Some("CHANGES_REQUESTED"), None)]);
 
     assert_eq!(fx.poll()["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
@@ -1408,7 +1639,7 @@ fn poll_tells_the_plan_once_that_changes_were_requested() {
 
 #[test]
 fn poll_maps_gh_values_to_the_stored_ones() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     let cases = [
         // (reviewDecision, rollup state, stored decision, stored checks)
         (Some("APPROVED"), None, "approved", "none"),
@@ -1427,14 +1658,14 @@ fn poll_maps_gh_values_to_the_stored_ones() {
 
 #[test]
 fn a_draft_is_stored_and_printed() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     fx.search(&[pay("OPEN", None, None).replace(r#""isDraft":false"#, r#""isDraft":true"#)]);
     let out = fx.poll();
     assert_eq!(out["changed"][0]["draft"], true);
     assert_eq!(out["prs"][0]["pull_request"]["draft"], true);
 }
 
-impl Fx {
+impl Poll {
     /// `(id, state, authored, review_requested, merged_at)` of the row of `pull_requests` for pull request `number`.
     fn pull_request_row(&self, number: i64) -> Option<(i64, String, bool, bool, Option<String>)> {
         self.store()
@@ -1485,7 +1716,7 @@ impl Fx {
 
 #[test]
 fn a_flag_a_search_misses_clears_only_when_the_direct_read_says_so() {
-    let fx = fx("dispatch");
+    let fx = poll_fx("dispatch");
     let a = node("acme/pay", 901, "OPEN", None, None);
     fx.search_both(&[a.clone()], &[a.clone()]);
     fx.poll_all();
@@ -1527,7 +1758,7 @@ fn a_flag_a_search_misses_clears_only_when_the_direct_read_says_so() {
 
 #[test]
 fn a_direct_read_that_says_merged_or_closed_moves_an_unowned_row_and_keeps_it() {
-    let fx = fx("dispatch");
+    let fx = poll_fx("dispatch");
     let (a, b) = (node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None));
     fx.search(&[a.clone(), b.clone()]);
     fx.poll_all();
@@ -1560,7 +1791,7 @@ fn a_direct_read_that_says_merged_or_closed_moves_an_unowned_row_and_keeps_it() 
 
 #[test]
 fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     let (p812, p901, p902, p903) =
         (pay("OPEN", None, None), node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None), node("acme/shop", 903, "OPEN", None, None));
     // 812 is owned; 901 and 902 are authored; 903 is review-requested only.
@@ -1611,14 +1842,14 @@ fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing
 
 #[test]
 fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
-    let fx = fx("dispatch");
+    let fx = poll_fx("dispatch");
     fx.search(&[node("acme/pay", 901, "OPEN", None, None)]);
     fx.poll_all();
     let (txns, events, rows) = (fx.txns(), fx.event_count(), fx.memberships());
 
     fx.search(&[]);
-    fx.env.fake_gh(&lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"));
-    let run = fx.env.cpd(&["pr", "poll"]);
+    fx.gh.lookup.set(stderr_exit(1, "gh: HTTP 502: Bad Gateway"));
+    let run = fx.cpd(&["pr", "poll"]);
 
     assert_eq!(run.exit, 1, "the poll reads 901 directly and fails: {run:?}");
     assert_eq!(code(&run), ("gh_failed".into(), 1));
@@ -1631,7 +1862,7 @@ fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
 
 #[test]
 fn poll_with_a_done_plan_reruns_its_clean_up() {
-    let fx = fx("done");
+    let fx = poll_fx("done");
     let (worktree, branch) = kept_attempt(&fx);
     fx.search(&[]);
 
@@ -1646,8 +1877,8 @@ fn poll_with_a_done_plan_reruns_its_clean_up() {
 
 #[test]
 fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
-    let fx = fx("deploy");
-    fx.add_web(Web::Waiting);
+    let fx = poll_fx("deploy");
+    fx.add_waiting_web();
     fx.search(&[pay("OPEN", None, Some("PENDING"))]);
 
     let without = fx.poll_all();
@@ -1663,19 +1894,19 @@ fn with_a_plan_the_output_adds_its_prs_and_their_rows() {
 
 #[test]
 fn poll_has_no_phase_precondition_and_knows_its_plan() {
-    let fx = fx("plan");
+    let fx = poll_fx("plan");
     fx.search(&[]);
     let out = fx.poll();
     assert_eq!(out["prs"], json!([{"key": "repo", "status": "waiting", "pull_request": null}]));
 
-    let run = fx.env.cpd(&["pr", "poll", "--plan", "nope"]);
+    let run = fx.cpd(&["pr", "poll", "--plan", "nope"]);
     assert_eq!(code(&run), ("plan_not_found".into(), 4));
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 1, "an unknown Plan polls nothing");
 }
 
 #[test]
 fn poll_has_no_pr_flag() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     let run = fx.pr_cmd("poll", "repo");
     assert_eq!(code(&run), ("usage".into(), 2));
     assert!(fx.gh_calls().is_empty());
@@ -1701,9 +1932,9 @@ impl Drop for Child {
 
 #[test]
 fn poll_reports_a_failing_gh_and_changes_nothing() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     let (txns, events) = (fx.txns(), fx.event_count());
-    fx.gh("fail", "rate limited");
+    fx.fail("rate limited");
 
     let run = fx.pr("poll");
 
@@ -1717,68 +1948,82 @@ fn poll_reports_a_failing_gh_and_changes_nothing() {
 
 // ---------- `pr poll`: a `gh` HTTP 5xx or timeout is a transient `gh_failed` (contract §7.6 step 4, hs-d354) ----------
 
-/// `pr poll` against a `gh` that runs `script` (with `vars` set); the `gh_failed` it exits 1 with, its `details`.
+/// The call of the poll a failure is scripted on.
+#[derive(Clone, Copy)]
+enum On {
+    /// The first call, the search of the User's own and review-requested pull requests.
+    Search,
+    /// The direct read of a stored open pull request no search lists (812, with the fixture's empty search).
+    Lookup,
+}
+
+/// `pr poll` against a `gh` that answers `reply` to the call `on`; the `gh_failed` it exits 1 with, its `details`.
 /// Nothing is written.
-fn poll_failure(fx: &Fx, script: &str, vars: &[(&str, &str)]) -> Value {
+fn poll_failure(fx: &Poll, on: On, reply: Reply) -> Value {
     let (txns, events) = (fx.txns(), fx.event_count());
-    fx.env.fake_gh(script);
-    let run = fx.env.cpd_with(fx.env.root(), &["pr", "poll", "--plan", "pay"], vars);
-    assert_eq!(code(&run), ("gh_failed".into(), 1), "{script}");
-    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{script}");
+    match on {
+        On::Search => fx.gh.search.set(reply.clone()),
+        On::Lookup => fx.gh.lookup.set(reply.clone()),
+    }
+    let run = fx.cpd(&["pr", "poll", "--plan", "pay"]);
+    assert_eq!(code(&run), ("gh_failed".into(), 1), "{reply:?}");
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{reply:?}");
     run.error()["details"].clone()
 }
 
-/// A `gh` that answers the search with `search.json` and runs `lookup` for the lookup of the PR the search did not list.
-fn lookup_script(lookup: &str) -> String {
-    format!(r#"case "$4" in *"search(type"*) cat "$(dirname "$0")/../gh/search.json" ;; *) {lookup} ;; esac"#)
+/// `gh` exits `code` with `stderr` and a line end, and nothing on stdout.
+fn stderr_exit(code: i32, stderr: &str) -> Reply {
+    Reply::exit(code, "", &format!("{stderr}\n"))
 }
 
 const NGINX: &str = "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>";
 
 #[test]
 fn poll_says_an_http_5xx_of_the_search_is_transient() {
-    let fx = fx("deploy");
-    for (script, reason) in [
-        ("echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1".to_owned(), "HTTP 502"),
+    let fx = poll_fx("deploy");
+    for (reply, reason) in [
+        (stderr_exit(1, "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)"), "HTTP 502"),
         // nginx's page with the status in the message: the same case.
-        (format!("echo '{NGINX}'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1"), "HTTP 502"),
-        ("echo 'gh: Service Unavailable (HTTP 503)' >&2; exit 1".to_owned(), "HTTP 503"),
+        (Reply::exit(1, &format!("{NGINX}\n"), "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)\n"), "HTTP 502"),
+        (stderr_exit(1, "gh: Service Unavailable (HTTP 503)"), "HTTP 503"),
         // The status in stdout when stderr is empty.
-        ("echo 'gh: HTTP 504: Gateway Timeout'; exit 1".to_owned(), "HTTP 504"),
+        (Reply::exit(1, "gh: HTTP 504: Gateway Timeout\n", ""), "HTTP 504"),
     ] {
-        let details = poll_failure(&fx, &script, &[]);
-        assert_eq!((&details["transient"], &details["call"], &details["reason"], &details["exit"]), (&json!(true), &json!("search"), &json!(reason), &json!(1)), "{script}: {details}");
+        let details = poll_failure(&fx, On::Search, reply.clone());
+        assert_eq!((&details["transient"], &details["call"], &details["reason"], &details["exit"]), (&json!(true), &json!("search"), &json!(reason), &json!(1)), "{reply:?}: {details}");
         assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"], "{details}");
     }
 }
 
 #[test]
 fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_are_not() {
-    let fx = fx("deploy");
-    let details = poll_failure(&fx, &lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"), &[]);
+    let fx = poll_fx("deploy");
+    let details = poll_failure(&fx, On::Lookup, stderr_exit(1, "gh: HTTP 502: Bad Gateway"));
     assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("HTTP 502")), "{details}");
-    for script in ["echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", r#"echo '{"errors":[{"message":"Bad credentials"}]}'; exit 1"#] {
-        let details = poll_failure(&fx, &lookup_script(script), &[]);
-        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("lookup"), &Value::Null), "{script}: {details}");
+    for reply in [stderr_exit(1, "gh: HTTP 401: Bad credentials"), Reply::exit(1, "{\"errors\":[{\"message\":\"Bad credentials\"}]}\n", "")] {
+        let details = poll_failure(&fx, On::Lookup, reply.clone());
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("lookup"), &Value::Null), "{reply:?}: {details}");
     }
 }
 
 /// `gh`'s own failure to parse a response that ended early (hs-d354, E5 at 2026-10-20 16:43:13Z): exit 1, this on stderr, nothing on stdout.
-const GH_CUT: &str = "echo 'unexpected end of JSON input' >&2; exit 1";
+fn gh_cut() -> Reply {
+    stderr_exit(1, "unexpected end of JSON input")
+}
 
 #[test]
 fn poll_says_a_cut_response_of_the_search_is_transient() {
-    let fx = fx("deploy");
-    for script in [
-        GH_CUT,
+    let fx = poll_fx("deploy");
+    for reply in [
+        gh_cut(),
         // A body that stopped mid-way holds no complete JSON.
-        r#"echo '{"data":{"search":{"issueCount":1,"nodes":[{"repository":'; echo 'unexpected end of JSON input' >&2; exit 1"#,
+        Reply::exit(1, "{\"data\":{\"search\":{\"issueCount\":1,\"nodes\":[{\"repository\":\n", "unexpected end of JSON input\n"),
     ] {
-        let details = poll_failure(&fx, script, &[]);
+        let details = poll_failure(&fx, On::Search, reply.clone());
         assert_eq!(
             (&details["transient"], &details["call"], &details["reason"], &details["exit"]),
             (&json!(true), &json!("search"), &json!("unexpected end of JSON input"), &json!(1)),
-            "{script}: {details}"
+            "{reply:?}: {details}"
         );
         assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
     }
@@ -1786,8 +2031,8 @@ fn poll_says_a_cut_response_of_the_search_is_transient() {
 
 #[test]
 fn poll_says_a_cut_response_of_the_lookup_is_transient() {
-    let fx = fx("deploy");
-    let details = poll_failure(&fx, &lookup_script(GH_CUT), &[]);
+    let fx = poll_fx("deploy");
+    let details = poll_failure(&fx, On::Lookup, gh_cut());
     assert_eq!(
         (&details["transient"], &details["call"], &details["reason"]),
         (&json!(true), &json!("lookup"), &json!("unexpected end of JSON input")),
@@ -1797,47 +2042,47 @@ fn poll_says_a_cut_response_of_the_lookup_is_transient() {
 
 #[test]
 fn poll_says_other_json_failures_of_gh_are_not_the_cut_response() {
-    let fx = fx("deploy");
-    for script in [
+    let fx = poll_fx("deploy");
+    for reply in [
         // A body that arrived whole and is wrong: other `gh` parse messages.
-        "echo \"invalid character '<' looking for beginning of value\" >&2; exit 1",
-        "echo 'json: cannot unmarshal string into Go value of type map[string]interface {}' >&2; exit 1",
+        stderr_exit(1, "invalid character '<' looking for beginning of value"),
+        stderr_exit(1, "json: cannot unmarshal string into Go value of type map[string]interface {}"),
         // `gh` exit 0 with an empty body is the poll's own check, never transient, whatever stderr says.
-        "echo 'unexpected end of JSON input' >&2; exit 0",
+        stderr_exit(0, "unexpected end of JSON input"),
     ] {
-        let details = poll_failure(&fx, script, &[]);
-        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{script}: {details}");
+        let details = poll_failure(&fx, On::Search, reply.clone());
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{reply:?}: {details}");
     }
 }
 
 #[test]
 fn poll_says_every_other_gh_failure_is_not_transient() {
-    let fx = fx("deploy");
-    for script in [
-        "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1".to_owned(),
-        "echo 'gh: HTTP 403: Resource not accessible' >&2; exit 1".to_owned(),
-        "echo 'gh: HTTP 404: Not Found' >&2; exit 1".to_owned(),
-        "echo 'gh: HTTP 429: Too Many Requests' >&2; exit 1".to_owned(),
+    let fx = poll_fx("deploy");
+    for reply in [
+        stderr_exit(1, "gh: HTTP 401: Bad credentials"),
+        stderr_exit(1, "gh: HTTP 403: Resource not accessible"),
+        stderr_exit(1, "gh: HTTP 404: Not Found"),
+        stderr_exit(1, "gh: HTTP 429: Too Many Requests"),
         // An HTML page with no 5xx status in the message is not transient, whatever the exit.
-        format!("echo '{NGINX}'; echo 'gh: exit status 1' >&2; exit 1"),
-        format!("echo '{NGINX}'"),
+        Reply::exit(1, &format!("{NGINX}\n"), "gh: exit status 1\n"),
+        Reply::ok(&format!("{NGINX}\n")),
         // A 2xx answer with a bad or empty body.
-        "exit 0".to_owned(),
-        "echo 'not json'".to_owned(),
+        Reply::ok(""),
+        Reply::ok("not json\n"),
         // GraphQL's own `errors`, a RATE_LIMITED among them.
-        r#"echo '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}'; echo 'gh: API rate limit exceeded' >&2; exit 1"#.to_owned(),
+        Reply::exit(1, "{\"errors\":[{\"type\":\"RATE_LIMITED\",\"message\":\"API rate limit exceeded\"}]}\n", "gh: API rate limit exceeded\n"),
         // `HTTP 502` in a body that is a 2xx answer is not a status.
-        r#"echo '{"data":null,"errors":[{"message":"upstream said HTTP 502"}]}'"#.to_owned(),
+        Reply::ok("{\"data\":null,\"errors\":[{\"message\":\"upstream said HTTP 502\"}]}\n"),
     ] {
-        let details = poll_failure(&fx, &script, &[]);
-        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{script}: {details}");
+        let details = poll_failure(&fx, On::Search, reply.clone());
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{reply:?}: {details}");
         assert!(details["argv"].is_array() && details.get("exit").is_some() && details.get("stderr").is_some(), "{details}");
     }
 }
 
 #[test]
 fn poll_refuses_a_gh_answer_that_is_not_an_answer_and_writes_nothing() {
-    let fx = fx("deploy");
+    let fx = poll_fx("deploy");
     let (txns, events) = (fx.txns(), fx.event_count());
     let failing = pay("OPEN", None, Some("FAILURE"));
     for (name, body) in [
@@ -1846,19 +2091,19 @@ fn poll_refuses_a_gh_answer_that_is_not_an_answer_and_writes_nothing() {
         // The nodes are there, but an `errors` makes the search no answer: never "no PRs", never partial.
         ("errors", search_answer(&[failing], 4987).replace("}}}", r#"}},"errors":[{"message":"boom"}]}"#)),
     ] {
-        fx.gh("search.json", &body);
+        fx.search_raw(&body);
         let run = fx.pr("poll");
         assert_eq!(code(&run), ("gh_failed".into(), 1), "{name}");
     }
     // The search answers; the lookup has no `data`: the whole poll fails and the search's changes are not written.
     fx.search(&[node("acme/web", 902, "OPEN", None, None)]);
-    fx.gh("lookup.json", r#"{"errors":[{"message":"Bad credentials"}]}"#);
+    fx.lookup_raw(r#"{"errors":[{"message":"Bad credentials"}]}"#);
     assert_eq!(code(&fx.pr("poll")), ("gh_failed".into(), 1));
     assert_eq!((fx.txns(), fx.event_count(), fx.pull_requests().len()), (txns, events, 1));
 }
 
 /// The Dispatch column's read of the Plan: label, number, state, checks, decision, title.
-fn dispatch_card(fx: &Fx) -> (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>) {
+fn dispatch_card(fx: &Poll) -> (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>) {
     let widgets = read::widgets(&mut fx.store(), 4, 10).unwrap();
     assert_eq!(widgets.plans.len(), 1);
     let card = widgets.plans.into_iter().next().unwrap();
@@ -1868,13 +2113,13 @@ fn dispatch_card(fx: &Fx) -> (String, Option<(i64, PrState, Option<(String, Revi
 
 #[test]
 fn a_plan_without_a_pr_has_a_label_and_no_pr_row() {
-    let fx = fx("dispatch");
+    let fx = poll_fx("dispatch");
     assert_eq!(dispatch_card(&fx), ("Lead".into(), None));
 }
 
 /// Attempt `b-a1` of a cancelled Job `b`, ended, with its worktree and branch kept for
 /// debugging (§3.4 A9), and a tmux window for it.
-fn kept_attempt(fx: &Fx) -> (PathBuf, String) {
+fn kept_attempt(fx: &Poll) -> (PathBuf, String) {
     let attempt = AttemptId::parse("b-a1").unwrap();
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("attempt.log") };
     let made = create_attempt_worktree(&fx.repo, &fx.lead, &plan(), &attempt, &setup).unwrap();
@@ -2540,58 +2785,6 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let out = f.add("fix", &other, &[]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
-}
-
-// ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------
-
-/// PR `web` of Plan `pay`, stacked on its PR `repo` (its Lead Branch `fx.branch`, whose
-/// Lead worktree is `fx.lead`): started from that branch, one Merged Job's commit on it, its Lead Branch pushed.
-fn stacked_pr(fx: &Fx) {
-    let ship = PlanId::parse("pay").unwrap();
-    let path = fx.repo.parent().unwrap().join("pay.pay.web");
-    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
-    let prepared = cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &ship, &path, "cpd/pay/web", fx.branch.as_str(), &setup).map_err(|f| f.error).unwrap();
-    assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
-    prepared.push().unwrap();
-    fx.git(&path, &["config", "user.name", "cpd test"]);
-    fx.git(&path, &["config", "user.email", "test@cpd.invalid"]);
-    fs::write(path.join("web.txt"), "web\n").unwrap();
-    fx.git(&path, &["add", "-A"]);
-    fx.git(&path, &["commit", "-q", "-m", "web"]);
-    let merged = fx.git(&path, &["rev-parse", "HEAD"]);
-    fx.store()
-        .write("fixture", |tx| {
-            tx.execute_batch(&format!(
-                "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pay' AND phase = 'done';
-                 INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                   VALUES ('pay', 'web', '{repo}', 'pay', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
-                repo = fx.repo.display(),
-                base = fx.branch,
-                path = path.display()
-            ))?;
-            tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
-                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
-                params!["f".repeat(64), merged, tx.id()],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-}
-
-impl Fx {
-}
-
-impl Fx {
-    /// The `base` of PR `web` of Plan `pay`.
-    fn web_base(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
-    }
-
-    fn web_status(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
-    }
 }
 
 // ------------------------------------------------------------ the test slots
