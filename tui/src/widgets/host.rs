@@ -59,7 +59,7 @@ fn read_file(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `program`'s stdout, run on `runner`: its stdout when it ran and exited 0.
+/// `program`'s stdout, run on `runner`, when it ran and exited 0.
 pub(crate) fn run_with(runner: &dyn Runner, program: &str, args: &[&str]) -> Option<String> {
     let call = Call {
         tool: program.to_owned(),
