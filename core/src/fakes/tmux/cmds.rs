@@ -81,10 +81,14 @@ pub fn kill_session(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// `-k` is required when the pane is not dead.
+/// `-k` is required when the pane is not dead. Without `-t`, in a hook, the pane is the hook's (as `pane-died`'s
+/// `respawn-pane`), not the window's active pane.
 pub fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("respawn-pane", args, "kc:e:t:")?;
-    let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
+    let loc = match (o.val('t'), cx.loc) {
+        (None, Some(hook)) if hook.pane.is_some() => hook,
+        (target, _) => resolve(cx.db, target, Kind::Pane)?,
+    };
     let pane = loc.pane.expect("pane");
     let dead: i64 = s(cx.db, "SELECT dead FROM panes WHERE id = ?1", [pane]).expect("pane row");
     if dead == 0 && !o.has('k') {
@@ -105,10 +109,19 @@ pub fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
 
 pub fn resize_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("resize-pane", args, "DLRUZMTt:x:y:")?;
-    let pane = resolve(cx.db, o.val('t'), Kind::Pane)?.pane.expect("pane");
+    let at = resolve(cx.db, o.val('t'), Kind::Pane)?;
+    let (window, pane) = (at.window.expect("window"), at.pane.expect("pane"));
     for (flag, col) in [('x', "width"), ('y', "height")] {
         if let Some(v) = o.val(flag) {
-            let n: i64 = v.parse().map_err(|_| format!("size not a number: {v}"))?;
+            // `N%` is a share of the window's size, as tmux takes it.
+            let n: i64 = match v.strip_suffix('%') {
+                Some(percent) => {
+                    let share: i64 = percent.parse().map_err(|_| format!("size not a number: {v}"))?;
+                    let whole: i64 = cx.db.query_row(&format!("SELECT {col} FROM windows WHERE id = ?1"), [window], |r| r.get(0)).map_err(fail)?;
+                    whole * share / 100
+                }
+                None => v.parse().map_err(|_| format!("size not a number: {v}"))?,
+            };
             cx.db.execute(&format!("UPDATE panes SET {col} = ?1 WHERE id = ?2"), (n, pane)).map_err(fail)?;
         }
     }

@@ -143,6 +143,18 @@ fn resize_pane_sets_the_size() {
 }
 
 #[test]
+fn resize_pane_takes_a_percentage_of_the_window() {
+    let t = T::new();
+    t.server();
+    let window = t.ok(&["display-message", "-p", "-t", "%0", "#{window_width}x#{window_height}"]);
+    let (w, h) = window.trim().split_once('x').unwrap();
+    let (w, h): (i64, i64) = (w.parse().unwrap(), h.parse().unwrap());
+    t.ok(&["resize-pane", "-t", "%0", "-x", "20%", "-y", "30%"]);
+    assert_eq!(t.ok(&["display-message", "-p", "-t", "%0", "#{pane_width}x#{pane_height}"]), format!("{}x{}\n", w * 20 / 100, h * 30 / 100));
+    assert_eq!(t.t(&["resize-pane", "-t", "%0", "-x", "x%"]).code, 1);
+}
+
+#[test]
 fn resize_window_and_select_layout_are_accepted() {
     let t = T::new();
     two(&t);
