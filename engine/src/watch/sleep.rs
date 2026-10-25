@@ -14,29 +14,40 @@ use cpd_core::host::chat_slot;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::close_lead;
 
-/// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
-/// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is
-/// recent. Times are §1.3's, so they compare as text.
-const READY: &str = "
-SELECT s.id, s.context, s.plan FROM sessions s LEFT JOIN plans p ON p.id = s.plan
- WHERE s.role IN ('lead', 'manager') AND s.archived_at IS NULL AND s.asleep_at IS NULL
-   AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
-                      AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))
-   AND CASE s.role
-     WHEN 'lead' THEN p.phase = 'done'
+/// A Lead's Plan is finished when the Plan is `done` and nothing of it is live or open, and its Lead has no open,
+/// visible Inbox item. E13 ([`ready_sql`]) and E14 ([`super::archive_leads`]) share it, so the two cannot drift.
+/// Both queries alias the Session `s` and its Plan `p`, and pass `?1` = `now`.
+pub(super) const LEAD_FINISHED: &str = "
+       p.phase = 'done'
        AND NOT EXISTS (SELECT 1 FROM prs r WHERE r.plan = p.id AND r.status NOT IN ('merged', 'cancelled'))
        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running'))
        AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
        AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')
+       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
+                          AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))";
+
+/// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
+/// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is
+/// recent. Times are §1.3's, so they compare as text.
+fn ready_sql() -> String {
+    format!(
+        "SELECT s.id, s.context, s.plan FROM sessions s LEFT JOIN plans p ON p.id = s.plan
+ WHERE s.role IN ('lead', 'manager') AND s.archived_at IS NULL AND s.asleep_at IS NULL
+   AND CASE s.role
+     WHEN 'lead' THEN {LEAD_FINISHED}
      ELSE EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase = 'done')
        AND NOT EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase <> 'done' AND q.archived_at IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
+                          AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))
      END
    AND max(
          CASE s.role WHEN 'lead' THEN coalesce(p.done_at, '')
                      ELSE coalesce((SELECT max(q.done_at) FROM plans q WHERE q.context = s.context AND q.phase = 'done'), '') END,
          s.state_at,
          coalesce((SELECT max(i.closed_at) FROM inbox_items i WHERE i.session = s.id), '')) <= ?2
- ORDER BY s.created_at, s.id";
+ ORDER BY s.created_at, s.id"
+    )
+}
 
 struct Ready {
     session: SessionId,
@@ -69,7 +80,7 @@ fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
     let cutoff = now - time::Duration::seconds(i64::from(engine.config.timeouts.sleep_seconds));
     let (now, cutoff) = (timestamp(now), timestamp(cutoff));
     engine.store.read(|conn| {
-        let mut stmt = conn.prepare(READY)?;
+        let mut stmt = conn.prepare(&ready_sql())?;
         let rows = stmt
             .query_map([&now, &cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;

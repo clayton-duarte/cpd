@@ -114,7 +114,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
 
   | binary (`cli/tests/<area>/`) | modules |
   |---|---|
-  | `engine` | `watch*`, `doctor` |
+  | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
   | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `secret*` |
   | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env` |

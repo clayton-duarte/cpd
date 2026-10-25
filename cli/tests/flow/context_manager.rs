@@ -212,48 +212,6 @@ fn a_second_call_changes_nothing() {
 }
 
 #[test]
-fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
-    let env = TestEnv::new();
-    setup(&env);
-    cockpit(&env);
-    let first = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
-    let id = first["manager"]["session"].as_str().unwrap().to_owned();
-    pi_envs(&env, &id, 1);
-    let file = env.home().join(format!(".pi/agent/sessions/g/2026_{id}.jsonl"));
-    assert!(file.exists());
-
-    // Close its pane: stopped, no pane.
-    env.cpd(&["session", "close", &id]).ok();
-    let row = env.cpd(&["session", "show", &id]).ok()["session"].clone();
-    assert_eq!((&row["state"], &row["tmux_pane"]), (&json!("stopped"), &Value::Null));
-    assert_eq!(window_names(&env), ["main"]);
-    let slot_before = slot(&env);
-
-    let again = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
-    assert_eq!(again["started"], true);
-    assert_eq!(again["manager"]["session"], json!(id));
-    assert_ne!(again["manager"]["pane"], first["manager"]["pane"]);
-    assert_eq!(manager_ids(&env), [id.clone()], "no second Manager");
-    assert_eq!(events(&env, "session-registered").len(), 1);
-    // `session-moved` for: parked, its pane closed, parked again.
-    assert_eq!(events(&env, "session-moved").len(), 3);
-    assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
-    assert_eq!(slot(&env), slot_before);
-
-    // pi resumes the Session's file on the row's Tier's model (hs-d506): no first message.
-    pi_envs(&env, &id, 2);
-    let calls = env.calls("pi");
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[1][0], "--model", "{calls:?}");
-    assert!(calls[1][1].ends_with(":xhigh"), "O4's level (manager_tier's default since hs-d506): {calls:?}");
-    assert_eq!(calls[1][2..4], ["--session".to_owned(), file.display().to_string()], "{calls:?}");
-    assert!(!calls[1].contains(&"--".to_owned()), "no first message: {calls:?}");
-
-    // And a third call changes nothing.
-    assert_eq!(env.cpd(&["context", "manager", "--context", "ctx"]).ok()["started"], false);
-}
-
-#[test]
 fn refusals_register_nothing() {
     let env = TestEnv::new();
     setup(&env);

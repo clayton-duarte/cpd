@@ -261,6 +261,39 @@ impl Catalog {
         Ok(None)
     }
 
+    /// The Tier a Worker takes when the catalog refuses `tier` (hs-n465,
+    /// hs-d632): `None` when a Worker may not have `tier` (hs-d554);
+    /// otherwise the lowest valid, Worker-allowed Tier at or above `tier`'s
+    /// effort, its own letter first and then `H → S` (the Tier itself when the
+    /// catalog accepts it).
+    pub fn step_up(&self, tier: Tier) -> Option<Tier> {
+        if !tier.is_worker_allowed() {
+            return None;
+        }
+        let allowed = |t: &Tier| t.is_worker_allowed() && self.is_valid(*t);
+        // Same letter first: its lowest valid effort at or above the Tier's.
+        if let Some(same) = self
+            .model(tier.letter)
+            .efforts
+            .iter()
+            .copied()
+            .find(|e| *e >= tier.effort)
+            .and_then(|effort| Tier::new(tier.letter, effort))
+            .filter(allowed)
+        {
+            return Some(same);
+        }
+        // Then `H → S`, at the lowest valid effort at or above the Tier's.
+        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
+        for letter in &Letter::LADDER[at + 1..] {
+            let lowest = self.model(*letter).efforts.iter().copied().find(|e| *e >= tier.effort);
+            if let Some(next) = lowest.and_then(|effort| Tier::new(*letter, effort)).filter(allowed) {
+                return Some(next);
+            }
+        }
+        None
+    }
+
     /// The Tier of automatic Attempt `n` (from 1): `next` applied `n - 1`
     /// times from the Job's Tier; `None` when the ladder runs out first.
     pub fn attempt_tier(&self, job_tier: Tier, n: u32) -> Result<Option<Tier>, CpdError> {

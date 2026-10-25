@@ -11,6 +11,9 @@ import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
 import { ev, Fixture, ID, OTHER } from "./fake.ts";
 
+// Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
+process.env.TZ = "Asia/Kolkata";
+
 /** commands.md §15.9 (hs-d286): every cpd message is a collapsed row like pi-compact-tools' tool rows; the model's `content` is untouched. */
 
 // A fake theme that paints real SGR codes, so widths and wrapping behave, and that `tagged` reads back as `<colour>…</>` and `<b>…</b>`.
@@ -103,15 +106,16 @@ test("an empty content shows no body", () => {
 test("a message from the User: `Message from the User`", () => {
   const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
   assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("expand")]);
-  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11): hi there"), closing("collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
   const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
   assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("expand")]);
-  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}): hello`)]);
+  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11): hello`)]);
   const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
+  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11): hello`)]);
 });
 
 // ---- the adapter's errors ----

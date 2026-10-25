@@ -699,6 +699,38 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
 }
 
+/// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
+/// `S` supports 0,1,3,5). E2 ends it and requeues the Job at the next valid Tier in the Worker
+/// range at or above its effort (`S3`), never wedging with `tier_invalid` and leaving it `starting`.
+#[test]
+fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // A live Attempt holds the only slot, so E3 does not start the next one after E2 queues `api`.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_running("api", "starting", &ago(1));
+
+    let engine = fx.start();
+    wait_until("api ended", || fx.attempt("api-a1").0 == "ended");
+    engine.stop();
+
+    assert_ne!(fx.attempt("api-a1").0, "starting", "the Attempt stayed starting");
+    assert_eq!(fx.job_status("api"), "queued");
+    let retry = fx.events("attempt-retry");
+    assert_eq!(retry.len(), 1, "{retry:?}");
+    assert_eq!(
+        (retry[0].1.as_deref(), retry[0].2.as_deref(), &retry[0].3["cause"], &retry[0].3["next_tier"]),
+        (Some("api"), Some("api-a1"), &json!("crashed"), &json!("S3"))
+    );
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
+}
+
 /// `attempt-status` check Events of `<key>-a1`: `(at, "start" | "end")`, in order.
 fn check_events(fx: &Fx, key: &str, edges: &[(&str, &str)]) {
     for (at, edge) in edges {
@@ -827,6 +859,37 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
     assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
+    // Its driver runs detached; the Worker exits at once, so it ends crashed.
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+}
+
+/// hs-n465, hs-d632: a stored Job whose Tier the catalog refuses (`S2` when `S` supports
+/// 0,1,3,5) is started at the next valid Tier in the Worker range at or above its effort
+/// (`S3`), never wedging with `tier_invalid`.
+#[test]
+fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // The work session as tui leaves it, with remain-on-exit (§6.1).
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job_on("S2", "repo", "api", &[], "");
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+
+    let started = fx.events("attempt-started");
+    assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S3", "origin": "ladder"}))]);
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a1'"), "S3");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
     // Its driver runs detached; the Worker exits at once, so it ends crashed.
     wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
 }
@@ -1177,7 +1240,7 @@ impl Fx {
     }
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S2),
+/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S1),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
 /// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
 #[test]
@@ -1199,13 +1262,13 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )?)
     });
-    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S2".into(), "repo".into(), 1, 0, false));
+    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S1".into(), "repo".into(), 1, 0, false));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0, "its needs are derived");
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!((&added[0].0, &added[0].1), (&Some("pay".to_owned()), &Some("open-repo".to_owned())));
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S2")));
+    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S1")));
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"), None);
@@ -1227,7 +1290,7 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
     let row: (String, i64, bool) = fx.env.read(|conn| {
         Ok(conn.query_row("SELECT tier, appended, fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
     });
-    assert_eq!(row, ("S2".into(), 1, true));
+    assert_eq!(row, ("S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
@@ -1454,7 +1517,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?)
     });
-    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S2".into(), 1, true));
+    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'up-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");

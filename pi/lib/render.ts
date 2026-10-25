@@ -49,12 +49,12 @@ function oneLine(text: string): string {
   return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : line;
 }
 
-/** `Message from <name> (<id>): …` or `Message from <id>: …` (delivery.ts `sessionMessage`): the sender's name, or its id. */
+/** `Message from <name> (<id>) (<time>): …` or `Message from <id> (<time>): …` (delivery.ts `sessionMessage`): the sender's name, or its id. */
 function senderOf(from: string | null, content: string): string {
   if (from === null) return "the User";
   const rest = content.startsWith("Message from ") ? content.slice("Message from ".length) : "";
-  if (rest.startsWith(`${from}: `)) return from;
-  const named = rest.indexOf(` (${from}): `);
+  if (rest.startsWith(`${from} `) || rest.startsWith(`${from}: `)) return from;
+  const named = rest.indexOf(` (${from})`);
   return named > 0 ? rest.slice(0, named) : from;
 }
 
