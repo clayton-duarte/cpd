@@ -30,6 +30,7 @@ pub mod host;
 pub mod host_repair;
 pub mod host_repair_approval;
 pub mod inbox;
+pub mod install;
 pub mod incident;
 pub mod job;
 pub mod merge;
