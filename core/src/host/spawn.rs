@@ -52,6 +52,9 @@ pub trait Spawn: Send + Sync {
     fn alive(&self, p: Pid) -> bool;
     fn exe_of(&self, p: Pid) -> Option<PathBuf>;
     fn cmdline(&self, p: Pid) -> Option<String>;
+    /// The pids of the live processes of this user that carry `key=value` in their environment (`cpd gate finish`
+    /// finds a run's leftovers by `GATE_RUN=<id>`).
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid>;
     /// Returns only on failure.
     fn exec(&self, l: &Launch) -> io::Error;
     fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)>;
@@ -239,6 +242,10 @@ impl Spawn for ProcessSpawn {
         (!words.is_empty()).then(|| words.join(" "))
     }
 
+    fn with_env(&self, _key: &str, _value: &str) -> Vec<Pid> {
+        todo!("ProcessSpawn::with_env: /proc/<pid>/environ on Linux, `ps -axww -E` on macOS")
+    }
+
     fn exec(&self, l: &Launch) -> io::Error {
         let mut command = command(l);
         // The new program owns this process's terminal (a reloaded `session run` reads its stdin): `command` sets null.
@@ -398,6 +405,10 @@ impl Spawn for FakeSpawn {
 
     fn cmdline(&self, p: Pid) -> Option<String> {
         self.table().cmdlines.get(&p).cloned()
+    }
+
+    fn with_env(&self, _key: &str, _value: &str) -> Vec<Pid> {
+        todo!("FakeSpawn::with_env: the live pids whose Launch env_set holds key=value")
     }
 
     fn exec(&self, l: &Launch) -> io::Error {

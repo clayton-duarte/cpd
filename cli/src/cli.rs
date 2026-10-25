@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -89,6 +89,9 @@ pub enum Command {
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
+    /// The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26)
+    #[command(subcommand)]
+    Gate(gate::Command),
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
@@ -152,6 +155,21 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
+    }
+}
+
+/// `cpd gate finish` ends the process with the run's status, its report on stderr (as `cpd slot`). It never returns.
+fn gate_exit(result: Result<gate::Finished, CpdError>) -> ! {
+    match result {
+        Ok(done) => {
+            eprint!("{}", done.report);
+            std::process::exit(done.status)
+        }
+        Err(err) => {
+            eprint!("{}", cpd_core::output::to_line(&err));
+            std::process::exit(i32::from(err.exit().code()))
+        }
     }
 }
 

@@ -6,7 +6,7 @@ mod common;
 
 mod cargo_script;
 mod dead_code;
-mod gate_run;
+mod gate_run_smoke;
 mod fake_tmux;
 mod fx;
 mod guards;

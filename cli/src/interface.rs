@@ -112,6 +112,7 @@ pub const TABLE: &[Entry] = &[
     ("secret edit", &[Lead, Manager], false),
     ("secret delete", &[Lead, Manager], false),
     ("secret allow", &[Lead], false),
+    ("gate finish", &[], false),
     ("host repair", &[Manager], false),
 ];
 
