@@ -567,7 +567,7 @@ impl Store {
         let mut wait = Wait::new();
         // Declared before the transaction: dropped, so the record removed, after its commit or rollback.
         let mut holder = Holder::default();
-        let asked = Instant::now();
+        let asked = clock.now();
         let result = (|| {
             let tx = loop {
                 let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
@@ -576,22 +576,22 @@ impl Store {
                     break tx;
                 }
             };
-            let begun = Instant::now();
+            let begun = clock.now();
             holder.record(&path, command);
             // Another process may have migrated since this process opened.
             refuse_user_version(user_version(&tx)?)?;
             let id = begin_txn(&tx, &self.txn, command, &caller)?;
             let write = WriteTxn { tx, id };
-            let ran = Instant::now();
+            let ran = clock.now();
             let value = f(&write)?;
-            let committing = Instant::now();
+            let committing = clock.now();
             write.tx.commit()?;
-            let held = begun.elapsed();
+            let held = clock.now().saturating_duration_since(begun);
             if held >= SLOW_HOLD {
                 let ms = |d: Duration| d.as_millis() as u64;
                 let phases = json!({
                     "waited_ms": ms(begun - asked), "begin_ms": ms(ran - begun),
-                    "closure_ms": ms(committing - ran), "commit_ms": ms(committing.elapsed()), "held_ms": ms(held),
+                    "closure_ms": ms(committing - ran), "commit_ms": ms(clock.now().saturating_duration_since(committing)), "held_ms": ms(held),
                 });
                 Holder::report_slow(&path, command, phases);
             }
