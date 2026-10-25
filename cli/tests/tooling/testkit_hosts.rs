@@ -354,6 +354,19 @@ fn no_tmux_server_exists_before_the_first_tmux_call() {
 }
 
 #[test]
+fn a_tmux_probe_reads_the_server_a_step_holds_and_records_no_call() {
+    let fx = tmux_fx();
+    fx.tmux(&["new-session", "-d", "-s", "work", "-n", "w1", "sleep 1"]);
+    let calls = fx.calls("tmux").len();
+    let probe = fx.tmux_probe();
+    let held = probe.clone();
+
+    assert_eq!(held.run(&["list-windows", "-t", "=work", "-F", "#{window_name}"]), "w1");
+    assert_eq!(probe.state().sessions().len(), 1);
+    assert_eq!(fx.calls("tmux").len(), calls, "the probe is no call of the product's");
+}
+
+#[test]
 fn a_new_session_made_through_tmux_lands_in_the_state() {
     let fx = tmux_fx();
 

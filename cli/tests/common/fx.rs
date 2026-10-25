@@ -303,6 +303,17 @@ impl Fx {
         (self.tmux_route.fake().run(&probe).code == 0).then(|| self.tmux_route.fake().state(self.env.tmux_socket()))
     }
 
+    /// The fake server of the env's socket, for a step of a running view: a probe that owns its handles (an `Fx` is not
+    /// `Clone`), so a closure can hold it. It asks the route's fake directly: no call of the product's to record.
+    pub fn tmux_probe(&self) -> TmuxProbe {
+        TmuxProbe {
+            route: self.tmux_route.clone(),
+            socket: self.env.tmux_socket().to_owned(),
+            tmpdir: self.env.tmux_tmpdir(),
+            cwd: self.env.root().to_path_buf(),
+        }
+    }
+
     /// Starts the cockpit in the fake server: session `cpd`, window `main` with three panes (`tree`, `plan`, `chat`),
     /// on a server with cpd's `SERVER_OPTIONS`. Only records: no pane program runs.
     pub fn cockpit(&self) {
@@ -527,5 +538,30 @@ impl Drop for Scope {
             }
         }
         let _ = std::env::set_current_dir(&self.cwd);
+    }
+}
+
+/// The fake tmux server of an `Fx`'s socket, asked directly ([`Fx::tmux_probe`]): it is `Clone`, so a step of a running
+/// view holds one.
+#[derive(Clone)]
+pub struct TmuxProbe {
+    route: Arc<TmuxRoute>,
+    socket: String,
+    tmpdir: PathBuf,
+    cwd: PathBuf,
+}
+
+impl TmuxProbe {
+    /// `tmux -L <socket> <args>`, which must succeed: its stdout without the trailing newline.
+    pub fn run(&self, args: &[&str]) -> String {
+        let argv = ["-L", self.socket.as_str()].into_iter().chain(args.iter().copied()).map(str::to_owned).collect();
+        let out = self.route.fake().run(&Invocation { argv, tmux_tmpdir: self.tmpdir.clone(), cwd: self.cwd.clone(), env: Vec::new() });
+        assert_eq!(out.code, 0, "tmux {args:?}: {}", out.stderr);
+        out.stdout.trim_end_matches('\n').to_owned()
+    }
+
+    /// The server's state; the server must exist.
+    pub fn state(&self) -> cpd::fakes::tmux::State {
+        self.route.fake().state(&self.socket)
     }
 }

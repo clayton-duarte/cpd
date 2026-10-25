@@ -4,7 +4,7 @@
 //! The store is prepared through the store API (`Store::write`), as the other areas' tests do, because Plans, Jobs
 //! and Attempts belong to their areas. What the chart draws is the view's first frame (`cpd_tui::draw_first_frame`) on a
 //! `TestBackend` over the store of an `Fx`; the tests of the view's loop (keys, the follow of Events, the Worker pane)
-//! run `cpd tui view plan` in a pane of a private tmux server, and its screen is read with `tmux capture-pane`.
+//! run it in this process on a scripted pump (`show`), the Worker pane's on the fake tmux server of the `Fx`.
 
 use crate::common;
 
@@ -14,12 +14,12 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::tui_plan_cancelled::{cells_of, draw, draw_sized, plain, rows};
-use common::fx::Fx;
+use common::fx::{Fx, TmuxProbe};
 use common::screen::{NoInput, Screen, SharedBackend, Steps};
-use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
+use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
@@ -33,6 +33,7 @@ use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, DRAFT, FAILED, MERGED, MERGING, Meaning, QUEUED, SPINNER};
 use cpd_tui::read::Kind;
 use ratatui::buffer::Buffer;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Color;
 use serde_json::json;
 
@@ -76,54 +77,9 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 // ---------- the environment ----------
 
-/// An env whose config has `concurrency = 4` and the private tmux server, with a fake `gh` and `pi` that record any call.
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    env.fake_gh("exit 1");
-    env.fake_pi("exit 1");
-    env
-}
-
 /// An `Fx` with the config of the chart tests: the store the chart is drawn from, no process.
 fn fx() -> Fx {
     crate::tui_plan_cancelled::env()
-}
-
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap()
-}
-
-/// Starts `cpd tui view plan` alone in a 300 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
-/// (the review host's override, contract §6.5); returns its pane.
-fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "300", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
-        .trim()
-        .to_owned()
-}
-
-fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
-    tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
-}
-
-/// Waits until the screen satisfies `ok`, and returns it.
-fn screen_when(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
-    let mut last = Vec::new();
-    wait_until(what, || {
-        last = screen(env, pane);
-        ok(&last)
-    });
-    last
 }
 
 /// The chart rows inside the one PR box of a screen: below one row of padding and the box's top border, indented by two columns of padding and the box's left border; the box's right border is left out. A running pill spins on the clock (`SPINNER`): its frame is whatever the screen was captured at, so every frame reads as the first.
@@ -826,141 +782,172 @@ fn an_invalid_scroll_file_starts_the_view_at_the_top_logs_it_and_the_next_write_
 
 #[test]
 fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
-    let env = env();
-    env.sql(&plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
-    let pane = start_view(&env);
-    let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]).trim().to_owned();
-    // let it draw, follow an Event and take a new snapshot
-    screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
-    // The Event comes with its Job: when the new pill shows, the view has followed the Event and read the store again.
-    env.sql(&format!(
-        "{}{}",
-        job_row("ship", "b", "queued", "S3"),
-        event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#)
-    ));
-    screen_when(&env, &pane, "the new Job", |s| s.iter().any(|l| l.contains(" b│")));
-    // the pane's program is the view itself, and it has no child process
-    let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
-    assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
-    for fake in ["gh", "pi"] {
-        assert_eq!(env.calls(fake), Vec::<Vec<String>>::new(), "the view ran {fake}");
-    }
+    let fx = fx();
+    fx.env.sql(&plan_with("deploy", Some((7, "failed")), &[("a", "running", "S3", &[], 1)]));
+    let world = World::of(&fx);
+    // let it draw, follow an Event and take a new snapshot: the Event comes with its Job, so when the new pill shows, the
+    // view has followed the Event and read the store again
+    let steps = Steps::new()
+        .at("the chart", |s| s.shown_row(2).contains(" a│"), move |_| {
+            world.write(&format!(
+                "{}{}",
+                job_row("ship", "b", "queued", "S3"),
+                event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":[]}"#)
+            ));
+        })
+        .at("the new Job", |s| s.rows().iter().any(|l| l.contains(" b│")), |_| {});
+    show(&fx, vec![Signal::Commit, gone()], &steps);
+    // the view is in this process and asks nothing of the world: no `Runner` call (`gh` and `pi` included), no child
+    assert_eq!(fx.fakes.runner.calls(), Vec::new(), "the view ran a program");
+    assert_eq!(fx.fakes.spawn.launches(), Vec::new(), "the view started a process");
 }
 
-/// The cockpit's centre on the private server: the plan view above the chat slot; returns `(plan pane, chat pane)`.
-fn centre(env: &TestEnv) -> (String, String) {
-    env.fake(
-        "cpd",
-        &format!("if [ \"$1\" = tui ] && [ \"$3\" = worker ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{CPD}' \"$@\""),
-    );
-    let plan = tmux_out(
-        env,
-        &["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"],
+/// An `Fx` on fake ports whose config is the chart tests' plus the private tmux server (the fake): the Worker pane's tests.
+fn tmux_fx() -> Fx {
+    let fx = Fx::with_ports();
+    fs::write(
+        fx.env.cpd_home().join("config.toml"),
+        format!(
+            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+             [events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
+            fx.env.tmux_socket()
+        ),
     )
-    .trim()
-    .to_owned();
-    tmux_out(env, &["set", "-p", "-t", &plan, "@cpd_view", "plan"]);
-    let chat = tmux_out(env, &["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep", "3600"]).trim().to_owned();
-    tmux_out(env, &["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
-    (plan, chat)
+    .unwrap();
+    fx
+}
+
+/// The cockpit's centre on the fake server: the plan view above the chat slot. Only records: no pane runs a program.
+fn cockpit_centre(fx: &Fx) {
+    let ok = |args: &[&str]| {
+        let out = fx.tmux(args);
+        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let plan = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", "cpd tui view plan"]);
+    ok(&["set", "-p", "-t", &plan, "@cpd_view", "plan"]);
+    let chat = ok(&["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep 3600"]);
+    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+}
+
+/// What `format` says of each pane of the cockpit's `main` window, one line each.
+fn panes(tmux: &TmuxProbe, format: &str) -> String {
+    tmux.run(&["list-panes", "-t", "=cpd:main", "-F", format])
+}
+
+/// The program (argv, a word each) of the pane whose `@cpd_view` is `view`.
+fn program_of(tmux: &TmuxProbe, view: &str) -> Vec<String> {
+    let panes = tmux.state().panes();
+    panes.into_iter().find(|p| p.options.iter().any(|(k, v)| k == "@cpd_view" && v == view)).unwrap_or_else(|| panic!("no {view} pane")).argv
+}
+
+/// A press of `code`, as the scripted pump hands it to the loop.
+fn press_key(code: KeyCode) -> Signal {
+    Signal::Input(common::screen::key(code))
 }
 
 #[test]
 fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
-    let (plan, chat) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
-
-    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
-    // nothing is selected until the User asks: an arrow selects the first pill, Enter opens its Worker
-    tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
-    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
-    wait_until("the Worker pane", || workers().contains("worker a a-a1"));
-    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
-    let started = ["tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec();
-    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
-    // beside the chat, without taking the focus: the plan view keeps it
-    let layout = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}"]);
-    let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
-    let (worker, chat_row) = (row("worker"), row("chat"));
-    assert_eq!((worker[2].as_str(), worker[3].as_str()), ("0", chat_row[3].as_str()), "{layout}");
-    assert_eq!(row("plan")[2], "1", "{layout}");
-    assert!(chat.starts_with('%') && layout.contains(&chat), "{layout}");
-    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
-    wait_until("the Worker pane to close", || !workers().contains("worker"));
+    let fx = tmux_fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "queued", "S3", &["a"], 0)]));
+    cockpit_centre(&fx);
+    let workers = "#{@cpd_view} #{@cpd_job} #{@cpd_attempt}";
+    let (before, opened, closed) = (fx.tmux_probe(), fx.tmux_probe(), fx.tmux_probe());
+    let steps = Steps::new()
+        .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
+        // nothing is selected until the User asks: an arrow selects the first pill, Enter opens its Worker
+        .at("the pill selected", any_selected, move |_| assert!(!panes(&before, workers).contains("worker"), "nothing opened yet"))
+        .next("the Worker pane", move |_| {
+            assert!(panes(&opened, workers).contains("worker a a-a1"), "{}", panes(&opened, workers));
+            // the Worker view is started in the pane, in cpd's home, for the Attempt
+            let started = ["cpd", "tui", "view", "worker", "a-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+            assert_eq!(program_of(&opened, "worker")[program_of(&opened, "worker").len() - started.len()..], started);
+            // beside the chat, without taking the focus: the plan view keeps it
+            let layout = panes(&opened, "#{pane_id} #{@cpd_view} #{pane_active} #{pane_top} #{pane_width}");
+            let row = |view: &str| layout.lines().find(|l| l.split(' ').nth(1) == Some(view)).unwrap().split(' ').map(str::to_owned).collect::<Vec<_>>();
+            let (worker, chat_row) = (row("worker"), row("chat"));
+            assert_eq!((worker[2].as_str(), worker[3].as_str()), ("0", chat_row[3].as_str()), "{layout}");
+            assert_eq!(row("plan")[2], "1", "{layout}");
+        })
+        .next("the Worker pane closed", move |_| assert!(!panes(&closed, workers).contains("worker"), "{}", panes(&closed, workers)));
+    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Enter), gone()], &steps);
 }
 
 #[test]
 fn a_pill_without_an_attempt_opens_its_worker_view_in_the_job_form() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("b", "queued", "S3", &[], 0)]));
-    let (plan, _chat) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" b│"));
-
-    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view}|#{@cpd_job}|#{@cpd_attempt}|#{pane_active}"]);
-    // Right selects the first pill, `b`, which has no Attempt; Enter opens its Worker
-    tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
-    wait_until("the Worker pane", || workers().lines().any(|l| l.starts_with("worker|b||")));
-    let started = ["tui", "view", "worker", "--job", "b", "--plan", "ship"].map(str::to_owned).to_vec();
-    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
-    let calls: Vec<_> = env.calls("cpd").into_iter().filter(|c| c.first().map(String::as_str) == Some("tui") && c.get(2).map(String::as_str) == Some("worker")).collect();
-    assert_eq!(calls, [started]);
-    // without taking the focus
-    assert!(workers().lines().any(|l| l == "worker|b||0"), "{}", workers());
-    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
-    wait_until("the Worker pane to close", || !workers().contains("worker"));
+    let fx = tmux_fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("b", "queued", "S3", &[], 0)]));
+    cockpit_centre(&fx);
+    let workers = "#{@cpd_view}|#{@cpd_job}|#{@cpd_attempt}|#{pane_active}";
+    let (opened, closed) = (fx.tmux_probe(), fx.tmux_probe());
+    let steps = Steps::new()
+        .at("the chart", |s| s.shown_row(2).contains(" b│"), |_| {})
+        // Right selects the first pill, `b`, which has no Attempt; Enter opens its Worker
+        .at("the pill selected", any_selected, |_| {})
+        .next("the Worker pane", move |_| {
+            let panes = panes(&opened, workers);
+            // without taking the focus
+            assert!(panes.lines().any(|l| l == "worker|b||0"), "{panes}");
+            let started = ["cpd", "tui", "view", "worker", "--job", "b", "--plan", "ship"].map(str::to_owned).to_vec();
+            let program = program_of(&opened, "worker");
+            assert_eq!(program[program.len() - started.len()..], started, "{program:?}");
+        })
+        .next("the Worker pane closed", move |_| assert!(!panes(&closed, workers).contains("worker"), "{}", panes(&closed, workers)));
+    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Enter), gone()], &steps);
 }
 
-/// Opening a Worker runs several tmux calls (`toggle_worker`): the view keeps following Events meanwhile (tui-W7). The
-/// `tmux` first on `PATH` takes 4 s to answer `split-window`, the call that makes the pane.
+/// Opening a Worker runs several tmux calls (`toggle_worker`): the view keeps following Events meanwhile (tui-W7). That the
+/// calls run off the view's thread is `Background`'s (`tui/src/background_tests.rs`); the scripted pump runs them inline,
+/// so here the Event is committed with the key that opens the pane, and the chart follows it with no other input.
 #[test]
 fn the_chart_keeps_following_events_while_a_worker_pane_is_being_opened() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1)]));
-    let (plan, _chat) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
-    let real = std::env::var("PATH")
-        .unwrap()
-        .split(':')
-        .map(|dir| std::path::Path::new(dir).join("tmux"))
-        .find(|p| p.is_file())
-        .expect("tmux on PATH");
-    env.fake("tmux", &format!(r#"case " $* " in *" split-window "*) sleep 4;; esac; exec {} "$@""#, real.display()));
-    tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
-    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
-    wait_until("the split-window call", || env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "split-window")));
-    // time-claim: the chart follows the new Job while the popup's split-window (4 s) is still running: within 3 s
-    let opening = Instant::now();
-    env.sql(
-        &(job_row("ship", "b", "queued", "S3")
-            + &need_row("ship", "b", "a")
-            + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
-    );
-    screen_when(&env, &plan, "Job b", |s| s.len() > 2 && s[2].contains(" b│"));
-    // time-claim: within 3 s, while the popup's split-window (4 s) still runs
-    assert!(opening.elapsed() < Duration::from_secs(3), "the chart followed at once: {:?}", opening.elapsed());
+    let fx = tmux_fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1)]));
+    cockpit_centre(&fx);
+    let (world, opened) = (World::of(&fx), fx.tmux_probe());
+    let steps = Steps::new()
+        .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
+        .at("the pill selected", any_selected, move |_| {
+            world.write(
+                &(job_row("ship", "b", "queued", "S3")
+                    + &need_row("ship", "b", "a")
+                    + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
+            );
+        })
+        .at("Job b", |s| s.shown_row(2).contains(" b│"), move |_| {
+            assert!(panes(&opened, "#{@cpd_view}").contains("worker"), "the Worker pane opened too");
+        });
+    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), Signal::Commit, gone()], &steps);
 }
 
 #[test]
 fn another_job_retargets_the_worker_pane_in_place() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
-    let (plan, _) = centre(&env);
-    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
-    let workers = || tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}"]);
-    tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
-    wait_until("the Worker pane of a", || workers().contains("worker a a-a1"));
-    let pane = workers().lines().find(|l| l.contains(" worker ")).unwrap().split(' ').next().unwrap().to_owned();
-    // the next Job's pill: the same pane shows it
-    tmux_out(&env, &["send-keys", "-t", &plan, "Right", "Enter"]);
-    wait_until("the Worker pane of b", || workers().contains("worker b b-a1"));
-    let after = workers();
-    assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
-    assert!(after.contains(&format!("{pane} worker b b-a1")), "retargeted in place: {after}");
-    // The pane exists before the fake `cpd` has recorded its call: wait for the call.
-    let started = ["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
-    wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
+    let fx = tmux_fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1), ("b", "running", "S3", &["a"], 1)]));
+    cockpit_centre(&fx);
+    let workers = "#{pane_id} #{@cpd_view} #{@cpd_job} #{@cpd_attempt}";
+    let (first, second) = (fx.tmux_probe(), fx.tmux_probe());
+    let pane = Rc::new(RefCell::new(String::new()));
+    let remembered = pane.clone();
+    let steps = Steps::new()
+        .at("the chart", |s| s.shown_row(2).contains(" a│"), |_| {})
+        .at("the pill selected", any_selected, |_| {})
+        .next("the Worker pane of a", move |_| {
+            let panes = panes(&first, workers);
+            assert!(panes.contains("worker a a-a1"), "{panes}");
+            *remembered.borrow_mut() = panes.lines().find(|l| l.contains(" worker ")).unwrap().split(' ').next().unwrap().to_owned();
+        })
+        // the next Job's pill: the same pane shows it
+        .next("the next pill", |_| {})
+        .next("the Worker pane of b", move |_| {
+            let after = panes(&second, workers);
+            assert_eq!(after.lines().filter(|l| l.contains(" worker ")).count(), 1, "{after}");
+            assert!(after.contains(&format!("{} worker b b-a1", pane.borrow())), "retargeted in place: {after}");
+            let started = ["cpd", "tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
+            let program = program_of(&second, "worker");
+            assert_eq!(program[program.len() - started.len()..], started, "{program:?}");
+        });
+    show(&fx, vec![press_key(KeyCode::Right), press_key(KeyCode::Enter), press_key(KeyCode::Right), press_key(KeyCode::Enter), gone()], &steps);
 }
 
 // ---------- Pulse (a Manager in the chat slot; User, hs-d327) ----------

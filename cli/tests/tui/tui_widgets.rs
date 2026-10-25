@@ -12,11 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fx::Fx;
+use common::fx::{Fx, TmuxProbe};
 use common::screen::{NoInput, Screen, SharedBackend, Steps, left_click, right_click, wheel};
 use common::{TestEnv, sql};
 use cpd_core::error::CpdError;
-use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{FakeRunner, Reply};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
@@ -662,37 +661,24 @@ fn client(fx: &Fx) {
 /// (which owns what it captures) holds a clone.
 #[derive(Clone)]
 struct Seen {
-    route: Arc<TmuxRoute>,
+    probe: TmuxProbe,
     runner: Arc<FakeRunner>,
-    socket: String,
-    tmpdir: PathBuf,
-    root: PathBuf,
     home: PathBuf,
 }
 
 impl Seen {
     fn of(fx: &Fx) -> Seen {
-        Seen {
-            route: fx.tmux_route.clone(),
-            runner: fx.fakes.runner.clone(),
-            socket: fx.env.tmux_socket().to_owned(),
-            tmpdir: fx.env.tmux_tmpdir(),
-            root: fx.env.root().to_path_buf(),
-            home: fx.env.cpd_home(),
-        }
+        Seen { probe: fx.tmux_probe(), runner: fx.fakes.runner.clone(), home: fx.env.cpd_home() }
     }
 
-    /// `tmux <args>` on the fake server of the env's socket, as [`Fx::tmux`] sends it but not recorded as a call of the product's.
+    /// `tmux <args>` on the fake server of the env's socket (no call of the product's).
     fn tmux(&self, args: &[&str]) -> String {
-        let argv = ["-L", self.socket.as_str()].into_iter().chain(args.iter().copied()).map(str::to_owned).collect();
-        let out = self.route.fake().run(&Invocation { argv, tmux_tmpdir: self.tmpdir.clone(), cwd: self.root.clone(), env: Vec::new() });
-        assert_eq!(out.code, 0, "tmux {args:?}: {}", out.stderr);
-        out.stdout.trim().to_owned()
+        self.probe.run(args)
     }
 
     /// The argv (`display-popup` first) of every popup the fake server opened.
     fn popups(&self) -> Vec<Vec<String>> {
-        self.route.fake().state(&self.socket).popups()
+        self.probe.state().popups()
     }
 
     /// The arguments of every `set-buffer` the product sent to tmux.
