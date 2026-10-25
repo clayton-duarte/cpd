@@ -38,9 +38,6 @@ pub struct Config {
     pub host: HostName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
-    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
-    /// (§7.6 "The test slot", hs-d336, hs-d301).
-    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -278,7 +275,6 @@ impl Config {
         let host_default = HostName::parse(machine.as_str()).expect("a machine name is a valid host name");
         let host = r.get("host", host_default, |v| HostName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
-        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
@@ -399,7 +395,6 @@ impl Config {
             machine,
             host,
             concurrency,
-            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,
