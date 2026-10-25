@@ -14,15 +14,35 @@ const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
 
 /// The incident pill's left cap sits directly after the fill: no `#[align=right]` builds a
 /// separate right screen between the fill's reset and the incident branch, so the branch opens
-/// with its left cap `\u{e0b6}` immediately after the fill's `#[default]` (contract §6.1.1, hs-d640).
+/// with its click range and its left cap `\u{e0b6}` immediately after the fill's `#[default]`
+/// (contract §6.1.1, hs-d640, hs-d678).
 #[test]
 fn the_incident_pill_is_first_after_the_fill() {
     let f: &str = &STATUS_FORMAT;
     assert!(!f.contains("#[align=right]"), "no right-aligned side clips the incident pill's left cap: {f}");
     assert!(
-        f.contains("#[default]#{?@cpd_incident,#[fg=colour9]\u{e0b6}"),
-        "the incident branch opens with its left cap immediately after the fill's reset: {f}"
+        f.contains("#[default]#{?@cpd_incident,#[range=user|incident]#[fg=colour9]\u{e0b6}"),
+        "the incident branch opens with its click range and left cap immediately after the fill's reset: {f}"
     );
+}
+
+/// The incident pill carries the click range `#[range=user|incident]` around the whole pill, caps
+/// included (contract §6.1, hs-d678): the range opens before the `#[fg=colour9]` left cap, closes
+/// with `#[norange]` before the join that follows the pill, and the pill keeps its colour 9,
+/// reverse and italics look and its label.
+#[test]
+fn the_incident_pill_carries_the_incident_click_range() {
+    let f: &str = &STATUS_FORMAT;
+    let label = f.find("Incident Mode: #{@cpd_incident}").expect("the incident pill's label");
+    let open = f[..label].rfind("#[range=user|incident]").expect("the incident pill's click range");
+    let close = label + f[label..].find("#[norange]").expect("the pill's range close") + "#[norange]".len();
+    assert!(f[open..].starts_with("#[range=user|incident]#[fg=colour9]\u{e0b6}"), "the range opens immediately before the left cap: {}", &f[open..close]);
+    assert!(f[close..].starts_with("#[fg=colour8]\u{2500}"), "the range closes before the following join: {}", &f[close..]);
+    let pill = &f[open..close];
+    assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
+    assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");
+    assert!(pill.replace("noitalics", "").contains("italics"), "the text is italic: {pill}");
+    assert!(pill.contains("Incident Mode: #{@cpd_incident}"), "the label reads the option: {pill}");
 }
 
 /// The incident pill is guarded by `@cpd_incident`, reads `Incident Mode: ` immediately followed

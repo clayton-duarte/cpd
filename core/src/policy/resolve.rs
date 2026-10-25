@@ -114,6 +114,7 @@ pub fn resolve_unowned_row(home: &CpdHome, host: &HostName, key: &PolicyKey) -> 
         None => Ok(Resolved {
             policy: default_policy().clone(),
             sources: Sources::all(Source::DefaultNoOwnerFile),
+            warnings: Vec::new(),
         }),
     }
 }

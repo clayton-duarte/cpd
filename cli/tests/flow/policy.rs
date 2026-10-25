@@ -13,10 +13,10 @@ use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{json, Value};
 
-const OWNER_FILE: &str = "[pr]\ngate = \"local\"\ntext = \"Owner pr text.\"\n\n[code]\ntext = \"Owner code text.\"\n";
+const OWNER_FILE: &str = "[gate]\nmerge = \"local\"\npr = \"local\"\n\n[pr]\ntext = \"Owner pr text.\"\n\n[code]\ntext = \"Owner code text.\"\n";
 const REPO_FILE: &str = "[code]\ntext = \"Repo code text.\"\n";
 
-/// Owner `acme` (a file with `[pr]` setting only `gate`, and `[code]`), the repo file
+/// Owner `acme` (a file with `[gate]`, `[pr]` and `[code]`), the repo file
 /// `acme/cpd`, Context `ctx` (owner `acme`) with Plan `pl`, PR `named` (name `cpd`) and
 /// PR `anon` (no name), a Manager, a Lead and one Worker per PR; Context `bare` has no owner.
 fn world() -> Fx {
@@ -95,7 +95,7 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["role"], Value::Null);
     let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
     domains.sort_unstable();
-    assert_eq!(domains, ["code", "deploy", "hooks", "instructions", "monitor", "pr", "protected", "test-commands", "tests"]);
+    assert_eq!(domains, ["code", "deploy", "gate", "hooks", "instructions", "monitor", "pr", "protected", "test-commands", "tests"]);
     for (name, domain) in out["policy"].as_object().unwrap() {
         let mut fields: Vec<&str> = domain.as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort_unstable();
@@ -107,7 +107,11 @@ fn the_output_has_exactly_the_documented_fields() {
     assert_eq!(out["policy"]["deploy"]["keys"], json!({}));
     let mut keys: Vec<&str> = out["policy"]["pr"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["feedback.checks", "gate"]);
+    assert_eq!(keys, ["feedback.checks"]);
+    let mut gate: Vec<&str> = out["policy"]["gate"]["keys"].as_object().unwrap().keys().map(String::as_str).collect();
+    gate.sort_unstable();
+    assert_eq!(gate, ["merge", "pr"]);
+    assert_eq!(out["policy"]["gate"]["audience"], json!(["lead", "worker"]));
     for k in out["policy"]["pr"]["keys"].as_object().unwrap().values() {
         let mut fields: Vec<&str> = k.as_object().unwrap().keys().map(String::as_str).collect();
         fields.sort_unstable();
@@ -125,9 +129,13 @@ fn owner_key_reads_the_owner_file_and_marks_the_key_default() {
     let pr = &out["policy"]["pr"];
     assert_eq!(pr["source"], owner);
     assert_eq!(pr["text"], "Owner pr text.");
-    assert_eq!(pr["keys"]["gate"], json!({"value": "local", "source": owner}));
     // `feedback.checks` is left out of the set domain: cpd's default, marked.
     assert_eq!(pr["keys"]["feedback.checks"], json!({"value": "any", "source": format!("{owner} (key default)")}));
+    // The `gate` domain is its own domain: the owner sets both keys.
+    let gate = &out["policy"]["gate"];
+    assert_eq!(gate["source"], owner);
+    assert_eq!(gate["keys"]["merge"], json!({"value": "local", "source": owner}));
+    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": owner}));
     assert_eq!(out["policy"]["code"]["source"], owner);
     assert_eq!(out["policy"]["deploy"], json!({"source": "default", "audience": ["lead"], "keys": {}, "text": ""}));
 }
@@ -153,14 +161,18 @@ fn an_empty_owner_file_is_cpds_default_without_key_default_marks() {
     let fx = world();
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
     let out = show(&fx, &["--owner", "acme"]).ok();
+    assert_eq!(out["policy"]["gate"]["source"], "default");
+    assert_eq!(out["policy"]["gate"]["keys"]["merge"], json!({"value": "none", "source": "default"}));
+    assert_eq!(out["policy"]["gate"]["keys"]["pr"], json!({"value": "none", "source": "default"}));
     assert_eq!(out["policy"]["pr"]["source"], "default");
-    assert_eq!(out["policy"]["pr"]["keys"]["gate"], json!({"value": "ci", "source": "default"}));
-    // A bare `[pr]` table sets the whole domain to cpd's default: every key is defaulted.
+    assert_eq!(out["policy"]["pr"]["keys"]["feedback.checks"], json!({"value": "any", "source": "default"}));
+    // A bare `[pr]` table sets the whole `pr` domain to cpd's default: every key is defaulted.
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "[pr]\n").unwrap();
     let owner = format!("owner:{}", real(&fx, "owners/acme.toml"));
     let out = show(&fx, &["--owner", "acme"]).ok();
-    assert_eq!(out["policy"]["pr"]["keys"]["gate"], json!({"value": "ci", "source": format!("{owner} (key default)")}));
-    assert_eq!(out["policy"]["pr"]["keys"]["feedback.checks"]["source"], format!("{owner} (key default)"));
+    assert_eq!(out["policy"]["pr"]["keys"]["feedback.checks"], json!({"value": "any", "source": format!("{owner} (key default)")}));
+    // `[pr]` sets only the `pr` domain: `gate` stays cpd's default.
+    assert_eq!(out["policy"]["gate"]["source"], "default");
 }
 
 #[test]
@@ -245,10 +257,10 @@ fn policy_invalid_names_the_file_and_key() {
     let fx = world();
     let owner: PathBuf = fx.env.cpd_home().join("policy/owners/acme.toml");
     let repo: PathBuf = fx.env.cpd_home().join("policy/repos/acme/cpd.toml");
-    fs::write(&owner, "[pr]\ngate = \"sometimes\"\n").unwrap();
+    fs::write(&owner, "[pr]\nfeedback.checks = \"sometimes\"\n").unwrap();
     let error = refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1);
     assert_eq!(error["details"]["file"], real(&fx, "owners/acme.toml"));
-    assert_eq!(error["details"]["key"], "pr.gate");
+    assert_eq!(error["details"]["key"], "pr.feedback.checks");
     fs::write(&owner, "[nonsense]\n").unwrap();
     assert_eq!(refused(&show(&fx, &["--owner", "acme"]), "policy_invalid", 1)["details"]["key"], "nonsense");
     fs::write(&owner, "not toml = = =").unwrap();
@@ -272,6 +284,25 @@ fn a_misnamed_policy_file_is_policy_invalid_with_its_path() {
         assert_eq!(error["details"]["file"], path.display().to_string(), "{rel}");
         assert_eq!(error["details"]["key"], Value::Null);
     }
+}
+
+#[test]
+fn policy_show_lists_gate_merge_and_pr_with_sources() {
+    let fx = world();
+    let owner = format!("owner:{}", real(&fx, "owners/acme.toml"));
+    let out = show(&fx, &["--owner", "acme"]).ok();
+    let gate = &out["policy"]["gate"];
+    assert_eq!(gate["audience"], json!(["lead", "worker"]), "{out}");
+    assert_eq!(gate["keys"]["merge"], json!({"value": "local", "source": owner}), "{out}");
+    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": owner}), "{out}");
+    // A repo file that sets `pr` only replaces the whole gate domain: `merge` is cpd's `none`, marked.
+    let repo = format!("repo:{}", real(&fx, "repos/acme/cpd.toml"));
+    fs::write(fx.env.cpd_home().join("policy/repos/acme/cpd.toml"), "[gate]\npr = \"local\"\n\n[code]\ntext = \"Repo code text.\"\n").unwrap();
+    let out = show(&fx, &["--owner", "acme", "--repo", "cpd"]).ok();
+    let gate = &out["policy"]["gate"];
+    assert_eq!(gate["source"], repo, "{out}");
+    assert_eq!(gate["keys"]["merge"], json!({"value": "none", "source": format!("{repo} (key default)")}), "{out}");
+    assert_eq!(gate["keys"]["pr"], json!({"value": "local", "source": repo}), "{out}");
 }
 
 #[test]

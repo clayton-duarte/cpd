@@ -6,14 +6,12 @@
 
 use std::time::Duration;
 
-use time::OffsetDateTime;
-
 use super::engine::Engine;
 use cpd_core::clock::timestamp;
 use super::report::{About, Step, tell_stuck_jobs};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::{Changes, reconcile};
-use cpd_core::inbox::rules::{conditions, stuck_jobs};
+use cpd_core::inbox::rules::{conditions_on, stuck_jobs};
 
 pub(super) fn run(engine: &mut Engine) {
     match reconcile_inbox(engine) {
@@ -32,8 +30,8 @@ pub(super) fn run(engine: &mut Engine) {
 
 /// The Inbox's changes, and how many stuck-Job messages were sent to their Manager (hs-d318, hs-d647).
 fn reconcile_inbox(engine: &mut Engine) -> Result<(Changes, usize), CpdError> {
-    let now = OffsetDateTime::now_utc();
-    let found = conditions(&mut engine.store, &engine.home)?;
+    let now = engine.ports.clock.utc();
+    let found = conditions_on(&engine.ports, &mut engine.store, &engine.home)?;
     let changes = reconcile(&mut engine.store, &found, &timestamp(now))?;
     let stuck_after = Duration::from_secs(u64::from(engine.config.inbox.stuck_job_minutes) * 60);
     let stuck = stuck_jobs(&mut engine.store, now, stuck_after)?;

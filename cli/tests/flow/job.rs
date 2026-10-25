@@ -21,23 +21,6 @@ use serde_json::{Value, json};
 
 // ---------- fixtures ----------
 
-/// What runs `cpd` for [`job`]: the in-process [`Fx`], and the [`TestEnv`] of the tests that start real git.
-trait Cpd {
-    fn cpd(&self, args: &[&str]) -> Run;
-}
-
-impl Cpd for Fx {
-    fn cpd(&self, args: &[&str]) -> Run {
-        Fx::cpd(self, args)
-    }
-}
-
-impl Cpd for TestEnv {
-    fn cpd(&self, args: &[&str]) -> Run {
-        TestEnv::cpd(self, args)
-    }
-}
-
 fn store(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
@@ -147,7 +130,7 @@ fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]) -> Run {
     fx.cpd(&args)
 }
 
-fn job(env: &impl Cpd, args: &[&str], plan: &str) -> Run {
+fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
     let mut all = vec!["job"];
     all.extend(args);
     all.extend(["--plan", plan]);
@@ -2206,74 +2189,67 @@ fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
 
 // ---------- the touches check (hs-d512; commands.md §5.1, §5.3) ----------
 
-/// Plan `pl` in `plan`, whose PR's repo is a real git repo with `src/a.rs` on `main` (the tree a Job of the unstarted PR starts from).
-fn touches_fx(env: &TestEnv) {
-    setup(env);
-    plan(env, "pl", "plan");
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
-    }
-    fs::create_dir_all(repo.join("src")).unwrap();
-    fs::write(repo.join("src/a.rs"), "// a\n").unwrap();
-    env.git(&repo, &["add", "-A"]);
-    env.git(&repo, &["commit", "-q", "-m", "src"]);
-    fixture(env, &format!("UPDATE prs SET repo = '{}' WHERE plan = 'pl';", repo.display()));
+/// Plan `pl` in `plan`, whose PR's repo is a repo of the fake git (a real directory, its objects in the `Universe`)
+/// with `src/a.rs` on `main` (the tree a Job of the unstarted PR starts from).
+fn touches_fx() -> Fx {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    plan(&fx.env, "pl", "plan");
+    let repo = fx.git_repo("pay").canonicalize().unwrap();
+    fx.commit_file(&repo, "src/a.rs", "// a\n", "src");
+    fixture(&fx.env, &format!("UPDATE prs SET repo = '{}' WHERE plan = 'pl';", repo.display()));
+    fx
 }
 
 /// `job add <key> --spec` of a Spec whose `touches` are `touches`, into Plan `pl`.
-fn add_touching(env: &TestEnv, key: &str, touches: &[&str]) -> Run {
+fn add_touching(fx: &Fx, key: &str, touches: &[&str]) -> Run {
     let mut spec = spec_json();
     spec["touches"] = json!(touches);
-    let spec = write_spec(env, &format!("{key}.json"), &spec.to_string());
-    env.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", &spec, "--plan", "pl"])
+    let spec = write_spec(&fx.env, &format!("{key}.json"), &spec.to_string());
+    fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", &spec, "--plan", "pl"])
 }
 
 #[test]
 fn job_add_refuses_a_touches_path_missing_from_the_tree() {
-    let env = TestEnv::new();
-    touches_fx(&env);
-    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
-    let error = refused(&add_touching(&env, "a", &["src/a.rs", "nope/x.rs"]), "touches_missing", 3);
+    let fx = touches_fx();
+    let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
+    let error = refused(&add_touching(&fx, "a", &["src/a.rs", "nope/x.rs"]), "touches_missing", 3);
     assert_eq!(error["details"]["missing"], json!(["nope/x.rs"]), "{error}");
     assert!(error["details"]["tree"].is_string(), "{error}");
-    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs), "a refusal writes nothing");
-    assert_eq!(count(&env, "jobs"), 0);
+    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs), "a refusal writes nothing");
+    assert_eq!(count(&fx.env, "jobs"), 0);
 }
 
 #[test]
 fn job_add_accepts_a_new_file_in_an_existing_directory() {
-    let env = TestEnv::new();
-    touches_fx(&env);
+    let fx = touches_fx();
     // The check is on: a path whose directory is missing too is refused, while the entries below pass.
-    refused(&add_touching(&env, "bad", &["nope/x.rs"]), "touches_missing", 3);
-    add_touching(&env, "a", &["src/new.rs"]).ok();
-    assert_eq!(job_row(&env, "pl", "a", "touches"), "[\"src/new.rs\"]");
+    refused(&add_touching(&fx, "bad", &["nope/x.rs"]), "touches_missing", 3);
+    add_touching(&fx, "a", &["src/new.rs"]).ok();
+    assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/new.rs\"]");
 }
 
 #[test]
 fn job_add_accepts_a_glob_that_matches() {
-    let env = TestEnv::new();
-    touches_fx(&env);
+    let fx = touches_fx();
     // The check is on: a path whose directory is missing too is refused, while the entries below pass.
-    refused(&add_touching(&env, "bad", &["nope/x.rs"]), "touches_missing", 3);
-    add_touching(&env, "a", &["src/*.rs"]).ok();
-    assert_eq!(job_row(&env, "pl", "a", "touches"), "[\"src/*.rs\"]");
+    refused(&add_touching(&fx, "bad", &["nope/x.rs"]), "touches_missing", 3);
+    add_touching(&fx, "a", &["src/*.rs"]).ok();
+    assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/*.rs\"]");
 }
 
 #[test]
 fn job_edit_refuses_a_touches_path_missing_from_the_tree() {
-    let env = TestEnv::new();
-    touches_fx(&env);
-    add_touching(&env, "a", &["src/a.rs"]).ok();
-    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    let fx = touches_fx();
+    add_touching(&fx, "a", &["src/a.rs"]).ok();
+    let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
     let mut spec = spec_json();
     spec["touches"] = json!(["nope/x.rs"]);
-    let spec = write_spec(&env, "edit.json", &spec.to_string());
-    let error = refused(&job(&env, &["edit", "a", "--spec", &spec], "pl"), "touches_missing", 3);
+    let spec = write_spec(&fx.env, "edit.json", &spec.to_string());
+    let error = refused(&job(&fx, &["edit", "a", "--spec", &spec], "pl"), "touches_missing", 3);
     assert_eq!(error["details"]["missing"], json!(["nope/x.rs"]), "{error}");
-    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs), "a refusal writes nothing");
-    assert_eq!(job_row(&env, "pl", "a", "touches"), "[\"src/a.rs\"]");
+    assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events")), (txns, evs), "a refusal writes nothing");
+    assert_eq!(job_row(&fx.env, "pl", "a", "touches"), "[\"src/a.rs\"]");
 }
 
 // ---------- a Spec names no primary checkout (commands.md §5.1, §5.2) ----------

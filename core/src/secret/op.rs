@@ -2,9 +2,8 @@
 //! (`value`, `items`, `created`, `edited`, `archived`). A value is only ever passed in memory (stdin of `op`),
 //! never in argv, and never appears in an error.
 
-use std::io::{ErrorKind, Write, pipe};
-use std::process::{Command, Output, Stdio};
-use std::thread;
+use std::io::ErrorKind;
+use std::process::Output;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -12,7 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
+use crate::host::runner::{Call, Runner};
 use crate::ports::Ports;
 
 /// The fields an op call adds to the command's output.
@@ -50,30 +49,19 @@ fn run(args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
     run_with(&*Ports::current().runner, args, stdin)
 }
 
-/// [`run`] on `runner`.
+/// [`run`] on `runner`. The value is `Call::stdin`: the runner writes it and closes the pipe, and a fake records it.
 fn run_with(runner: &dyn Runner, args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
-    let mut cmd = Command::new("op");
-    cmd.args(args).args(["--account", ACCOUNT]);
-    let writer = match stdin {
-        Some(data) => {
-            let (read, mut write) = pipe().map_err(io_failed)?;
-            cmd.stdin(read);
-            let data = data.to_owned();
-            // A thread: a large value must not block on a full pipe while op is not yet reading.
-            Some(thread::spawn(move || {
-                let _ = write.write_all(data.as_bytes());
-            }))
-        }
-        None => {
-            cmd.stdin(Stdio::null());
-            None
-        }
+    let call = Call {
+        tool: "op".to_owned(),
+        program: "op".to_owned(),
+        args: args.iter().copied().chain(["--account", ACCOUNT]).map(str::to_owned).collect(),
+        envs: Vec::new(),
+        cwd: None,
+        deadline: DEADLINE,
+        stdin: stdin.map(|data| data.as_bytes().to_vec()),
+        stderr_to: None,
     };
-    let result = runner.output(&mut cmd, "op", DEADLINE);
-    drop(cmd);
-    if let Some(w) = writer {
-        let _ = w.join();
-    }
+    let result = runner.run(&call);
     let out: Output = result.map_err(|e| match e {
         Failed::Io(e) if e.kind() == ErrorKind::NotFound => {
             CpdError::new(ErrorCode::SecretOpMissing, "`op` (the 1Password CLI) is not on PATH")

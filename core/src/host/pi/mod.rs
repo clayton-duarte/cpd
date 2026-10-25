@@ -21,3 +21,6 @@ pub use launch::{
 pub use packages::declared;
 pub use packages::{PackageId, extensions_to_pass, package_identity};
 pub use session_file::session_file;
+
+#[cfg(test)]
+mod plannotator_env_tests;
