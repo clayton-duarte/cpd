@@ -16,6 +16,9 @@ use crate::clock::{Clock, ManualClock};
 /// The `Call.deadline` of a process that has none (pi in a retitle, `cpd watch --ensure`, `date`): a `Duration` the real runner never reaches.
 pub const NO_DEADLINE: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 100);
 
+/// The `Call.tool` of a Git hook (`git::hooks::exec`): the `SystemRunner` runs it at idle priority (hs-d528).
+pub const HOOK_TOOL: &str = "hook";
+
 pub trait Runner: Send + Sync {
     /// Runs `cmd` for at most `deadline` and returns what [`deadline::output`] returns: the same `Output`,
     /// `Failed::Io` or `Failed::Timeout(tool_timeout)`.
@@ -51,13 +54,20 @@ impl Runner for SystemRunner {
         deadline::output(cmd, tool, deadline)
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
-        let mut cmd = command(call);
+        let mut cmd = if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) };
         if let Some(path) = &call.stderr_to {
             let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
             cmd.stderr(file);
         }
-        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some())
+        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some(), call.tool == HOOK_TOOL)
     }
+}
+
+/// `call` behind the idle priority prefix (hs-d528): its environment and working directory are the same.
+fn idle(call: &Call) -> Call {
+    let prefix = super::priority::idle_prefix();
+    let args = prefix[1..].iter().map(|s| (*s).to_owned()).chain([call.program.clone()]).chain(call.args.clone()).collect();
+    Call { program: prefix[0].to_owned(), args, ..call.clone() }
 }
 
 /// What a `Command` carries, as the fake saw it.

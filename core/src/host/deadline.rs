@@ -50,17 +50,18 @@ pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Outpu
 /// [`output`] with `grace` between `SIGTERM` and `SIGKILL` instead of [`GRACE`]: for this module's tests.
 fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration) -> Result<Output, Failed> {
     cmd.stderr(Stdio::piped());
-    run(cmd, tool, deadline, grace, Stdin::AsSet)
+    run(cmd, tool, deadline, grace, Stdin::AsSet, false)
 }
 
 /// [`output`] with `stdin` written to the child's stdin by a thread, which then closes it (`None`: a null stdin),
 /// and, when `stderr_set` is true, the child's stderr as the caller set it on `cmd` (a file it is appended to)
-/// instead of captured. A write that fails is `Failed::Io` when the child exited successfully.
-pub(super) fn output_fed(cmd: &mut Command, tool: &str, deadline: Duration, stdin: Option<Vec<u8>>, stderr_set: bool) -> Result<Output, Failed> {
+/// instead of captured. With `reap_group`, the child's group is killed (`SIGKILL`) when the child has exited: nothing it
+/// left behind outlives the call. A write that fails is `Failed::Io` when the child exited successfully.
+pub(super) fn output_fed(cmd: &mut Command, tool: &str, deadline: Duration, stdin: Option<Vec<u8>>, stderr_set: bool, reap_group: bool) -> Result<Output, Failed> {
     if !stderr_set {
         cmd.stderr(Stdio::piped());
     }
-    run(cmd, tool, deadline, GRACE, stdin.map_or(Stdin::Null, Stdin::Bytes))
+    run(cmd, tool, deadline, GRACE, stdin.map_or(Stdin::Null, Stdin::Bytes), reap_group)
 }
 
 /// Where the stdin of the child comes from.
@@ -72,7 +73,7 @@ enum Stdin {
     Bytes(Vec<u8>),
 }
 
-fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin: Stdin) -> Result<Output, Failed> {
+fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin: Stdin, reap_group: bool) -> Result<Output, Failed> {
     let deadline = limit(&format!("DEADLINE_{}", tool.to_ascii_uppercase()), deadline);
     let argv: Vec<String> = std::iter::once(cmd.get_program())
         .chain(cmd.get_args())
@@ -111,6 +112,10 @@ fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin
             }
         }
     };
+    if reap_group {
+        // ESRCH, an empty group, is ignored.
+        let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL);
+    }
     // The child exited: its output is complete once the pipes close, which the
     // deadline also bounds (a daemon it left behind may hold them).
     let left = until.saturating_duration_since(Instant::now());
