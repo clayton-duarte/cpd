@@ -56,7 +56,6 @@ import {
 	prefixedSentence,
 	prefixedText,
 	railComponent,
-	withOutputPad,
 	renderArguments,
 	renderCodeDiff,
 	renderCodeView,
@@ -352,7 +351,7 @@ function hasNestedArguments(args: ToolArgs): boolean {
 
 /** The call line: a status dot, the tool, and what it was asked, then any arguments the line leaves out. */
 function renderRowCall(name: string, args: ToolArgs, theme: Theme, ctx: RenderContext): Component {
-	return withOutputPad(renderRowCallContent(name, args, theme, ctx), ctx.outputPad);
+	return renderRowCallContent(name, args, theme, ctx);
 }
 
 function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: RenderContext): Component {
@@ -621,7 +620,7 @@ function renderRowResult(
 	rememberResult(state, result, options, ctx.isError, theme);
 	state.lastResultDurationMs = state.durationMs;
 	state.lastResultOutputPad = ctx.outputPad;
-	let drawn = withOutputPad(component, ctx.outputPad);
+	let drawn = component;
 	if (name !== "codemode" || options.isPartial || !watchNested) return drawn;
 	// The host can deliver a final nested snapshot (or a cancelled child's end)
 	// after the parent's result. Read through at draw time, not only on updateResult.
