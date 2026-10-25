@@ -1218,6 +1218,9 @@ fn strings(args: &[&str]) -> Vec<String> {
 pub mod pill;
 
 #[cfg(test)]
+mod pill_lines_tests;
+
+#[cfg(test)]
 mod pill_tests;
 
 #[cfg(test)]

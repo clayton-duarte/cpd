@@ -32,6 +32,7 @@ use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
+use cpd_core::ports::Ports;
 use cpd_core::session::State;
 use serde_json::Value;
 use crate::palette;
@@ -319,9 +320,15 @@ impl View {
     }
 
     /// Writes the folds when they have changed (at most once a second); a failure is the log line returned, and is retried.
+    #[cfg(test)]
     pub fn save_folds(&mut self) -> Option<String> {
+        self.save_folds_with(&Ports::real())
+    }
+
+    /// [`View::save_folds`] with the second counted on the clock of `ports`.
+    pub fn save_folds_with(&mut self, ports: &Ports) -> Option<String> {
         let file = self.folds.as_mut()?;
-        file.save(&Folds::of(&self.state, &self.tree)).err()
+        file.save_with(ports, &Folds::of(&self.state, &self.tree)).err()
     }
 
     fn cursor_shown(&self) -> bool {
@@ -715,6 +722,7 @@ impl View {
     }
 
     /// [`View::draw_at`] now.
+    #[cfg(test)]
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         self.draw_at(f, frame, OffsetDateTime::now_utc());
     }

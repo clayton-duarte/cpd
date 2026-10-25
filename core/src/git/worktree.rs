@@ -70,7 +70,8 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    list_with(&*Ports::current().runner, &*Ports::current().clock, dir)
+    let ports = Ports::current();
+    list_with(&*ports.runner, &*ports.clock, dir)
 }
 
 /// [`list`] on `runner`, the naps of its re-reads on `clock`.
@@ -96,7 +97,8 @@ pub fn list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<V
 
 /// The worktree that has `branch` checked out, if any.
 pub fn worktree_of_branch(dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
-    worktree_of_branch_with(&*Ports::current().runner, &*Ports::current().clock, dir, branch)
+    let ports = Ports::current();
+    worktree_of_branch_with(&*ports.runner, &*ports.clock, dir, branch)
 }
 
 /// [`worktree_of_branch`] on `runner`, its naps on `clock`.
