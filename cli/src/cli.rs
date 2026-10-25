@@ -14,11 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-<<<<<<< HEAD
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
-=======
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot, tag, version_sync};
->>>>>>> origin/main
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, review, secret, session, slot, tag, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -174,9 +170,15 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
-<<<<<<< HEAD
         Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
+        Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
+        Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
     }
+}
+
+/// The repository the release commands work in: the current directory.
+fn repo_root() -> Result<std::path::PathBuf, CpdError> {
+    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
 }
 
 /// `cpd gate finish` ends the process with the run's status, its report on stderr (as `cpd slot`). It never returns.
@@ -189,15 +191,8 @@ fn gate_exit(result: Result<gate::Finished, CpdError>) -> ! {
         Err(err) => {
             eprint!("{}", cpd_core::output::to_line(&err));
             std::process::exit(i32::from(err.exit().code()))
-=======
-        Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
-        Command::Version(VersionCommand::Sync { print }) => release_exit(version_sync::sync(&repo_root()?, print)),
+        }
     }
-}
-
-/// The repository the release commands work in: the current directory.
-fn repo_root() -> Result<std::path::PathBuf, CpdError> {
-    std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
 }
 
 /// `cpd tag` and `cpd version sync` print one plain line, not JSON (commands.md §26), and end the process: the line on
@@ -211,7 +206,6 @@ fn release_exit(result: Result<String, String>) -> ! {
         Err(line) => {
             eprintln!("{line}");
             std::process::exit(1)
->>>>>>> origin/main
         }
     }
 }

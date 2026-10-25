@@ -36,11 +36,8 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
-<<<<<<< HEAD
 26. [`gate`](#26-gate)
-=======
-26. [`tag` and `version`](#26-tag-and-version)
->>>>>>> origin/main
+27. [`tag` and `version`](#27-tag-and-version)
 
 ## 1. Conventions
 
@@ -4803,7 +4800,6 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-<<<<<<< HEAD
 ## 26. `gate`
 
 The Gate's leak check (hs-d519, docs/research/hygiene.md "The Gate leak check", Plan tests-mock pro-d35). Area `core/src/gate/` and `cli/`.
@@ -4820,12 +4816,11 @@ cpd gate finish --run <id> --status <n>
 | `--status <n>` | the exit status of the run's command. Required |
 
 Run by `scripts/gate-run.sh` after its command, with `TMPDIR` the run's directory. It lists what the run left: the processes that have `GATE_RUN=<id>` in their environment (`Spawn::with_env`), the tmux sockets named with the id (`/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`), the paths under `$TMPDIR`, and the lines of `$TMPDIR/tripwire.log`. A clean run prints nothing, removes the empty directory and exits with `--status`. Otherwise it prints `gate-run: FAIL: …` on stderr, `SIGKILL`s only the listed pids, removes only the listed sockets and the run's directory, and exits with `--status` when that is not 0, else 64. Another run's id never matches. Like `slot`, it prints no JSON of its own; a usage error is the envelope on stderr. Idempotent: yes.
-=======
-## 26. `tag` and `version`
+## 27. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
 
-### 26.1 `cpd tag`
+### 27.1 `cpd tag`
 
 `cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
 
@@ -4850,7 +4845,7 @@ Output (stderr, one line each; the stream the script used):
 
 Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
 
-### 26.2 `cpd version sync [--print]`
+### 27.2 `cpd version sync [--print]`
 
 cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
 
@@ -4860,4 +4855,3 @@ cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTO
 - Failures print a `sync-version:` line on stderr and exit 1, writing nothing: `sync-version: no 'pub const PROTOCOL: u32 = <n>;' line in <kind.rs>.`, `sync-version: no .sql file in <dir>.`, `sync-version: no [workspace.package] in <Cargo.toml>.`, `sync-version: no version line under [workspace.package] in <Cargo.toml>.`
 
 The test that fails when `Cargo.toml` differs from the derived version (docs/implementing.md "The version string") stays; `cpd version sync` is what fixes it.
->>>>>>> origin/main
