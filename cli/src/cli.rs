@@ -163,7 +163,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Inbox(c) => inbox::cmd::run(c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run(a, version(), run_command, RESTART),
-        Command::Doctor(a) => doctor::run(a),
+        Command::Doctor(a) => doctor::run(a, ports),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
         Command::Slot(a) => slot_exit(slot::run(a)),

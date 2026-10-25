@@ -19,6 +19,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::limit::limit;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use crate::watch;
 use check::{Check, Severity};
@@ -50,7 +51,10 @@ fn tmux_restart(home: &CpdHome) -> Option<Check> {
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct Args {}
 
-pub fn run(_args: Args) -> Result<Output, CpdError> {
+/// The checks, with every external tool probed through `ports.runner`: a hung probe is a failed check by `ports.clock`'s
+/// time, not a hung `doctor`.
+pub fn run(_args: Args, ports: &Ports) -> Result<Output, CpdError> {
+    let runner = &*ports.runner;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home);
     let mut store = config.as_ref().ok().map(|c| Store::open(&home, c.timeouts.store_busy_ms.into()));
@@ -66,14 +70,14 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     };
     checks.push(store_check);
     checks.push(state::tamper(store.as_mut()));
-    checks.extend(tools::tools());
-    checks.push(tools::gh_auth());
-    checks.push(tools::pi_node());
+    checks.extend(tools::tools_with(runner));
+    checks.push(tools::gh_auth_with(runner));
+    checks.push(tools::pi_node_with(runner));
     let with_config = |name, severity, run: &dyn Fn(&Config) -> Check| match &config {
         Ok(config) => run(config),
         Err(_) => Check::not_checked(name, severity, needs_config),
     };
-    checks.push(with_config("tiers", Severity::Error, &pi::tiers));
+    checks.push(with_config("tiers", Severity::Error, &|config| pi::tiers(runner, config)));
     checks.push(with_config("pi_adapter", Severity::Error, &pi::adapter));
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
     checks.push(state::watch(&home, store.as_mut()));
