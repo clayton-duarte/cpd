@@ -1,9 +1,7 @@
-//! `cpd tui view tree` (commands.md §13.2, §17), end to end: the built binary
-//! runs in a pane of a private tmux server (its terminal), over a prepared
-//! store; a test reads the screen (`capture-pane`), presses keys (`send-keys`)
-//! and, for the actions, finds a fake `cpd` first on `PATH` that records its
-//! command line. The rendering of single rows, colours and keys is unit-tested
-//! in `tui/src/tree/`.
+//! `cpd tui view tree` (commands.md §13.2, §17): the view runs in the test process on a `Tree` (`common/tree.rs`) over a
+//! prepared store, on a `TestBackend`, with the fake `cpd` and the fake tmux of the `Fx`; a test reads the screen, presses
+//! keys and clicks, and finds the `cpd` command lines and the tmux calls the view made. The rendering of single rows,
+//! colours and keys is unit-tested in `tui/src/tree/`.
 
 use crate::common;
 use crate::tui_titles;
@@ -13,7 +11,7 @@ use std::time::Duration;
 use common::fx::Fx;
 use common::screen::{Bytes, Display, FakeTty, Keys};
 use common::tree::{self as drive, Gate, Tree, engine, fx, stamp};
-use common::{CPD, TestEnv, sql};
+use common::{TestEnv, sql};
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
@@ -21,11 +19,8 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
-use nix::fcntl::{Flock, FlockArg};
 use ratatui::crossterm::Command;
 use ratatui::crossterm::event::EnableMouseCapture;
-
-const WORKING: &str = SPINNER[0];
 
 // The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
@@ -54,28 +49,6 @@ fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
 }
 
 // ---------- the prepared store ----------
-
-/// An env with the config `cpd` needs and an engine running (`engine-down` is no row of the Inbox); its tmux server is
-/// the env's private one. The engine's lock is held until the test process ends.
-fn env() -> TestEnv {
-    let env = env_without_engine();
-    let path = env.cpd_home().join("locks/watch.lock");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    std::mem::forget(lock);
-    env
-}
-
-/// [`env`] with no engine.
-fn env_without_engine() -> TestEnv {
-    let env = TestEnv::new();
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    env
-}
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
@@ -204,11 +177,8 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 ///
 /// The Inbox ([`items`]) gives the dots their filled dot: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
 /// have a Manager with an item, which alone fills a Context row's filled dot.
-fn populate(env: &TestEnv) {
-    populate_at(env, &opened_ago());
-}
-
-/// [`populate`] with the Inbox items opened at `opened` (contract §1.3 text).
+///
+/// The Inbox items are opened at `opened` (contract §1.3 text).
 fn populate_at(env: &TestEnv, opened: &str) {
     let mut store = open(env);
     let mut s = String::new();
@@ -240,13 +210,6 @@ fn populate_at(env: &TestEnv, opened: &str) {
     reconcile(&mut store, &items(), opened).unwrap();
 }
 
-/// When `populate`'s Inbox items were opened: five minutes and a half ago, so that their age reads `5m` for the half
-/// minute a test takes at most.
-fn opened_ago() -> String {
-    let at = time::OffsetDateTime::now_utc() - time::Duration::seconds(330);
-    at.format(&time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
-}
-
 /// The Inbox section of `populate`'s four items in a pane `width` wide: the empty row, the pill title, three rows and the
 /// fold widget's `╰󰬦 expand`.
 fn inbox_section(width: usize) -> Vec<String> {
@@ -261,142 +224,10 @@ fn inbox_section(width: usize) -> Vec<String> {
     ]
 }
 
-// ---------- the pane ----------
-
-const SESSION: &str = "tree";
+// ---------- the screen ----------
 
 /// What the legend (`?`) logs where no tmux client is attached (a view draws no note, commands.md §17 "No notes").
 const NO_CLIENT: &str = "No tmux client is attached to the cockpit.";
-
-struct Pane<'a> {
-    env: &'a TestEnv,
-}
-
-impl<'a> Pane<'a> {
-    /// Runs `cpd tui view tree` in a `width` × `height` pane of the env's private tmux server.
-    fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
-        let out = env.tmux(&[
-            "-u",
-            "set-option",
-            "-g",
-            "remain-on-exit",
-            "on",
-            ";",
-            "new-session",
-            "-d",
-            "-s",
-            SESSION,
-            "-x",
-            &width.to_string(),
-            "-y",
-            &height.to_string(),
-            &format!("{CPD} tui view tree"),
-        ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        Pane { env }
-    }
-
-    /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅1⋅2`) every frame reads as
-    /// the first: a test cannot know which one it catches. Elsewhere a glyph is what it is: the last frame is the needs-you dot.
-    fn screen(&self) -> Vec<String> {
-        let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text: String = String::from_utf8(out.stdout).unwrap();
-        let text: String = text
-            .lines()
-            .map(|l| {
-                if l.trim_end().ends_with("1⋅1⋅1⋅2") {
-                    l.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c }).collect()
-                } else {
-                    l.to_owned()
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n");
-        let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
-        while rows.last().is_some_and(String::is_empty) {
-            rows.pop();
-        }
-        rows
-    }
-
-    /// Waits until `done` holds of the screen; panics with the last screen.
-    fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    /// Waits until the tree has been drawn.
-    fn ready(&self) -> Vec<String> {
-        self.wait("the tree", |s| s.iter().any(|r| r.contains("alpha")))
-    }
-
-    /// The view's log, `run/tui/tree.log`: empty before its first line.
-    fn log(&self) -> String {
-        std::fs::read_to_string(self.env.cpd_home().join("run/tui/tree.log")).unwrap_or_default()
-    }
-
-    /// Waits until the view's log has a line with `text` (`ok: <what the command said>`, `failed: <command>: <why>`).
-    fn wait_logged(&self, what: &str, text: &str) {
-        self.wait(what, |_| self.log().contains(text));
-    }
-
-    /// [`Pane::settled`] where a fake tmux has a client (see [`popups`]): `?` then opens the legend's popup, the mark.
-    fn settled_with_a_client(&self) {
-        let before = popups(self.env).len();
-        self.keys(&["?"]);
-        let popups = common::wait_some("the view to handle the input sent before", common::WAIT, || {
-            let popups = popups(self.env);
-            if popups.len() > before { Ok(popups) } else { Err(format!("popups: {popups:?}")) }
-        });
-        assert_eq!(popups.len(), before + 1, "{popups:?}");
-        assert!(popups[before].contains(&" legend ".to_owned()), "the legend's: {:?}", popups[before]);
-    }
-
-    fn keys(&self, keys: &[&str]) {
-        let mut args = vec!["send-keys", "-t", SESSION];
-        args.extend(keys);
-        assert!(self.env.tmux(&args).status.success());
-    }
-
-    /// Types `text` literally.
-    fn type_text(&self, text: &str) {
-        assert!(self.env.tmux(&["send-keys", "-t", SESSION, "-l", text]).status.success());
-    }
-
-    /// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
-    fn click(&self, column: u16, row: u16) {
-        for end in ['M', 'm'] {
-            self.type_text(&format!("\x1b[<0;{};{}{end}", column + 1, row + 1));
-        }
-    }
-
-    /// A right click at 0-based `column` and `row`: SGR button 2, which tmux calls button 3.
-    fn right_click(&self, column: u16, row: u16) {
-        for end in ['M', 'm'] {
-            self.type_text(&format!("\x1b[<2;{};{}{end}", column + 1, row + 1));
-        }
-    }
-
-    fn footer_has(&self, text: &str) -> bool {
-        self.screen().iter().any(|r| r.contains(text))
-    }
-}
-
-/// A fake `cpd` that succeeds with `reply`.
-fn fake_cpd(env: &TestEnv, reply: &str) {
-    env.fake("cpd", &format!("echo '{reply}'"));
-}
-
-fn calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd")
-}
-
-fn wait_for_calls(env: &TestEnv, n: usize) -> Vec<Vec<String>> {
-    common::wait_some(&format!("{n} calls of cpd"), common::WAIT, || {
-        let calls = calls(env);
-        if calls.len() >= n { Ok(calls) } else { Err(format!("got {calls:?}")) }
-    })
-}
 
 fn words(w: &[&str]) -> Vec<String> {
     w.iter().map(|s| (*s).to_owned()).collect()
@@ -1293,14 +1124,17 @@ fn the_dialogs_helper_answers_the_popups_result_file_and_leaves_it_out_of_what_i
 
 #[test]
 fn question_mark_opens_the_legend_popup() {
-    let env = env();
-    populate(&env);
-    let pane = Pane::start(&env, 60, 14);
-    pane.ready();
-    // `?` needs no cursor; with no client attached to the private server, the popup has nowhere to open: a line of the log
-    pane.keys(&["?"]);
-    pane.wait_logged("the failure", NO_CLIENT);
-    assert!(!pane.footer_has(NO_CLIENT), "no note: {:?}", pane.screen());
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    // a tmux server with no client: the popup has nowhere to open
+    drive::fake_cockpit(&fx);
+    let mut tree = Tree::start(&fx, 60, 14);
+    ready(&tree);
+    // `?` needs no cursor; with no client attached, the popup has nowhere to open: a line of the log
+    tree.keys(&["?"]);
+    tree.until_logged(NO_CLIENT);
+    assert!(!tree.shows(NO_CLIENT), "no note: {:?}", tree.screen());
 }
 
 #[test]
@@ -1664,21 +1498,24 @@ fn a_refused_open_of_the_new_lead_shows_its_message_and_the_plan_stays_created()
 
 #[test]
 fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
-    let env = env();
-    populate(&env);
-    fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 60, 14);
-    pane.ready();
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    drive::cpd_says(&fx, r#"{"ok":true}"#);
+    // a fake tmux server with a client: it has the buffer `set-buffer` fills
+    let _dialogs = drive::dialogs(&fx);
+    let mut tree = Tree::start(&fx, 60, 14);
+    ready(&tree);
     for (column, row, id) in [(5, 1, "alpha"), (8, 2, "ship"), (8, 4, "ship·f-id")] {
-        pane.right_click(column, row);
-        pane.wait("the menu", |s| menu_open(s, if id == "alpha" { "New Plan…" } else if id == "ship" { "New session…" } else { "Open" }));
+        tree.right_click(column, row);
+        tree.until("the menu", |s| menu_open(s, if id == "alpha" { "New Plan…" } else if id == "ship" { "New session…" } else { "Open" }));
         let downs = if id == "ship·f-id" { 3 } else { 2 };
-        pane.keys(&[&["Down"; 3][..downs], &["Enter"]].concat());
-        pane.wait_logged("the result", &format!("ok: copied {id}\n"));
-        let buffer = env.tmux(&["show-buffer"]);
+        tree.keys(&[&["Down"; 3][..downs], &["Enter"]].concat());
+        tree.until_logged(&format!("ok: copied {id}\n"));
+        let buffer = fx.tmux(&["show-buffer"]);
         assert_eq!(String::from_utf8_lossy(&buffer.stdout), id);
     }
-    assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
+    assert!(drive::calls(&fx).is_empty(), "Copy id runs no cpd command: {:?}", drive::calls(&fx));
 }
 
 // ---------- the folds survive a restart of the view (hs-d260) ----------
@@ -1752,67 +1589,56 @@ fn jumping_items(event: i64) -> Vec<Condition> {
 
 #[test]
 fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
-    let env = env();
-    populate(&env);
-    let mut store = open(&env);
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    let mut store = open(&fx.env);
     let event = store.read(cpd_core::events::highest_id).unwrap();
-    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
-    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
-    // a fake tmux: one client, the popup recorded and not run, the rest the real tmux
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    env.fake(
-        "tmux",
-        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 /dev/pts/9';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
-    );
-    let pane = Pane::start(&env, 60, 40);
-    pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
-    let more = pane.screen().len() as u16 - 1;
-    pane.click(10, more);
-    pane.wait("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
-    let row_of = |label: &str| {
-        let screen = pane.screen();
-        screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
-    };
-    let copies = || -> Vec<Vec<String>> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect() };
+    reconcile(&mut store, &jumping_items(event), &stamp(&fx, -330)).unwrap();
+    drive::cpd_says(&fx, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
+    // a fake tmux: one client (`/dev/pts/9`), the popups recorded and not run
+    let dialogs = drive::dialogs(&fx);
+    let mut tree = Tree::start(&fx, 60, 40);
+    ready(&tree);
+    expand_the_inbox(&mut tree);
+    let row_of = |tree: &Tree, label: &str| item_row_in(&tree.screen(), label);
+    let copies = || -> Vec<Vec<String>> { fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "set-buffer")).collect() };
     let copied = |n: usize, url: &str| {
-        let copy = common::wait_some(&format!("copy {n} of {url}"), common::WAIT, || {
-            let all = copies();
-            if all.len() >= n { Ok(all[n - 1].clone()) } else { Err(format!("got {all:?}\n{}", pane.screen().join("\n"))) }
-        });
+        let all = copies();
+        assert!(all.len() >= n, "copy {n} of {url}: got {all:?}");
+        let copy = &all[n - 1];
         assert_eq!(copy[copy.len() - 3..], words(&["-w", "--", url]));
     };
     // dialog: `session open <its Session>`
-    pane.click(10, row_of("f-blocked label"));
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    tree.click(10, row_of(&tree, "f-blocked label"));
+    assert_eq!(drive::calls(&fx), [words(&["session", "open", "f-blocked"])]);
     // question: the Context's Manager
-    pane.click(10, row_of("alpha: a question"));
-    assert_eq!(wait_for_calls(&env, 3)[1..], [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]);
+    tree.click(10, row_of(&tree, "alpha: a question"));
+    assert_eq!(drive::calls(&fx)[1..], [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]);
     // plan-review: its page's url is copied, and the log says how to open it; the Lead of its Plan is in the chat slot
     // already (`populate`), so no `session open` runs, as for any item whose Session is in focus
-    pane.click(10, row_of("ship plan review"));
+    tree.click(10, row_of(&tree, "ship plan review"));
     copied(1, "http://10.0.0.5:20000/");
-    pane.wait_logged("the result", "ok: copied http://10.0.0.5:20000/: Cmd-click the row to open it");
-    assert!(!pane.footer_has("copied"), "no note: {:?}", pane.screen());
+    tree.until_logged("ok: copied http://10.0.0.5:20000/: Cmd-click the row to open it");
+    assert!(!tree.shows("copied"), "no note: {:?}", tree.screen());
     // pr-ready: the merge popup of its pull request, whether a Plan owns it or not, and no command
-    pane.click(10, row_of("acme/api#3 ready"));
-    common::wait_until("the merge popup", || !popups(&env).is_empty());
-    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
-    assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
-    assert!(popups(&env)[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", popups(&env)[0]);
-    assert!(popups(&env)[0].contains(&"-B".to_owned()), "{:?}", popups(&env)[0]);
+    tree.click(10, row_of(&tree, "acme/api#3 ready"));
+    assert_eq!(dialogs.raw().len(), 1, "{:?}", dialogs.raw());
+    assert_eq!(dialogs.raw()[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
+    assert!(dialogs.raw()[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", dialogs.raw()[0]);
+    assert!(dialogs.raw()[0].contains(&"-B".to_owned()), "{:?}", dialogs.raw()[0]);
     // a review request: the url is copied, and the log says how to open it
-    pane.click(10, row_of("acme/web#5 review requested"));
+    tree.click(10, row_of(&tree, "acme/web#5 review requested"));
     copied(2, "https://x.io/review");
-    pane.wait_logged("the result", "ok: copied https://x.io/review: Cmd-click the row to open it");
+    tree.until_logged("ok: copied https://x.io/review: Cmd-click the row to open it");
     // pr-changes and pr-failing, rows an older engine opened (hs-d470): no click, no url copy
-    pane.click(10, row_of("acme/web#4 changes requested"));
-    pane.click(10, row_of("acme/api#12 failing"));
-    // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click either; `settled_with_a_client` fails on any popup but the legend's
-    pane.click(10, row_of("engine: store busy"));
-    pane.click(10, row_of("ship: c is stuck"));
-    pane.settled_with_a_client();
-    assert_eq!(calls(&env).len(), 3, "the copies and the popups ran no cpd command: {:?}", calls(&env));
+    tree.click(10, row_of(&tree, "acme/web#4 changes requested"));
+    tree.click(10, row_of(&tree, "acme/api#12 failing"));
+    // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click either; `settled` fails on any popup but the legend's
+    tree.click(10, row_of(&tree, "engine: store busy"));
+    tree.click(10, row_of(&tree, "ship: c is stuck"));
+    dialogs.settled(&mut tree);
+    assert_eq!(drive::calls(&fx).len(), 3, "the copies and the popups ran no cpd command: {:?}", drive::calls(&fx));
     assert_eq!(copies().len(), 2, "only the review page and the review request were copied: {:?}", copies());
 }
 
@@ -1826,44 +1652,39 @@ fn glyph_of(screen: &[String], label: &str) -> String {
 fn a_pr_ready_item_whose_merge_runs_shows_the_spinner_and_a_click_on_it_does_nothing_until_the_marker_is_gone_or_stale() {
     // commands.md §13.2 "A merge in progress" (hs-d495): the merge marker of `acme/api#3` makes its `pr-ready` item's glyph the
     // spinner and its click nothing; a stale marker (a dead pid) is ignored, as no marker is.
-    let env = env();
-    populate(&env);
-    let mut store = open(&env);
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    let mut store = open(&fx.env);
     let event = store.read(cpd_core::events::highest_id).unwrap();
-    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
-    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    env.fake(
-        "tmux",
-        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 /dev/pts/9';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
-    );
+    reconcile(&mut store, &jumping_items(event), &stamp(&fx, -330)).unwrap();
+    drive::cpd_says(&fx, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
+    let dialogs = drive::dialogs(&fx);
     // the marker is there before the view starts: a restarted view reads the same file
-    crate::tui_merge::put_marker(&env, "acme__api__3.json", std::process::id());
-    let pane = Pane::start(&env, 60, 40);
-    pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
-    pane.click(10, pane.screen().len() as u16 - 1);
-    pane.wait("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
+    crate::tui_merge::put_marker(&fx.env, "acme__api__3.json", fx.live_pid());
+    let mut tree = Tree::start(&fx, 60, 40);
+    ready(&tree);
+    expand_the_inbox(&mut tree);
     let ready = "acme/api#3 ready";
-    let screen = pane.wait("the spinner in the glyph cell", |s| s.iter().any(|r| r.contains(ready)) && SPINNER.contains(&glyph_of(s, ready).as_str()));
+    let screen = tree.until("the spinner in the glyph cell", |s| s.iter().any(|r| r.contains(ready)) && SPINNER.contains(&glyph_of(s, ready).as_str()));
     // the other items keep their tier glyph
     assert_eq!(glyph_of(&screen, "acme/web#5 review requested"), palette::TIER_YELLOW, "{screen:?}");
     assert_eq!(glyph_of(&screen, "acme/api#12 failing"), palette::TIER_YELLOW);
 
-    // a click on it does nothing: the popups are the legend's alone, which `settled_with_a_client` asks for last
-    let row = item_row(&pane, ready);
-    pane.click(10, row);
-    pane.click(4, row);
-    pane.settled_with_a_client();
-    assert_eq!(popups(&env).len(), 1, "no merge popup: {:?}", popups(&env));
+    // a click on it does nothing: the popups are the legend's alone, which `settled` asks for last
+    let row = item_row_in(&tree.screen(), ready);
+    tree.click(10, row);
+    tree.click(4, row);
+    dialogs.settled(&mut tree);
+    assert_eq!(dialogs.raw().len(), 1, "no merge popup: {:?}", dialogs.raw());
 
     // the same marker, stale: ignored as no marker is, and the click merges again
-    crate::tui_merge::put_marker(&env, "acme__api__3.json", crate::tui_merge::dead_pid());
-    let screen = pane.wait("the tier glyph back", |s| s.iter().any(|r| r.contains(ready)) && glyph_of(s, ready) == palette::TIER_WHITE);
+    crate::tui_merge::put_marker(&fx.env, "acme__api__3.json", fx.ended_pid());
+    let screen = tree.until("the tier glyph back", |s| s.iter().any(|r| r.contains(ready)) && glyph_of(s, ready) == palette::TIER_WHITE);
     assert_eq!(glyph_of(&screen, ready), palette::TIER_WHITE);
-    pane.click(10, item_row(&pane, ready));
-    common::wait_until("the merge popup", || popups(&env).len() == 2);
-    assert_eq!(popups(&env)[1].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'", "{:?}", popups(&env)[1]);
+    tree.click(10, item_row_in(&tree.screen(), ready));
+    assert_eq!(dialogs.raw().len(), 2, "the merge popup: {:?}", dialogs.raw());
+    assert_eq!(dialogs.raw()[1].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'", "{:?}", dialogs.raw()[1]);
 }
 
 /// Every Manager archived: none is live (`populate` makes one per Context).
@@ -1884,16 +1705,7 @@ fn attempt_row(job: &str, number: u32, ended: Option<&str>) -> String {
     )
 }
 
-/// The `display-popup` calls of a fake tmux.
-fn popups(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
-}
-
 // ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
 
-/// The row of the Inbox item labelled `label`, as the screen has it now (a note below the section moves it up).
-fn item_row(pane: &Pane, label: &str) -> u16 {
-    item_row_in(&pane.screen(), label)
-}
 
 

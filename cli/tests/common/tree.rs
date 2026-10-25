@@ -141,7 +141,8 @@ impl Tree {
             .name(format!("{name} view"))
             .spawn(move || {
                 let mut written = written;
-                entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote)
+                // what the view reaches through `Ports::current()` is the fake too, never the real ports
+                Ports::scope(&ports, || entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote))
             })
             .expect("a thread for the view");
         let mut tree = Tree {

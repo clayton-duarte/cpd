@@ -35,7 +35,7 @@ use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::host::spawn::Launch;
+use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::{Fakes, Ports};
 use time::OffsetDateTime;
@@ -197,6 +197,19 @@ impl Fx {
             assert!(self.fakes.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time");
             self.advance(TICK);
         }
+    }
+
+    /// The pid of a process the `FakeSpawn` runs: it is alive until [`Fx::ended_pid`] or an `exit` of the test.
+    pub fn live_pid(&self) -> u32 {
+        let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };
+        self.fakes.spawn.spawn(&launch).expect("the FakeSpawn starts nothing and cannot fail").0
+    }
+
+    /// The pid of a process the `FakeSpawn` ran and that has ended.
+    pub fn ended_pid(&self) -> u32 {
+        let pid = self.live_pid();
+        self.fakes.spawn.exit(Pid(pid), 0);
+        pid
     }
 
     /// The `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).

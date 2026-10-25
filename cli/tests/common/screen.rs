@@ -68,9 +68,23 @@ impl Screen {
         &self.cells[usize::from(y) * usize::from(self.width) + usize::from(x)]
     }
 
+    /// What row `y` shows, piece by piece: the column and the text of each. A link's piece (`cpd_tui::link`) is one cell
+    /// whose symbol carries its OSC 8 escapes around its text; the backend never writes the cell(s) after it, so those hold
+    /// nothing to show and a terminal shows the piece's text where its first cell is.
+    fn pieces(&self, y: u16) -> Vec<(u16, &str)> {
+        let (mut pieces, mut x) = (Vec::new(), 0);
+        while x < self.width {
+            let symbol = self.cell(x, y).symbol.as_str();
+            let link = symbol.strip_prefix("\x1b]8;;").and_then(|s| s.split_once('\x07')).map(|(_, text)| text.trim_end_matches("\x1b]8;;\x07"));
+            pieces.push((x, link.unwrap_or(symbol)));
+            x += link.map_or(1, |text| text.chars().count().max(1) as u16);
+        }
+        pieces
+    }
+
     /// Row `y` as text, without its trailing spaces (what `capture-pane -p` prints).
     pub fn row(&self, y: u16) -> String {
-        let row: String = (0..self.width).map(|x| self.cell(x, y).symbol.as_str()).collect();
+        let row: String = self.pieces(y).into_iter().map(|(_, text)| text).collect();
         row.trim_end().to_owned()
     }
 
@@ -87,8 +101,10 @@ impl Screen {
     /// The column and row of the first `text` on one row (rows from the top, columns from the left); `None` when absent.
     pub fn find(&self, text: &str) -> Option<(u16, u16)> {
         (0..self.height).find_map(|y| {
-            let row: Vec<&str> = (0..self.width).map(|x| self.cell(x, y).symbol.as_str()).collect();
-            (0..self.width).find(|&x| row[usize::from(x)..].concat().starts_with(text)).map(|x| (x, y))
+            let pieces = self.pieces(y);
+            (0..pieces.len())
+                .find(|&i| pieces[i..].iter().map(|(_, piece)| *piece).collect::<String>().starts_with(text))
+                .map(|i| (pieces[i].0, y))
         })
     }
 
