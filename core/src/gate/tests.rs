@@ -22,8 +22,11 @@ const OTHER: &str = "zZ9yY8";
 
 struct Fx {
     fakes: Fakes,
-    /// Holds the run's directory (`gate-run.<id>`), the other run's and the tmux root.
+    /// Holds the run's directory (`gate-run.<id>`) and the other run's.
     tmp: tempfile::TempDir,
+    /// The tmux root, `$TMUX_TMPDIR`. Apart from `tmp` and short: a socket's path must be shorter than `SUN_LEN`
+    /// (104 bytes on macOS), and the Gate's `TMPDIR` (`/var/folders/…/T/gate-run.XXXXXX`) already takes 65 of them.
+    tmux_root: tempfile::TempDir,
     saved: Vec<(&'static str, Option<OsString>)>,
     _lock: MutexGuard<'static, ()>,
 }
@@ -32,14 +35,15 @@ impl Fx {
     fn new() -> Fx {
         let lock = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let tmp = tempfile::tempdir().expect("a temp dir");
+        let tmux_root = tempfile::Builder::new().prefix("g").tempdir_in("/tmp").expect("a short temp dir");
         let fx_saved = vec![("TMPDIR", std::env::var_os("TMPDIR")), ("TMUX_TMPDIR", std::env::var_os("TMUX_TMPDIR"))];
-        let fx = Fx { fakes: Fakes::new(), tmp, saved: fx_saved, _lock: lock };
+        let fx = Fx { fakes: Fakes::new(), tmp, tmux_root, saved: fx_saved, _lock: lock };
         fs::create_dir_all(fx.tmux_dir()).unwrap();
         fx.make_run_dir();
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own.
         unsafe {
             std::env::set_var("TMPDIR", fx.run_dir());
-            std::env::set_var("TMUX_TMPDIR", fx.tmp.path().join("tmux-root"));
+            std::env::set_var("TMUX_TMPDIR", fx.tmux_root.path());
         }
         fx
     }
@@ -55,8 +59,8 @@ impl Fx {
     /// `$TMUX_TMPDIR/tmux-<uid>`: where tmux puts its sockets.
     fn tmux_dir(&self) -> PathBuf {
         // The uid is the temp dir owner's: this user's.
-        let uid = std::os::unix::fs::MetadataExt::uid(&fs::metadata(self.tmp.path()).unwrap());
-        self.tmp.path().join("tmux-root").join(format!("tmux-{uid}"))
+        let uid = std::os::unix::fs::MetadataExt::uid(&fs::metadata(self.tmux_root.path()).unwrap());
+        self.tmux_root.path().join(format!("tmux-{uid}"))
     }
 
     fn finish(&self, status: i32) -> Finished {
