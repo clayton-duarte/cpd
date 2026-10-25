@@ -36,6 +36,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
+26. [`tag` and `version`](#26-tag-and-version)
 
 ## 1. Conventions
 
@@ -208,6 +209,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
+| `cpd tag` (§26.1) | Lead | no | no |
+| `cpd version sync` (§26.2) | Lead | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -4794,11 +4797,51 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-## 26. `test`
+## 26. `tag` and `version`
+
+The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
+
+### 26.1 `cpd tag`
+
+`cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
+
+Steps, each a git call through the `Runner`: `fetch --quiet origin main`; `show origin/main:Cargo.toml` (the first `version = "` under `[workspace.package]` is `<version>`); `ls-remote --tags origin refs/tags/v<version>` (output means the tag exists: exit 0, nothing more); `log -1 --first-parent -G'^version = ' --format=%H origin/main -- Cargo.toml` (the commit `<sha>`, whose `Cargo.toml` must carry `<version>`); then, when the local tag is absent, `tag -a v<version> <sha> -m v<version>` (a local tag that exists must point at `<sha>`); then `push --quiet origin refs/tags/v<version>`. A failed push is accepted only when `ls-remote --tags origin refs/tags/v<version>^{}` already answers `<sha>`.
+
+Output (stderr, one line each; the stream the script used):
+
+| Case | Line | Exit |
+|---|---|---|
+| tagged | `tag-version: tagged v<version> on <sha>` | 0 |
+| the remote has the tag | `tag-version: v<version> exists; nothing to do` | 0 |
+| fetch fails | `tag-version: cannot fetch origin/main` | 1 |
+| no `Cargo.toml` on origin/main | `tag-version: cannot read Cargo.toml on origin/main` | 1 |
+| no workspace version | `tag-version: no workspace version in Cargo.toml on origin/main` | 1 |
+| `ls-remote` fails | `tag-version: cannot list the tags of origin` | 1 |
+| `log` fails | `tag-version: cannot find the commit that set v<version>` | 1 |
+| `log` is empty | `tag-version: no commit on origin/main changed the version` | 1 |
+| the commit has another version | `tag-version: commit <sha> has version '<at>', not <version>` | 1 |
+| the local tag points elsewhere | `tag-version: local tag v<version> points at <have>, not <sha>` | 1 |
+| `tag -a` fails | `tag-version: cannot create v<version>` | 1 |
+| the push fails and the remote lacks `<sha>` | `tag-version: push of v<version> failed` | 1 |
+
+Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
+
+### 26.2 `cpd version sync [--print]`
+
+cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
+
+- `cpd version sync --print` prints the version (for example `0.13.45`) on stdout and writes nothing. Exit 0.
+- `cpd version sync` rewrites the first `version = "` under `[workspace.package]` of `Cargo.toml` and the `version` of the four workspace crates (`cpd`, `cpd-core`, `cpd-engine`, `cpd-tui`; never a package with a `source`) in `Cargo.lock`, then prints `sync-version: <version>`. Rerunning changes nothing.
+- Any other argument is a usage error: `usage: cpd version sync [--print]`, exit 2.
+- Failures print a `sync-version:` line on stderr and exit 1, writing nothing: `sync-version: no 'pub const PROTOCOL: u32 = <n>;' line in <kind.rs>.`, `sync-version: no .sql file in <dir>.`, `sync-version: no [workspace.package] in <Cargo.toml>.`, `sync-version: no version line under [workspace.package] in <Cargo.toml>.`
+
+The test that fails when `Cargo.toml` differs from the derived version (docs/implementing.md "The version string") stays; `cpd version sync` is what fixes it.
+
+## 27. `test`
 
 The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thin (`exec cpd test …`). The selection and the name classification are pure over `git diff` and `cargo metadata` output, read through the `Runner`; the commands start `cargo` through `scripts/cargo.sh` (the bootstrap that builds cpd). Callers: Manager, Lead, Worker; not cockpit, not internal. The command tree is pinned by `cli/tests/tooling/interface.rs`, and [docs/interface.md](interface.md) is regenerated.
 
-### 26.1 `test changed`
+### 27.1 `test changed`
 
 ```
 cpd test changed [--dry-run] [<base>]
@@ -4806,7 +4849,7 @@ cpd test changed [--dry-run] [<base>]
 
 Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
 
-### 26.2 `test run`
+### 27.2 `test run`
 
 ```
 cpd test run <name>...
@@ -4814,7 +4857,7 @@ cpd test run <name>...
 
 Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
-### 26.3 `test list` and `test build`
+### 27.3 `test list` and `test build`
 
 ```
 cpd test list <name>
@@ -4823,6 +4866,6 @@ cpd test build
 
 `list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
 
-### 26.4 The `scripts/tests.sh` contract
+### 27.4 The `scripts/tests.sh` contract
 
 `.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. The script is only the bootstrap: it builds cpd with `scripts/cargo.sh build -p cpd` (a no-op when cpd is current, so a stale cpd never answers), takes the newest `target/*/cpd` and runs `exec cpd test <command> "$@"`; `scripts/test-changed` does the same for `cpd test changed`. A process's output reaches the caller when that process ends, not line by line: the runner returns it whole.
