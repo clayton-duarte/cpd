@@ -274,10 +274,6 @@ impl Rows {
         work
     }
 
-    fn sql(&self, text: &str) {
-        self.fx.env.sql(text);
-    }
-
     /// `cpd attempt <args> --plan pay`, in this process.
     fn cpd(&self, args: &[&str]) -> Run {
         let mut all = vec!["attempt"];
@@ -294,7 +290,7 @@ impl Rows {
     /// Registers a Worker Session for `api-a1` whose file is `file` (`None`: not known yet).
     fn session(&self, file: Option<&Path>) {
         let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-        self.sql(&format!(
+        self.fx.env.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, state, state_at, created_at)
                VALUES ('w1', 'worker', 'ctx', 'pay', 'api-a1', 'api-a1', {file}, '/', 'S2', 'working', 't', 't');
              UPDATE attempts SET worker_session = 'w1' WHERE id = 'api-a1';"
@@ -712,7 +708,7 @@ fn read_needs_a_registered_session_with_an_existing_file() {
     refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
 
     let gone = fx.fx.env.root().join("gone.jsonl");
-    fx.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
+    fx.fx.env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'w1'", gone.display()));
     let error = refused(&fx.cpd(&["read", "api-a1"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "w1");
 
@@ -728,7 +724,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
     let fx = rows();
     let file = fx.session_file(SESSION);
     fx.session(Some(&file));
-    fx.sql(
+    fx.fx.env.sql(
         "UPDATE attempts SET spec_path = '/specs/api-a1.md', driver_pid = 4242, nudged = 1, metrics = '{\"turns\":3}' WHERE id = 'api-a1';
          INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
            VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 99, 't');",
@@ -788,7 +784,7 @@ fn show_refuses_what_does_not_exist() {
 /// Attempts `api-a1` (ended), `api-a2` (running), `web-a1` (running).
 fn listed() -> Rows {
     let fx = rows();
-    fx.sql(
+    fx.fx.env.sql(
         "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 'u' WHERE id = 'api-a1';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'api-a2', 'api', 2, 'S3', 'retry', 'running', 'cpd/pay--api-a2', '/w2', 't2');",
@@ -834,7 +830,7 @@ fn list_refuses_what_does_not_exist() {
     refused(&fx.cpd(&["list", "--job", "Bad_Key"]), "invalid_job_id", 2);
     refused(&fx.raw(&["attempt", "list", "--plan", "nope"]), "plan_not_found", 4);
     refused(&fx.raw(&["attempt", "list"]), "plan_required", 2);
-    fx.sql(
+    fx.fx.env.sql(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', 'repo', 'idle', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, 1, 't')",
     );
