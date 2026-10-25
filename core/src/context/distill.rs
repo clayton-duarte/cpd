@@ -28,6 +28,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::host::pi;
+use crate::host::runner::{Call, Runner};
 use crate::ids::{ContextId, RecordId};
 use crate::lock;
 use crate::output::Output;
@@ -856,7 +857,7 @@ mod pi_json {
 
 /// What became of a child that was given a time limit.
 #[derive(Debug)]
-enum Waited {
+pub(super) enum Waited {
     /// It ended; `stdout` is everything it printed (empty when its stdout was not piped).
     Exited { status: ExitStatus, stdout: io::Result<Vec<u8>> },
     TimedOut,
@@ -885,6 +886,19 @@ fn wait_limited(command: &mut Command, limit: Duration) -> io::Result<Waited> {
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// [`wait_limited`] on `runner`: one call of `call` for at most `limit`; a call that runs past it is [`Waited::TimedOut`].
+pub(super) fn wait_limited_with(runner: &dyn Runner, call: &Call, limit: Duration) -> io::Result<Waited> {
+    let _ = (runner, call, limit);
+    todo!("port-run2: wait_limited_with")
+}
+
+/// Step 4's process on `runner`: `launch` in `dir`, its stderr appended to `log`, no stdin, under `limit`. The
+/// variables of `environ` (the names of the process's environment) that start with `CPD_` are removed.
+pub(super) fn run_pi_with(runner: &dyn Runner, launch: &pi::Launch, dir: &Path, log: &Path, limit: Duration, environ: &[String]) -> io::Result<Waited> {
+    let _ = (runner, launch, dir, log, limit, environ);
+    todo!("port-run2: distill run_pi_with")
 }
 
 /// The last [`TAIL_LINES`] lines of `log` after byte `offset`.

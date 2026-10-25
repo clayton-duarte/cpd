@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::error::{CpdError, ErrorCode};
+use super::runner::Runner;
 
 /// What tells one installed file from another: device, inode and modification time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,6 +210,12 @@ fn asks_to_open_store(mut command: Command, timeout: Duration) -> Result<(), Str
         },
         None => Err("--version does not report the store verdict".to_owned()),
     }
+}
+
+/// [`asks_to_open_store`] on `runner`: one call of `<program> --version` under `timeout`, with a null stdin.
+pub(crate) fn asks_to_open_store_with(runner: &dyn Runner, program: &Path, timeout: Duration) -> Result<(), String> {
+    let _ = (runner, program, timeout);
+    todo!("port-run2: asks_to_open_store_with")
 }
 
 #[cfg(test)]

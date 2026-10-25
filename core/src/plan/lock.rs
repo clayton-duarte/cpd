@@ -3,6 +3,7 @@
 //! every draft Job with its Locked-Job fingerprint, and starts the engine with
 //! `cpd watch --ensure`.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
@@ -16,6 +17,7 @@ use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{TAIL_LINES, tail};
+use crate::host::runner::Runner;
 use crate::ids::PlanId;
 use crate::output::Output;
 use crate::pr::start::{self, By, Pushed};
@@ -163,6 +165,12 @@ fn listed(prs: &[PrRow], started: &[Pushed]) -> Vec<Value> {
 fn cas_lost(id: &PlanId) -> CpdError {
     CpdError::new(ErrorCode::CasLost, format!("Plan {id} changed while it was being locked: rerun the command."))
         .with("plan", id.as_str())
+}
+
+/// [`ensure_watch`] on `runner`: one call of `cpd watch --ensure` with `CPD_HOME=<root>` and `root` as its cwd.
+pub(crate) fn ensure_watch_with(runner: &dyn Runner, root: &Path, plan: &PlanId) -> Result<Value, CpdError> {
+    let _ = (runner, root, plan);
+    todo!("port-run2: ensure_watch_with")
 }
 
 /// `cpd watch --ensure` (commands.md §12), run as a subprocess with `cpd`

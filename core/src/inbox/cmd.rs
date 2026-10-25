@@ -13,6 +13,7 @@ use crate::clock::timestamp;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
+use crate::host::runner::Runner;
 use crate::ids::ContextId;
 use crate::output::Output;
 
@@ -257,6 +258,12 @@ fn local_offset() -> Result<UtcOffset, CpdError> {
     let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     parse_offset(&text)
         .ok_or_else(|| fail(format!("`date +%z` printed {text:?}, not an offset like +0200.")).with("stdout", text))
+}
+
+/// [`local_offset`] on `runner`: one call of `date +%z`.
+pub fn local_offset_with(runner: &dyn Runner) -> Result<UtcOffset, CpdError> {
+    let _ = runner;
+    todo!("port-run2: local_offset_with")
 }
 
 fn parse_offset(text: &str) -> Option<UtcOffset> {

@@ -11,6 +11,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -23,6 +24,7 @@ use crate::config::{Letter, Tier, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::host::runner::Runner;
 use crate::ids::SessionId;
 use crate::output::Output;
 
@@ -250,6 +252,16 @@ fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, 
         return Err(title_failed(id, Reason::Spawn, format_args!("pi did not read the conversation: {e}")).with("tail", tail));
     }
     sanitise(&String::from_utf8_lossy(&out.stdout), limit).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
+}
+
+/// The `Call.deadline` of pi in a retitle: it has none today and keeps none (a `Duration` the real runner never reaches).
+pub(crate) const NO_DEADLINE: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 100);
+
+/// Steps 3 and 4 on `runner`: pi on `model` in `dir` (its stderr is the `Output`'s, passed on to this run's stderr), the conversation
+/// `text` as stdin, under [`NO_DEADLINE`]. The variables of `environ` that start with `CPD_` are removed.
+pub(crate) fn run_pi_with(runner: &dyn Runner, id: &SessionId, model: &str, dir: &Path, text: &str, limit: usize, environ: &[String]) -> Result<Title, CpdError> {
+    let _ = (runner, id, model, dir, text, limit, environ);
+    todo!("port-run2: retitle run_pi_with")
 }
 
 /// Step 4: the title is the text after the marker of the only line that starts with `TITLE:` (leading

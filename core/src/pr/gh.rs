@@ -16,6 +16,7 @@ use crate::error::{CpdError, ErrorCode};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
+use crate::host::runner::Runner;
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -121,15 +122,15 @@ fn failed(argv: &[&str], message: String, exit: Option<i32>, stderr: &str) -> Cp
 }
 
 /// What a finished `gh` call printed; `exit` is `None` when a signal ended it.
-struct Output {
-    stdout: String,
-    stderr: String,
-    exit: Option<i32>,
+pub(super) struct Output {
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+    pub(super) exit: Option<i32>,
 }
 
 /// `gh` ran past its timeout and was killed; `stderr` is what it had printed.
-struct Killed {
-    stderr: String,
+pub(super) struct Killed {
+    pub(super) stderr: String,
 }
 
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
@@ -141,6 +142,18 @@ fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdEr
 /// The `gh_failed` of a call killed after `timeout`.
 fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
     failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
+}
+
+/// [`run_raw`] on `runner`.
+pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
+    let _ = (runner, cwd, args, timeout);
+    todo!("port-run2: gh run_raw_with")
+}
+
+/// [`run_timed`] on `runner`: one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
+pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
+    let _ = (runner, cwd, args, timeout);
+    todo!("port-run2: gh run_timed_with")
 }
 
 /// [`run_raw`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).

@@ -16,6 +16,17 @@ pub trait Runner: Send + Sync {
     /// Runs `cmd` for at most `deadline` and returns what [`deadline::output`] returns: the same `Output`,
     /// `Failed::Io` or `Failed::Timeout(tool_timeout)`.
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed>;
+
+    /// Runs what `call` describes: like [`Runner::output`], and also writes `call.stdin` to the child's stdin
+    /// (then closes it) and sends the child's stderr to the file `call.stderr_to`, appending.
+    fn run(&self, call: &Call) -> Result<Output, Failed>;
+}
+
+/// The `Command` that `call` describes: its program, arguments, environment (a `None` value removes the variable)
+/// and working directory. Stdin and stderr are wired by the runner, not here.
+pub fn command(call: &Call) -> Command {
+    let _ = call;
+    todo!("port-run2: build the Command of a Call")
 }
 
 /// The real runner: [`deadline::output`] and nothing else.
@@ -24,6 +35,10 @@ pub struct SystemRunner;
 impl Runner for SystemRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         deadline::output(cmd, tool, deadline)
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        let _ = call;
+        todo!("port-run2: SystemRunner::run")
     }
 }
 
@@ -37,6 +52,10 @@ pub struct Call {
     pub envs: Vec<(String, Option<String>)>,
     pub cwd: Option<PathBuf>,
     pub deadline: Duration,
+    /// Bytes written to the child's stdin, which is then closed; `None` is a null stdin.
+    pub stdin: Option<Vec<u8>>,
+    /// The file the child's stderr is appended to; `None` is captured in the `Output`.
+    pub stderr_to: Option<PathBuf>,
 }
 
 /// How a scripted call ends.
@@ -172,6 +191,8 @@ impl Runner for FakeRunner {
             envs,
             cwd: cmd.get_current_dir().map(PathBuf::from),
             deadline,
+            stdin: None,
+            stderr_to: None,
         };
         match self.answer(&call) {
             None => Err(Failed::Io(ErrorKind::NotFound.into())),
@@ -186,5 +207,9 @@ impl Runner for FakeRunner {
                 Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
             }
         }
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        let _ = call;
+        todo!("port-run2: FakeRunner::run")
     }
 }
