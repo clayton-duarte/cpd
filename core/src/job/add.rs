@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use super::open;
 use super::spec::{self, Spec};
@@ -192,6 +193,10 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("plan", plan.as_str())
         .with("job", job.key.as_str()));
     }
+    // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+    if let Some(spec) = &wanted.spec {
+        spec.check_primary_roots(&primary_roots(&prs), &std::env::home_dir().unwrap_or_default())?;
+    }
     // A review Job's `touches` is informational (commands.md §5.1).
     if let (Some(spec), false) = (&wanted.spec, wanted.review) {
         let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
@@ -289,6 +294,11 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
         tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
     }
     Ok(())
+}
+
+/// The `(PR key, root)` pairs the primary-check searches: each PR of the Plan and its stored repo path.
+pub(super) fn primary_roots(prs: &[PrRow]) -> Vec<(String, PathBuf)> {
+    prs.iter().map(|p| (p.key.as_str().to_owned(), PathBuf::from(&p.repo))).collect()
 }
 
 /// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the PR's Lead Branch head once

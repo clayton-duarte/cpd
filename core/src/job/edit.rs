@@ -122,6 +122,8 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     }
     if let Some(spec) = &edits.spec {
         spec.check_kind(&after.kind)?;
+        // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
+        spec.check_primary_roots(&super::add::primary_roots(&load_prs(conn, plan)?), &std::env::home_dir().unwrap_or_default())?;
         after.spec = Some(spec.stored());
         after.tests = spec.tests.as_ref().map(|t| json!(t));
         after.test_files = spec.test_files.as_ref().map(|t| json!(t));
