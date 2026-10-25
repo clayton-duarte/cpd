@@ -123,8 +123,9 @@ fn host_repair_runs_git_on_the_ports_it_is_given() {
 
     let gits = calls(&fakes, "git");
     assert!(!gits.is_empty(), "git reached the FakeRunner: {:?}", fakes.runner.calls());
-    assert_eq!(gits[0].args, ["rev-parse", "HEAD"], "the first git call of a repair");
-    assert!(gits[0].cwd.as_deref().is_some_and(|dir| dir.ends_with("projects/cpd")), "in the checkout: {:?}", gits[0].cwd);
+    let args = &gits[0].args;
+    assert!(args.ends_with(&["rev-parse".to_owned(), "HEAD".to_owned()]), "the first git call of a repair: {args:?}");
+    assert!(args.iter().any(|arg| arg.ends_with("projects/cpd")), "in the checkout: {args:?}");
     let Ok(Output::Success(fields)) = out else { panic!("host repair succeeds on the scripted git: {out:?}") };
     assert_eq!(fields["head"], "0123456789abcdef");
     assert!(fakes.runner.unscripted().is_empty(), "{:?}", fakes.runner.unscripted());
