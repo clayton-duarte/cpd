@@ -194,7 +194,7 @@ impl World {
         World { home: fx.env.cpd_home() }
     }
 
-    fn sql(&self, text: &str) {
+    fn write(&self, text: &str) {
         common::sql(&mut Store::open(&CpdHome::resolve(Some(self.home.clone().into()), None).unwrap(), 5000).unwrap(), text);
     }
 }
@@ -577,7 +577,7 @@ fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succee
         })
         .at("the error", failed, {
             let clock = clock.clone();
-            // time-claim: the refresh is every 2 s: past two of them the snapshot was taken again, and still fails
+            // the refresh is every 2 s: past two of them the snapshot was taken again, and still fails
             move |_| clock.advance(3 * ONE_SECOND)
         })
         .next("a frame after the next snapshot", {
@@ -612,7 +612,7 @@ fn a_follow_that_fails_is_shown_below_the_chart() {
             }
         })
         .at("the error", |s| s.contains("Event cursor"), move |_| clock.advance(3 * ONE_SECOND))
-        // time-claim: a snapshot is retaken within 3 s (the refresh): the error stays
+        // a snapshot is retaken within 3 s (the refresh): the error stays
         .next("a frame after the next refresh", move |screen| assert!(screen.contains("Event cursor") && title(screen), "{}", screen.text()));
     show(&fx, vec![Signal::Commit, Signal::Commit, press('x'), gone()], &steps);
 }
@@ -676,7 +676,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             let (world, clock) = (world.clone(), clock.clone());
             move |_| {
                 // a Job is appended to the shown Plan: its Event makes the view take a new snapshot
-                world.sql(
+                world.write(
                     &(job_row("ship", "b", "queued", "S3")
                         + &need_row("ship", "b", "a")
                         + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
@@ -688,7 +688,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             // the pills and the edge between them; what a note after them was is pinned by `tui_plan_waiting`
             assert!(chart_rows(&screen.shown_rows(), 1).starts_with(&format!(" \u{e0b6}{QUEUED} a│S3\u{e0b4}─────\u{e0b6}{QUEUED} b│S3\u{e0b4}")), "{}", screen.text());
             // the other Lead moves into the chat slot: the view shows its Plan
-            world.sql(&in_chat("ctx", "side", "lead-side"));
+            world.write(&in_chat("ctx", "side", "lead-side"));
             clock.advance(ONE_SECOND);
         })
         .at("the other Plan", row2("other"), |screen| {
@@ -723,7 +723,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
                 *scrolled.borrow_mut() = screen.shown_rows();
                 assert!(scrolled.borrow().iter().all(|l| !l.contains(" j10│")), "{}", screen.text());
                 // another Plan starts at its corner
-                world.sql(&in_chat("ctx", "side", "lead-side"));
+                world.write(&in_chat("ctx", "side", "lead-side"));
                 clock.advance(ONE_SECOND);
             }
         })
@@ -731,7 +731,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
             let (world, clock) = (world.clone(), clock.clone());
             // coming back shows the chart where it was left
             move |_| {
-                world.sql(&in_chat("ctx", "ship", "lead-ship"));
+                world.write(&in_chat("ctx", "ship", "lead-ship"));
                 clock.advance(ONE_SECOND);
             }
         })
