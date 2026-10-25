@@ -2432,6 +2432,64 @@ fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
     assert_eq!(fx.events("error").len(), 0);
 }
 
+/// A prerequisite PR that E5 sees merged lets E7 start its dependent PR in that same tick: the poll's result and E7 are one tick.
+#[test]
+fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
+    let fx = polling("");
+    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
+    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    let origin = fx.env.root().join("repos/origin.git");
+    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.local_origin(&repo, &origin);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
+    let lead = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap().path;
+    fx.engine_plan_at(&repo, &lead);
+    // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
+    let web = fx.git_repo("web").canonicalize().unwrap();
+    fx.env.sql(&format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+           VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
+         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
+                pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'repo';
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'web', '{repo}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
+        repo = web.display()
+    ));
+    // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
+    let merged = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}"#;
+    fx.route_fn("gh", move |call| {
+        if is_search(call) { Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")) } else { Reply::ok(&format!(r#"{{"data":{{"p0":{{"pullRequest":{merged}}}}}}}"#)) }
+    });
+
+    // The engine is held at its first nap until the poll the first tick started has ended ([`Ip::watch_gated`]): the second tick takes
+    // its result and, in that tick, E7 starts `web`.
+    let (ended_tx, ended_rx) = std::sync::mpsc::channel::<()>();
+    let ended_tx = Mutex::new(ended_tx);
+    fx.watch_gated(
+        move |nap| {
+            if nap == 1 {
+                // The longest the gate waits for the poll thread: a failing test's answer, never a pause of a passing one.
+                ended_rx.recv_timeout(Duration::from_secs(10)).expect("the poll ended");
+            }
+            nap >= OVER_ONE_TICK
+        },
+        move || {
+            let _ = ended_tx.lock().unwrap().send(());
+        },
+    )
+    .unwrap();
+
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
+    assert_eq!(fx.count("pr-started"), 1);
+    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert!(!lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
 // ---------- E6 (removed) ----------
 
 #[test]
