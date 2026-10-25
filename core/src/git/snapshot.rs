@@ -36,6 +36,11 @@ pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, pid: u32) -> 
 /// fails with `ESRCH`): the leftovers of killed runs (contract §7.6 step 1,
 /// §7.2). One whose pid lives is left alone. Returns the removed paths.
 pub fn sweep(repo: &Path, plan: &PlanId, key: &PrKey) -> Result<Vec<PathBuf>, CpdError> {
+    sweep_with(&ProcessSpawn, repo, plan, key)
+}
+
+/// [`sweep`] asking `spawn` whether a pid is alive.
+pub fn sweep_with(spawn: &dyn Spawn, repo: &Path, plan: &PlanId, key: &PrKey) -> Result<Vec<PathBuf>, CpdError> {
     let (parent, leaf) = prefix(repo, plan, key)?;
     let parent = parent.canonicalize().unwrap_or(parent);
     let mut removed = Vec::new();
@@ -43,7 +48,7 @@ pub fn sweep(repo: &Path, plan: &PlanId, key: &PrKey) -> Result<Vec<PathBuf>, Cp
         let (Some(dir), Some(name)) = (worktree.path.parent(), worktree.path.file_name()) else { continue };
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(&leaf)).and_then(|p| p.parse::<u32>().ok()) else { continue };
-        if dir != parent || pid == 0 || ProcessSpawn.alive(Pid(pid)) {
+        if dir != parent || pid == 0 || spawn.alive(Pid(pid)) {
             continue;
         }
         force_remove(repo, &worktree.path)?;

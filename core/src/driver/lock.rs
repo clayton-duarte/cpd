@@ -13,11 +13,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
 
-use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 
 use crate::error::{CpdError, ErrorCode};
@@ -69,24 +66,10 @@ impl Starter {
         }
     }
 
-    /// Step 2: makes `command` start in a new session (`setsid`) with this
-    /// descriptor as its fd 3, not close-on-exec.
-    pub fn hand_over(&self, command: &mut Command) {
-        let fd = self.file.as_raw_fd();
-        // SAFETY: the closure runs in the forked child before exec and only
-        // makes async-signal-safe system calls; it allocates nothing.
-        unsafe {
-            command.pre_exec(move || {
-                nix::unistd::setsid().map_err(std::io::Error::from)?;
-                if fd != DRIVER_FD {
-                    Errno::result(nix::libc::dup2(fd, DRIVER_FD)).map_err(std::io::Error::from)?;
-                }
-                // dup2 clears close-on-exec; when fd already was 3 it did not run.
-                fcntl(BorrowedFd::borrow_raw(DRIVER_FD), FcntlArg::F_SETFD(FdFlag::empty()))
-                    .map_err(std::io::Error::from)?;
-                Ok(())
-            });
-        }
+    /// Step 2: the descriptor a `Launch` hands over (`Launch::hand_over`): the child gets it as its fd 3, not close-on-exec,
+    /// in a new session.
+    pub fn fd(&self) -> RawFd {
+        self.file.as_raw_fd()
     }
 }
 

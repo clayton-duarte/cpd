@@ -32,6 +32,7 @@ use crate::pill::spec;
 
 use super::deadline::Failed;
 use super::runner::{Runner, SystemRunner};
+use super::spawn::{Pid as ProcessId, ProcessSpawn, Spawn as ProcessPort};
 use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
@@ -477,7 +478,33 @@ pub struct Tmux {
     runner: Handle,
     /// What `kill-server` reads and naps on: the time, not which server it is, so it takes no part in equality.
     clock: Time,
+    /// What names a process's executable (`server_exe`): how a pid is read, not which server it is, so it takes no part in equality.
+    procs: Procs,
 }
+
+/// The [`ProcessPort`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Procs(Arc<dyn ProcessPort>);
+
+impl Default for Procs {
+    fn default() -> Procs {
+        Procs(Arc::new(ProcessSpawn))
+    }
+}
+
+impl fmt::Debug for Procs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Spawn")
+    }
+}
+
+impl PartialEq for Procs {
+    fn eq(&self, _: &Procs) -> bool {
+        true
+    }
+}
+
+impl Eq for Procs {}
 
 /// The [`Clock`] of a [`Tmux`]: always equal to another, printed by name.
 #[derive(Clone)]
@@ -530,13 +557,13 @@ impl Eq for Handle {}
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default() }
+        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default() }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
     }
 
     /// This server, with every call run by `runner` instead of the real processes.
@@ -548,6 +575,12 @@ impl Tmux {
     /// This server, whose `kill-server` waits on `clock` instead of the real time.
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Tmux {
         self.clock = Time(clock);
+        self
+    }
+
+    /// This server, whose `server_exe` asks `spawn` for the executable of a pid instead of the real process table.
+    pub fn with_spawn(mut self, spawn: Arc<dyn ProcessPort>) -> Tmux {
+        self.procs = Procs(spawn);
         self
     }
 
@@ -742,10 +775,18 @@ impl Tmux {
     /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
     /// unlinked executable: unverified).
     pub fn pid_exe(pid: u32) -> Option<PathBuf> {
-        #[cfg(target_os = "macos")]
-        return libproc::proc_pid::pidpath(i32::try_from(pid).ok()?).ok().map(PathBuf::from);
+        Tmux::pid_exe_with(&ProcessSpawn, pid)
+    }
+
+    /// [`Tmux::pid_exe`] asking `spawn` (`Spawn::exe_of`) whether the process exists and what it runs. On Linux the real
+    /// `Spawn` is answered with `/proc/<pid>/exe` itself, not the file it points to: that stays readable after an upgrade.
+    pub fn pid_exe_with(spawn: &dyn ProcessPort, pid: u32) -> Option<PathBuf> {
+        let exe = spawn.exe_of(ProcessId(pid))?;
         #[cfg(not(target_os = "macos"))]
-        return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+        if spawn.kind() == "ProcessSpawn" {
+            return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+        }
+        Some(exe)
     }
 
     /// `display -p '#{version}'`: the version of the tmux the server runs
@@ -761,18 +802,13 @@ impl Tmux {
     /// file (accepted). A client of another version cannot attach to the server (hs-n224).
     pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
         let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
-        #[cfg(target_os = "macos")]
-        let exe = {
-            let pid: i32 = out.trim().parse().map_err(|e| {
-                CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
-            })?;
-            PathBuf::from(libproc::proc_pid::pidpath(pid).map_err(|e| {
-                CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid}): {e}."))
-                    .with("pid", pid.to_string())
-            })?)
-        };
-        #[cfg(not(target_os = "macos"))]
-        let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
+        let pid: u32 = out.trim().parse().map_err(|e| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
+        })?;
+        let exe = Tmux::pid_exe_with(&*self.procs.0, pid).ok_or_else(|| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid})."))
+                .with("pid", pid.to_string())
+        })?;
         std::fs::metadata(&exe).map_err(|e| {
             CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
                 .with("path", exe.display().to_string())

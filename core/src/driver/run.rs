@@ -756,6 +756,7 @@ impl Driver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::spawn::ProcessSpawn;
 
     #[test]
     fn a1_takes_up_starting_running_and_merging() {
