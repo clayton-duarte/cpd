@@ -303,3 +303,31 @@ fn incident_started_and_ended_events_are_known_kinds() {
     assert_eq!(ended_event.kind(), Kind::IncidentEnded);
     assert_eq!(ended_event.data(), &json!({"by": "mgr", "ended_at": "2026-10-14T22:00:00.000Z"}));
 }
+
+/// `incident::elapsed` (hs-d640, contract §6.1): the coarse human duration from the row's
+/// `started_at` to now — under 60 s `{n}s`; under 1 h `{n}m`; under 1 d `{n}h {n}m`; otherwise
+/// `{n}d {n}h`; values truncated, a `started_at` in the future reads `0s`.
+#[test]
+fn elapsed_is_a_coarse_human_duration() {
+    use time::Duration;
+    use time::macros::datetime;
+
+    let started = "2000-01-01T00:00:00.000Z";
+    let base = datetime!(2000-01-01 00:00:00 UTC);
+    let cases = [
+        (Duration::ZERO, "0s"),
+        (Duration::seconds(42), "42s"),
+        (Duration::seconds(59), "59s"),
+        (Duration::minutes(1), "1m"),
+        (Duration::minutes(5), "5m"),
+        (Duration::minutes(59), "59m"),
+        (Duration::hours(1), "1h 0m"),
+        (Duration::hours(1) + Duration::minutes(23), "1h 23m"),
+        (Duration::days(1), "1d 0h"),
+        (Duration::days(2) + Duration::hours(4), "2d 4h"),
+        (Duration::seconds(-1), "0s"),
+    ];
+    for (i, (ago, want)) in cases.into_iter().enumerate() {
+        assert_eq!(incident::elapsed(started, base + ago).unwrap(), want, "case {i}");
+    }
+}

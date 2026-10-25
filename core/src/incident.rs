@@ -137,3 +137,12 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
     let incident = store.read(row)?;
     Ok(Output::success(json!({"on": incident.is_some(), "incident": incident})))
 }
+
+/// The coarse human duration from the incident row's `started_at` to `now` (hs-d640, contract
+/// §6.1): under 60 s `{n}s`; under 1 h `{n}m`; under 1 d `{n}h {n}m`; otherwise `{n}d {n}h`;
+/// values truncated, a `started_at` in the future reads `0s`. Stub: the impl Job replaces the
+/// body; the signature is the test Job's.
+pub fn elapsed(started_at: &str, now: time::OffsetDateTime) -> Result<String, CpdError> {
+    let _ = (started_at, now);
+    Ok(String::new())
+}
