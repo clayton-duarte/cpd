@@ -13,7 +13,7 @@ use cpd_core::inbox::model::{Kind, Urgency};
 const WIDE: &str = "計計計計計計計計計計";
 
 fn now() -> OffsetDateTime {
-    OffsetDateTime::parse("2026-01-03T00:00:00.000Z", &Rfc3339).unwrap()
+    OffsetDateTime::parse("2026-01-01T00:03:00.000Z", &Rfc3339).unwrap()
 }
 
 /// Draws one item in a `width` x `height` pane and returns the buffer.
@@ -45,8 +45,10 @@ fn an_inbox_item_with_wide_text_fills_its_row_to_the_width() {
     linked.kind = Kind::ReviewRequested;
     linked.url = Some("https://example.com/pull/1".into());
     let buf = drawn(&linked, width, 5);
-    // The lead is two columns, the label ten wide chars: its last cell is body column 21 (the pane's column 24).
-    let last_label_column = 2 + 20 - 1;
+    // The lead is two columns, the label ten wide chars (twenty columns): link writes the OSC at the first cell of
+    // each piece and skips a wide symbol's second cell, so the last linked cell is the first cell of the last wide
+    // character, body column 20 (the pane's column 23).
+    let last_label_column = 2 + 20 - 2;
     let linked = buf[(3 + last_label_column as u16, body_row)].symbol().contains("\x1b]8;;");
     assert!(linked, "the OSC 8 link covers the label's display columns, not its char count");
 }
