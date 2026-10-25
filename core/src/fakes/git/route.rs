@@ -183,6 +183,11 @@ impl GitRoute {
             "status" => status(&mut ctx, rest),
             "diff" => diff(&mut ctx, rest),
             "ls-remote" => ls_remote(&mut ctx, rest),
+            "update-ref" => update_ref(&mut ctx, rest),
+            "branch" => branch(&mut ctx, rest),
+            "worktree" => worktree(&mut ctx, rest),
+            "write-tree" => write_tree(&mut ctx, rest),
+            "read-tree" => read_tree(&mut ctx, rest),
             other => Err(other.to_owned()),
         }
     }
@@ -772,4 +777,26 @@ fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
         return Ok(Out::silent(2));
     }
     Ok(Out::ok(shown.iter().map(|(n, o)| format!("{o}\t{n}\n")).collect::<String>()))
+}
+
+// ---- update-ref, branch, worktree, write-tree, read-tree (stubs: PR port-git's Job git-worktree) -------
+
+fn update_ref(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("update-ref")
+}
+
+fn branch(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("branch")
+}
+
+fn worktree(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("worktree")
+}
+
+fn write_tree(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("write-tree")
+}
+
+fn read_tree(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("read-tree")
 }

@@ -28,3 +28,5 @@ impl FakeRunner {
 mod route_read_tests;
 #[cfg(test)]
 mod universe_tests;
+#[cfg(test)]
+mod worktree_tests;

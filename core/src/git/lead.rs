@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::run::{Out, run};
+use crate::clock::Clock;
+use crate::host::runner::Runner;
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 
@@ -53,6 +55,12 @@ pub fn sync_lead(lead: &Path, branch: &str) -> Result<Synced, CpdError> {
         }
     }
     Ok(Synced::Busy)
+}
+
+/// [`sync_lead`] on `runner`, napping on `clock` (a test passes a `FakeRunner` and a `ManualClock`).
+/// Stub: the seam is not made yet.
+pub fn sync_lead_with(_runner: &dyn Runner, _clock: &dyn Clock, _lead: &Path, _branch: &str) -> Result<Synced, CpdError> {
+    todo!("sync_lead_with")
 }
 
 fn round(lead: &Path, branch: &str, index: &Path) -> Result<Round, CpdError> {

@@ -44,7 +44,7 @@ pub mod session;
 pub mod spec;
 pub mod store;
 
-#[cfg(feature = "fakes")]
+#[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
 
 #[cfg(test)]
