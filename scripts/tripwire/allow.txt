@@ -74,13 +74,11 @@ cpd::tui tui_chat_pad::  # m-tui-r: view driven through a pane
 cpd::tui tui_history::  # m-tui-r: view driven through a pane
 cpd::tui tui_titles::  # m-tui-r: view driven through a pane
 cpd-core context::  # m-units: unit tests that may start a real tmux
-cpd-core driver::  # m-units: unit tests that may start a real tmux
 cpd-core host::  # m-units: unit tests that may start a real tmux
 cpd-core lock::  # m-units: unit tests that may start a real tmux
 cpd-core merge::  # m-units: unit tests that may start a real tmux
 cpd-core plan::  # m-units: unit tests that may start a real tmux
 cpd-core pr::  # m-units: unit tests that may start a real tmux
-cpd-core session::  # m-units: unit tests that may start a real tmux
 cpd-core store::  # m-units: unit tests that may start a real tmux
 cpd-engine watch::  # m-units: unit tests that may start a real tmux
 cpd-tui background::  # m-units: unit tests that may start a real tmux

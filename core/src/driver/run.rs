@@ -756,7 +756,8 @@ impl Driver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::spawn::ProcessSpawn;
+    use crate::driver::ports_tests::process;
+    use crate::host::spawn::FakeSpawn;
 
     #[test]
     fn a1_takes_up_starting_running_and_merging() {
@@ -768,17 +769,16 @@ mod tests {
 
     #[test]
     fn a_zombie_or_reaped_process_is_not_alive() {
-        assert!(ProcessSpawn.alive(SpawnPid(std::process::id())));
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
+        // The look at a pane asks `Spawn::alive`; the fake's process that ended is the zombie, then the reaped one.
+        let spawn = FakeSpawn::new();
+        let pid = process(&spawn);
+        assert!(spawn.alive(pid));
         // Not reaped yet: a zombie once it has exited.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while ProcessSpawn.alive(SpawnPid(pid)) {
-            assert!(std::time::Instant::now() < deadline, "{pid} still alive");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        child.wait().unwrap();
-        assert!(!ProcessSpawn.alive(SpawnPid(pid)));
+        spawn.exit(pid, 0);
+        assert!(!spawn.alive(pid));
+        assert_eq!(spawn.try_wait(pid).unwrap().map(|s| s.success()), Some(true), "waited for: reaped");
+        assert!(!spawn.alive(pid));
+        assert!(!spawn.alive(SpawnPid(4_000_000)), "a pid nobody started");
     }
 
     #[test]
