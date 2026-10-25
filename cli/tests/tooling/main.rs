@@ -23,6 +23,7 @@ mod run_with;
 mod slot;
 mod test_changed_script;
 mod testkit;
+mod testkit_hosts;
 mod testkit_screen;
 mod tests_script;
 mod tripwire_script;

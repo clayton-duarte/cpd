@@ -23,7 +23,7 @@
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{ExitCode, Output};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
@@ -41,6 +41,20 @@ const LIMIT: Duration = Duration::from_secs(600);
 
 /// Held by every [`Fx`] from its creation to its drop.
 static LOCK: Mutex<()> = Mutex::new(());
+
+/// One pane of the fake server: what `list-panes -a` prints with the `@cpd_*` options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneRow {
+    pub pane: String,
+    pub window: String,
+    pub window_name: String,
+    /// `@cpd_session`, empty when unset.
+    pub session: String,
+    /// `@cpd_view`, empty when unset.
+    pub view: String,
+    /// `@cpd_history`, empty when unset.
+    pub history: String,
+}
 
 pub struct Fx {
     /// The env: the fixtures (`env.sql(..)`, `env.write_config(..)`, `env.git_repo(..)`) are its.
@@ -177,6 +191,61 @@ impl Fx {
         }
         std::env::set_current_dir(fx.env.root()).expect("enter the env's root");
         fx
+    }
+
+    // ---- the git fixtures (the names of `TestEnv`'s), over the git route of the `FakeRunner`
+
+    /// `git` with `dir` as the cwd, through the route; panics unless it exits 0; returns trimmed stdout.
+    pub fn git(&self, _dir: &Path, _args: &[&str]) -> String {
+        todo!("Fx::git: run `git` through the route")
+    }
+
+    /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
+    pub fn git_repo(&self, _name: &str) -> PathBuf {
+        todo!("Fx::git_repo: a repo of the Universe")
+    }
+
+    /// [`Fx::git_repo`] whose `origin` is `https://github.com/acme/<name>.git`, with `refs/remotes/origin/main`.
+    pub fn keyed_repo(&self, _name: &str) -> PathBuf {
+        todo!("Fx::keyed_repo: a keyed repo of the Universe")
+    }
+
+    /// `url.<bare>.insteadOf = <the repo's GitHub URL>`: the GitHub URL resolves to the bare repo `bare`.
+    pub fn local_origin(&self, _repo: &Path, _bare: &Path) {
+        todo!("Fx::local_origin: insteadOf to a bare repo of the Universe")
+    }
+
+    /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
+    pub fn commit_file(&self, _dir: &Path, _path: &str, _text: &str, _message: &str) {
+        todo!("Fx::commit_file: write then commit")
+    }
+
+    // ---- the tmux fixtures, over the tmux route of the `FakeRunner`
+
+    /// `tmux -L <the env's private socket> <args>` through the route.
+    pub fn tmux(&self, _args: &[&str]) -> Output {
+        todo!("Fx::tmux: run `tmux` through the route")
+    }
+
+    /// The fake server's state of the env's socket; `None` while no server exists.
+    pub fn tmux_state(&self) -> Option<cpd::fakes::tmux::State> {
+        todo!("Fx::tmux_state: the FakeTmux state of the env's socket")
+    }
+
+    /// Starts the cockpit in the fake server: session `cpd`, window `main` with three panes (`tree`, `plan`, `chat`),
+    /// on a server with cpd's `SERVER_OPTIONS`. Only records: no pane program runs.
+    pub fn cockpit(&self) {
+        todo!("Fx::cockpit: the cockpit state, in one place")
+    }
+
+    /// Every pane of the fake server, in pane order, read from [`Fx::tmux_state`].
+    pub fn panes(&self) -> Vec<PaneRow> {
+        todo!("Fx::panes: the panes of the fake server")
+    }
+
+    /// A `cpd` reply for `tui view chat` and `tui view history` that exits at once.
+    pub fn fake_cpd_views(&self) {
+        todo!("Fx::fake_cpd_views: a cpd reply for the view panes")
     }
 
     /// Runs `cpd <args>` from this env's root.
