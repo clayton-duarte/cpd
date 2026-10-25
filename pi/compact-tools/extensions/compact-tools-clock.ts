@@ -10,9 +10,11 @@ type Subscription = { listener: () => void; period: number; elapsed: number };
 const listeners = new Set<Subscription>();
 let timer: ReturnType<typeof setInterval> | undefined;
 let cadence = 0;
+/** Whether the pane has focus; the clock holds no timer while it does not. */
+let focused = true;
 
 function reschedule(): void {
-	const next = listeners.size ? Math.min(...[...listeners].map(({ period }) => period)) : 0;
+	const next = listeners.size && focused ? Math.min(...[...listeners].map(({ period }) => period)) : 0;
 	if (next === cadence) return;
 	if (timer) clearInterval(timer);
 	timer = undefined;
@@ -33,8 +35,12 @@ function reschedule(): void {
 	timer.unref?.();
 }
 
-/** Set whether the pane has focus; a compiling stub replaced by the implementation Job. */
-export function setClockFocused(_focused: boolean): void {}
+/** Set whether the pane has focus; a focus change starts or stops the shared timer. */
+export function setClockFocused(value: boolean): void {
+	if (focused === value) return;
+	focused = value;
+	reschedule();
+}
 
 /** Subscribe until disposed. No timer survives the last subscriber. */
 export function onTick(listener: () => void, period = TICK_MS): () => void {

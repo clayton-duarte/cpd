@@ -30,6 +30,8 @@ for (const publicAPI of [false, true]) for (const initial of ["off", "claude"]) 
 	const chat = new Container();
 	const tui = { children: [{ children: [chat] }], requestRender() {} };
 	const emit = (name: string, event: unknown) => handlers.get(name)?.forEach(fn => fn(event, ctx));
+	// The pane is in view: report focus through the extension's own input path after every (re)bind.
+	const focusPane = () => { for (const fn of [...inputs]) fn("\x1b[I"); };
 	const ui = new Proxy({}, { get(_target, key) {
 		if (key === "theme") return theme;
 		if (key === "setWidget") return (name: string, factory: unknown) => { if (typeof factory === "function") widgets.set(name, factory(tui)); else widgets.delete(name); };
@@ -77,6 +79,7 @@ for (const publicAPI of [false, true]) for (const initial of ["off", "claude"]) 
 		const command = (style: string) => commands.get("compact-tools").handler(style, ctx);
 		for (const style of ["compact", "off", "claude", "off", "codex", "off", "compact"]) {
 			await command(style);
+			if (style !== "off") focusPane();
 			assert.equal(reloads, 0);
 			assert.equal(busy, true);
 			const output = draw();
