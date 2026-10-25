@@ -34,6 +34,7 @@ mod buffer;
 mod cells;
 mod chat;
 mod cockpit;
+mod host_click;
 pub mod dialog;
 pub mod fold;
 mod history;

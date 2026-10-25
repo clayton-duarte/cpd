@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -61,6 +61,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// The `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
+    /// The `@cpd_host_alert` value last set on the tmux server (`None` when it was unset).
+    pub host_alert: Option<String>,
     /// E9: the (highest record `seq`, uncurated count) of each Context's latest distill run in this engine's life, with the batch size it was given.
     pub distill_started: HashMap<ContextId, ((i64, i64), u8)>,
     /// E10: the retitle runs this engine started and has not seen end.
@@ -90,6 +92,7 @@ impl Engine {
             poll: None,
             paused_until: None,
             workers: None,
+            host_alert: None,
             distill_started: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
@@ -117,12 +120,13 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 16] = [
+        let steps: [fn(&mut Engine); 17] = [
             restart::drain,
             workers::run,
+            host_alert::run,
             escalations::run,
             liveness::run,
             schedule::run,
@@ -429,6 +433,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         poll: None,
         paused_until: None,
         workers: None,
+        host_alert: None,
         distill_started: HashMap::new(),
         titles: titles::Runs::default(),
         team: team::State::default(),

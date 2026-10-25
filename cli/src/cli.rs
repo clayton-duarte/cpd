@@ -9,6 +9,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
+use cpd_core::host_repair as host;
 use cpd_core::output::Output;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
@@ -87,6 +88,9 @@ pub enum Command {
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
+    /// Repair the cpd checkout after a skipped install (commands.md §9.11)
+    #[command(subcommand)]
+    Host(host::Command),
 }
 
 /// Parses `argv` and runs the command.
@@ -140,6 +144,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Tiers(a) => config::tiers(a),
         Command::Slot(a) => slot_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
+        Command::Host(c) => host::run(c),
     }
 }
 

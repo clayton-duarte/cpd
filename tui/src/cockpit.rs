@@ -338,6 +338,7 @@ enum Action {
     Legend,
     Logs,
     Merge,
+    Host,
 }
 
 impl Action {
@@ -347,12 +348,13 @@ impl Action {
             "legend" => Some(Action::Legend),
             "logs" => Some(Action::Logs),
             "merge" => Some(Action::Merge),
+            "host" => Some(Action::Host),
             _ => None,
         }
     }
 }
 
-/// `cpd tui action <reset|legend|logs> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|host> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge the `merge` popup confirmed, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
@@ -390,6 +392,7 @@ fn run_action(name: Option<&str>, pull: Option<&str>, client: &str, run_command:
         }
         (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
         (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
+        (Action::Host, None) => return super::host_click::run(&home, &config, &tmux, client, run_command),
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),

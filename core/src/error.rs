@@ -98,6 +98,7 @@ error_codes! {
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
+    InstallStateInvalid = "install_state_invalid" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,
@@ -216,6 +217,8 @@ error_codes! {
     SecretExists = "secret_exists" => Refused,
     SecretNotSignedIn = "secret_not_signed_in" => Refused,
     OwnerInUse = "owner_in_use" => Refused,
+    HostApprovalRequired = "host_approval_required" => Refused,
+    NotAManager = "not_a_manager" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
