@@ -19,12 +19,10 @@ cli/tests/tooling/install_script.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/tui/tui_idle.rs 4  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_plan.rs 6  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_plan_cancelled.rs 1  # m-tui-t: sleep or wall-clock wait
-cli/tests/tui/tui_runner.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_tree_asleep.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_tree_delete.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_tree.rs 4  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_widgets.rs 8  # m-tui-t: sleep or wall-clock wait
-cli/tests/tui/tui_worker.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui.rs 1  # m-tui-t: sleep or wall-clock wait
 core/src/driver/run.rs 3  # m-units: sleep or wall-clock wait
 core/src/driver/stall.rs 2  # m-units: sleep or wall-clock wait

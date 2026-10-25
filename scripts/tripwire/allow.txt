@@ -86,7 +86,6 @@ cpd::tui tui_merge::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_checklist::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_dialog::  # m-tui-r: view driven through a pane
 cpd::tui tui_logs::  # m-tui-r: view driven through a pane
-cpd::tui tui_runner::  # m-tui-r: view driven through a pane
 cpd::tui tui_chat_pad::  # m-tui-r: view driven through a pane
 cpd::tui tui_history::  # m-tui-r: view driven through a pane
 cpd::tui tui_titles::  # m-tui-r: view driven through a pane
