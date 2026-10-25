@@ -104,16 +104,16 @@ impl Live {
 
     /// One value of the store, read through a store opened and closed here: `env.query` keeps a connection, and with it a
     /// descriptor, open, which could be the fd 3 a driver is handed.
-    pub(super) fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+    pub(super) fn value<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
         store(&self.fx.env).read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
     pub(super) fn job_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.value(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
     fn phase(&self) -> String {
-        self.query("SELECT phase FROM plans WHERE id = 'pay'")
+        self.value("SELECT phase FROM plans WHERE id = 'pay'")
     }
 
     /// The worktree Attempt `id` runs in, as the starter recorded it: the PR's Lead worktree for a linear Attempt (the only
@@ -406,9 +406,9 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
     let (status, number, opened_at) = live.pr_row();
     assert_eq!((status.as_str(), number, opened_at.is_some()), ("open", Some(812), true));
     assert_eq!(live.phase(), "deploy");
-    assert_eq!(live.query::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
-    assert_eq!(live.query::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
-    assert!(live.query::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some());
+    assert_eq!(live.value::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
+    assert_eq!(live.value::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
+    assert!(live.value::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some());
     let (merged, opened, phase) = (live.plan_events("job-merged"), live.plan_events("pr-opened"), live.plan_events("plan-phase"));
     let ours: Vec<&(i64, Value)> = merged.iter().filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open").collect();
     assert_eq!(ours.len(), 1, "{merged:?}");
@@ -427,7 +427,7 @@ fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_
     let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
     let statuses: Vec<Value> = live.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
     assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
-    let txns: String = live.query(
+    let txns: String = live.value(
         "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
     );
     let txns: Vec<&str> = txns.split(',').collect();
@@ -671,13 +671,13 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
 
 // ---------- the stall rule (§3.4 A4, hs-d195) ----------
 
-/// The pid of the process a tool call of the Worker's pi runs as: `sleep 600`, a child of the pane's process.
-const TOOL: &str = "sleep 600";
+/// The pid of the process a tool call of the Worker's pi runs as: `sleep 120`, a child of the pane's process.
+const TOOL: &str = "sleep 120";
 
 /// A tool call of the Worker's pi whose result is `result` (a JSONL line, or nothing): the session file of the Worker, ending in a
 /// `bash` tool call, quiet for an hour of virtual time, and `TOOL` running under the pane's process. Returns the tool's pid.
 fn start_tool_call(live: &Live, result: &str) -> Pid {
-    let sid: String = live.query("SELECT id FROM sessions WHERE role = 'worker'");
+    let sid: String = live.value("SELECT id FROM sessions WHERE role = 'worker'");
     let dir = live.fx.env.home().join(".pi/agent/sessions/w");
     fs::create_dir_all(&dir).unwrap();
     let file = dir.join(format!("2026_{sid}.jsonl"));
@@ -727,7 +727,7 @@ fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
         2..=5 => {
             let tool = tool.unwrap();
             assert!(!live.fx.fakes.spawn.alive(tool), "the tool call is still alive");
-            let status: String = live.query("SELECT status FROM attempts WHERE id = 'api-a1'");
+            let status: String = live.value("SELECT status FROM attempts WHERE id = 'api-a1'");
             let panes = live.fx.tmux(&["list-panes", "-a", "-F", "#{pane_dead}"]);
             seen.push((status, String::from_utf8(panes.stdout).unwrap()));
             if nap == 5 {

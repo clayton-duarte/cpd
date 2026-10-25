@@ -85,6 +85,7 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
     // Not before the limit: the polls of the watchdog up to 59.5 s of virtual time, and the wrapper has done nothing.
     f.fx.advance(LIMIT - Duration::from_secs(3));
     f.wrapper.steps(4);
+    // time-claim: the watchdog's limit is the subject, on the ManualClock's virtual time; no per-poll signal from the watchdog.
     assert!(f.elapsed() < LIMIT);
     assert_eq!(f.pis(), 1, "restarted at {:?}, before the limit", f.elapsed());
     assert!(f.pane.spawn.signals().is_empty());
@@ -128,6 +129,7 @@ fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
     // Up to the last poll of the watchdog within the limit (59.5 s of virtual time): nothing yet.
     f.fx.advance(LIMIT - Duration::from_secs(3));
     f.wrapper.steps(4);
+    // time-claim: the watchdog's limit is the subject, on the ManualClock's virtual time; no per-poll signal from the watchdog.
     assert!(f.elapsed() < LIMIT);
     // The adapter reports `idle` now; the limit passes at the next polls of the watchdog, which see `idle`, not `stopped`.
     f.fx.env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = '{LEAD}'"));

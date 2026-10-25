@@ -234,7 +234,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     let (_, id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.root())).unwrap().unwrap();
     t.set_pane_view(&id, View::Plan).unwrap();
     let before = pane(&t.list_panes().unwrap(), &id).clone();
-    let script = "echo \"$CPD_HOST_TEST_VAR\" > respawned.txt; sleep 600";
+    let script = "echo \"$CPD_HOST_TEST_VAR\" > respawned.txt; sleep 120";
     t.respawn_pane_killing(&id, &sh(script)).unwrap();
     let after = pane(&t.list_panes().unwrap(), &id).clone();
     assert!(!after.dead);
@@ -261,7 +261,7 @@ fn create_session_returns_the_first_window_and_pane_once() {
     // -e reaches the first pane only, not the session's later windows.
     let session_env = s.raw(&["show-environment", "-t", "=cpd"]);
     assert!(!session_env.contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
-    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
+    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 120")).unwrap().1;
     let env_of = |id: &PaneId| s.state().pane_env(id.as_str()).into_iter().filter(|(k, _)| k == "CPD_HOST_TEST_VAR").collect::<Vec<_>>();
     assert_eq!(env_of(&pane), [("CPD_HOST_TEST_VAR".to_owned(), "pay".to_owned())], "the first pane has it");
     assert_eq!(env_of(&later), [], "the later window's pane has not: it prints `plan=` and nothing");
@@ -363,7 +363,7 @@ fn a_worker_window_gets_its_cwd_environment_and_argv() {
     let attempt = AttemptId::parse("rs-host-a1").unwrap();
     t.ensure_session("cpd-work", layout::WATCH_WINDOW, &sleeper(s.root())).unwrap();
 
-    let mut spawn = sh("printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${TMUX_PANE:+set}\" \"$1\"; sleep 600");
+    let mut spawn = sh("printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${TMUX_PANE:+set}\" \"$1\"; sleep 120");
     spawn.argv.extend(["argv0".into(), "two words; $HOME".into()]);
     spawn.cwd = Some(wt.clone());
     spawn.env.insert("CPD_PLAN".into(), "cpd2".into());

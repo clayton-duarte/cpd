@@ -265,7 +265,7 @@ fn log(live: &Live, id: &str) -> String {
 
 /// The Events about Attempt `id` or its Worker, in order.
 fn events(live: &Live, id: &str) -> Vec<Value> {
-    let session: Option<String> = live.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
+    let session: Option<String> = live.value(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
     let all = live.fx.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
     all.into_iter().filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref())).collect()
 }
@@ -581,7 +581,7 @@ fn an_idle_worker_is_nudged_once_then_ends_no_submit() {
     };
 
     let (id, _) = live.drive(JOB, |live, id, nap| {
-        let sid: String = live.query("SELECT id FROM sessions WHERE role = 'worker'");
+        let sid: String = live.value("SELECT id FROM sessions WHERE role = 'worker'");
         let dir = live.fx.env.home().join(".pi/agent/sessions/w");
         let file = dir.join(format!("2026_{sid}.jsonl"));
         match nap {
