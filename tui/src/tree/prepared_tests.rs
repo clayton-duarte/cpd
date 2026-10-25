@@ -374,7 +374,7 @@ fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
     view.mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 10, row: 3, modifiers: KeyModifiers::NONE });
     let screen = self::screen(&draw(&mut view, 46, 20));
     assert!(screen.get(1).is_some_and(|r| cue(r, '▲')), "the tree's ▲ cue after a notch: {screen:?}");
-    assert!(!screen[1..].iter().any(|r| r.contains(" alpha")), "the top of the tree scrolled away: {screen:?}");
+    assert!(!screen[1..].iter().any(|r| r.contains(" beta")), "the first Context scrolled away: {screen:?}");
     assert!(screen.iter().any(|r| r.contains("Inbox")), "the Inbox stays: {screen:?}");
 }
 
