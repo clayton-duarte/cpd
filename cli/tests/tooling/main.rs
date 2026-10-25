@@ -24,6 +24,7 @@ mod run_with;
 mod slot;
 mod tag_script;
 mod test_changed_script;
+mod testkit;
 mod tests_script;
 mod tripwire_script;
 mod version;

@@ -24,6 +24,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::Duration;
+
+use cpd_core::host::runner::{Call, Reply};
+use cpd_core::host::spawn::Launch;
+use cpd_core::ports::Fakes;
 
 use super::{Run, TestEnv};
 
@@ -33,6 +38,9 @@ static LOCK: Mutex<()> = Mutex::new(());
 pub struct Fx {
     /// The env: the fixtures (`env.sql(..)`, `env.write_config(..)`, `env.git_repo(..)`) are its.
     pub env: TestEnv,
+    /// The fake ports of [`Fx::with_ports`]: the `ManualClock`, the `FakeRunner` and the `FakeSpawn`, and the `Ports`
+    /// over them. [`Fx::new`] builds them too, but its commands run on the real ports.
+    pub fakes: Fakes,
     /// The process's environment and directory when this `Fx` took the lock.
     saved_vars: Vec<(OsString, OsString)>,
     saved_cwd: PathBuf,
@@ -45,6 +53,70 @@ impl Fx {
     /// process. Waits for the other `Fx` of the process, if any.
     pub fn new() -> Fx {
         Fx::with(bare_with_store())
+    }
+
+    /// STUB (PR testkit2): an `Fx` like [`Fx::new`] whose `cpd`, `cpd_in` and `cpd_with` call
+    /// `cpd::run_with(&self.fakes.ports, ..)`: no process is started and nothing external is run. Its drop fails the test
+    /// when a program was called that no `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
+    pub fn with_ports() -> Fx {
+        todo!("Fx::with_ports")
+    }
+
+    /// STUB: scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
+    pub fn fake(&self, _program: &str, _reply: Reply) {
+        todo!("Fx::fake")
+    }
+
+    /// STUB: [`Fx::fake`] for `gh`.
+    pub fn fake_gh(&self, _reply: Reply) {
+        todo!("Fx::fake_gh")
+    }
+
+    /// STUB: [`Fx::fake`] for `pi`.
+    pub fn fake_pi(&self, _reply: Reply) {
+        todo!("Fx::fake_pi")
+    }
+
+    /// STUB: [`Fx::fake`] for `op`.
+    pub fn fake_op(&self, _reply: Reply) {
+        todo!("Fx::fake_op")
+    }
+
+    /// STUB: [`Fx::fake`] for `node`.
+    pub fn fake_node(&self, _reply: Reply) {
+        todo!("Fx::fake_node")
+    }
+
+    /// STUB: every call of `program` (matched by file name) so far, in order, as the `FakeRunner` saw it.
+    pub fn calls(&self, _program: &str) -> Vec<Call> {
+        todo!("Fx::calls")
+    }
+
+    /// STUB: lifts the refusal, at drop, of a call no rule answered.
+    pub fn allow_unscripted(&self) {
+        todo!("Fx::allow_unscripted")
+    }
+
+    /// STUB: moves the `ManualClock` forward by `d` (no nap is recorded).
+    pub fn advance(&self, _d: Duration) {
+        todo!("Fx::advance")
+    }
+
+    /// STUB: returns as soon as `cond` holds, advancing the `ManualClock` by one tick between two looks; panics
+    /// `waited <limit> virtual time` when it never holds within the limit.
+    pub fn until(&self, _cond: impl FnMut() -> bool) {
+        todo!("Fx::until")
+    }
+
+    /// STUB: the `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).
+    pub fn take_launch(&self, _i: usize) -> Launch {
+        todo!("Fx::take_launch")
+    }
+
+    /// STUB: runs the `cpd` that `launch` describes through `run_with` on this thread: its `args` after the program,
+    /// its `env_set` and `env_remove` and its `cwd` around the call, restored after it. Starts no process.
+    pub fn run_launch(&self, _launch: &Launch) -> Run {
+        todo!("Fx::run_launch")
     }
 
     /// An `Fx` over `env`. Waits for the other `Fx` of the process, if any.
@@ -67,7 +139,7 @@ impl Fx {
         let (remove, set) = env.isolation();
         let saved_vars: Vec<_> = std::env::vars_os().collect();
         let saved_cwd = std::env::current_dir().expect("the current directory");
-        let fx = Fx { env, saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes: Fakes::new(), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
