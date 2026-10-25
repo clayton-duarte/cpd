@@ -462,9 +462,11 @@ pub fn frame(now: SystemTime) -> usize {
 }
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
-/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working, red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan with a failed Job); [`WAITING`] in the colour of
-/// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the hollow
-/// ring when working or fixing), in colour 8.
+/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) in the bright pair of [`Meaning::InProgress`]
+/// (cyan 14) for a working Session that leads no Plan and of the Plan's phase for a working Plan Lead (hs-d622:
+/// grounding 15, plan 13, dispatch 14, deploy 11, done 10), red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan
+/// with a failed Job); [`WAITING`] in the colour of [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row
+/// keeps its glyph, never animated (the hollow ring when working or fixing), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
@@ -472,7 +474,10 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working(_) => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Working(p) => (
+            SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
+            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p) }),
+        ),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),

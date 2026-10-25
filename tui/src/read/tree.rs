@@ -118,13 +118,15 @@ pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Ve
 
 /// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
 /// its glyph and takes no item. Every view that draws a Lead's dot (the tree, Pulse) uses this one rule.
-/// `heads` are the Plans: a working Plan Lead of one with a failed Job gets the red loader (hs-d581).
+/// `heads` are the Plans: a working Plan Lead of one with a failed Job gets the red loader (hs-d581), else the bright
+/// colour of its Plan's phase (hs-d622); a Session that leads no Plan works cyan.
 pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [SessionNode]) {
     for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
         let lead_of = s.plan.as_ref().filter(|_| s.plan_lead);
-        let failed = lead_of.is_some_and(|p| heads.iter().any(|h| h.id == *p && h.counts.failed >= 1));
-        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed, None);
-        // the phase (from `heads`) is ignored until the implementation Job reads it (red test: phase_dot_tests).
+        let head = lead_of.and_then(|p| heads.iter().find(|h| &h.id == p));
+        let failed = head.is_some_and(|h| h.counts.failed >= 1);
+        let phase = head.map(|h| h.phase);
+        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed, phase);
     }
 }
 

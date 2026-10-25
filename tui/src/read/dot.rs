@@ -62,12 +62,12 @@ impl Dot {
     /// (hs-d183): a working Session shows the spinner whatever its items, so a Lead at work is never yellow, magenta
     /// or white; any other state shows its most urgent item, else its glyph. `failed` is true for a Plan's own Lead
     /// whose Plan has a failed Job (hs-d581): working, it shows the red loader, or the red dot when its own item is red.
+    /// `phase` is the phase of the Plan the Session leads (`None` for any other Session); only a working Session uses it.
     pub fn of(state: State, item: Option<Urgency>, failed: bool, phase: Option<Phase>) -> Dot {
         if state == State::Working {
             return match (failed, item) {
                 (true, Some(Urgency::Red)) => Dot::Red,
-                // `phase` is ignored until the implementation Job reads it from the Plan (red test: phase_dot_tests).
-                _ => Dot::working(failed, None),
+                _ => Dot::working(failed, phase),
             };
         }
         item.map_or_else(|| Dot::glyph(state), Dot::from)

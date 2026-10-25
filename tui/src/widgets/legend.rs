@@ -150,14 +150,16 @@ pub(crate) fn sections() -> Vec<Section> {
     ]);
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
-    let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working(None), f, false)).collect::<Vec<_>>());
-    let fixing = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Fixing, f, false)).collect::<Vec<_>>());
+    let loader = |d: Dot| Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(d, f, false)).collect::<Vec<_>>());
+    // the working loader once per phase (hs-d622): the cyan row is dispatch, which a Session with no Plan shares
+    let frames = loader(Dot::Working(None));
+    let fixing = loader(Dot::Fixing);
     let dots = Section {
         title: DOTS_TITLE,
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working (one frame every 50 ms)")],
+            vec![frames, plain("the Lead is working, dispatch (a Session with no Plan too) (one frame every 50 ms)")],
             vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
@@ -167,6 +169,10 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::Blue, 0), plain("blue: a cpd notice that blocks nothing: curation")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
+            vec![loader(Dot::Working(Some(Phase::Grounding))), plain("the Lead is working, grounding (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Plan))), plain("the Lead is working, plan (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Deploy))), plain("the Lead is working, deploy (one frame every 50 ms)")],
+            vec![loader(Dot::Working(Some(Phase::Done))), plain("the Lead is working, done (one frame every 50 ms)")],
             vec![plain(""), plain(&precedence())],
         ],
     };
@@ -500,7 +506,7 @@ mod tests {
     #[test]
     fn the_popup_is_sized_to_the_legend_and_capped_at_the_client() {
         let (w, h) = size();
-        let args = popup_args((215, 66));
+        let args = popup_args((215, 80));
         assert_eq!(
             args,
             ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
