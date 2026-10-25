@@ -1,19 +1,25 @@
-//! The `plan` view (commands.md §13.2, §17), the centre-top pane of the cockpit, on a private tmux server: the flow
-//! chart of the Plan of the Lead in the chat slot, and the view's refresh from Events.
+//! The `plan` view (commands.md §13.2, §17), the centre-top pane of the cockpit: the flow chart of the Plan of the Lead in
+//! the chat slot, and the view's refresh from Events.
 //!
 //! The store is prepared through the store API (`Store::write`), as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas; the view runs as `cpd tui view plan` in a pane, and its screen is read with
-//! `tmux capture-pane`.
+//! and Attempts belong to their areas. What the chart draws is the view's first frame (`cpd_tui::draw_first_frame`) on a
+//! `TestBackend` over the store of an `Fx`; the tests of the view's loop (keys, the follow of Events, the Worker pane)
+//! run `cpd tui view plan` in a pane of a private tmux server, and its screen is read with `tmux capture-pane`.
 
 use crate::common;
 
 use std::fs;
 use std::time::{Duration, Instant};
 
+use crate::tui_plan_cancelled::{cells_of, draw, draw_sized, plain, rows};
+use common::fx::Fx;
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_tui::link::CUE;
-use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
+use cpd_tui::palette::{self, DRAFT, FAILED, MERGED, MERGING, Meaning, QUEUED, SPINNER};
+use cpd_tui::read::Kind;
+use ratatui::buffer::Buffer;
+use ratatui::style::Color;
 use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
@@ -71,6 +77,11 @@ fn env() -> TestEnv {
     env.fake_gh("exit 1");
     env.fake_pi("exit 1");
     env
+}
+
+/// An `Fx` with the config of the chart tests: the store the chart is drawn from, no process.
+fn fx() -> Fx {
+    crate::tui_plan_cancelled::env()
 }
 
 /// Whether the styled screen has the blue block of a selection (hs-d534, hs-d594, §6.1.1): colour 4, inverted, so its caps are
@@ -274,11 +285,10 @@ fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[
 
 #[test]
 fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_has_all_its_jobs_in_one_box() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, CPD_JOBS));
+    let fx = fx();
+    fx.env.sql(&plan_with("dispatch", None, CPD_JOBS));
     // The chart is wide: 1500 columns.
-    let pane = tmux_out(&env, &["new-session", "-d", "-s", "view", "-x", "1500", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"]).trim().to_owned();
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains("contract-core") && s.iter().any(|l| l.ends_with('╯')));
+    let screen = rows(&draw_sized(&fx, 1500, 40));
     let text = screen.join("\n");
     for (key, ..) in CPD_JOBS {
         assert!(text.contains(key), "{key} is drawn:\n{text}");
@@ -292,7 +302,7 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_has_all_its_jobs_in_o
 
 #[test]
 fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow() {
-    let env = env();
+    let fx = fx();
     // `api` has its open pull request #12; `web` needs it and waits
     let mut s = bare_plan("dispatch");
     s += r#"INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
@@ -310,9 +320,8 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     s += &job_row_in("ship", "api", "b", "merged", "S3");
     s += &need_row("ship", "b", "a");
     s += &job_row_in("ship", "web", "c", "queued", "S3");
-    env.sql(&s);
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('╯'));
+    fx.env.sql(&s);
+    let screen = rows(&draw(&fx));
     // web below api, the line from api's bottom border into web's top border
     // `web` waits for `api`, which has not merged (hs-d521): its title says on what
     let (merged_row, queued_row) = (
@@ -335,20 +344,20 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
 
 #[test]
 fn a_plan_with_no_pr_yet_says_so() {
-    let env = env();
-    env.sql(&bare_plan("grounding"));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no PR yet")));
+    let fx = fx();
+    fx.env.sql(&bare_plan("grounding"));
+    let buf = draw(&fx);
+    let screen = rows(&buf);
     assert!(screen.iter().any(|l| l.trim() == "no PR yet: cpd pr add"), "{}", screen.join("\n"));
     assert!(!screen.iter().any(|l| l.contains('╭') || l.contains("No Plan")), "{}", screen.join("\n"));
     // muted, colour 8
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    assert!(styled.contains("38;5;8mno PR yet: cpd pr add"), "{styled}");
+    let text = cells_of(&buf, "no PR yet: cpd pr add").expect("the message");
+    assert!(text.iter().all(|at| buf[*at].fg == palette::muted_text().fg.unwrap()), "{text:?}");
 }
 
 #[test]
 fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() {
-    let env = env();
+    let fx = fx();
     let jobs: &[(&str, &str, &str, &[&str], u32)] = &[
         ("draft", "draft", "S3", &[], 0),
         ("queued", "queued", "S3", &[], 0),
@@ -358,9 +367,8 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() 
         ("failed", "failed", "S3", &[], 3),
         ("gone", "cancelled", "S3", &[], 0),
     ];
-    env.sql(&plan_with("dispatch", None, jobs));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 13 && s[2].contains("draft"));
+    fx.env.sql(&plan_with("dispatch", None, jobs));
+    let screen = rows(&draw(&fx));
     // a column is as wide as its widest pill (the failed pill, `failed│S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = format!(
         "
@@ -384,24 +392,23 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() 
 
 #[test]
 fn a_plan_without_jobs_says_no_plan_yet() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[]));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Plan yet")));
+    let fx = fx();
+    fx.env.sql(&plan_with("dispatch", None, &[]));
+    let screen = rows(&draw(&fx));
     assert!(screen.iter().any(|l| l.trim() == "no Plan yet"), "{}", screen.join("\n"));
 }
 
 #[test]
 fn escalations_and_a_decided_plan_review_are_not_drawn() {
-    let env = env();
+    let fx = fx();
     let mut s = plan_with("dispatch", None, &[("a", "running", "S3", &[], 1)]);
     s += &format!("INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at, expired_at)
           VALUES ('ship', 'a-a1-q1', 'a-a1', 1, 'Which?', 'open', NULL, 1, '2026-01-03T00:20:00.000Z', NULL, NULL);
           INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at, decided_at)
           VALUES ('ship', 'r1', 1, '{FP}', 'approved', '2026-01-02T01:00:00.000Z', '2026-01-02T02:00:00.000Z');");
-    env.sql(&s);
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" a│"));
+    fx.env.sql(&s);
+    let screen = rows(&draw(&fx));
+    assert!(screen[2].contains(" a│"), "{}", screen.join("\n"));
     assert!(screen.iter().all(|l| !l.contains("Escalation") && !l.contains("review")), "{}", screen.join("\n"));
 }
 
@@ -420,55 +427,40 @@ fn styled_screen(env: &TestEnv, pane: &str) -> String {
     tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane])
 }
 
-/// The visible text the OSC 8 links to `url` cover in `styled`, SGR sequences dropped.
-fn linked_text(styled: &str, url: &str) -> String {
-    let (mut out, mut inside, mut rest) = (String::new(), false, styled);
-    while let Some(at) = rest.find('\x1b') {
-        if inside {
-            out.push_str(&rest[..at]);
-        }
-        rest = &rest[at..];
-        if let Some(osc) = rest.strip_prefix("\x1b]8;;") {
-            let end = osc.find("\x1b\\").expect("an OSC 8 ends in ST");
-            inside = &osc[..end] == url;
-            rest = &osc[end + 2..];
-        } else {
-            let end = rest.find('m').expect("an SGR ends in m");
-            rest = &rest[end + 1..];
-        }
-    }
-    out
+/// The visible text the OSC 8 links to `url` cover in `buf`: a linked piece is one cell whose symbol is `ESC ] 8 ; ; <url> BEL`, its text and
+/// the closing escape (`cpd_tui::link`).
+fn linked_text(buf: &Buffer, url: &str) -> String {
+    let open = format!("\x1b]8;;{url}\x07");
+    let cells = (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y)));
+    cells.filter_map(|at| buf[at].symbol().strip_prefix(&open).map(|rest| plain(rest.trim_end_matches("\x1b]8;;\x07")))).collect()
 }
 
 #[test]
 fn a_pull_request_box_title_ends_in_a_link_to_it() {
-    let env = env();
-    env.sql(&plan_under_review(2, "pending"));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
+    let fx = fx();
+    fx.env.sql(&plan_under_review(2, "pending"));
+    let buf = draw(&fx);
+    let screen = rows(&buf);
     assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮")), "{}", screen.join("\n"));
-    let styled = styled_screen(&env, &pane);
-    assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
     // the link wraps its whole text, from `#` through `󱆭`, and nothing else
-    assert_eq!(linked_text(&styled, "https://github.com/acme/repo/pull/7"), format!("#7 open {CUE}"), "{styled:?}");
+    assert_eq!(linked_text(&buf, "https://github.com/acme/repo/pull/7"), format!("#7 open {CUE}"), "{}", screen.join("\n"));
 }
 
 #[test]
 fn a_conflict_shows_in_the_box_title_and_clears_with_no_event() {
-    let env = env();
-    env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
-    let pane = start_view(&env);
-    let title = |s: &[String], word: &str| s.iter().any(|l| l.contains(&format!("#7 {word} {CUE}")));
-    screen_when(&env, &pane, "the open title", |s| title(s, "open"));
+    let fx = fx();
+    fx.env.sql(&plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let title = |word: &str| rows(&draw(&fx)).iter().any(|l| l.contains(&format!("#7 {word} {CUE}")));
+    assert!(title("open"), "the open title");
 
-    // the poll stored a conflict: no Event is appended for the view to wake on, so only the change of the row shows it
+    // the poll stored a conflict: no Event is appended, so only the change of the row shows it
     // (the poll sets `changed_at` with every change, contract §4.4)
-    env.sql("UPDATE pull_requests SET mergeable = 'conflicting', changed_at = '2026-02-01T00:00:01.000Z' WHERE number = 7;");
-    screen_when(&env, &pane, "conflict", |s| title(s, "conflict"));
+    fx.env.sql("UPDATE pull_requests SET mergeable = 'conflicting', changed_at = '2026-02-01T00:00:01.000Z' WHERE number = 7;");
+    assert!(title("conflict"), "conflict");
 
     // `unknown` is not a conflict
-    env.sql("UPDATE pull_requests SET mergeable = 'unknown', changed_at = '2026-02-01T00:00:02.000Z' WHERE number = 7;");
-    screen_when(&env, &pane, "open again", |s| title(s, "open"));
+    fx.env.sql("UPDATE pull_requests SET mergeable = 'unknown', changed_at = '2026-02-01T00:00:02.000Z' WHERE number = 7;");
+    assert!(title("open"), "open again");
 }
 
 /// A failed snapshot keeps the chart on screen and shows the error in the row below it, for longer than one poll; the
@@ -527,39 +519,38 @@ fn a_follow_that_fails_is_shown_below_the_chart() {
 #[test]
 fn a_pending_plan_review_draws_no_row_above_the_boxes() {
     {
-        let env = env();
-        env.sql(&plan_under_review(2, "pending"));
-        let pane = start_view(&env);
-        let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
+        let fx = fx();
+        fx.env.sql(&plan_under_review(2, "pending"));
+        let buf = draw(&fx);
+        let screen = rows(&buf);
         let shown = screen.join("\n");
         assert_eq!(screen[0], "", "{shown}");
         assert_eq!(screen[1], format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮"), "{shown}");
         assert!(screen.iter().all(|l| !l.contains("Plan review")), "{shown}");
-        assert!(!styled_screen(&env, &pane).contains("localhost"));
+        assert!(!(0..buf.area.height).any(|y| (0..buf.area.width).any(|x| buf[(x, y)].symbol().contains("localhost"))));
     }
 }
 
 #[test]
 fn no_lead_in_the_chat_slot_says_so() {
-    let env = env();
-    env.sql(&(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no Lead")));
+    let fx = fx();
+    fx.env.sql(&(context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z")));
+    let buf = draw(&fx);
+    let screen = rows(&buf);
     // in the message row, the pane's last row, indented by the margin; nothing above it
     assert_eq!(screen.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(), [&"   no Lead session in the centre".to_owned()], "{}", screen.join("\n"));
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    assert!(styled.contains("38;5;8m no Lead session in the centre"), "{styled}");
+    let text = cells_of(&buf, " no Lead session in the centre").expect("the message");
+    assert!(text.iter().all(|at| buf[*at].fg == palette::muted_text().fg.unwrap()), "{text:?}");
 }
 
 #[test]
 fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
-    let env = env();
-    env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
+    let fx = fx();
+    fx.env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
     // a second Lead of the Context with a pane: it used to be a tab
-    env.sql(&(lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z") + &event(
+    fx.env.sql(&(lead_row("fork-ship", "ctx", "ship", "2026-01-02T00:00:09.000Z") + &event(
         "session-moved", "ctx", Some("ship"), Some("fork-ship"), r#"{"pane":"%2","window":"@2","place":"parked"}"#)));
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the box", |s| s.len() > 3 && s[2].contains(" a│"));
+    let screen = rows(&draw(&fx));
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
     assert_eq!(screen[1], " ╭─ repo · repo 󱦰 main · dispatch ╮");
@@ -875,33 +866,20 @@ fn event_ago(kind: &str, plan: &str, minutes: u32) -> String {
     )
 }
 
-/// The bars of a row of a styled screen with their foreground: the number of the 256-colour palette tmux captures
-/// (`1` red, `2` green, `3` yellow, `4` blue, `5` magenta, `8` dark grey, `15` bright white), or `default`.
-fn bars_with_colours(styled_row: &str) -> Vec<(char, String)> {
-    let (mut out, mut colour, mut rest) = (Vec::new(), "default".to_owned(), styled_row);
-    while let Some(c) = rest.chars().next() {
-        if let Some(seq) = rest.strip_prefix("\x1b[") {
-            let end = seq.find('m').expect("an SGR ends in m");
-            let params: Vec<&str> = seq[..end].split(';').collect();
-            match params.as_slice() {
-                ["38", "5", n] => colour = (*n).to_owned(),
-                ["" | "0" | "39"] => colour = "default".to_owned(),
-                _ => {}
-            }
-            rest = &seq[end + 1..];
-        } else {
-            if ('▁'..='█').contains(&c) {
-                out.push((c, colour.clone()));
-            }
-            rest = &rest[c.len_utf8()..];
-        }
-    }
-    out
+/// The bars of row `y` of `buf` with their foreground.
+fn bars_with_colours(buf: &Buffer, y: u16) -> Vec<(char, Color)> {
+    (0..buf.area.width)
+        .filter_map(|x| {
+            let cell = &buf[(x, y)];
+            let c = cell.symbol().chars().next()?;
+            ('▁'..='█').contains(&c).then_some((c, cell.fg))
+        })
+        .collect()
 }
 
 #[test]
 fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_low_bar_for_zero() {
-    let env = env();
+    let fx = fx();
     let mut s = context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z");
     s += &lead_row("mgr", "ctx", "", "2026-01-01T00:00:01.000Z").replace("'lead'", "'manager'");
     s += &plan_row("p1", "ctx", "dispatch", "lead-p1", "2026-01-02T00:00:00.000Z", None);
@@ -920,26 +898,27 @@ fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_lo
         }
     }
     s += &event("session-moved", "ctx", None, Some("mgr"), r#"{"pane":"%1","window":"@1","place":"chat"}"#);
-    env.sql(&s);
-    let pane = start_view(&env);
+    fx.env.sql(&s);
 
-    let screen = screen_when(&env, &pane, "the Pulse row", |s| s.get(1).is_some_and(|l| l.contains("p1") && l.contains('▁')));
+    let buf = draw(&fx);
+    let screen = rows(&buf);
     let row = &screen[1];
     assert!(row.starts_with("  p1  "), "the id first, no dot: {row:?}");
     assert!(!row.contains('󰗠') && !row.contains('󰪥') && !row.contains('󰝦'), "no icon: {row:?}");
     let age = row.chars().rev().take(9).collect::<String>();
     assert!(age.trim().chars().next().is_some(), "the age cell stays: {row:?}");
-    // the pane is 300 wide (start_view); 2 columns of margin on each side
+    // the pane is 300 wide (`draw`); 2 columns of margin on each side
     let n = 300 - 4 - ("p1".len() + 2 + 2 + 9);
     assert_eq!(row.chars().filter(|c| ('▁'..='█').contains(c)).count(), n, "the sparkline takes the width the icons freed: {row:?}");
 
-    let styled = styled_screen(&env, &pane);
-    let bars = bars_with_colours(styled.lines().nth(1).expect("the first row"));
+    let bars = bars_with_colours(&buf, 1);
     assert_eq!(bars.len(), n);
-    let coloured: Vec<&str> = bars.iter().filter(|(_, c)| c != "8").map(|(_, c)| c.as_str()).collect();
-    assert_eq!(coloured, ["14", "14", "9", "13", "14", "10"], "other, PR opened, error, plan, escalation, merged (the bright pairs): {bars:?}");
-    assert!(bars.iter().filter(|(_, c)| c == "8").all(|(g, _)| *g == '▁'), "an empty slot is a grey ▁: {bars:?}");
-    assert!(bars.iter().any(|(_, c)| c == "8"), "{bars:?}");
+    let grey = palette::color(Meaning::Nothing);
+    let coloured: Vec<Color> = bars.iter().filter(|(_, c)| *c != grey).map(|(_, c)| *c).collect();
+    let kinds = [Kind::Other, Kind::PrOpened, Kind::Error, Kind::Plan, Kind::Escalation, Kind::Merged].map(palette::pulse_kind);
+    assert_eq!(coloured, kinds, "other, PR opened, error, plan, escalation, merged (the bright pairs): {bars:?}");
+    assert!(bars.iter().filter(|(_, c)| *c == grey).all(|(g, _)| *g == '▁'), "an empty slot is a grey ▁: {bars:?}");
+    assert!(bars.iter().any(|(_, c)| *c == grey), "{bars:?}");
 }
 
 #[test]

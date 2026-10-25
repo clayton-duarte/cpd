@@ -14,7 +14,7 @@ use common::fx::Fx;
 use cpd_tui::palette::{self, CANCELLED, Meaning};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 
 pub(crate) const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -42,10 +42,24 @@ pub(crate) fn draw_sized(fx: &Fx, width: u16, height: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
-/// The pane's rows as text, each without trailing blanks: a linked cell's symbol carries its OSC 8 escapes
-/// (`ESC ] 8 ; ; <url> BEL`), which take no column.
+/// The pane's rows as text, each without trailing blanks, as the terminal shows them: a linked piece is one cell whose symbol
+/// carries its OSC 8 escapes (`ESC ] 8 ; ; <url> BEL`, which take no column) and holds the text of the 1 or 2 cells it covers
+/// (`cpd_tui::link`), so the cells it covers are skipped.
 pub(crate) fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| plain(buf[(x, y)].symbol())).collect::<String>().trim_end().to_owned()).collect()
+    (0..buf.area.height)
+        .map(|y| {
+            let (mut row, mut x) = (String::new(), 0);
+            while x < buf.area.width {
+                let cell = &buf[(x, y)];
+                row.push_str(&plain(cell.symbol()));
+                x += match cell.diff_option {
+                    CellDiffOption::ForcedWidth(width) => width.get(),
+                    _ => 1,
+                };
+            }
+            row.trim_end().to_owned()
+        })
+        .collect()
 }
 
 /// `symbol` without its OSC 8 escapes.
