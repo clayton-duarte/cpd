@@ -37,8 +37,6 @@ core/src/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/session/run.rs 4  # m-units: sleep or wall-clock wait
 core/src/store/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/mod.rs 5  # m-units: sleep or wall-clock wait
-engine/src/watch/engine.rs 3  # m-units: sleep or wall-clock wait
-engine/src/watch/mod.rs 3  # m-units: sleep or wall-clock wait
 pi/test/askguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/chat-pad.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait

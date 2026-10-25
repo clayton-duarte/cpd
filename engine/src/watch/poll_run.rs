@@ -44,7 +44,7 @@ impl PollRun {
             // The thread never ran: the failure is the poll's result, as for a panic.
             let (tx, rx) = channel();
             let failure = Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the PR poll thread: {e}.")));
-            let _ = tx.send(Finished { result: Err(failure), ended: Instant::now() });
+            let _ = tx.send(Finished { result: Err(failure), ended: clock.now() });
             return PollRun { result: Some(rx) };
         }
         PollRun { result: Some(rx) }
