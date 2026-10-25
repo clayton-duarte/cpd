@@ -18,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+
+use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
 use serde_json::Value;
 
 /// How long the processes get between `SIGTERM` and `SIGKILL`.
@@ -185,11 +187,6 @@ fn cmdline(pid: u32) -> String {
     words.join(" ")
 }
 
-/// Whether `pid` still runs (a zombie has ended).
-fn alive(pid: u32) -> bool {
-    stat(pid).is_some_and(|(_, state)| state != 'Z')
-}
-
 fn signal(pid: u32, signal: Signal) {
     // A process already gone is what we want.
     let _ = kill(Pid::from_raw(pid as i32), signal);
@@ -203,12 +200,12 @@ fn terminate(pids: &[u32]) -> Vec<u32> {
     }
     let deadline = Instant::now() + GRACE;
     while Instant::now() < deadline {
-        if !pids.iter().any(|&p| alive(p)) {
+        if !pids.iter().any(|&p| ProcessSpawn.alive(SpawnPid(p))) {
             return Vec::new();
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let left: Vec<u32> = pids.iter().copied().filter(|&p| alive(p)).collect();
+    let left: Vec<u32> = pids.iter().copied().filter(|&p| ProcessSpawn.alive(SpawnPid(p))).collect();
     for &pid in &left {
         signal(pid, Signal::SIGKILL);
     }
@@ -277,10 +274,10 @@ mod tests {
         assert_eq!(child.len(), 1, "{child:?}");
         let mut watch = Watch::new(60);
         assert_eq!(watch.check(&file, pi.id(), true), None, "an open span is not a stall");
-        assert!(alive(child[0]));
+        assert!(ProcessSpawn.alive(SpawnPid(child[0])));
         // The span ended a moment ago: the quiet counts from the last tick that saw it, not from the file.
         assert_eq!(watch.check(&file, pi.id(), false), None);
-        assert!(alive(child[0]));
+        assert!(ProcessSpawn.alive(SpawnPid(child[0])));
         // With no span ever seen, the same file is a stall.
         let line = Watch::new(60).check(&file, pi.id(), false).expect("killed");
         assert!(line.contains(&child[0].to_string()), "{line}");

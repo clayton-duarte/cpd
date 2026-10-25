@@ -44,9 +44,12 @@ impl Clock for SystemClock {
         std::thread::sleep(d);
     }
     fn utc(&self) -> OffsetDateTime {
-        todo!("Clock::utc of SystemClock (PR ports2)")
+        OffsetDateTime::now_utc()
     }
 }
+
+/// The UTC time a [`ManualClock`] starts at: fixed, so a stamp a test reads is the same on every run.
+const EPOCH: OffsetDateTime = time::macros::datetime!(2026-01-01 00:00:00 UTC);
 
 #[derive(Default)]
 struct State {
@@ -98,7 +101,7 @@ impl Clock for ManualClock {
         state.elapsed += d;
     }
     fn utc(&self) -> OffsetDateTime {
-        todo!("Clock::utc of ManualClock (PR ports2)")
+        EPOCH + self.elapsed()
     }
 }
 

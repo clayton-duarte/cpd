@@ -21,9 +21,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
@@ -32,6 +29,7 @@ use crate::clock::{Clock, SystemClock};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
 
 use lock::{MIGRATION_SETTLE_MS, SetupLock, setup_lock};
 pub use lock::MIGRATION_WAIT_CEILING;
@@ -883,10 +881,7 @@ impl Holder {
             .filter_map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).ok()?).ok())
             .filter_map(|v| {
                 let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
-                let alive = match kill(Pid::from_raw(i32::try_from(pid).ok()?), None) {
-                    Ok(()) | Err(Errno::EPERM) => true,
-                    Err(_) => false,
-                };
+                let alive = ProcessSpawn.alive(SpawnPid(pid));
                 let since = v["since_unix_ms"].as_u64()?;
                 let text = |k: &str| v[k].as_str().map(str::to_owned);
                 let command = text("command")?;

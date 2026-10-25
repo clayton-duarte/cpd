@@ -10,9 +10,7 @@ use super::Pull;
 use cpd_core::atomic;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
+use cpd_core::host::spawn::{Pid, ProcessSpawn, Spawn};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -79,7 +77,7 @@ fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
 pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
     markers(home)
         .into_iter()
-        .filter(|(_, pull, marker)| alive(marker.pid) || (marker.merged && open.contains(pull)))
+        .filter(|(_, pull, marker)| u32::try_from(marker.pid).is_ok_and(|pid| ProcessSpawn.alive(Pid(pid))) || (marker.merged && open.contains(pull)))
         .map(|(_, pull, _)| pull)
         .collect()
 }
@@ -104,13 +102,6 @@ struct Marker {
 /// The directory of the markers.
 fn path_dir(home: &CpdHome) -> PathBuf {
     home.run_dir().join("tui").join("merging")
-}
-
-/// Whether process `pid` exists (signal 0). A process of another user exists too (`EPERM`).
-fn alive(pid: i64) -> bool {
-    // 0 and the negatives would signal a process group, not a process.
-    let Some(pid) = i32::try_from(pid).ok().filter(|p| *p > 0) else { return false };
-    !matches!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
 }
 
 #[cfg(test)]

@@ -7,9 +7,6 @@
 
 use std::time::Duration;
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -26,6 +23,7 @@ use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
+use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
 use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
@@ -65,7 +63,7 @@ struct PaneWatch {
 
 impl PaneWatch {
     fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
-        if let Some(pid) = self.pid.filter(|&pid| alive(pid)) {
+        if let Some(pid) = self.pid.filter(|&pid| ProcessSpawn.alive(SpawnPid(pid))) {
             return Ok(Look::Alive(Some(pid)));
         }
         let panes = match tmux.list_panes() {
@@ -89,33 +87,6 @@ impl PaneWatch {
                 Look::Alive(p.pid)
             }
         })
-    }
-}
-
-/// Whether process `pid` runs: `kill(pid, 0)` finds it and it is not a
-/// zombie (ended, not yet reaped by tmux). Linux reads `/proc/<pid>/stat`;
-/// macOS reads the BSD status through `libproc` (`SZOMB`).
-fn alive(pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else { return false };
-    if matches!(kill(Pid::from_raw(raw), None), Err(Errno::ESRCH)) {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use libproc::bsd_info::BSDInfo;
-        // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
-        const SZOMB: u32 = 5;
-        return match libproc::proc_pid::pidinfo::<BSDInfo>(raw, 0) {
-            Ok(info) => info.pbi_status != SZOMB,
-            // `kill` found it, `libproc` does not: it was reaped between the two.
-            Err(_) => false,
-        };
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
-        // `pid (comm) state …`; comm may hold spaces and parentheses.
-        stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
     }
 }
 
@@ -786,17 +757,17 @@ mod tests {
 
     #[test]
     fn a_zombie_or_reaped_process_is_not_alive() {
-        assert!(alive(std::process::id()));
+        assert!(ProcessSpawn.alive(SpawnPid(std::process::id())));
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id();
         // Not reaped yet: a zombie once it has exited.
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while alive(pid) {
+        while ProcessSpawn.alive(SpawnPid(pid)) {
             assert!(std::time::Instant::now() < deadline, "{pid} still alive");
             std::thread::sleep(Duration::from_millis(10));
         }
         child.wait().unwrap();
-        assert!(!alive(pid));
+        assert!(!ProcessSpawn.alive(SpawnPid(pid)));
     }
 
     #[test]

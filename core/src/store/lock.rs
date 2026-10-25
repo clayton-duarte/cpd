@@ -10,14 +10,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::spawn::{Pid, ProcessSpawn, Spawn};
 use crate::lock as flock;
 
 /// The longest a waiter waits for a holder that says it migrates, counted from
@@ -50,18 +48,12 @@ impl Marker {
     /// released the `flock` by itself; a marker of a dead pid under a lock
     /// someone else holds is not a migration.
     fn live(&self) -> bool {
-        self.migrating && alive(self.pid)
+        self.migrating && ProcessSpawn.alive(Pid(self.pid))
     }
 
     fn migrated_for(&self) -> Duration {
         Duration::from_millis(unix_ms().saturating_sub(self.started_unix_ms))
     }
-}
-
-fn alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    // Pid 0 would signal this process group.
-    pid > 0 && matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
 }
 
 fn unix_ms() -> u64 {
