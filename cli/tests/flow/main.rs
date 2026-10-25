@@ -44,3 +44,4 @@ mod secret_guard;
 mod secret_op;
 mod spec;
 mod repo_config;
+mod workflow;
