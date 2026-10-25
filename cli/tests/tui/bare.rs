@@ -33,7 +33,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
-use serde_json::{Value, json};
+use serde_json::Value;
 use time::OffsetDateTime;
 use time::macros::format_description;
 

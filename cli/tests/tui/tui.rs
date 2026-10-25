@@ -10,6 +10,8 @@
 use crate::common;
 
 use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use common::cockpit::{action, ran, tui};
 use common::fx::Fx;
@@ -984,6 +986,69 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
     assert_eq!(moved["session"], "lead-b");
     assert_eq!(moved["data"]["place"], "chat");
     assert_eq!(moved["data"]["pane"], lead_pane);
+}
+
+/// `cpd tui` on a server older than the installed tmux marks a restart pending, once, and never restarts
+/// it itself (it may run inside the server): the engine does, once nothing is in the way (contract §6.1).
+/// The older server is the route's answer: `display -p #{version}` says `1.0` once the test arms it (`-V`, the installed
+/// tmux, is the route's `3.6a`).
+#[test]
+fn tui_marks_a_restart_of_an_older_tmux_server_pending_and_does_not_kill_it() {
+    let fx = fx();
+    let older = Arc::new(AtomicBool::new(false));
+    let says = older.clone();
+    let _ = (*fx.fakes.runner).clone().on(
+        "tmux",
+        move |call| says.load(Ordering::SeqCst) && call.args.ends_with(&["display".into(), "-p".into(), "#{version}".into()]),
+        Reply::ok("1.0\n"),
+    );
+    let pending = fx.env.cpd_home().join("run/tmux-restart.pending");
+
+    let (built, stderr) = fx.with_stderr(|| tui(&fx, &[]));
+    assert_eq!(built["built"], true);
+    assert!(!pending.exists(), "a server as new as the installed tmux needs no restart");
+    assert_eq!(stderr, "");
+    let pid = shown(&fx, &["display", "-p", "#{pid}"]);
+    older.store(true, Ordering::SeqCst);
+    let (run, stderr) = fx.with_stderr(|| tui(&fx, &[]));
+    assert_eq!(run["built"], false);
+    // Said once on stderr, with what happens next: the engine restarts it.
+    assert_eq!(stderr, "cpd tui: the tmux server runs an older tmux than the installed one; the restart happens once no Attempt runs.\n");
+    let marked: Value = serde_json::from_str(&fs::read_to_string(&pending).unwrap()).unwrap();
+    assert_eq!((marked["server"].as_str(), marked["installed"].as_str(), marked["failed"].is_null()), (Some("1.0"), Some("3.6a"), true));
+    let at = marked["at"].clone();
+    // Again: still pending, with its first time; and nothing was killed.
+    tui(&fx, &[]);
+    let again: Value = serde_json::from_str(&fs::read_to_string(&pending).unwrap()).unwrap();
+    assert_eq!(again["at"], at);
+    assert!(!fx.calls("tmux").iter().any(|c| c.args.iter().any(|a| a == "kill-server")));
+    assert_eq!(shown(&fx, &["display", "-p", "#{pid}"]), pid);
+}
+
+/// The preview build the views keep until `preview-tui.sh off` (the server's `@cpd_preview`).
+const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+#[test]
+fn tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise() {
+    let fx = fx();
+    let (quiet, stderr) = fx.with_stderr(|| tui(&fx, &["--respawn"]));
+    assert_eq!(quiet["built"], true, "{quiet}");
+    assert!(!stderr.contains("preview"), "{stderr}");
+
+    out(&fx, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let (warned, stderr) = fx.with_stderr(|| tui(&fx, &["--respawn"]));
+    assert_eq!(warned["built"], false, "{warned}");
+    assert!(
+        stderr.contains(&format!("a preview is on ({PREVIEW}); its views keep the preview build until 'preview-tui.sh off'")),
+        "{stderr}"
+    );
+    // Without --respawn nothing is said; the option's JSON does not change.
+    let (_, stderr) = fx.with_stderr(|| tui(&fx, &[]));
+    assert!(!stderr.contains("preview"), "{stderr}");
+
+    out(&fx, &["set", "-gu", "@cpd_preview"]);
+    let (_, stderr) = fx.with_stderr(|| tui(&fx, &["--respawn"]));
+    assert!(!stderr.contains("preview"), "{stderr}");
 }
 
 #[test]
