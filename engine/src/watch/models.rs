@@ -2,7 +2,7 @@
 //! runs the helper `pi/lib/models-list.ts` when no cached list exists or the newest `polled_at` is
 //! `watch.models_discovery_seconds` old, validates its answer and writes one file per provider that has a good list
 //! (`cpd_core::models`, shared with `cpd models refresh`). Like E11 the run is detached from the tick: a later tick
-//! collects its answer. cpd names no provider and no key here: the helper's answer names the providers and the helper
+//! collects its answer. cpd names no provider and no key here: the helper's answer names them and the helper
 //! inherits the engine's environment.
 //!
 //! The week counts from the files' `polled_at`, never from the engine's start. After a failed run the next attempt is

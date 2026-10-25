@@ -74,7 +74,8 @@ pub enum Entry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
     pub pi_version: String,
-    pub providers: Vec<Entry>,
+    /// One entry per listed or failed provider, in the helper's order (the answer's `providers` array).
+    pub entries: Vec<Entry>,
 }
 
 fn invalid(why: impl std::fmt::Display) -> CpdError {
@@ -128,18 +129,18 @@ impl Answer {
             Value::Bool(true) => {
                 let pi_version = value["pi_version"].as_str().ok_or_else(|| invalid("`pi_version` is not text"))?.to_owned();
                 let list = value["providers"].as_array().ok_or_else(|| invalid("`providers` is not an array"))?;
-                let providers = list.iter().map(entry_of).collect::<Result<Vec<_>, _>>()?;
-                let names: std::collections::BTreeSet<&str> = providers
+                let entries = list.iter().map(entry_of).collect::<Result<Vec<_>, _>>()?;
+                let names: std::collections::BTreeSet<&str> = entries
                     .iter()
                     .map(|e| match e {
                         Entry::Listed(l) => l.provider.as_str(),
                         Entry::Failed(f) => f.provider.as_str(),
                     })
                     .collect();
-                if names.len() != providers.len() {
+                if names.len() != entries.len() {
                     return Err(invalid("a provider is listed twice"));
                 }
-                Ok(Answer { pi_version, providers })
+                Ok(Answer { pi_version, entries })
             }
             _ => Err(invalid("`ok` is not a boolean")),
         }

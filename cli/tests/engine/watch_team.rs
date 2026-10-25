@@ -63,6 +63,13 @@ fn fx(period: Option<u32>, sleep: u32) -> Fx {
         ),
     )
     .unwrap();
+    // E14 shares the fake `node`: a cached model list that is not due keeps it from running here.
+    fs::create_dir_all(env.cpd_home().join("run")).unwrap();
+    fs::write(
+        env.cpd_home().join("run/models-x.json"),
+        r#"{"version":1,"provider":"x","polled_at":"2999-01-01T00:00:00.000Z","pi_version":"1.0.0","source":{"kind":"openai-models","auth":"custom","base":null},"ids":["a"]}"#,
+    )
+    .unwrap();
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake_pi("exit 0");

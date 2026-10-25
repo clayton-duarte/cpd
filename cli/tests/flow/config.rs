@@ -226,6 +226,7 @@ sleep_seconds = 1
 tick_seconds = 1
 pr_poll_seconds = 1
 team_review_seconds = 1
+models_discovery_seconds = 1
 pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
@@ -327,6 +328,7 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[watch]\nteam_review_seconds = 0\n", "watch.team_review_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\nmodels_discovery_seconds = 0\n", "watch.models_discovery_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"c02ju\"\nslack_user_id = \"U1\"\n", "inbox.team_channel"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"clayton\"\n", "inbox.slack_user_id"),
         // both or neither: the claim and mention rules need the User's id, and the id is useless without the channel

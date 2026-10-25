@@ -87,15 +87,15 @@ pub fn read_all(home: &CpdHome) -> Result<Vec<Read>, CpdError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(io_failed("list", &dir, e)),
     };
-    let mut providers = BTreeSet::new();
+    let mut names = BTreeSet::new();
     for entry in entries {
         let name = entry.map_err(|e| io_failed("list", &dir, e))?.file_name().to_string_lossy().into_owned();
         if let Some(provider) = name.strip_prefix("models-").and_then(|n| n.strip_suffix(".json")).filter(|p| super::safe_name(p)) {
-            providers.insert(provider.to_owned());
+            names.insert(provider.to_owned());
         }
     }
     let mut reads = Vec::new();
-    for provider in providers {
+    for provider in names {
         reads.extend(read_file(&provider, &path_of(home, &provider))?);
     }
     Ok(reads)
@@ -216,14 +216,14 @@ fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, ap
     Ok(Outcome::Written(Written { provider: provider.clone(), polled_at: now.to_owned(), count: file.ids.len(), changes: this }))
 }
 
-/// Writes the good providers of `answer` (contract §3.7 E14), each against its own previous file, under
+/// Writes the good lists of `answer` (contract §3.7 E14), each against its own previous file, under
 /// `locks/models.lock`; a failed or empty one writes nothing, and a provider the answer does not name keeps its file.
 /// Errors: `lock_timeout`, `store_failed`.
 pub fn apply(home: &CpdHome, busy_ms: u32, answer: &Answer) -> Result<Applied, CpdError> {
     let _lock = take_lock(home, busy_ms)?;
     let now = timestamp(OffsetDateTime::now_utc());
     let mut applied = Applied::default();
-    for entry in &answer.providers {
+    for entry in &answer.entries {
         let outcome = match entry {
             Entry::Listed(listed) => write_listed(home, &answer.pi_version, listed, &now, &mut applied)?,
             Entry::Failed(failure) => Outcome::Failed(failure.clone()),

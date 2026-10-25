@@ -15,7 +15,7 @@ use crate::output::Output;
 /// The `models` commands (commands.md §14.4).
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Read the model lists of the providers pi can use now (§14.4)
+    /// Read the model lists pi can offer now (§14.4)
     Refresh,
     /// Print the cached model lists (§14.4)
     Show(ShowArgs),
@@ -40,7 +40,7 @@ fn refresh() -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let answer = Helper::new(&config, &home)?.run()?;
     let applied = cache::apply(&home, config.timeouts.store_busy_ms, &answer)?;
-    let providers: Vec<Value> = applied
+    let lists: Vec<Value> = applied
         .outcomes
         .iter()
         .map(|o| match o {
@@ -54,8 +54,8 @@ fn refresh() -> Result<Output, CpdError> {
         Outcome::Written(_) => None,
     });
     match first {
-        Some(failure) => Err(failure.error().with("providers", providers)),
-        None => Ok(Output::success(json!({"pi_version": answer.pi_version, "providers": providers}))),
+        Some(failure) => Err(failure.error().with("providers", lists)),
+        None => Ok(Output::success(json!({"pi_version": answer.pi_version, "providers": lists}))),
     }
 }
 
@@ -65,12 +65,12 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
     }
     let home = CpdHome::from_env()?;
     let now = OffsetDateTime::now_utc();
-    let (mut providers, mut warnings) = (Vec::new(), Vec::new());
+    let (mut lists, mut warnings) = (Vec::new(), Vec::new());
     for read in cache::read_all(&home)? {
         match read {
             Read::Good(file) if args.provider.as_ref().is_none_or(|p| *p == file.provider) => {
                 let polled = OffsetDateTime::parse(&file.polled_at, &Rfc3339).expect("a good file's polled_at parses");
-                providers.push(json!({
+                lists.push(json!({
                     "provider": file.provider,
                     "polled_at": file.polled_at,
                     "age_seconds": (now - polled).whole_seconds().max(0),
@@ -87,5 +87,5 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
             _ => {}
         }
     }
-    Ok(Output::success(json!({"providers": providers, "warnings": warnings})))
+    Ok(Output::success(json!({"providers": lists, "warnings": warnings})))
 }

@@ -79,7 +79,7 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
-    /// The model lists of the providers pi can use (commands.md §14.4)
+    /// The model lists pi can offer (commands.md §14.4)
     #[command(subcommand)]
     Models(models::Command),
     /// Run a command inside a test slot (commands.md §23)
