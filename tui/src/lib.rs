@@ -23,6 +23,12 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod guard_tests;
+#[cfg(test)]
+mod guard_popup_tests;
+#[cfg(test)]
+mod guard_terminal_tests;
+#[cfg(test)]
 mod section_title_tests;
 mod chat;
 mod cockpit;
@@ -74,6 +80,7 @@ mod updating_label;
 #[cfg(test)]
 mod pill_colours;
 mod plan;
+mod popup;
 pub mod read;
 mod runner;
 mod scroll;
