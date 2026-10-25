@@ -6,6 +6,7 @@
 use crate::common;
 use crate::tui_titles;
 
+use common::fx::Fx;
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::PANE_DIED_HOOK;
@@ -126,11 +127,11 @@ fn populate(store: &mut Store) {
     sql(store, &s);
 }
 
-fn fixture() -> (TestEnv, Store) {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+fn fixture() -> (Fx, Store) {
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     populate(&mut store);
-    (env, store)
+    (fx, store)
 }
 
 fn machine() -> Machine {
@@ -248,8 +249,8 @@ fn prs_store(env: &TestEnv) -> Store {
 /// the same lines on the same 30×14 pane, for a machine with no open pull request.
 #[test]
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut open(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut open(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, 0, 0))).unwrap();
@@ -263,8 +264,8 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
 
 #[test]
 fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
@@ -293,8 +294,8 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
 
 #[test]
 fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     sql(&mut store, "UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 9; UPDATE pull_requests SET mergeable = 'mergeable' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let buf = render(46, 25, &w);
@@ -308,8 +309,8 @@ fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
 
 #[test]
 fn a_draft_shows_draft_and_the_others_open() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| p.draft).collect::<Vec<_>>(), [true, false, false]);
     let got = rows(&render(46, 25, &w)).join("\n");
     assert_eq!(got.matches("draft").count(), 1, "{got}");
@@ -317,8 +318,8 @@ fn a_draft_shows_draft_and_the_others_open() {
 
 #[test]
 fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others_are_not() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| p.active).collect::<Vec<_>>(), [false, false, true]);
     let buf = render(46, 25, &w);
@@ -348,12 +349,15 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others
 
 #[test]
 fn closed_and_merged_pull_requests_are_not_listed() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    let got = rows(&render(46, 25, &w)).join("\n");
-    for hidden in ["acme/web#2", "Closed web", "acme/api#1", "Merged api"] {
-        assert!(!got.contains(hidden), "{hidden}:\n{got}");
+    {
+        let fx = Fx::new();
+        let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
+        let got = rows(&render(46, 25, &w)).join("\n");
+        for hidden in ["acme/web#2", "Closed web", "acme/api#1", "Merged api"] {
+            assert!(!got.contains(hidden), "{hidden}:\n{got}");
+        }
     }
+    // (one `Fx` at a time: the second is the fixture's, in `column`)
     // The fixture's merged ones (a Plan's own, `old` #3 and `away` #9) are not listed either.
     let (got, _) = column(25);
     let got = got.join("\n");
@@ -362,8 +366,8 @@ fn closed_and_merged_pull_requests_are_not_listed() {
 
 #[test]
 fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     let mut s = pull_request("acme/web", 31, "A colleague change", false, "open", "none", "passed", "2026-01-06T00:00:00.000Z");
     s += &pull_request("acme/web", 32, "My own, and asked of me", false, "open", "none", "passed", "2026-01-07T00:00:00.000Z");
     s += "UPDATE pull_requests SET authored = 0, review_requested = 1 WHERE number = 31;
@@ -381,8 +385,8 @@ fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
 
 #[test]
 fn no_open_pull_request_says_so() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     let mut s = context("alpha") + &lead_row("ship", "v1");
     s += &plan_row("ship", "dispatch", "2026-01-02T00:00:00.000Z", None);
     s += &pull_request("acme/web", 2, "Closed web", false, "closed", "none", "none", "2026-01-01T00:00:00.000Z");
@@ -398,8 +402,8 @@ fn no_open_pull_request_says_so() {
 /// `acme/web#4` (failed checks) is owned by no Plan, `acme/repo#20` (pending) by `mine`: only the unowned one is red.
 #[test]
 fn failed_checks_are_red_on_an_unowned_pull_request() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     assert_eq!(buf[find(&buf, palette::CHECKS_FAILED)].fg, palette::color(Meaning::Failed));
 }
@@ -421,8 +425,8 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 
 #[test]
 fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     // Beside the 6 rows of the blank row, the machine, the header and its blank rows, each pull request takes 2, and
     // when some are hidden the `▼` row takes one more.
     for (height, listed) in [(6 + 6, 3), (6 + 5, 2), (6 + 4, 1), (6 + 3, 1), (6 + 2, 0), (6 + 1, 0)] {
@@ -443,8 +447,8 @@ fn linked_arrow(url: &str) -> String {
 
 #[test]
 fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
         assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
@@ -456,8 +460,8 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
 
 #[test]
 fn an_unowned_pr_is_read_only_text_on_both_lines_with_its_arrow_clickable_and_an_owned_one_is_clickable_text() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     assert_eq!(
         w.prs.iter().map(|p| p.lead.as_ref().map(|l| l.as_str())).collect::<Vec<_>>(),
         [None, None, Some("l-mine")],
@@ -489,8 +493,8 @@ fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
 
 #[test]
 fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advances_with_the_clock() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     // `mine` owns acme/repo#20 (third row pair); `acme/web#4` and `acme/repo#9` have no owner.
     let second = |w: &Widgets, frame: usize| row(&render_at(46, 25, w, frame), 11).trim_end().to_owned();
     let idle = read::widgets(&mut store, 3, 0).unwrap();
@@ -509,8 +513,8 @@ fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advanc
 
 #[test]
 fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let (_, hits) = render_hits(46, 25, &w);
     let [hit] = &hits[..] else { panic!("{hits:?}") };
     assert_eq!(hit.lead.as_str(), "l-mine");
@@ -522,8 +526,8 @@ fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
 
 #[test]
 fn a_snapshot_error_is_the_last_row_in_red() {
-    let env = TestEnv::new();
-    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let fx = Fx::new();
+    let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     terminal
         .draw(|f| {
@@ -613,21 +617,21 @@ fn focused_session(env: &TestEnv) -> String {
 
 #[test]
 fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mouse() {
-    let env = pane_env();
-    prs_store(&env);
-    let pane = start(&env, "view");
-    let screen = wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
-    let width = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_width}"]).parse::<usize>().unwrap();
-    for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
-        let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
-        assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
+    // The column on the 120-column pane of the old test. Whether the terminal's mouse reporting is on while a view runs is
+    // `tui_runner`'s (`run_view`'s `Capture::Mouse`): a real pty's flag has no in-process subject.
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
+    let width = 120;
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    let buf = render(width, 40, &w);
+    for (name, number, repo) in [(" acme/web#4", 4, "acme/web"), (" acme/repo#9", 9, "acme/repo"), (" acme/repo#20", 20, "acme/repo")] {
+        let y = (0..buf.area.height).find(|y| row(&buf, *y).starts_with(name)).unwrap_or_else(|| panic!("{name}: {:#?}", rows(&buf)));
+        let line = row(&buf, y);
+        assert_eq!(line.chars().count(), usize::from(width), "the arrow ends {name}'s line at the right edge: {line:?}");
         assert!(line.ends_with(CUE), "{line:?}");
+        // the cell at the right edge is the link to the pull request, in the OSC 8 escapes the terminal gets
+        assert_eq!(buf[(width - 1, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "{name}");
     }
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
-        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\{CUE}"))), "{url}: {styled:?}");
-    }
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }
 
 /// `q` does nothing in the column: with the cockpit's `pane-died` hook a view that exits is started again, so a `q` that
@@ -805,8 +809,8 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
 
 #[test]
 fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
-    let env = TestEnv::new();
-    let mut store = prs_store(&env);
+    let fx = Fx::new();
+    let mut store = prs_store(&fx.env);
     sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);

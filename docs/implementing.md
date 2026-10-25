@@ -104,6 +104,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
 - **Integration tests** go in `cli/tests/<area>/<module>.rs` (or `<module>_<topic>.rs`), whichever crate the area is in: they run the built `cpd` binary. There is **one test binary per area**, `cli/tests/<area>/main.rs` (docs/research/workspace-split.md §4.2; docs/research/test-binaries.md): its `mod` lines are the area table below, the one source of truth, and a test checks that every `.rs` under `cli/tests/` (but `common/`) is in exactly one binary. A new file is declared in its area's `main.rs` with `mod <module>;`, and a test's name is `<module>::<test>` in the binary `cpd::<area>`. A file starts with `use crate::common;` and uses the harness `cli/tests/common/mod.rs` (each `main.rs` has `#[path = "../common/mod.rs"] mod common;`):
   - `TestEnv::new()`: a temporary directory with its own `$CPD_HOME` (`cpd_home()`, empty), `$HOME` (`home()`, with a git identity), and `bin/` first on `PATH`; `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `TMUX` and `TMUX_PANE` are removed from the environment. The env's directory is made under `TMPDIR` normalised (no trailing `//`: the Gate's `TMPDIR` ends in `/` on a Mac).
   - `env.cpd(&[…])` / `env.cpd_in(cwd, &[…])` run the built binary and return a `Run` (`exit`, `stdout`, `stderr`); `run.json()` asserts exactly one JSON value, `run.ok()` the success envelope, `run.error()` the failure's `error` object.
+  - **`Fx` or `TestEnv::cpd`.** `common::fx::Fx::new()` (`cli/tests/common/fx.rs`) is a `TestEnv` whose `fx.cpd(&[…])` / `fx.cpd_in(cwd, &[…])` / `fx.cpd_with(cwd, &[…], vars)` run the command tree in the test process (`cpd::main_with`), with the same `Run`, instead of an exec: use it for every test whose commands start no process of their own (a store, config, policy or read command; the fixtures are `fx.env`, a `TestEnv::bare()` that starts no reaper). Keep `env.cpd` (the binary) for a command that runs the recorded executable again (`pr poll`, `attempt run`, `session reload`, `watch`, a detached driver), for `slot` (it exits the process), for a signal, a terminal or `events follow`, and for a command that owns its stdout with `print!` (`context pending --markdown`): `Fx::cpd` panics on it, as it reads nothing from the writer; a test may call both (`fx.env.cpd`). `Fx` holds a process-wide lock for its whole life (two never overlap under `cargo test`'s threads), sets the env's variables once and puts the environment and the directory back when it drops; `cpd_with` and `cpd_in` set theirs around the one call. `Run::stderr` is empty: a test that reads stderr keeps `env.cpd`. A file is migrated whole, from `env.cpd` to `fx.cpd`, and the old test is removed in the commit that has its replacement green (no test is deleted for being slow).
   - `env.git_repo("name")`: a repo on `main` with one commit; `env.git(dir, &[…])`.
   - `env.tmux_tmpdir()`: the directory where the env's tmux server keeps its socket, `<root>/tmux` when `<canonical root>/tmux/tmux-<uid>/<socket>` is at most 100 characters, the socket name measured with room for the sockets a test derives from it (`DERIVED_SOCKET_ROOM`, 20 characters), else `/tmp` (where the socket is `/tmp/tmux-<uid>/<socket>`), because macOS limits a unix socket path to 104 bytes (`sun_path`) and tmux resolves `/var` to `/private/var`; the teardown removes the socket file (never the directory, tmux's and shared); every test takes the directory from `tmux_tmpdir()`, never from `root().join("tmux")`.
   - `env.tmux(&[…])` and `env.tmux_socket()`: a private tmux server (own `TMUX_TMPDIR` via `tmux_tmpdir()` and socket name, killed when the `TestEnv` drops). Put the socket name in the test's `config.toml` as `tmux.socket`.
@@ -123,12 +124,52 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env`, `host_pill` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fx`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
+
+### Time in tests
+
+A test never sleeps, polls on the wall clock, or measures real elapsed time (no `thread::sleep`, no `Instant::now()` bound); it runs the product's timer on virtual time. `host::limit::limit(name, default)` (CPD_TEST_<NAME>, debug builds) stays only for what a built binary alone can reach, until PR final.
+
+Decided API: in `core/src/clock.rs` (cpd-core, always compiled, no feature):
+```rust
+pub trait Clock: Send + Sync {
+    fn now(&self) -> std::time::Instant;
+    fn sleep(&self, d: std::time::Duration);
+}
+
+pub struct SystemClock;  // Instant::now, thread::sleep
+
+pub struct ManualClock {
+    fn new() -> Self;
+    fn advance(&self, d: Duration);
+    fn elapsed(&self) -> Duration;
+    fn naps(&self) -> Vec<Duration>;
+}  // Clone shares one state; now() is construction Instant + virtual elapsed; sleep(d) records d, advances by d, returns at once
+```
+The Clock trait lives in core, not behind a feature, so core, engine and tui unit tests use it. A timer is passed as `&dyn Clock` (later `Ports::clock`) at the entry of the loop that waits, never a global. Every existing public signature stays: the Clock-taking form is added beside it (`<name>_with(clock, ...)`) and the old one calls it with `&SystemClock`, so no caller changes and behaviour is identical.
+
+A ManualClock is for waits that END BY TIME (a deadline, a back-off, a nap count). A loop whose condition is changed by something outside the test (a real child process exiting, a file another process writes) must not run on a ManualClock: its virtual naps would burn the whole deadline before the event happens; such a loop is tested after its ports exist (PRs port-run, port-tmux, ports), where the event is an in-memory state change.
+
+Timers and which PR gives each the seam:
+
+| Timer | PR |
+|---|---|
+| Store busy back-off 500 ms doubling to 5 s, flock retry 20 ms, migration wait 10 minutes | this PR (`Store::open_with`) |
+| Subprocess deadline poll 10 ms, grace 5 s, drain 1 s (`host::deadline`) | port-run |
+| Git 60 s/300 s (`git::run`) | port-git |
+| Tmux 10 s | port-tmux |
+| Driver poll, lead poll, kill pause, wait log, stall grace (`driver`) | ports |
+| Session file poll, watchdog, pane wait, retry, stop poll, chat idle, adapter watchdog, fork source poll (`session`) | ports |
+| Slot poll, ask poll, plan cancel wait, distill poll, PR rebase guard, engine tick, everything in `engine/src/watch` | ports |
+
+Do not describe code that this PR has not created yet as present: this PR creates `Clock`, `SystemClock`, `ManualClock` and `Store::open_with`.
+
+**Update (pro-d29):** `cpd slot` is being removed by the Plan `no-slots` of Context cpd; if the `slot poll` named above is gone from main when you start, skip it.
 
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
-- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share coordinates nothing there (under `cargo test` they share one process): do not write one. Never `set_var`/`remove_var` in a test (`harness.rs` fails on it): put the variable on the `Command` (`env.command(..).env(..)`), or `Tmux::with_tmpdir` for tmux. Write and copy executables with `common::write_executable`/`copy_executable` (ETXTBSY, `harness.rs` checks it). Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it; select a file's tests with `binary_id(cpd::<area>) and test(/^<file>::/)`). A test that runs its own binary again (`std::env::current_exe()`) passes the full name, `"<file>::<test>"`, to `--exact`.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share coordinates nothing there (under `cargo test` they share one process): do not write one. Never `set_var`/`remove_var` in a test (`harness.rs` fails on it; `common/fx.rs`, which holds the lock, is the one place that does): put the variable on the `Command` (`env.command(..).env(..)`), or `Tmux::with_tmpdir` for tmux. Write and copy executables with `common::write_executable`/`copy_executable` (ETXTBSY, `harness.rs` checks it). Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it; select a file's tests with `binary_id(cpd::<area>) and test(/^<file>::/)`). A test that runs its own binary again (`std::env::current_exe()`) passes the full name, `"<file>::<test>"`, to `--exact`.
 - A test must fail first, for the right reason.
 - **The guard (the tripwire, allowlist and static sleep check).** The Gate's last segment runs tests through a tripwire that denies real tmux until a test is migrated to the fake. Three mechanisms enforce this:
   - **The tripwire** `scripts/tripwire/tmux` (POSIX shell, passes `scripts/check-portable.sh`, no `timeout`): it takes its program name from `$0` and its allowlist from `allow.txt` next to it (or `allow-<program>.txt` for any other program such as `git`); where it runs from does not matter: a test may copy or wrap the `tmux` it finds on PATH (`bare.rs` copies it as the "older" server), and a copy with no allowlist beside it takes the first PATH directory that has the allowlist and a `tmux`. It starts no subshell and no external command before its verdict (a test makes hundreds of calls). It reads the nextest environment variables `NEXTEST_BINARY_ID` and `NEXTEST_TEST_NAME`; when the pair matches a line of the allowlist it execs the real program (the first one in the PATH entries *behind* the tripwire's directory, so a fake `tmux` in front of it that execs the tripwire is never found again; the program itself gets the PATH it was given, so what it starts meets the tripwire too); otherwise it prints `tripwire: real tmux called by <binary id> <test name>: tmux <argv>` on stderr, appends that line to `${TMPDIR:-/tmp}/tripwire.log` and exits 127. With no nextest variables set it denies all access: a test that builds its own environment (`env -i`, `env_clear`) passes `NEXTEST_BINARY_ID`, `NEXTEST_TEST_NAME` and `TMPDIR` on (`common::tripwire_env_words()`), or its calls are unidentified and denied. A fake `tmux` in `env.bin()` (built from `cli/src/fakes/tmux/`) still wins because it is earlier on PATH. `scripts/gate-run.sh`'s `finish()` function prints the log and fails the run when it is non-empty, so a test that swallows the exit 127 still fails the Gate.

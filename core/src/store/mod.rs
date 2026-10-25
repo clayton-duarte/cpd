@@ -5,6 +5,8 @@
 //! Every module reads through [`Store::read`] and writes through
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
+#[cfg(test)]
+mod clock_tests;
 mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
@@ -26,6 +28,7 @@ use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
 
+use crate::clock::{Clock, SystemClock};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -112,26 +115,33 @@ pub fn is_transient(e: &CpdError) -> bool {
 /// Settles one attempt of a step that may meet a transient error. `Ok(Some)`:
 /// it worked. `Ok(None)`: it met a transient error, which was logged and
 /// waited out; try again. `Err`: not transient, or not persisting, or told to give up.
-fn settle<T>(persist: &mut Option<Persist>, wait: &mut Wait, result: Result<T, CpdError>) -> Result<Option<T>, CpdError> {
+/// `step` is the longest single nap of the wait, so `give_up` is polled between naps.
+fn settle<T>(
+    clock: &dyn Clock,
+    step: Duration,
+    persist: &mut Option<Persist>,
+    wait: &mut Wait,
+    result: Result<T, CpdError>,
+) -> Result<Option<T>, CpdError> {
     let Some(p) = persist else { return result.map(Some) };
     match result {
         Ok(value) => {
             if let Some(since) = wait.since.take() {
-                (p.log)(&format!("the store is clear again after {:.1} s", since.elapsed().as_secs_f64()));
+                (p.log)(&format!("the store is clear again after {:.1} s", clock.now().saturating_duration_since(since).as_secs_f64()));
                 *wait = Wait::new();
             }
             Ok(Some(value))
         }
         Err(e) if is_transient(&e) && !(p.give_up)() => {
             let code = e.code().as_str().to_owned();
-            wait.since.get_or_insert_with(Instant::now);
+            wait.since.get_or_insert_with(|| clock.now());
             if !wait.codes.contains(&code) {
                 (p.log)(&format!("{code}: {} Waiting and trying again until it clears.", e.message()));
                 wait.codes.push(code);
             }
-            let until = Instant::now() + wait.delay;
-            while Instant::now() < until && !(p.give_up)() {
-                std::thread::sleep(Duration::from_millis(50).min(until.saturating_duration_since(Instant::now())));
+            let until = clock.now() + wait.delay;
+            while clock.now() < until && !(p.give_up)() {
+                clock.sleep(step.min(until.saturating_duration_since(clock.now())));
             }
             wait.delay = (wait.delay * 2).min(BACKOFF_MAX);
             Ok(None)
@@ -195,14 +205,35 @@ impl Store {
     /// `locks/store.lock` (§1.4): SQLite answers concurrent switches to WAL of
     /// a new database with `SQLITE_BUSY` at once, without its busy handler.
     pub fn open(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
-        Store::open_with(home, busy_ms, &Catalog::BUILT_IN)
+        Store::open_with(&SystemClock, home, busy_ms, None)
+    }
+
+    /// [`Store::open`] on `clock`: every wait of the open (the busy back-off of `persist`, the retry of the setup
+    /// lock) sleeps on it. With `persist`, a transient error is waited out as [`Store::open_persistent`] does,
+    /// until [`lock::MIGRATION_WAIT_CEILING`] of `clock` time has passed since the first one; then the error returns.
+    pub fn open_with(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, persist: Option<Persist>) -> Result<Store, CpdError> {
+        let mut persist = persist;
+        let mut wait = Wait::new();
+        loop {
+            let result = Store::open_catalog(clock, home, busy_ms, &Catalog::BUILT_IN);
+            if let (Err(e), Some(since)) = (&result, wait.since)
+                && is_transient(e)
+                && clock.now().saturating_duration_since(since) >= lock::MIGRATION_WAIT_CEILING
+            {
+                return result;
+            }
+            if let Some(mut store) = settle(clock, Duration::MAX, &mut persist, &mut wait, result)? {
+                store.persist = persist;
+                return Ok(store);
+            }
+        }
     }
 
     /// [`Store::open`] with the migrations and the pinned hash of `catalog`:
     /// the tests' way to run migrations this binary does not have.
-    fn open_with(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
+    fn open_catalog(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
         let path = home.db();
-        let setup = setup_lock(home, busy_ms)?;
+        let setup = setup_lock(clock, home, busy_ms)?;
         // An opener that waited out a migration may meet its holder still finishing (closing its connection, which
         // checkpoints): its own setup waits for SQLite at least `MIGRATION_SETTLE_MS`, whatever `busy_ms` (§4.2).
         let setup_ms = if setup.waited_for_migration() { busy_ms.max(MIGRATION_SETTLE_MS) } else { busy_ms };
@@ -221,7 +252,7 @@ impl Store {
         let mut wait = Wait::new();
         let mut persist = Some(persist);
         loop {
-            if let Some(mut store) = settle(&mut persist, &mut wait, Store::open(home, busy_ms))? {
+            if let Some(mut store) = settle(&SystemClock, Duration::from_millis(50), &mut persist, &mut wait, Store::open(home, busy_ms))? {
                 store.persist = persist;
                 return Ok(store);
             }
@@ -468,7 +499,7 @@ impl Store {
                         }
                         Ok(tx)
                     });
-                    if let Some(tx) = settle(&mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
+                    if let Some(tx) = settle(&SystemClock, Duration::from_millis(50), &mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
                         break tx;
                     }
                 };
@@ -526,7 +557,7 @@ impl Store {
             let tx = loop {
                 let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
                     .map_err(|e| enrich(CpdError::from(e), &path, busy_ms));
-                if let Some(tx) = settle(&mut self.persist, &mut wait, begun)? {
+                if let Some(tx) = settle(&SystemClock, Duration::from_millis(50), &mut self.persist, &mut wait, begun)? {
                     break tx;
                 }
             };
@@ -1016,7 +1047,7 @@ mod tests {
         let probe_home = CpdHome::resolve(Some(probe.path().join("cpd").into()), None).unwrap();
         // Even a refusal of `home` is judged against the pinned hash of a fresh store with the same list.
         let pinned = canonical_hash(&verdict::reference_database(&Catalog { named, schema_hash: "" }, &probe_home)?)?;
-        Store::open_with(home, 5000, &Catalog { named, schema_hash: &pinned })
+        Store::open_catalog(&SystemClock, home, 5000, &Catalog { named, schema_hash: &pinned })
     }
 
     pub(super) fn applied(store: &mut Store) -> Vec<(String, i64, i64)> {
@@ -1338,7 +1369,7 @@ mod tests {
                 false
             }))
             .unwrap();
-        let setup = setup_lock(home, 5000).unwrap();
+        let setup = setup_lock(&SystemClock, home, 5000).unwrap();
         store.migrate(home, &Catalog::BUILT_IN, &setup).unwrap();
         store.conn.progress_handler(1000, None::<fn() -> bool>).unwrap();
         (store, steps.load(Ordering::SeqCst))

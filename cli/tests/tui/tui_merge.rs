@@ -12,11 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use common::fx::Fx;
 use common::{CPD, TestEnv, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::merge;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 const REF: &str = "o/r#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -42,6 +45,12 @@ fn env() -> TestEnv {
         ),
     )
     .unwrap();
+    seed(&env);
+    env
+}
+
+/// The pull request `o/r#7` in the env's store.
+fn seed(env: &TestEnv) {
     let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
     store
         .write("fixture", |tx| {
@@ -53,7 +62,6 @@ fn env() -> TestEnv {
             Ok::<(), CpdError>(())
         })
         .unwrap();
-    env
 }
 
 /// The file the fake `gh pr merge` waits for, when the test gives it one.
@@ -258,16 +266,20 @@ fn has(rows: &[String], text: &str) -> bool {
 
 // ---------- the dialog, before the confirm (unchanged) ----------
 
+/// The dialog of `arg` as the view draws it in the 60x8 popup, over the store of `fx`: its rows, each without trailing blanks.
+fn dialog_rows(fx: &Fx, arg: &str) -> Vec<String> {
+    let mut store = fx.env.store();
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+    terminal.draw(|f| merge::draw_dialog(&mut store, f, arg).unwrap()).unwrap();
+    let buf = terminal.backend().buffer();
+    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+}
+
 #[test]
 fn a_pull_request_the_store_does_not_have_shows_no_title() {
-    let env = env();
-    gh(&env, "CLEAN", 0);
-    let args = [
-        "new-session", "-d", "-s", "view", "-x", "60", "-y", "8", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", "o/r#8", "--client",
-        CLIENT,
-    ];
-    let pane = tmux_out(&env, &args).trim().to_owned();
-    let rows = wait_dialog(&env, &pane);
+    let fx = Fx::new();
+    seed(&fx.env);
+    let rows = dialog_rows(&fx, "o/r#8");
     assert_eq!(rows[2..5], [inside(" o/r#8"), inside(""), inside(" method: squash")]);
 }
 

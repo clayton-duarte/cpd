@@ -45,6 +45,8 @@ pub mod spec;
 pub mod store;
 
 #[cfg(test)]
+mod clock_tests;
+#[cfg(test)]
 mod incident_tests;
 
 #[cfg(test)]
