@@ -5,7 +5,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 
 use super::{Machine, Usage, draw, legend};
 use crate::link::CUE;
@@ -345,7 +345,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
+            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Default::default()), "{name}: cap at {cap_at}: {text}");
         }
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
         assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
@@ -383,7 +383,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         let want = palette::dot_span(dot, 0, false);
         assert_eq!(cell.symbol(), glyph, "{text}");
         assert_eq!(cell.symbol(), want.content, "{text}");
-        assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
+        assert_eq!(cell.fg, want.style.fg.unwrap_or_default(), "{text}");
     }
     let precedence = format!(
         "red > yellow > magenta > blue > white > {} > {} > {} > {}",

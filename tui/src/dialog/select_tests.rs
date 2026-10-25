@@ -12,7 +12,7 @@ use super::view::{Dialog, Mode};
 use super::{Outcome, check_options, select};
 use cpd_core::clock::ManualClock;
 use cpd_core::error::ErrorCode;
-use cpd_core::fakes::tmux::TmuxRoute;
+use cpd_core::fakes::tmux::{FakeTmux, TmuxRoute};
 use cpd_core::host::runner::FakeRunner;
 use cpd_core::host::Tmux;
 
@@ -188,7 +188,7 @@ fn mock_tmux(dir: &tempfile::TempDir) -> (Tmux, Arc<FakeRunner>, Answer) {
     route.fake().add_client("c1", 100, 30);
     let result = Answer::default();
     let answer = result.clone();
-    route.fake().on_popup(move |_| answer.lock().unwrap().clone());
+    FakeTmux::on_popup(route.fake(), move |_| answer.lock().unwrap().clone());
     (tmux, runner, result)
 }
 
