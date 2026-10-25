@@ -18,6 +18,7 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
+use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
