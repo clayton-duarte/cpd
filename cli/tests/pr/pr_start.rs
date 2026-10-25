@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use common::fx::{Fx as Kit, exit_code};
 use common::Run;
 use common::refused;
+use cpd_core::clock::Clock;
 use cpd_core::host::runner::Reply;
+use cpd_core::ports::Ports;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
@@ -32,6 +34,25 @@ impl Deref for Fx {
 
     fn deref(&self) -> &Kit {
         &self.kit
+    }
+}
+
+/// The clock of eight `cpd` commands on threads of one process: the store's setup lock is held by one of them while the others
+/// wait for it, and a wait on the `ManualClock` passes at once (the 5 s `store_busy_ms` in an instant), so a nap here only
+/// yields the processor, and the time stands still until the holder is done.
+struct Yielding(Arc<dyn Clock>);
+
+impl Clock for Yielding {
+    fn now(&self) -> std::time::Instant {
+        self.0.now()
+    }
+
+    fn sleep(&self, _: std::time::Duration) {
+        std::thread::yield_now();
+    }
+
+    fn utc(&self) -> time::OffsetDateTime {
+        self.0.utc()
     }
 }
 
@@ -54,7 +75,6 @@ fn fx() -> Fx {
         "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[tmux]\nsocket = \"{}\"\n",
         kit.env.tmux_socket()
     ));
-    kit.fake("cpd", Reply::ok(WATCH_OK));
     let fx = Fx { kit, clones: std::cell::Cell::new(0) };
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
@@ -114,6 +134,8 @@ impl Fx {
     }
 
     fn lock(&self) -> Run {
+        // `plan lock` starts the engine: `cpd watch --ensure` answers it has.
+        self.fake("cpd", Reply::ok(WATCH_OK));
         self.cpd(&["plan", "lock", "--plan", "pay"])
     }
 
@@ -236,8 +258,8 @@ impl Fx {
         self.env.root().join(format!("other-clone-{}", self.clones.get()))
     }
 
-    /// The engine's calls answered by `engine_routes` (`cpd pr poll` finds no pull request, tmux has no server), with E5 polling every second of virtual time and `cpd pr poll` run for real, in this process, over a `gh`
-    /// that knows no pull request but `acme/a1#1`, merged on GitHub once `merged` is set.
+    /// The engine with E5 polling every second of virtual time and `cpd pr poll` run for real, in this process, over a `gh`
+    /// that finds no pull request by search and knows `acme/a1#1`, merged on GitHub once `merged` is set.
     fn engine_polling(&self, merged: &Arc<AtomicBool>) {
         let text = fs::read_to_string(self.env.cpd_home().join("config.toml")).unwrap();
         fs::write(self.env.cpd_home().join("config.toml"), text.replace("pr_poll_seconds = 3600", "pr_poll_seconds = 1")).unwrap();
@@ -259,11 +281,12 @@ impl Fx {
     /// Runs the engine, on virtual time, until `done` says so, asked between two naps of the state in the database.
     fn engine_until(&self, done: impl Fn(&Look) -> bool + Send + 'static) {
         let db = self.env.cpd_home().join("cpd.db");
-        self.watch_steps(move |_| {
+        // E7 starts a PR through the ambient ports of the thread: the fake ones, scoped.
+        self.scoped(|| self.watch_steps(move |_| {
             let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).expect("open the store");
             conn.busy_timeout(std::time::Duration::from_secs(5)).expect("set the busy timeout");
             done(&Look(conn))
-        })
+        }))
         .expect("the engine ends cleanly");
     }
 
@@ -272,7 +295,12 @@ impl Fx {
         let runner = self.fakes.runner.clone();
         let searches = move || runner.calls().iter().filter(|call| call.program.ends_with("gh") && call.args.iter().any(|a| a.contains("search(type"))).count();
         let to = searches() + n;
-        self.watch_steps(move |_| searches() >= to).expect("the engine ends cleanly");
+        self.scoped(|| self.watch_steps(move |_| searches() >= to)).expect("the engine ends cleanly");
+    }
+
+    /// Runs the engine for `n` ticks.
+    fn engine_ticks(&self, n: usize) {
+        self.scoped(|| self.watch_ticks(n)).expect("the engine ends cleanly");
     }
 }
 
@@ -370,6 +398,8 @@ fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.pre_start(&web, "echo setting up; exit 3");
+    // What `sh` does with that is the shell's: it prints the line and exits 3.
+    fx.fake("sh", Reply::exit(3, "setting up\n", ""));
     fx.add("api", &api.path, &[]);
     fx.add("web", &web.path, &[]);
     fx.job("schema", "api");
@@ -531,7 +561,7 @@ fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
         let started: Vec<_> = keys
             .iter()
             .map(|key| {
-                let ports = fx.fakes.ports.clone();
+                let ports = Ports { clock: Arc::new(Yielding(fx.fakes.ports.clock.clone())), runner: fx.fakes.ports.runner.clone(), spawn: fx.fakes.ports.spawn.clone() };
                 s.spawn(move || {
                     let argv = ["cpd", "pr", "start", key, "--plan", "pay"].map(std::ffi::OsString::from);
                     let mut stdout = Vec::new();
@@ -738,7 +768,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert!(!fx.lead_path(&repo.path, "a2").exists(), "the worktree is removed");
 
     // The engine does not try again.
-    fx.watch_ticks(3).unwrap();
+    fx.engine_ticks(3);
     assert_eq!(fx.events("error").len(), 1);
     assert!(fx.events("pr-started").is_empty());
 
@@ -896,7 +926,7 @@ fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
     fx.add_with("c1", &repo.path, &["--needs", "a1"]);
     fx.engine_routes();
 
-    fx.watch_ticks(2).unwrap();
+    fx.engine_ticks(2);
     assert_eq!(fx.pr_status("c1"), "waiting", "pay/a1 is not merged");
     assert!(fx.events("pr-started").is_empty());
 
@@ -920,7 +950,7 @@ fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before()
     fx.engine_routes();
 
     // a1 waits for a0, and b1 for a1 to start: nothing starts.
-    fx.watch_ticks(2).unwrap();
+    fx.engine_ticks(2);
     assert_eq!((fx.pr_status("a1"), fx.pr_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(fx.events("pr-started").is_empty());
 
