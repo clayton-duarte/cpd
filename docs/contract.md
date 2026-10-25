@@ -3128,6 +3128,8 @@ Agent, the same top and text rows with 1 space before and 6 after, then `│╭`
 
 **Where it is wired.** In `compact-tools`, by patching the prototype `render` of pi's `UserMessageComponent` and `AssistantMessageComponent`, the same mechanism as `patchRender` of `compact-tools-silent.ts`. A pi update that renames or moves those classes turns balloons off (the user then sees pi's plain messages) until the test that pins them fails.
 
+**Timestamps in balloons** (hs-d637 display rendering). The agent's balloon bottom border shows the absolute machine-local time (HH:MM 24-hour zero-padded) from `AssistantMessageComponent.lastMessage.timestamp`, displayed in the tail start row as `│╭─HH:MM` followed by `─`.repeat(...) then `╯`. When there is no room for the time, it is omitted. The user balloon is not yet supported (unverified: `UserMessageComponent` stores text only).
+
 ### 6.10 The ask_user_question extension of the adapter
 
 (User, 2026-10-23, hs-d593, Plan `ask-limit`.) The Lead's and Manager's tool `ask_user_question` and its widget are **an extension cpd owns**: a copy of `@juicesharp/rpiv-ask-user-question` (MIT) 2.13.8, shipped inside the adapter in `pi/ask-user-question/`. Reason: agents hit the guard G2 (commands.md §15.13, `LIMIT` = 1500 in `pi/lib/askguard.ts`) 5 times in 94 asks, one turn lost each (`docs/research/ask-limit-baseline.md`); as the owner of the copy, cpd writes the tool's description and states the limit where the model reads it. The procedure of copying and of taking upstream changes is docs/implementing.md "The ask_user_question extension".
