@@ -118,6 +118,22 @@ test("the teardown stops the processes of the env's tmux panes when list-panes f
   }
 });
 
+test("the teardown does not stop a process whose CPD_HOME only starts with the env's (a prefix of another env's path)", async () => {
+  const e = await env(true);
+  try {
+    const longer = e.pane(`${e.home}-2`);
+    const below = e.pane(join(e.home, "below"));
+    const own = e.pane(e.home);
+    assert.ok(e.alive(longer) && e.alive(below) && e.alive(own));
+    e.teardown();
+    assert.equal(e.alive(own), false, "a pane of the env's tmux outlived the teardown");
+    assert.equal(e.alive(longer), true, "the teardown stopped a process of an env whose home continues the env's name");
+    assert.equal(e.alive(below), true, "the teardown stopped a process whose CPD_HOME is below the env's");
+  } finally {
+    e.stop();
+  }
+});
+
 test("the teardown leaves the processes of an env that never had a tmux server to the group and the recorded pids", async () => {
   const e = await env(false);
   try {
