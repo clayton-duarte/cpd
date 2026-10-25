@@ -4,14 +4,18 @@
 //! - [`Screen::from_buffer`] gives the rows as text and the style of every cell (`fg`, `bg`, `modifier`), which is what
 //!   the assertions that read `capture-pane -e` read.
 //! - [`Keys::script`] is the `cpd_tui::view_ports::Input` of a view: it hands out the scripted events in order.
-//! - [`Script`] is an `Input` too, with time and a changing world: a step is an event, an idle poll (it naps the poll's
-//!   wait on the clock) or a closure that runs between two polls (a commit by another process, a snapshot of the screen).
+//! - [`Script`] is the same for a loop that waits on a clock: its [`Step`]s are the keys, the polls that find nothing (a
+//!   nap on the clock), what the world does between two polls (`then`, `Step::then`) and a look at the screen the loop
+//!   drew so far (`Step::look`, with a [`Script::on_screen`] on the [`SharedBackend`] the view draws on). No sleep, no
+//!   wait: the loop ends when the script has typed its last key.
 //! - [`Display`] is a `TestBackend` the test keeps a handle of while the view owns the terminal made of it.
+//! - [`SharedBackend`] is the same on one thread, with a hook that runs after every frame ([`Steps`]).
 //! - [`FakeTty`] is the `Tty` of a view: whether there is a terminal, and the log of its raw mode.
 //! - [`Bytes`] is a writer the test reads while the code under test holds it.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::io::{self, Write};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,8 +25,8 @@ use std::time::Duration;
 use cpd_core::clock::Clock;
 use cpd_tui::view_ports::{Input, Tty};
 use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
-use ratatui::buffer::{Buffer, Cell as BufferCell};
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::buffer::{Buffer, Cell as BufferCell, CellDiffOption};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Size};
 use ratatui::style::{Color, Modifier};
 
@@ -211,6 +215,169 @@ impl Input for Keys {
     }
 }
 
+/// The input of a loop that does not read it (a scripted pump carries the events): any read is a bug of the test.
+pub struct NoInput;
+
+impl Input for NoInput {
+    fn poll(&mut self, _: Duration) -> io::Result<bool> {
+        panic!("the loop polls ctx.input: its events come from the pump");
+    }
+    fn read(&mut self) -> io::Result<Event> {
+        panic!("the loop reads ctx.input: its events come from the pump");
+    }
+}
+
+/// One notch of the wheel (`ScrollUp` or `ScrollDown`) at 0-based `column`, `row` of the screen.
+pub fn wheel(kind: MouseEventKind, column: u16, row: u16) -> Event {
+    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+}
+
+/// A [`TestBackend`] the test keeps a handle to while the view owns the terminal: both read and write the same buffer.
+#[derive(Clone)]
+pub struct SharedBackend(Rc<RefCell<TestBackend>>, Rc<RefCell<Option<FrameHook>>>);
+
+/// What runs after each frame the view wrote ([`SharedBackend::on_frame`]).
+type FrameHook = Box<dyn FnMut(&Screen)>;
+
+impl SharedBackend {
+    /// A blank `width` x `height` screen.
+    pub fn new(width: u16, height: u16) -> SharedBackend {
+        SharedBackend(Rc::new(RefCell::new(TestBackend::new(width, height))), Rc::default())
+    }
+
+    /// The screen as the view drew it last.
+    pub fn screen(&self) -> Screen {
+        Screen::from_buffer(self.0.borrow().buffer())
+    }
+
+    /// `hook` runs after every frame the view writes (the terminal's `flush`), with the screen of that frame, on the view's
+    /// thread and before the view goes on: what the world does while the view waits (a commit, the time), and a look at
+    /// the screen. Replaces the one before. [`Steps`] is the usual hook.
+    pub fn on_frame(&self, hook: impl FnMut(&Screen) + 'static) {
+        *self.1.borrow_mut() = Some(Box::new(hook));
+    }
+
+    /// The terminal a view draws on (`Ctx::new(&ports, backend.terminal(), &mut input)`).
+    pub fn terminal(&self) -> ratatui::Terminal<SharedBackend> {
+        ratatui::Terminal::new(self.clone()).expect("a test terminal")
+    }
+}
+
+impl Backend for SharedBackend {
+    type Error = Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Infallible>
+    where
+        I: Iterator<Item = (u16, u16, &'a BufferCell)>,
+    {
+        self.0.borrow_mut().draw(content)
+    }
+    fn hide_cursor(&mut self) -> Result<(), Infallible> {
+        self.0.borrow_mut().hide_cursor()
+    }
+    fn show_cursor(&mut self) -> Result<(), Infallible> {
+        self.0.borrow_mut().show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> Result<Position, Infallible> {
+        self.0.borrow_mut().get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Infallible> {
+        self.0.borrow_mut().set_cursor_position(position)
+    }
+    fn clear(&mut self) -> Result<(), Infallible> {
+        self.0.borrow_mut().clear()
+    }
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Infallible> {
+        self.0.borrow_mut().clear_region(clear_type)
+    }
+    fn size(&self) -> Result<Size, Infallible> {
+        self.0.borrow().size()
+    }
+    fn window_size(&mut self) -> Result<WindowSize, Infallible> {
+        self.0.borrow_mut().window_size()
+    }
+    fn flush(&mut self) -> Result<(), Infallible> {
+        self.0.borrow_mut().flush()?;
+        // the hook is out of its cell while it runs: it may call `on_frame` itself
+        let hook = self.1.borrow_mut().take();
+        if let Some(mut hook) = hook {
+            hook(&self.screen());
+            self.1.borrow_mut().get_or_insert(hook);
+        }
+        Ok(())
+    }
+}
+
+/// What a test does, in order, as a view draws: each step waits for a frame whose screen satisfies its condition, runs its
+/// action (a change of the world, a look at the screen, the time passing on the `ManualClock`) and hands over to the next
+/// step; one step at most per frame, so a step's action is always seen by the frames after it. No sleep and no poll: a
+/// frame is what the view draws, and the signals of the scripted pump decide when. A script of signals that is over before
+/// the last step ran is a test that did not do what it says: [`Steps::finish`] fails and names the step.
+#[derive(Clone, Default)]
+pub struct Steps {
+    todo: Rc<RefCell<VecDeque<(String, Box<dyn Fn(&Screen) -> bool>, Box<dyn FnMut(&Screen)>)>>>,
+}
+
+impl Steps {
+    pub fn new() -> Steps {
+        Steps::default()
+    }
+
+    /// At the first frame whose screen satisfies `when`: `then` runs.
+    pub fn at(self, what: &str, when: impl Fn(&Screen) -> bool + 'static, then: impl FnMut(&Screen) + 'static) -> Steps {
+        self.todo.borrow_mut().push_back((what.to_owned(), Box::new(when), Box::new(then)));
+        self
+    }
+
+    /// At the next frame: `then` runs.
+    pub fn next(self, what: &str, then: impl FnMut(&Screen) + 'static) -> Steps {
+        self.at(what, |_| true, then)
+    }
+
+    /// Makes these steps the frame hook of `backend`.
+    pub fn on(&self, backend: &SharedBackend) {
+        let todo = Rc::clone(&self.todo);
+        backend.on_frame(move |screen| {
+            // out of the queue while it runs, so an action that looks at the steps finds them as they are
+            let step = {
+                let mut todo = todo.borrow_mut();
+                match todo.front() {
+                    Some((_, when, _)) if when(screen) => todo.pop_front(),
+                    _ => None,
+                }
+            };
+            if let Some((_, _, mut then)) = step {
+                then(screen);
+            }
+        });
+    }
+
+    /// The steps no frame reached yet, by what they wait for.
+    pub fn pending(&self) -> Vec<String> {
+        self.todo.borrow().iter().map(|(what, ..)| what.clone()).collect()
+    }
+
+    /// Fails when a step was not reached: the view ended first.
+    pub fn finish(&self) {
+        let pending = self.pending();
+        assert!(pending.is_empty(), "the view ended before the steps {pending:?}");
+    }
+}
+
+/// A left click at 0-based `column`, `row` of the screen (what `\x1b[<0;..M` is).
+pub fn left_click(column: u16, row: u16) -> Event {
+    mouse(MouseEventKind::Down(MouseButton::Left), column, row)
+}
+
+/// A right click at 0-based `column`, `row` of the screen.
+pub fn right_click(column: u16, row: u16) -> Event {
+    mouse(MouseEventKind::Down(MouseButton::Right), column, row)
+}
+
+fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+}
+
 /// One thing a [`Script`] does at a poll or a read.
 pub enum Step {
     /// An event is there.
@@ -219,6 +386,30 @@ pub enum Step {
     Idle,
     /// The world changes before the next step, and takes no time.
     Do(Box<dyn FnMut()>),
+    /// The test looks at the screen the loop drew so far (its last frame); takes no time. Needs [`Script::on_screen`].
+    Look(Box<dyn FnMut(&Screen)>),
+}
+
+impl Step {
+    /// A press of `code`.
+    pub fn key(code: KeyCode) -> Step {
+        Step::Event(key(code))
+    }
+
+    /// A press of the character `c`.
+    pub fn ch(c: char) -> Step {
+        Step::Event(ch(c))
+    }
+
+    /// `f` runs when the loop reaches this step: what the world does between two polls (as the free fn [`then`]).
+    pub fn then(f: impl FnMut() + 'static) -> Step {
+        Step::Do(Box::new(f))
+    }
+
+    /// `f` is given the screen the loop drew so far when the loop reaches this step; its assertions are the test's.
+    pub fn look(f: impl FnMut(&Screen) + 'static) -> Step {
+        Step::Look(Box::new(f))
+    }
 }
 
 /// `n` idle polls.
@@ -235,48 +426,62 @@ pub fn then(change: impl FnMut() + 'static) -> Step {
 /// the test fails loudly instead of spinning.
 pub struct Script {
     clock: Arc<dyn Clock>,
+    screen: Option<SharedBackend>,
     steps: VecDeque<Step>,
 }
 
 impl Script {
     /// An input that does `steps` in order; its idle polls nap on `clock` (the view's own).
     pub fn new(clock: Arc<dyn Clock>, steps: impl IntoIterator<Item = Step>) -> Script {
-        Script { clock, steps: steps.into_iter().collect() }
+        Script { clock, screen: None, steps: steps.into_iter().collect() }
     }
 
-    /// How many steps are left.
+    /// As [`Script::new`], for a view drawing on `screen`: a [`Step::look`] is given what it drew so far.
+    pub fn on_screen(clock: Arc<dyn Clock>, screen: &SharedBackend, steps: impl IntoIterator<Item = Step>) -> Script {
+        Script { clock, screen: Some(screen.clone()), steps: steps.into_iter().collect() }
+    }
+
+    /// How many steps the loop did not reach.
     pub fn remaining(&self) -> usize {
         self.steps.len()
+    }
+
+    /// Runs the steps that take no time, up to the next one that does.
+    fn settle(&mut self) {
+        loop {
+            match self.steps.front_mut() {
+                Some(Step::Do(change)) => change(),
+                Some(Step::Look(look)) => {
+                    look(&self.screen.as_ref().expect("a Step::look needs Script::on_screen").screen());
+                }
+                _ => return,
+            }
+            self.steps.pop_front();
+        }
     }
 }
 
 impl Input for Script {
     fn poll(&mut self, wait: Duration) -> io::Result<bool> {
-        loop {
-            match self.steps.front_mut() {
-                None => panic!("the script is over and the loop still polls"),
-                Some(Step::Do(change)) => {
-                    change();
-                    self.steps.pop_front();
-                }
-                Some(Step::Idle) => {
-                    self.steps.pop_front();
-                    self.clock.sleep(wait);
-                    return Ok(false);
-                }
-                Some(Step::Event(_)) => return Ok(true),
+        self.settle();
+        match self.steps.front() {
+            None => panic!("the script is over and the loop still polls"),
+            Some(Step::Idle) => {
+                self.steps.pop_front();
+                self.clock.sleep(wait);
+                Ok(false)
             }
+            Some(_) => Ok(true),
         }
     }
 
     fn read(&mut self) -> io::Result<Event> {
-        loop {
-            match self.steps.pop_front() {
-                None => panic!("the script is over and the loop still reads"),
-                Some(Step::Do(mut change)) => change(),
-                Some(Step::Event(event)) => return Ok(event),
-                Some(Step::Idle) => panic!("a read cannot be idle: the loop reads only what a poll said is there"),
-            }
+        self.settle();
+        match self.steps.pop_front() {
+            Some(Step::Event(event)) => Ok(event),
+            Some(Step::Idle) => panic!("a read cannot be idle: the loop reads only what a poll said is there"),
+            Some(Step::Do(_) | Step::Look(_)) => unreachable!("settled above"),
+            None => panic!("the script is over and the loop still reads"),
         }
     }
 }

@@ -141,7 +141,7 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
         // q ends the loop, which `run` follows with the chat slot's placeholder
         Step::ch('q'),
     ];
-    let mut input = Script::new(&fx.fakes.clock, &screen, steps);
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), &screen, steps);
     let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
     cpd_tui::show_history_with(&mut ctx, "old lead", true, &text).unwrap();
     drop(ctx);

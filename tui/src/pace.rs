@@ -17,12 +17,34 @@ struct Queue<T> {
 }
 
 /// Reads run on one thread, one at a time; a request made while one runs waits, and only the newest waiting one is kept.
+///
+/// A scripted pump's `Reads` is the inline form ([`Reads::on`]): `request` runs the job in the caller, so a read is finished
+/// when `request` returns and `take` yields it; no thread, no race. The newest-wins rule holds by construction: no request
+/// waits.
 pub struct Reads<T> {
-    queue: Arc<(Mutex<Queue<T>>, Condvar)>,
+    run: Run<T>,
     results: Receiver<T>,
 }
 
+/// Where the jobs run.
+enum Run<T> {
+    /// On the reader thread.
+    Thread(Arc<(Mutex<Queue<T>>, Condvar)>),
+    /// In the caller of `request`; the result is sent to `take` and the pump is woken.
+    Inline { send: Sender<T>, waker: crate::pump::Waker },
+}
+
 impl<T: Send + 'static> Reads<T> {
+    /// The reads of the loop `pump` drives: the reader thread's, or inline for a scripted pump.
+    pub(crate) fn on(pump: &crate::pump::Pump) -> Self {
+        if pump.inline() {
+            let (send, results) = mpsc::channel();
+            Reads { run: Run::Inline { send, waker: pump.waker() }, results }
+        } else {
+            Self::with_waker(pump.waker())
+        }
+    }
+
     /// The reader thread calls `waker.read_done()` after each result it sends.
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Self {
         let queue = Arc::new((Mutex::new(Queue { waiting: None, closed: false }), Condvar::new()));
@@ -54,14 +76,23 @@ impl<T: Send + 'static> Reads<T> {
                 }
             })
             .expect("spawn the reader thread");
-        Reads { queue, results }
+        Reads { run: Run::Thread(queue), results }
     }
 
     /// Ask for `job` to run on the reader thread.
     pub fn request(&mut self, job: impl FnOnce() -> T + Send + 'static) {
-        let (lock, wake) = &*self.queue;
-        lock.lock().unwrap_or_else(|e| e.into_inner()).waiting = Some(Box::new(job));
-        wake.notify_one();
+        match &self.run {
+            Run::Thread(queue) => {
+                let (lock, wake) = &**queue;
+                lock.lock().unwrap_or_else(|e| e.into_inner()).waiting = Some(Box::new(job));
+                wake.notify_one();
+            }
+            Run::Inline { send, waker } => {
+                // the receiver is `self.results`: it is there
+                let _ = send.send(job());
+                waker.read_done();
+            }
+        }
     }
 
     /// A finished result, if there is one. Never blocks.
@@ -72,11 +103,17 @@ impl<T: Send + 'static> Reads<T> {
 
 impl<T> Drop for Reads<T> {
     fn drop(&mut self) {
-        let (lock, wake) = &*self.queue;
-        let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
-        q.closed = true;
-        q.waiting = None;
-        wake.notify_one();
+        match &self.run {
+            Run::Thread(queue) => {
+                let (lock, wake) = &**queue;
+                let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
+                q.closed = true;
+                q.waiting = None;
+                wake.notify_one();
+            }
+            // the reader thread's store dies with the thread; the inline form's is this thread's: it closes with the reads
+            Run::Inline { .. } => drop(STORE.with(|cell| cell.borrow_mut().take())),
+        }
     }
 }
 

@@ -947,14 +947,21 @@ impl Fx {
     /// Runs `cpd <args>` in `cwd` with `set` added to and `remove` taken out of its environment, on the ports of this
     /// `Fx`; the environment and the directory are put back after.
     fn run(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
-        if self.on_fake_ports {
-            return run_in_process(&self.fakes.ports, cwd, args, set, remove);
-        }
+        let (exit, stdout) = self.run_raw(cwd, args, set, remove);
+        finish(args, exit, stdout)
+    }
+
+    /// The exit code and the writer's text of one `cpd` call, as [`Fx::run`] sets it up.
+    fn run_raw(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> (i32, String) {
         let _scope = Scope::enter(cwd, set, remove);
         let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
         let mut stdout = Vec::new();
-        let code = cpd::main_with(argv, &mut stdout);
-        finish(args, code, stdout)
+        let code = if self.on_fake_ports {
+            cpd::run_with(&self.fakes.ports, argv, &mut stdout)
+        } else {
+            cpd::main_with(argv, &mut stdout)
+        };
+        (exit_code(code), String::from_utf8(stdout).expect("stdout is UTF-8"))
     }
 
     /// The `cpd` children the engine starts on this `Fx`'s `FakeSpawn`, which the test runs itself: [`Children`].
@@ -970,15 +977,15 @@ fn run_in_process(ports: &Ports, cwd: &Path, args: &[&str], set: &[(&str, &str)]
     let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
     let mut stdout = Vec::new();
     let code = cpd::run_with(ports, argv, &mut stdout);
-    finish(args, code, stdout)
+    finish(args, exit_code(code), String::from_utf8(stdout).expect("stdout is UTF-8"))
 }
 
-/// The [`Run`] of `cpd <args>` that wrote `stdout` and ended with `code`.
-fn finish(args: &[&str], code: ExitCode, stdout: Vec<u8>) -> Run {
+/// The [`Run`] of `cpd <args>` that wrote `stdout` and ended with `exit`.
+fn finish(args: &[&str], exit: i32, stdout: String) -> Run {
     // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
     // `print!` on the process's, which nobody can read back here.
     assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
-    Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+    Run { exit, stdout, stderr: String::new() }
 }
 
 /// The first pid a `FakeSpawn` hands out (`FIRST_FAKE_PID` of core/src/host/spawn.rs): its nth start is `FIRST_PID + n`.
