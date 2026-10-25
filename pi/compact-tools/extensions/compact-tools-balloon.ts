@@ -3,6 +3,7 @@
  * Borders and tails are colour 8 (bright black, indexed SGR 90); the text rows keep their own codes.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { localTime } from "../../lib/time.ts";
 
 export type BalloonSide = "user" | "agent";
 
@@ -14,10 +15,10 @@ const line = (text: string) => `\x1b[90m${text}\x1b[39m`;
 /**
  * Draw `rows` (already wrapped to at most `width - 8` columns) as a balloon: the user's one column off the
  * right edge of the pane, the agent's one column off the left. A pane narrower than 9 columns draws no balloon.
- * `at` (Unix ms) is the agent balloon's machine-local time (hs-d637); stub: today's border, time not yet drawn.
+ * `at` (Unix ms) is the agent balloon's machine-local time (hs-d637); a border too narrow for it (a box under
+ * 9 columns) or no `at` leaves the border unchanged.
  */
 export function drawBalloon(rows: string[], side: BalloonSide, width: number, at?: number): string[] {
-	void at;
 	if (width < MIN_BALLOON_WIDTH) return rows;
 	const inner = Math.min(Math.max(0, ...rows.map(visibleWidth)), width - 8);
 	const box = inner + 4;
@@ -28,7 +29,13 @@ export function drawBalloon(rows: string[], side: BalloonSide, width: number, at
 	const edge = line("│");
 	const body = rows.map(fit).map((row) => `${edge} ${row} ${edge}`);
 	const top = line(`╭${"─".repeat(box - 2)}╮`);
-	if (side === "agent") return [top, ...body, line(`│╭${"─".repeat(box - 3)}╯`), line("╰╯")].map((row) => " " + row);
+	if (side === "agent") {
+		const time = at !== undefined && Number.isFinite(at) ? localTime(new Date(at).toISOString()) : undefined;
+		const bottom = time !== undefined && box >= 9
+			? line(`│╭─${time}${"─".repeat(box - 9)}╯`)
+			: line(`│╭${"─".repeat(box - 3)}╯`);
+		return [top, ...body, bottom, line("╰╯")].map((row) => " " + row);
+	}
 	const margin = " ".repeat(width - box - 1);
 	return [top, ...body, line(`╰${"─".repeat(box - 3)}╮│`), " ".repeat(box - 2) + line("╰╯")].map((row) => margin + row + " ");
 }
