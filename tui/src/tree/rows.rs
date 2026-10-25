@@ -296,27 +296,9 @@ fn counter_style(counts: &JobCounts, index: usize, n: usize) -> Style {
     palette::count_style(status, merging, n)
 }
 
-/// The display width of `text` in terminal columns (wide characters take two, combining marks none).
-pub fn width(text: &str) -> usize {
-    Span::raw(text).width()
-}
-
-/// `text` cut to `width` columns with a final `…`. Counted in display columns, not chars (names are free text).
-pub fn truncate(text: &str, width: usize) -> String {
-    if self::width(text) <= width {
-        return text.to_string();
-    }
-    let Some(room) = width.checked_sub(1) else { return String::new() };
-    let (mut cut, mut used) = (String::new(), 0);
-    for c in text.chars() {
-        used += self::width(c.encode_utf8(&mut [0; 4]));
-        if used > room {
-            break;
-        }
-        cut.push(c);
-    }
-    cut + "…"
-}
+// `width` and `truncate` live in `crate::cells`, the one place text is measured in display columns; the re-export
+// keeps this module's callers (`tree/view.rs`) and tests reading `rows::width` / `truncate`.
+pub(crate) use crate::cells::{truncate, width};
 
 /// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
