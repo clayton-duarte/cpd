@@ -20,6 +20,8 @@ mod scroll_width_tests;
 mod input_tests;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod view_width_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
