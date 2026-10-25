@@ -20,6 +20,7 @@ use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::store::Store;
 use cpd_tui::read::{self, Checks, PrState, ReviewDecision};
+use nix::fcntl::{Flock, FlockArg};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -138,11 +139,6 @@ fn fx_with(phase: &str, config_extra: &str) -> Fx {
 /// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
 fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     fx_branch(phase, config_extra, job, "cpd/pay")
-}
-
-/// A Plan whose PR `repo` has the Lead Branch `cpd/pay/repo`: git cannot hold `cpd/pay` and `cpd/pay/web` both.
-fn fx_stacked(phase: &str) -> Fx {
-    fx_branch(phase, "", "merged", "cpd/pay/repo")
 }
 
 fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
@@ -309,11 +305,6 @@ impl Fx {
         self.env.cpd(&["pr", command, "--plan", "pay"])
     }
 
-    /// Sets what the fake `gh` answers: `list.json`, `create.out`, `search.json`, `lookup.json`, `lookup.exit`, `fail`.
-    fn gh(&self, file: &str, text: &str) {
-        fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
-    }
-
     /// Sets the `[hooks]` of the repo `acme/pay`'s policy file to `toml` (`pre-merge = "cmd"` lines), and commits an
     /// empty commit on the Lead Branch.
     fn hooks(&self, toml: &str) {
@@ -328,11 +319,6 @@ impl Fx {
 
     fn lead_sha(&self) -> String {
         self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
-    }
-
-    /// The `pull_request` of the Plan's PR, as `plan show` prints it.
-    fn shown_pull_request(&self) -> Value {
-        self.env.cpd(&["plan", "show", "--plan", "pay"]).ok()["prs"][0]["pull_request"].clone()
     }
 
     fn gh_calls(&self) -> Vec<Vec<String>> {
@@ -1983,6 +1969,32 @@ impl Drop for Child {
 }
 
 #[test]
+fn a_second_poll_waits_for_the_lock() {
+    let mut fx = poll_fx("deploy");
+    fx.search(&[pay("OPEN", None, None)]);
+    let path = fx.home.pr_poll_lock();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    // Another poll's lock, a real `flock` on a file of this env: the fixture holds it, until the nap below or the end of the test.
+    let held = Arc::new(Mutex::new(Some(Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap())));
+
+    // The poll waits on the clock: at each nap it has made no `gh` call. The first nap is the other poll finishing.
+    let (runner, gh_calls_at_nap, release) = (fx.fakes.runner.clone(), Arc::new(Mutex::new(Vec::new())), held.clone());
+    let seen = gh_calls_at_nap.clone();
+    fx.fx.on_nap(move |_| {
+        seen.lock().unwrap().push(runner.calls().iter().filter(|call| call.tool == "gh").count());
+        release.lock().unwrap().take();
+    });
+
+    let out = fx.cpd(&["pr", "poll"]).ok();
+
+    assert_eq!(*gh_calls_at_nap.lock().unwrap(), [0], "one nap, with the lock held and no gh call made");
+    assert_eq!(out["polled"], 1);
+    assert_eq!(fx.gh_calls().len(), 1);
+    assert!(held.lock().unwrap().is_none(), "the lock was released at the nap");
+}
+
+#[test]
 fn poll_reports_a_failing_gh_and_changes_nothing() {
     let fx = poll_fx("deploy");
     let (txns, events) = (fx.txns(), fx.event_count());
@@ -2153,6 +2165,22 @@ fn poll_refuses_a_gh_answer_that_is_not_an_answer_and_writes_nothing() {
     assert_eq!(code(&fx.pr("poll")), ("gh_failed".into(), 1));
     assert_eq!((fx.txns(), fx.event_count(), fx.pull_requests().len()), (txns, events, 1));
 }
+
+#[test]
+fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
+    let fx = poll_fx("deploy");
+    kept_attempt(&fx);
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE))]);
+    insert_pending_reviews(&fx.env, "pay");
+
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
+    assert_reviews_superseded_before_done(&fx.env, "pay");
+}
+
 
 /// The Dispatch column's read of the Plan: label, number, state, checks, decision, title.
 fn dispatch_card(fx: &Poll) -> (String, Option<(i64, PrState, Option<(String, ReviewDecision, Checks)>)>) {
