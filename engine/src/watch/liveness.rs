@@ -268,7 +268,7 @@ fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdErro
     for (asked, closed) in &open {
         escalations.push((parse_time(asked)?, closed.as_deref().map(parse_time).transpose()?));
     }
-    Ok(active_between(parse_time(&running)?, OffsetDateTime::now_utc(), &escalations))
+    Ok(active_between(parse_time(&running)?, engine.ports.clock.utc(), &escalations))
 }
 
 /// The check spans of the Attempt as `(start, end)`, `end` `None` for a span still open: each `start` Event pairs with the next `end`.
