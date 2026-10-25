@@ -35,7 +35,8 @@ use cpd_core::output::Output;
 use cpd_core::session::PROGRAM;
 use crate::box_widget::spacing;
 use validate::Validator;
-use view::{CANCEL, Dialog, Field, Mode, REFUSAL_ROWS, Row, wrap};
+pub(crate) use view::{Dialog, Mode};
+use view::{CANCEL, Field, REFUSAL_ROWS, Row, wrap};
 
 /// `cpd tui view dialog <confirm|input|text> …`.
 #[derive(clap::Args, Debug)]

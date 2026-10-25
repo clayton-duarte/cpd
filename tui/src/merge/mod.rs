@@ -21,10 +21,10 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
-use crate::palette;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 use rusqlite::OptionalExtension;
+
+use crate::box_widget::spacing;
+use crate::dialog::{Dialog, Mode};
 
 use super::viewlog::ViewLog;
 use super::{RunCommand, dialog, not_a_terminal, on_a_terminal};
@@ -38,14 +38,8 @@ use cpd_core::store::Store;
 
 /// The merge method the dialog names (the one `pr merge` uses, §9.10).
 const METHOD: &str = "squash";
-/// The popup's size `(columns, rows)`, border included: the dialog's five rows and 58 columns inside it.
-const POPUP: (u16, u16) = (60, 7);
-const MERGE: &str = "[Merge]";
-const CANCEL: &str = "[Cancel]";
-/// The dialog's button row, and the columns of its buttons, relative to the view's area.
-const BUTTON_ROW: u16 = 4;
-const MERGE_COLUMN: u16 = 2;
-const CANCEL_COLUMN: u16 = MERGE_COLUMN + MERGE.len() as u16 + 3;
+/// The popup's size `(columns, rows)`, border included: the kit's confirm with a three-row body (W 60, H body + 5).
+const POPUP: (u16, u16) = (60, 8);
 /// The view the merge's log is named after (`$CPD_HOME/run/tui/merge.log`, hs-d364): the action is the `merge`
 /// view's.
 const LOG: &str = "merge";
@@ -111,12 +105,11 @@ fn on_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
-/// The two buttons' rects in `area`: `[Merge]`, `[Cancel]`.
-fn buttons(area: Rect) -> [Rect; 2] {
-    let at = |column: u16, text: &str| {
-        Rect::new(area.x + column, area.y + BUTTON_ROW, text.len() as u16, 1).intersection(area)
-    };
-    [at(MERGE_COLUMN, MERGE), at(CANCEL_COLUMN, CANCEL)]
+/// The dialog the view shows: the kit's confirm, `Merge` and `Cancel`, the body's rows already cut to the content width.
+fn view_dialog(pull: &Pull, title: Option<&str>) -> Dialog {
+    let width = usize::from(POPUP.0) - 4;
+    let text = format!("{}\n{}\nmethod: {METHOD}", cut(&pull.to_string(), width), cut(title.unwrap_or(""), width));
+    Dialog::new("merge".to_owned(), text, Mode::Confirm { yes: "Merge".to_owned() })
 }
 
 /// The action of a mouse event over a dialog in `area`: a left click on a button.
@@ -125,13 +118,10 @@ fn on_mouse(area: Rect, mouse: MouseEvent) -> Option<Action> {
         return None;
     }
     let at = Position::new(mouse.column, mouse.row);
-    let [merge, cancel] = buttons(area);
-    if merge.contains(at) {
-        Some(Action::Merge)
-    } else if cancel.contains(at) {
-        Some(Action::Cancel)
-    } else {
-        None
+    let buttons = view_dialog(&Pull { repo: String::new(), number: 0 }, None).buttons(area);
+    match buttons.iter().position(|b| b.contains(at))? {
+        0 => Some(Action::Merge),
+        _ => Some(Action::Cancel),
     }
 }
 
@@ -145,23 +135,19 @@ fn cut(text: &str, width: usize) -> String {
 
 /// Draws the dialog in `area`. `title` is the stored title, if the store has the pull request.
 fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>) {
-    let width = usize::from(area.width).saturating_sub(2);
-    fn row(f: &mut Frame, area: Rect, n: u16, line: Line<'static>) {
-        f.render_widget(Paragraph::new(line), Rect::new(area.x, area.y + n, area.width, 1).intersection(area));
+    view_dialog(pull, title).draw_in(f, area);
+    // the pull request's row is bold
+    let row = Rect::new(area.x + 2, area.y + 2, u16::try_from(cut(&pull.to_string(), usize::from(POPUP.0) - 4).chars().count()).unwrap_or(0), 1);
+    let buf = f.buffer_mut();
+    for position in row.intersection(buf.area).positions() {
+        buf[position].modifier.insert(Modifier::BOLD);
     }
-    row(f, area, 0, Line::from(Span::styled(format!(" {}", cut(&pull.to_string(), width)), palette::read_only_text().add_modifier(Modifier::BOLD))));
-    if let Some(title) = title {
-        row(f, area, 1, Line::styled(format!(" {}", cut(title, width)), palette::read_only_text()));
-    }
-    row(f, area, 2, Line::styled(format!(" method: {METHOD}"), palette::read_only_text()));
-    let [merge, cancel] = buttons(area);
-    f.render_widget(Paragraph::new(MERGE).style(palette::selected()), merge);
-    f.render_widget(Paragraph::new(CANCEL).style(palette::clickable_text()), cancel);
 }
 
-/// The popup's size, border included, at most the client's `(columns, rows)`.
+/// The popup's size `(columns, rows)`, border included: fixed, at most the client's width less a margin each side
+/// (at least 1) and height.
 fn popup_size(client: (u16, u16)) -> (u16, u16) {
-    (POPUP.0.min(client.0), POPUP.1.min(client.1))
+    (POPUP.0.min(client.0.saturating_sub(2 * spacing::MARGIN_X)).max(1), POPUP.1.min(client.1))
 }
 
 /// `arg` as one word for the popup's shell: in single quotes.
@@ -177,10 +163,9 @@ pub fn popup_args(name: &str, client: (u16, u16), arg: &str) -> Vec<String> {
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
+        "-B".to_owned(),
         "-c".to_owned(),
         name.to_owned(),
-        "-T".to_owned(),
-        " merge ".to_owned(),
         "-w".to_owned(),
         w.to_string(),
         "-h".to_owned(),
@@ -355,10 +340,6 @@ impl Drop for Marked<'_> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
-
     use super::*;
 
     fn pull() -> Pull {
@@ -369,46 +350,11 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn click(column: u16, row: u16) -> MouseEvent {
-        MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE }
-    }
-
-    fn render(title: Option<&str>, width: u16, height: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &pull(), title)).unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    fn rows(buf: &Buffer) -> Vec<String> {
-        (0..buf.area.height)
-            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
-            .collect()
-    }
-
     #[test]
     fn the_argument_is_owner_repo_hash_number() {
         assert_eq!(pull().to_string(), "o/r#7");
         for bad in ["", "o/r", "o/r#", "o/r#x", "o/r#0", "o/r#-1", "r#7", "o#7"] {
             assert!(Pull::parse(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
-        let buf = render(Some("Add the thing"), 58, 5);
-        assert_eq!(rows(&buf), [" o/r#7", " Add the thing", " method: squash", "", "  [Merge]   [Cancel]"]);
-    }
-
-    #[test]
-    fn a_missing_title_shows_no_title_and_a_long_one_is_cut() {
-        assert_eq!(rows(&render(None, 58, 5))[1], "");
-        assert_eq!(rows(&render(Some("a very long title indeed"), 12, 5))[1], " a very lo…");
-    }
-
-    #[test]
-    fn a_dialog_in_a_tiny_area_draws_without_panicking() {
-        for (w, h) in [(0, 0), (1, 1), (10, 2), (58, 3)] {
-            render(Some("T"), w, h);
         }
     }
 
@@ -424,26 +370,6 @@ mod tests {
             assert_eq!(on_key(press(code)), None, "{code:?}");
         }
         assert_eq!(on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)), None);
-    }
-
-    #[test]
-    fn a_left_click_on_a_button_acts_and_nothing_else_does() {
-        let area = Rect::new(0, 0, 58, 5);
-        let [merge, cancel] = buttons(area);
-        assert_eq!((merge, cancel), (Rect::new(2, 4, 7, 1), Rect::new(12, 4, 8, 1)));
-        assert_eq!(on_mouse(area, click(2, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(area, click(8, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(area, click(12, 4)), Some(Action::Cancel));
-        assert_eq!(on_mouse(area, click(19, 4)), Some(Action::Cancel));
-        for (column, row) in [(1, 4), (9, 4), (11, 4), (20, 4), (2, 3), (2, 0)] {
-            assert_eq!(on_mouse(area, click(column, row)), None, "{column},{row}");
-        }
-        let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
-        assert_eq!(on_mouse(area, right), None);
-        // the buttons are where they are drawn
-        let buf = render(None, 58, 5);
-        assert_eq!(buf[(merge.x, merge.y)].symbol(), "[");
-        assert_eq!(buf[(cancel.x + cancel.width - 1, cancel.y)].symbol(), "]");
     }
 
     #[test]

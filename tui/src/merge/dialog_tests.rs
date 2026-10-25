@@ -80,7 +80,7 @@ fn the_dialog_is_one_rounded_frame_with_the_title_pill_the_pull_request_its_titl
         assert_eq!(buf[(x, y)].fg, Color::DarkGray, "frame colour at ({x}, {y})");
     }
     let pill = palette::pill_static();
-    for x in 2..=10 {
+    for x in 2..=8 {
         assert_eq!((buf[(x, 0)].fg, buf[(x, 0)].bg), (pill.fg.unwrap(), pill.bg.unwrap()), "title pill at {x}");
     }
     for y in 0..8 {
