@@ -211,6 +211,19 @@ impl Fx {
         self.fakes.clock.advance(d);
     }
 
+    /// A second env with a migrated store, made as [`Fx::new`]'s own: starts no process. Its commands run on this `Fx`
+    /// with its `$CPD_HOME`: `fx.cpd_with(env.root(), args, &[("CPD_HOME", ..)])`.
+    pub fn another_env(&self) -> TestEnv {
+        bare_with_store()
+    }
+
+    /// Runs `f` with the variables `set` added to the process's environment, put back after it, also when `f` panics:
+    /// for code that reads the environment outside a `cpd` command (`TestEnv::bare` reads `TMPDIR`). Under this `Fx`'s lock.
+    pub fn with_vars<T>(&self, set: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let _scope = Scope::enter(&std::env::current_dir().expect("the current directory"), set, &[]);
+        f()
+    }
+
     /// Returns as soon as `cond` holds, advancing the `ManualClock` by [`TICK`] between two looks; panics
     /// `waited <limit> virtual time` when it never holds within [`LIMIT`].
     pub fn until(&self, mut cond: impl FnMut() -> bool) {
@@ -219,6 +232,13 @@ impl Fx {
             assert!(self.fakes.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time");
             self.advance(TICK);
         }
+    }
+
+    /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
+    /// wrapper reads the ambient ports (`git::run`, `tamper`, `sync_lead`, the gate). A thread `f` spawns captures
+    /// `fx.fakes.ports.clone()` and scopes it itself.
+    pub fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
+        Ports::scope(&self.fakes.ports, f)
     }
 
     /// Makes a process migrate the store, as `Store::open` of another `cpd` does (contract §1.4): `locks/store.lock` is
@@ -370,6 +390,32 @@ let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false,
     pub fn local_origin(&self, repo: &Path, bare: &Path) {
         let url = self.git(repo, &["config", "--get", "remote.origin.url"]);
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
+    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches.
+        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
+    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
@@ -745,7 +791,7 @@ pub fn bare_with_store() -> TestEnv {
 }
 
 /// The number of `code`, which `ExitCode` does not give.
-fn exit_code(code: ExitCode) -> i32 {
+pub fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 
