@@ -26,13 +26,12 @@ cli/tests/tui/tui_tree.rs 4  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_widgets.rs 8  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_worker.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui.rs 1  # m-tui-t: sleep or wall-clock wait
-core/src/context/distill.rs 1  # m-units: sleep or wall-clock wait
 core/src/driver/run.rs 3  # m-units: sleep or wall-clock wait
 core/src/driver/stall.rs 2  # m-units: sleep or wall-clock wait
 core/src/driver/worker.rs 1  # m-units: sleep or wall-clock wait
 core/src/git/gate.rs 2  # m-units: sleep or wall-clock wait
 core/src/host/deadline.rs 4  # m-units: sleep or wall-clock wait
-core/src/host/exe.rs 2  # m-units: sleep or wall-clock wait
+core/src/host/exe.rs 1  # m-units: sleep or wall-clock wait
 core/src/host/tmux.rs 1  # m-units: sleep or wall-clock wait
 core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait
 core/src/lock.rs 1  # m-units: sleep or wall-clock wait
