@@ -1,10 +1,11 @@
 //! `cpd session first-message` (commands.md §10.15, hs-d542 A3), run as the built binary.
 
 use crate::common;
-use crate::session::setup;
+use crate::common::session::setup;
 
 use std::fs;
 
+use common::fx::Fx;
 use common::{TestEnv, refused, SLEEP_SECONDS};
 use serde_json::Value;
 
@@ -74,8 +75,10 @@ fn first_message_of_a_manager_holds_header_and_context() {
 
 #[test]
 fn first_message_refuses_a_worker_session() {
-    let env = TestEnv::new();
-    setup(&env);
-    let run = env.cpd(&["session", "first-message", "--session", "worker1"]);
+    // Store only: the command tree runs in this process (`Fx`); the other two run `context new`/`plan new` against a
+    // fake `pi` and a tmux cockpit, and stay on `TestEnv`.
+    let fx = Fx::new();
+    setup(&fx.env);
+    let run = fx.cpd(&["session", "first-message", "--session", "worker1"]);
     let _: Value = refused(&run, "not_a_lead", 3);
 }

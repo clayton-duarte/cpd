@@ -1,6 +1,8 @@
 //! Sessions (contract §3.6, §6.4, §6.7; commands.md §10 with §19 amendments
 //! 1–3), run as the built binary against a private tmux server, with fake
-//! `pi` and `cpd` scripts on `PATH`.
+//! `pi` and `cpd` scripts on `PATH`. The tests that start no tmux (13) run the command tree in this process (`Fx`); the
+//! others (a cockpit, a wrapper, or a command that runs the real `tmux` even with no server: `rename`, a `archive` of a
+//! Lead with no pane) stay on `TestEnv` until tmux is a route of the fake runner.
 
 use crate::common;
 
@@ -8,13 +10,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use common::fx::Fx;
+use common::session::{Cpd, events, home, setup, show};
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv, backdate, refused, wait_until};
-use cpd_core::error::CpdError;
-use cpd_core::events::{Kind, NewEvent, append};
-use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ids::{PlanId, SessionId};
-use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const LEAD1: &str = "lead1";
@@ -22,102 +22,8 @@ const LEAD2: &str = "lead2";
 const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
-pub(crate) fn home(env: &TestEnv) -> CpdHome {
-    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
-}
-
-fn store(env: &TestEnv) -> Store {
-    Store::open(&home(env), 5000).unwrap()
-}
-
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
-}
-
 fn sid(id: &str) -> SessionId {
     SessionId::parse(id).unwrap()
-}
-
-/// Context `ctx` with its Manager `manager1`; Plans `pay` (Lead `lead1`, idle;
-/// Job `api` with Attempt `api-a1`, Worker `worker1` and an open Escalation)
-/// and `other` (Lead `lead2`, stopped). Every Session's cwd is the env's root.
-pub(crate) fn setup(env: &TestEnv) {
-    env.write_tmux_config("[timeouts]\nfork_quiet_seconds = 1\n"); // a 1 s quiet time for forks
-    let cwd = env.root().display().to_string();
-    let mut store = store(env);
-    store
-        .write("fixture", |tx| {
-            exec(
-                tx,
-                &format!(
-                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                     INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '2020-01-01T00:00:01Z', 't1'),
-                       ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't2'),
-                       ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't0'),
-                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', '2020-01-01T00:00:03Z', 't3');
-                     INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
-                       ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
-                       ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES
-                       ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't'),
-                       ('other', 'r', '/r', 'main', 'waiting', 'cpd/other', {id}, 't');
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at)
-                       VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, 't');
-                     INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
-                       VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'worker1', 't');
-                     INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-                       VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
-                    fp = "a".repeat(64),
-                    id = tx.id()
-                ),
-            )?;
-            append(
-                tx,
-                NewEvent::new(
-                    Kind::SessionRegistered,
-                    "Lead one registered.",
-                    json!({"role": "lead", "name": "Lead one", "forked_from": null, "tier": "O3"}),
-                )
-                .plan(PlanId::parse("pay").unwrap())
-                .session(sid(LEAD1)),
-            )?;
-            Ok(())
-        })
-        .unwrap();
-    for plan in ["pay", "other"] {
-        let path = home(env).lead_message(&PlanId::parse(plan).unwrap());
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, format!("Plan {plan}.")).unwrap();
-    }
-}
-
-/// Runs `cpd <args>` with extra environment variables.
-fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
-    let mut cmd = env.command(CPD);
-    for (k, v) in vars {
-        cmd.env(k, v);
-    }
-    let out = cmd.args(args).output().unwrap();
-    Run {
-        exit: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
-}
-
-fn exec_sql(env: &TestEnv, sql: &str) {
-    store(env).write("test", |tx| exec(tx, sql)).unwrap();
-}
-
-pub(crate) fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
-}
-
-pub(crate) fn show(env: &TestEnv, id: &str) -> Value {
-    env.cpd(&["session", "show", id]).ok()["session"].clone()
 }
 
 // ---------- tmux ----------
@@ -249,13 +155,13 @@ pub(crate) fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
 
 #[test]
 fn list_filters_and_derives_place_and_leads() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::new();
+    setup(&fx.env);
     let ids = |run: Run| -> Vec<String> {
         run.ok()["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_owned()).collect()
     };
 
-    let all = env.cpd(&["session", "list"]).ok();
+    let all = fx.cpd(&["session", "list"]).ok();
     assert_eq!(all["events_cursor"], 1);
     let sessions = all["sessions"].as_array().unwrap();
     assert_eq!(sessions.len(), 4);
@@ -265,7 +171,7 @@ fn list_filters_and_derives_place_and_leads() {
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
                "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "asleep_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
-               "cwd": env.root().display().to_string(), "title": null, "titled_at": null, "by_user": false})
+               "cwd": fx.env.root().display().to_string(), "title": null, "titled_at": null, "by_user": false})
     );
     let manager = sessions.iter().find(|s| s["id"] == MANAGER).unwrap();
     assert_eq!(
@@ -274,31 +180,29 @@ fn list_filters_and_derives_place_and_leads() {
     );
     assert!(lead1.get("grounded_lead").is_none(), "the grounded Lead is retired");
 
-    assert_eq!(ids(env.cpd(&["session", "list", "--plan", "pay"])), [LEAD1, WORKER]);
-    assert_eq!(ids(env.cpd(&["session", "list", "--context", "ctx", "--role", "worker"])), [WORKER]);
-    assert_eq!(ids(env.cpd(&["session", "list", "--state", "idle", "--state", "working"])), [LEAD1, WORKER]);
-    assert_eq!(ids(env.cpd(&["session", "list", "--role", "lead", "--state", "stopped"])), [LEAD2]);
-    assert_eq!(ids(env.cpd(&["session", "list", "--role", "manager"])), [MANAGER]);
-    assert!(ids(env.cpd(&["session", "list", "--context", "elsewhere"])).is_empty());
+    assert_eq!(ids(fx.cpd(&["session", "list", "--plan", "pay"])), [LEAD1, WORKER]);
+    assert_eq!(ids(fx.cpd(&["session", "list", "--context", "ctx", "--role", "worker"])), [WORKER]);
+    assert_eq!(ids(fx.cpd(&["session", "list", "--state", "idle", "--state", "working"])), [LEAD1, WORKER]);
+    assert_eq!(ids(fx.cpd(&["session", "list", "--role", "lead", "--state", "stopped"])), [LEAD2]);
+    assert_eq!(ids(fx.cpd(&["session", "list", "--role", "manager"])), [MANAGER]);
+    assert!(ids(fx.cpd(&["session", "list", "--context", "elsewhere"])).is_empty());
     // Filters only: CPD_PLAN does not select anything.
-    assert_eq!(cpd_with(&env, &[("CPD_PLAN", "pay")], &["session", "list"]).ok()["sessions"].as_array().unwrap().len(), 4);
+    assert_eq!(fx.cpd_with(fx.env.root(), &["session", "list"], &[("CPD_PLAN", "pay")]).ok()["sessions"].as_array().unwrap().len(), 4);
 
-    refused(&env.cpd(&["session", "list", "--role", "reviewer"]), "usage", 2);
-    refused(&env.cpd(&["session", "list", "--state", "busy"]), "usage", 2);
-    refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
+    refused(&fx.cpd(&["session", "list", "--role", "reviewer"]), "usage", 2);
+    refused(&fx.cpd(&["session", "list", "--state", "busy"]), "usage", 2);
+    refused(&fx.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
 /// sql-F5, commands-F4: the Plan-Lead lookup is a join: a Session that leads two
 /// Plans is still one row, and a Session that leads none is not a Plan's Lead.
 #[test]
 fn list_gives_a_session_leading_two_plans_one_row() {
-    let env = TestEnv::new();
-    setup(&env);
-    exec_sql(
-        &env,
-        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
+    let fx = Fx::new();
+    setup(&fx.env);
+    fx.env.sql("INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
     );
-    let sessions = env.cpd(&["session", "list"]).ok()["sessions"].clone();
+    let sessions = fx.cpd(&["session", "list"]).ok()["sessions"].clone();
     let sessions = sessions.as_array().unwrap();
     let leads: Vec<(&str, bool)> =
         sessions.iter().map(|s| (s["id"].as_str().unwrap(), s["plan_lead"].as_bool().unwrap())).collect();
@@ -307,51 +211,51 @@ fn list_gives_a_session_leading_two_plans_one_row() {
 
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
-    let env = TestEnv::new();
-    setup(&env);
-    let out = env.cpd(&["session", "show", LEAD1]).ok();
+    let fx = Fx::new();
+    setup(&fx.env);
+    let out = fx.cpd(&["session", "show", LEAD1]).ok();
     assert_eq!(out["session"]["created_at"], "t1");
     assert_eq!(out["session"]["registered_event"], 1);
     assert_eq!(out["session"]["plan_lead"], true);
     assert_eq!(out["open_escalations"], json!(["api-a1-q1"]));
 
-    let worker = cpd_with(&env, &[("CPD_SESSION", WORKER)], &["session", "show"]).ok();
+    let worker = fx.cpd_with(fx.env.root(), &["session", "show"], &[("CPD_SESSION", WORKER)]).ok();
     assert_eq!(worker["session"]["id"], WORKER);
     assert_eq!(worker["session"]["attempt"], "api-a1");
     assert_eq!(worker["session"]["registered_event"], Value::Null);
     assert!(worker.get("open_escalations").is_none(), "only a Plan's Lead has them");
 
-    refused(&env.cpd(&["session", "show"]), "session_required", 2);
-    let error = refused(&env.cpd(&["session", "show", "nobody"]), "session_not_found", 4);
+    refused(&fx.cpd(&["session", "show"]), "session_required", 2);
+    let error = refused(&fx.cpd(&["session", "show", "nobody"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nobody");
-    refused(&env.cpd(&["session", "show", "bad id"]), "invalid_session_id", 2);
+    refused(&fx.cpd(&["session", "show", "bad id"]), "invalid_session_id", 2);
 }
 
 // ---------- state, rename ----------
 
 #[test]
 fn state_follows_section_3_6() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::new();
+    setup(&fx.env);
     let state = |args: &[&str]| {
         let mut argv = vec!["session", "state"];
         argv.extend(args);
         argv.extend(["--session", LEAD1]);
-        env.cpd(&argv)
+        fx.cpd(&argv)
     };
 
     let out = state(&["working"]).ok();
     assert_eq!(out, json!({"ok": true, "session": "lead1", "state": "working", "label": null, "from": "idle"}));
     let out = state(&["blocked", "--label", "cpd: Worker question"]).ok();
     assert_eq!((&out["from"], &out["label"]), (&json!("working"), &json!("cpd: Worker question")));
-    assert_eq!(show(&env, LEAD1)["state_label"], "cpd: Worker question");
+    assert_eq!(show(&fx, LEAD1)["state_label"], "cpd: Worker question");
 
     // Unchanged: nothing written, no Event.
-    let before = events(&env, "session-state").len();
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let before = events(&fx, "session-state").len();
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     assert_eq!(state(&["blocked", "--label", "cpd: Worker question"]).ok()["already"], true);
-    assert_eq!(events(&env, "session-state").len(), before);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(events(&fx, "session-state").len(), before);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     // A new label is a change.
     assert_eq!(state(&["blocked", "--label", "cpd: plan review"]).ok()["from"], "blocked");
@@ -362,56 +266,56 @@ fn state_follows_section_3_6() {
     refused(&state(&["blocked", "--label", "x"]), "illegal_transition", 3);
     assert_eq!(state(&["idle"]).ok()["from"], "stopped");
 
-    let all = events(&env, "session-state");
+    let all = events(&fx, "session-state");
     assert_eq!(all.len(), 6);
     let first = &all[0];
     assert_eq!((&first["session"], &first["plan"], &first["context"]), (&json!("lead1"), &json!("pay"), &json!("ctx")));
     assert_eq!(first["data"], json!({"from": "idle", "to": "working", "label": null}));
     assert_eq!(all[1]["data"], json!({"from": "working", "to": "blocked", "label": "cpd: Worker question"}));
-    assert_eq!(show(&env, LEAD1)["state_label"], Value::Null);
+    assert_eq!(show(&fx, LEAD1)["state_label"], Value::Null);
 
     // A Manager has no Plan: its Event has none either.
-    cpd_with(&env, &[("CPD_SESSION", MANAGER)], &["session", "state", "idle"]).ok();
-    assert_eq!(events(&env, "session-state").last().unwrap()["plan"], Value::Null);
+    fx.cpd_with(fx.env.root(), &["session", "state", "idle"], &[("CPD_SESSION", MANAGER)]).ok();
+    assert_eq!(events(&fx, "session-state").last().unwrap()["plan"], Value::Null);
 
     refused(&state(&["blocked"]), "usage", 2);
     refused(&state(&["idle", "--label", "x"]), "usage", 2);
     refused(&state(&["blocked", "--label", &"x".repeat(81)]), "usage", 2);
     refused(&state(&["asleep"]), "usage", 2);
-    refused(&env.cpd(&["session", "state", "idle"]), "session_required", 2);
-    refused(&env.cpd(&["session", "state", "idle", "--session", "nobody"]), "session_not_found", 4);
+    refused(&fx.cpd(&["session", "state", "idle"]), "session_required", 2);
+    refused(&fx.cpd(&["session", "state", "idle", "--session", "nobody"]), "session_not_found", 4);
 }
 
 #[test]
 fn state_waiting_takes_a_label_and_follows_section_3_6() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::new();
+    setup(&fx.env);
     let state = |args: &[&str]| {
         let mut argv = vec!["session", "state"];
         argv.extend(args);
         argv.extend(["--session", LEAD1]);
-        env.cpd(&argv)
+        fx.cpd(&argv)
     };
 
     // `waiting` needs a label, as `blocked` does; a refusal writes nothing.
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     let error = refused(&state(&["waiting"]), "usage", 2);
     assert_eq!(error["details"]["state"], "waiting");
     refused(&state(&["waiting", "--label", &"x".repeat(81)]), "usage", 2);
     refused(&state(&["idle", "--label", "x"]), "usage", 2);
     refused(&state(&["waiting", "--label", "x", "--reply"]), "usage", 2);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     // `idle` and `working` go to `waiting` and come back; a new label is a change; the same one writes nothing.
     let out = state(&["waiting", "--label", "cpd: Worker question"]).ok();
     assert_eq!(out, json!({"ok": true, "session": "lead1", "state": "waiting", "label": "cpd: Worker question", "from": "idle"}));
-    assert_eq!((show(&env, LEAD1)["state"].clone(), show(&env, LEAD1)["state_label"].clone()), (json!("waiting"), json!("cpd: Worker question")));
-    let before = events(&env, "session-state").len();
+    assert_eq!((show(&fx, LEAD1)["state"].clone(), show(&fx, LEAD1)["state_label"].clone()), (json!("waiting"), json!("cpd: Worker question")));
+    let before = events(&fx, "session-state").len();
     assert_eq!(state(&["waiting", "--label", "cpd: Worker question"]).ok()["already"], true);
-    assert_eq!(events(&env, "session-state").len(), before);
+    assert_eq!(events(&fx, "session-state").len(), before);
     assert_eq!(state(&["waiting", "--label", "cpd: other"]).ok()["from"], "waiting");
     assert_eq!(state(&["working"]).ok()["from"], "waiting");
-    assert_eq!(show(&env, LEAD1)["state_label"], Value::Null);
+    assert_eq!(show(&fx, LEAD1)["state_label"], Value::Null);
     assert_eq!(state(&["waiting", "--label", "cpd: Worker question"]).ok()["from"], "working");
     assert_eq!(state(&["idle"]).ok()["from"], "waiting");
 
@@ -422,41 +326,41 @@ fn state_waiting_takes_a_label_and_follows_section_3_6() {
     assert_eq!(state(&["stopped"]).ok()["from"], "waiting");
     refused(&state(&["waiting", "--label", "x"]), "illegal_transition", 3);
 
-    let last = events(&env, "session-state").into_iter().rev().nth(1).unwrap();
+    let last = events(&fx, "session-state").into_iter().rev().nth(1).unwrap();
     assert_eq!(last["data"], json!({"from": "blocked", "to": "waiting", "label": "cpd: Worker question"}));
 }
 
 #[test]
 fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::new();
+    setup(&fx.env);
     let state = |args: &[&str]| {
         let mut argv = vec!["session", "state"];
         argv.extend(args);
         argv.extend(["--session", LEAD1]);
-        env.cpd(&argv)
+        fx.cpd(&argv)
     };
 
     // Only `idle` takes `--reply`; a refusal writes nothing.
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
         refused(&state(other), "usage", 2);
     }
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     state(&["working"]).ok();
     state(&["idle", "--reply"]).ok();
-    let all = events(&env, "session-state");
+    let all = events(&fx, "session-state");
     assert_eq!(all.last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null, "reply": true}));
 
     // Without `--reply` the Event has no `reply`; an unchanged state writes nothing whatever `--reply`.
     state(&["working"]).ok();
     state(&["idle"]).ok();
-    assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
-    let (events_before, txns) = (events(&env, "session-state").len(), env.query::<i64>("SELECT count(*) FROM txns"));
+    assert_eq!(events(&fx, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
+    let (events_before, txns) = (events(&fx, "session-state").len(), fx.env.query::<i64>("SELECT count(*) FROM txns"));
     assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
-    assert_eq!(events(&env, "session-state").len(), events_before);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(events(&fx, "session-state").len(), events_before);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
 }
 
 #[test]
@@ -466,7 +370,7 @@ fn rename_appends_session_renamed_once() {
     let out = env.cpd(&["session", "rename", "cpd rust lead", "--session", LEAD1]).ok();
     assert_eq!(out, json!({"ok": true, "session": "lead1", "name": "cpd rust lead"}));
     assert_eq!(show(&env, LEAD1)["name"], "cpd rust lead");
-    let again = cpd_with(&env, &[("CPD_SESSION", LEAD1)], &["session", "rename", "cpd rust lead"]).ok();
+    let again = env.cpd_with(env.root(), &["session", "rename", "cpd rust lead"], &[("CPD_SESSION", LEAD1)]).ok();
     assert_eq!(again["already"], true);
     let renamed = events(&env, "session-renamed");
     assert_eq!(renamed.len(), 1);
@@ -894,9 +798,7 @@ fn open_and_park_refusals() {
 fn archived_lead2(env: &TestEnv) {
     let file = env.root().join("lead2.jsonl");
     fs::write(&file, "{\"type\":\"session\"}\n").unwrap();
-    exec_sql(
-        env,
-        &format!("UPDATE sessions SET file = '{}', archived_at = 't9' WHERE id = 'lead2'", file.display()),
+    env.sql(&format!("UPDATE sessions SET file = '{}', archived_at = 't9' WHERE id = 'lead2'", file.display()),
     );
 }
 
@@ -978,7 +880,7 @@ fn history_replaces_the_placeholder_in_place_and_park_brings_it_back() {
     assert!(events(&env, "session-moved").is_empty());
 
     // The history of another Session retargets the same pane.
-    exec_sql(&env, &format!("UPDATE sessions SET file = '{}' WHERE id = 'lead1'", env.root().join("lead2.jsonl").display()));
+    env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'lead1'", env.root().join("lead2.jsonl").display()));
     env.cpd(&["session", "history", LEAD1]).ok();
     let s = slot(&env);
     assert_eq!((s.pane.as_str(), s.history.as_str()), (placeholder.pane.as_str(), LEAD1));
@@ -992,7 +894,7 @@ fn history_refusals_change_nothing() {
     refused(&env.cpd(&["session", "history", "nobody"]), "session_not_found", 4);
     refused(&env.cpd(&["session", "history", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "history", MANAGER]), "not_a_lead", 3);
-    exec_sql(&env, "UPDATE sessions SET file = '/nonexistent/lead2.jsonl' WHERE id = 'lead2'");
+    env.sql("UPDATE sessions SET file = '/nonexistent/lead2.jsonl' WHERE id = 'lead2'");
     refused(&env.cpd(&["session", "history", LEAD2]), "file_unreadable", 2);
     archived_lead2(&env);
     // No cockpit yet.
@@ -1024,7 +926,7 @@ fn close_refusals_and_nothing_to_close() {
     cockpit(&env);
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     // A pane that is gone, with E2 not having recorded it: nothing is written.
-    exec_sql(&env, "UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
+    env.sql("UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok()["already"], true);
     assert_eq!(env.query::<String>("SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
     assert_eq!(events(&env, "session-moved").len(), 0);
@@ -1058,7 +960,7 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     env.cpd(&["session", "open", LEAD2]).ok();
     assert_eq!(show(&env, LEAD1)["place"], "parked");
     assert_eq!(window_names(&env), ["main", "park-pay"]);
-    exec_sql(&env, "UPDATE sessions SET state = 'idle' WHERE id = 'lead1'");
+    env.sql("UPDATE sessions SET state = 'idle' WHERE id = 'lead1'");
 
     let out = env.cpd(&["session", "close", LEAD1]).ok();
     assert_eq!(out, json!({"ok": true, "session": LEAD1, "pane": lead1_pane}));
@@ -1110,7 +1012,7 @@ fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
 fn rename_works_on_an_archived_session() {
     let env = TestEnv::new();
     setup(&env);
-    exec_sql(&env, "UPDATE sessions SET archived_at = 't9' WHERE id = 'lead2'");
+    env.sql("UPDATE sessions SET archived_at = 't9' WHERE id = 'lead2'");
     let out = env.cpd(&["session", "rename", "Archived and renamed", "--session", "lead2"]).ok();
     assert_eq!(out, json!({"ok": true, "session": "lead2", "name": "Archived and renamed"}));
     let row = show(&env, "lead2");
@@ -1160,7 +1062,7 @@ fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
     env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
-    exec_sql(&env, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"));
+    env.sql(&format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"));
     let title = |env: &TestEnv, session: &str| {
         let pane = panes(env).into_iter().find(|p| p.session == session).unwrap().pane;
         let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
@@ -1186,7 +1088,7 @@ fn parked_fork(env: &TestEnv) -> String {
     env.cpd(&["session", "fork", LEAD1]).ok()["session"]["id"].as_str().unwrap().to_owned()
 }
 
-fn archived_at(env: &TestEnv, id: &str) -> Value {
+fn archived_at(env: &impl Cpd, id: &str) -> Value {
     show(env, id)["archived_at"].clone()
 }
 
@@ -1194,7 +1096,7 @@ fn archived_at(env: &TestEnv, id: &str) -> Value {
 fn archive_kills_the_pane_of_an_idle_parked_fork_and_appends_one_event() {
     let env = TestEnv::new();
     let fork = parked_fork(&env);
-    exec_sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
+    env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
     let pane = show(&env, &fork)["tmux_pane"].as_str().unwrap().to_owned();
     assert_eq!(archived_at(&env, &fork), Value::Null);
 
@@ -1225,9 +1127,7 @@ fn archive_of_a_lead_with_no_pane_closes_nothing() {
     let env = TestEnv::new();
     setup(&env);
     let fork = "forkless";
-    exec_sql(
-        &env,
-        &format!(
+    env.sql(&format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
                VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1')"
         ),
@@ -1244,7 +1144,7 @@ fn archive_refuses_a_working_waiting_or_blocked_session_and_changes_nothing() {
     let pane = show(&env, &fork)["tmux_pane"].as_str().unwrap().to_owned();
     let moved = events(&env, "session-moved").len();
     for state in ["working", "waiting", "blocked"] {
-        exec_sql(&env, &format!("UPDATE sessions SET state = '{state}', state_label = {} WHERE id = '{fork}'", if state == "working" { "NULL" } else { "'why'" }));
+        env.sql(&format!("UPDATE sessions SET state = '{state}', state_label = {} WHERE id = '{fork}'", if state == "working" { "NULL" } else { "'why'" }));
         let error = refused(&env.cpd(&["session", "archive", &fork]), "archive_blocked", 3);
         let blockers = error["details"]["blockers"].as_array().unwrap();
         assert_eq!(blockers.len(), 1, "{error}");
@@ -1262,7 +1162,7 @@ fn archive_refuses_a_working_waiting_or_blocked_session_and_changes_nothing() {
 fn archive_refuses_the_chat_slot_a_plan_lead_a_worker_and_an_unknown_session() {
     let env = TestEnv::new();
     let fork = parked_fork(&env);
-    exec_sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
+    env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = '{fork}'"));
     let pane = env.cpd(&["session", "open", &fork]).ok()["pane"].as_str().unwrap().to_owned();
     let error = refused(&env.cpd(&["session", "archive", &fork]), "in_chat_slot", 3);
     assert_eq!(error["details"]["next"], "cpd session park");
@@ -1304,31 +1204,31 @@ fn unarchive_clears_archived_at_with_one_event_and_touches_no_pane() {
 
 #[test]
 fn unarchive_is_refused_while_its_plan_or_context_is_archived() {
-    let env = TestEnv::new();
-    setup(&env);
-    exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
-    exec_sql(&env, "UPDATE plans SET archived_at = 't' WHERE id = 'other'");
-    let error = refused(&env.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
+    let fx = Fx::new();
+    setup(&fx.env);
+    fx.env.sql("UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
+    fx.env.sql("UPDATE plans SET archived_at = 't' WHERE id = 'other'");
+    let error = refused(&fx.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd plan unarchive --plan other");
-    exec_sql(&env, "UPDATE contexts SET archived_at = 't' WHERE id = 'ctx'");
-    let error = refused(&env.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
+    fx.env.sql("UPDATE contexts SET archived_at = 't' WHERE id = 'ctx'");
+    let error = refused(&fx.cpd(&["session", "unarchive", LEAD2]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd context unarchive ctx");
-    assert_eq!(archived_at(&env, LEAD2), json!("t"));
-    assert_eq!(events(&env, "session-archived").len(), 0);
+    assert_eq!(archived_at(&fx, LEAD2), json!("t"));
+    assert_eq!(events(&fx, "session-archived").len(), 0);
 }
 
 /// No tmux server runs here: an `archived` refusal, not `no_cockpit`, shows that nothing asked tmux first.
 #[test]
 fn open_and_fork_of_an_archived_session_are_refused_before_any_tmux() {
-    let env = TestEnv::new();
-    setup(&env);
-    exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
+    let fx = Fx::new();
+    setup(&fx.env);
+    fx.env.sql("UPDATE sessions SET archived_at = 't' WHERE id = 'lead2'");
     for args in [["session", "open", LEAD2], ["session", "fork", LEAD2]] {
-        let error = refused(&env.cpd(&args), "archived", 3);
+        let error = refused(&fx.cpd(&args), "archived", 3);
         assert_eq!(error["details"]["next"], "cpd session unarchive lead2");
     }
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), 4);
-    assert_eq!(events(&env, "session-registered").len(), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions"), 4);
+    assert_eq!(events(&fx, "session-registered").len(), 1);
 }
 
 // ---------- dead Lead panes (contract §3.6, §3.7 E2; commands.md §10.4) ----------
@@ -1483,7 +1383,7 @@ fn run_refusals() {
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD2]);
     let server = String::from_utf8(env.tmux(&["display", "-p", "-t", &pane, "#{socket_path},1,0"]).stdout).unwrap();
-    let run = cpd_with(&env, &[("TMUX", server.trim()), ("TMUX_PANE", &pane)], &["session", "run", LEAD1]);
+    let run = env.cpd_with(env.root(), &["session", "run", LEAD1], &[("TMUX", server.trim()), ("TMUX_PANE", &pane)]);
     let error = refused(&run, "wrong_pane", 3);
     assert_eq!((&error["details"]["pane"], &error["details"]["found"]), (&json!(pane), &json!(LEAD2)));
     assert!(env.calls("pi").is_empty());
@@ -1584,9 +1484,7 @@ fn quit_fixture(env: &TestEnv) {
     env.fake_cpd_views();
     quitting_pi(env);
     cockpit(env);
-    exec_sql(
-        env,
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
+    env.sql("INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
            ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead1'),
            ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead2')",
     );
@@ -1598,7 +1496,7 @@ fn quit_fixture(env: &TestEnv) {
 /// [`run_lead`], and the Session's row has the pane, as when cpd started it.
 fn run_lead_with_pane(env: &TestEnv, id: &str) -> String {
     let pane = run_lead(env, id);
-    exec_sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
     pane
 }
 
@@ -1710,7 +1608,7 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
     pi_file(&env, "side", true);
     backdate(&env.home().join(".pi/agent/sessions/g/2026_side.jsonl"), Duration::from_secs(3600));
-    exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
+    env.sql("UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
     // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
     let current = env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
@@ -1741,9 +1639,7 @@ const CAFE_PREFIXED: &str = "cafe0001-0000-4000-8000-000000000004";
 /// starts with `cafe`, which is also a Plan id.
 fn setup_short(env: &TestEnv) {
     setup(env);
-    exec_sql(
-        env,
-        &format!(
+    env.sql(&format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
                ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
@@ -1754,83 +1650,83 @@ fn setup_short(env: &TestEnv) {
     );
 }
 
-fn resolved(env: &TestEnv, value: &str) -> String {
-    env.cpd(&["session", "show", value]).ok()["session"]["id"].as_str().unwrap().to_owned()
+fn resolved(fx: &Fx, value: &str) -> String {
+    fx.cpd(&["session", "show", value]).ok()["session"]["id"].as_str().unwrap().to_owned()
 }
 
 #[test]
 fn every_short_form_resolves_to_the_full_id() {
-    let env = TestEnv::new();
-    setup_short(&env);
+    let fx = Fx::new();
+    setup_short(&fx.env);
     // 1: the full id.
-    assert_eq!(resolved(&env, UUID_A), UUID_A);
-    assert_eq!(resolved(&env, LEAD2), LEAD2);
+    assert_eq!(resolved(&fx, UUID_A), UUID_A);
+    assert_eq!(resolved(&fx, LEAD2), LEAD2);
     // 2: a Plan id is that Plan's Lead.
-    assert_eq!(resolved(&env, "pay"), LEAD1);
-    assert_eq!(resolved(&env, "other"), LEAD2);
+    assert_eq!(resolved(&fx, "pay"), LEAD1);
+    assert_eq!(resolved(&fx, "other"), LEAD2);
     // 3: <plan>.<prefix> and <plan>·<prefix>, within the Plan.
-    assert_eq!(resolved(&env, "pay.a1b2c3d4-0000-4000-8000-000000000001"), UUID_A);
-    assert_eq!(resolved(&env, "pay·worker"), WORKER);
-    assert_eq!(resolved(&env, "pay.w"), WORKER);
-    assert_eq!(resolved(&env, "other.l"), LEAD2);
+    assert_eq!(resolved(&fx, "pay.a1b2c3d4-0000-4000-8000-000000000001"), UUID_A);
+    assert_eq!(resolved(&fx, "pay·worker"), WORKER);
+    assert_eq!(resolved(&fx, "pay.w"), WORKER);
+    assert_eq!(resolved(&fx, "other.l"), LEAD2);
     // 4: a bare prefix of 4 or more characters, of any Plan or none.
-    assert_eq!(resolved(&env, "work"), WORKER);
-    assert_eq!(resolved(&env, "a1b2c3d4-0000-4000-8000-000000000002"), UUID_B);
-    assert_eq!(resolved(&env, "mana"), MANAGER);
+    assert_eq!(resolved(&fx, "work"), WORKER);
+    assert_eq!(resolved(&fx, "a1b2c3d4-0000-4000-8000-000000000002"), UUID_B);
+    assert_eq!(resolved(&fx, "mana"), MANAGER);
 }
 
 #[test]
 fn a_plan_id_wins_over_a_prefix_that_is_also_a_plan_id() {
-    let env = TestEnv::new();
-    setup_short(&env);
+    let fx = Fx::new();
+    setup_short(&fx.env);
     // `cafe` is the id of a Plan and the 4-character prefix of another Session.
-    assert_eq!(resolved(&env, "cafe"), CAFE_LEAD);
+    assert_eq!(resolved(&fx, "cafe"), CAFE_LEAD);
     // The longer prefix is not a Plan id.
-    assert_eq!(resolved(&env, "cafe0"), CAFE_PREFIXED);
+    assert_eq!(resolved(&fx, "cafe0"), CAFE_PREFIXED);
 }
 
 #[test]
 fn an_ambiguous_prefix_is_refused_with_its_candidates() {
-    let env = TestEnv::new();
-    setup_short(&env);
+    let fx = Fx::new();
+    setup_short(&fx.env);
     for value in ["a1b2", "a1b2c3d4", "pay.a1b2"] {
-        let error = refused(&env.cpd(&["session", "show", value]), "session_ambiguous", 3);
+        let error = refused(&fx.cpd(&["session", "show", value]), "session_ambiguous", 3);
         assert_eq!(error["details"]["candidates"], json!([UUID_A, UUID_B]), "{value}");
     }
-    let error = refused(&env.cpd(&["session", "show", "lead"]), "session_ambiguous", 3);
+    let error = refused(&fx.cpd(&["session", "show", "lead"]), "session_ambiguous", 3);
     assert_eq!(error["details"]["candidates"], json!([LEAD1, LEAD2]));
     // Every command that takes a Session refuses it; nothing is written.
-    refused(&env.cpd(&["session", "rename", "x", "--session", "a1b2"]), "session_ambiguous", 3);
-    refused(&env.cpd(&["session", "archive", "a1b2"]), "session_ambiguous", 3);
-    refused(&env.cpd(&["session", "open", "a1b2"]), "session_ambiguous", 3);
-    refused(&env.cpd(&["session", "send", "a1b2", "hi", "--unblocks", "u"]), "session_ambiguous", 3);
-    assert_eq!(events(&env, "session-renamed").len(), 0);
-    assert_eq!(events(&env, "session-message").len(), 0);
+    refused(&fx.cpd(&["session", "rename", "x", "--session", "a1b2"]), "session_ambiguous", 3);
+    refused(&fx.cpd(&["session", "archive", "a1b2"]), "session_ambiguous", 3);
+    refused(&fx.cpd(&["session", "open", "a1b2"]), "session_ambiguous", 3);
+    refused(&fx.cpd(&["session", "send", "a1b2", "hi", "--unblocks", "u"]), "session_ambiguous", 3);
+    assert_eq!(events(&fx, "session-renamed").len(), 0);
+    assert_eq!(events(&fx, "session-message").len(), 0);
 }
 
 #[test]
 fn a_prefix_of_fewer_than_4_characters_is_not_accepted() {
-    let env = TestEnv::new();
-    setup_short(&env);
+    let fx = Fx::new();
+    setup_short(&fx.env);
     for value in ["wor", "a1b", "man", "w"] {
-        refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+        refused(&fx.cpd(&["session", "show", value]), "session_not_found", 4);
     }
     // A Plan id of 2 or 3 characters still resolves, and so does a scoped prefix of 1.
-    assert_eq!(resolved(&env, "pay"), LEAD1);
-    assert_eq!(resolved(&env, "pay.w"), WORKER);
+    assert_eq!(resolved(&fx, "pay"), LEAD1);
+    assert_eq!(resolved(&fx, "pay.w"), WORKER);
 }
 
 #[test]
 fn unmatched_values_are_session_not_found_and_malformed_ones_usage_errors() {
-    let env = TestEnv::new();
-    setup_short(&env);
+    let fx = Fx::new();
+    setup_short(&fx.env);
     for value in ["nobody", "Lead1", "WORK", "pay.zzz", "other.worker", "nosuch.lead", "pay·zzz"] {
-        let error = refused(&env.cpd(&["session", "show", value]), "session_not_found", 4);
+        let error = refused(&fx.cpd(&["session", "show", value]), "session_not_found", 4);
         // The reference is echoed in its canonical `.` form.
         assert_eq!(error["details"]["session"], value.replace('·', "."));
     }
     for value in ["pay.", "pay·", ".lead", "Pay.lead", "pay.-a", "a/b"] {
-        refused(&env.cpd(&["session", "show", value]), "invalid_session_id", 2);
+        refused(&fx.cpd(&["session", "show", value]), "invalid_session_id", 2);
     }
 }
 
@@ -1843,9 +1739,9 @@ fn every_session_command_accepts_the_short_forms() {
     // `--session` and `CPD_SESSION`.
     let out = env.cpd(&["session", "rename", "renamed", "--session", "pay"]).ok();
     assert_eq!(out, json!({"ok": true, "session": LEAD1, "name": "renamed"}));
-    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "rename", "again"]).ok();
+    let out = env.cpd_with(env.root(), &["session", "rename", "again"], &[("CPD_SESSION", "other")]).ok();
     assert_eq!(out["session"], LEAD2);
-    let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "show"]).ok();
+    let out = env.cpd_with(env.root(), &["session", "show"], &[("CPD_SESSION", "other")]).ok();
     assert_eq!(out["session"]["id"], LEAD2);
     // send, to a Lead by its Plan id and to the Manager by a bare prefix.
     assert_eq!(env.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"]).ok()["session"], LEAD1);
