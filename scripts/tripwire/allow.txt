@@ -73,7 +73,6 @@ cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_idle::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_worker::  # m-tui-t: cockpit view driven on a real tmux server
-cpd::tui inbox_rules::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_tree::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_tree_delete::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui_tree_archive_manager::  # m-tui-t: cockpit view driven on a real tmux server
@@ -98,7 +97,6 @@ cpd-core store::  # m-units: unit tests that may start a real tmux
 cpd-engine watch::  # m-units: unit tests that may start a real tmux
 cpd-tui background::  # m-units: unit tests that may start a real tmux
 cpd-tui cockpit::  # m-units: unit tests that may start a real tmux
-cpd-tui dialog::  # m-units: unit tests that may start a real tmux
 cpd-tui merge::  # m-units: unit tests that may start a real tmux
 cpd-tui pace_tests::  # m-units: unit tests that may start a real tmux
 cpd-tui plan::  # m-units: unit tests that may start a real tmux
