@@ -2162,3 +2162,205 @@ fn job_edit_refuses_a_touches_path_missing_from_the_tree() {
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs), "a refusal writes nothing");
     assert_eq!(job_row(&env, "pl", "a", "touches"), "[\"src/a.rs\"]");
 }
+
+// ---------- a Spec names no primary checkout (commands.md §5.1, §5.2) ----------
+
+/// Points Plan `pl`'s one PR (`repo`) at `path`, the primary checkout the Spec check searches for, and
+/// returns the absolute path the check reports in `details.primary`. The path is not made on disk: the
+/// check is of the stored path, and a real directory would make the `touches` tree check run `git`.
+fn primary(env: &TestEnv, path: PathBuf) -> String {
+    let root = path.to_str().unwrap().to_owned();
+    fixture(env, &format!("UPDATE prs SET repo = '{root}' WHERE plan = 'pl';"));
+    root
+}
+
+#[test]
+fn job_add_refuses_a_spec_that_names_a_primary_checkout_in_any_field() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let root = primary(&env, env.root().join("repos/primary"));
+    let writes = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    // `goal` is `<root>` followed by a space; every other field holds `<root>/docs/x.md`.
+    let with_root = |field: &str| {
+        let value = if field == "goal" { format!("{root} is the checkout.") } else { format!("{root}/docs/x.md") };
+        let mut spec = spec_json();
+        match field {
+            "goal" => spec["goal"] = json!(value),
+            "context" => spec["context"] = json!(value),
+            "touches[0]" => spec["touches"] = json!([value]),
+            "acceptance[1]" => spec["acceptance"] = json!(["cargo test", value]),
+            "out_of_scope[0]" => spec["out_of_scope"] = json!([value]),
+            "tests[0]" => {
+                spec["tests"] = json!([value]);
+                spec["test_files"] = json!(["cli/tests/flow/job.rs"]);
+            }
+            "test_files[0]" => {
+                spec["tests"] = json!(["job::one"]);
+                spec["test_files"] = json!([value]);
+            }
+            _ => unreachable!(),
+        }
+        write_spec(&env, "primary.json", &spec.to_string())
+    };
+
+    let cases = [
+        ("goal", "work", "$.goal"),
+        ("context", "work", "$.context"),
+        ("touches[0]", "work", "$.touches[0]"),
+        ("acceptance[1]", "work", "$.acceptance[1]"),
+        ("out_of_scope[0]", "work", "$.out_of_scope[0]"),
+        ("tests[0]", "test", "$.tests[0]"),
+        ("test_files[0]", "test", "$.test_files[0]"),
+    ];
+    for (i, (field, kind, path)) in cases.into_iter().enumerate() {
+        let spec = with_root(field);
+        let key = format!("k{i}");
+        let run = env.cpd(&["job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--kind", kind, "--plan", "pl"]);
+        let error = refused(&run, "spec_invalid", 2);
+        assert_eq!(error["details"]["path"].as_str(), Some(path), "{field}");
+        assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()), "{field}");
+        assert_eq!(error["details"]["pr"].as_str(), Some("repo"), "{field}");
+    }
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), writes);
+}
+
+#[test]
+fn job_add_refuses_the_tilde_and_home_forms_of_the_root() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let root = primary(&env, env.home().join("repos/primary"));
+    let writes = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    for (i, value) in ["~/repos/primary/docs/x.md", "$HOME/repos/primary", "${HOME}/repos/primary"].into_iter().enumerate() {
+        let mut spec = spec_json();
+        spec["goal"] = json!(value);
+        let spec = write_spec(&env, "home.json", &spec.to_string());
+        let key = format!("k{i}");
+        let run = env.cpd(&["job", "add", &key, "--title", "T", "--tier", "S2", "--spec", &spec, "--plan", "pl"]);
+        let error = refused(&run, "spec_invalid", 2);
+        assert_eq!(error["details"]["path"].as_str(), Some("$.goal"), "{value}");
+        assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()), "{value}");
+        assert_eq!(error["details"]["pr"].as_str(), Some("repo"), "{value}");
+    }
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), writes);
+}
+
+#[test]
+fn job_add_accepts_repo_relative_paths_a_sibling_directory_and_a_worktree_path() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let root = primary(&env, env.root().join("repos/primary"));
+
+    // A Spec with `docs/x.md` paths only.
+    let mut spec = spec_json();
+    spec["goal"] = json!("Follow docs/x.md.");
+    spec["context"] = json!("docs/x.md");
+    spec["touches"] = json!(["docs/x.md"]);
+    spec["acceptance"] = json!(["docs/x.md"]);
+    spec["out_of_scope"] = json!(["docs/x.md"]);
+    let spec = write_spec(&env, "relative.json", &spec.to_string());
+    env.cpd(&["job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+
+    // A sibling directory, a linked worktree and a numbered one merely begin with the root string.
+    let mut spec = spec_json();
+    spec["goal"] = json!(format!("{root}-old/x, {root}.wt/x and {root}2 are other checkouts."));
+    spec["touches"] = json!(["docs/x.md"]);
+    let spec = write_spec(&env, "sibling.json", &spec.to_string());
+    env.cpd(&["job", "add", "b", "--title", "B", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+
+    // The root of a repo that is not a PR of this Plan.
+    let other = env.root().join("repos/other");
+    let mut spec = spec_json();
+    spec["goal"] = json!(format!("{} is not one of the Plan's repos.", other.display()));
+    spec["touches"] = json!(["docs/x.md"]);
+    let spec = write_spec(&env, "other.json", &spec.to_string());
+    env.cpd(&["job", "add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--plan", "pl"]).ok();
+    assert_eq!(count(&env, "jobs"), 3);
+}
+
+#[test]
+fn job_add_checks_the_repo_of_every_pr_of_the_plan() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let second = env.root().join("repos/second");
+    primary(&env, env.root().join("repos/first"));
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+             VALUES ('pl', 'two', '{}', 'main', 'waiting', 'cpd/pl/two', cpd_txn(), 't');",
+            second.display()
+        ),
+    );
+    let writes = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+
+    let mut spec = spec_json();
+    spec["goal"] = json!(format!("{} is the other checkout.", second.display()));
+    let spec = write_spec(&env, "second.json", &spec.to_string());
+    let run = env.cpd(&["job", "add", "a", "--title", "A", "--tier", "S2", "--spec", &spec, "--pr", "repo", "--plan", "pl"]);
+    let error = refused(&run, "spec_invalid", 2);
+    assert_eq!(error["details"]["path"].as_str(), Some("$.goal"));
+    assert_eq!(error["details"]["primary"].as_str(), second.to_str());
+    assert_eq!(error["details"]["pr"].as_str(), Some("two"));
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), writes);
+}
+
+#[test]
+fn job_edit_refuses_a_spec_that_names_a_primary_checkout() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let root = primary(&env, env.root().join("repos/primary"));
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    let writes = (count(&env, "txns"), count(&env, "events"));
+
+    let mut bad = spec_json();
+    bad["goal"] = json!(format!("{root}/docs/x.md"));
+    let bad = write_spec(&env, "bad.json", &bad.to_string());
+    let error = refused(&job(&env, &["edit", "a", "--spec", &bad], "pl"), "spec_invalid", 2);
+    assert_eq!(error["details"]["path"].as_str(), Some("$.goal"));
+    assert_eq!(error["details"]["primary"].as_str(), Some(root.as_str()));
+    assert_eq!(error["details"]["pr"].as_str(), Some("repo"));
+    assert_eq!(job_row(&env, "pl", "a", "goal"), "Do it.");
+    assert_eq!(job_row(&env, "pl", "a", "context"), "Because.");
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+
+    // A clean Spec edit works.
+    let mut clean = spec_json();
+    clean["goal"] = json!("Do it well.");
+    let clean = write_spec(&env, "clean.json", &clean.to_string());
+    let out = job(&env, &["edit", "a", "--spec", &clean], "pl").ok();
+    assert_eq!(out["fields"], json!(["goal"]));
+    assert_eq!(job_row(&env, "pl", "a", "goal"), "Do it well.");
+}
+
+#[test]
+fn a_stub_draft_and_a_stored_job_are_not_checked_for_a_primary_checkout() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let root = primary(&env, env.root().join("repos/primary"));
+
+    // A stub draft needs only a title.
+    env.cpd(&["job", "add", "stub", "--title", "Stub", "--draft", "--plan", "pl"]).ok();
+    assert_eq!(job_row(&env, "pl", "stub", "goal"), Value::Null);
+
+    // A draft whose stored Spec names the root (a fixture row) can still be edited with `--title` and cancelled.
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+             VALUES ('pl', 'repo', 'stored', 'Stored', 'S2', '{root}/docs/x.md', 'c', '[\"docs/x.md\"]', '[\"a\"]', '[]', 'draft', 0, 'work', cpd_txn(), 't');"
+        ),
+    );
+    let out = job(&env, &["edit", "stored", "--title", "Renamed"], "pl").ok();
+    assert_eq!(out["fields"], json!(["title"]));
+    assert_eq!(job_row(&env, "pl", "stored", "title"), "Renamed");
+    job(&env, &["cancel", "stored", "--reason", "No longer needed."], "pl").ok();
+    assert_eq!(job_row(&env, "pl", "stored", "status"), "cancelled");
+}
