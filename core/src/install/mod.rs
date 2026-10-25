@@ -38,6 +38,9 @@ const MIGRATIONS: &str = "core/src/store/migrations";
 /// Why the install stops: the line printed after `cpd install refused: ` (or as it is, for a failure) and the exit.
 struct Stop(String);
 
+#[cfg(test)]
+mod adapter_tests;
+
 /// Runs the install; the human text (refusals, warnings, `installed ...`) goes to `err`. The exit code: 0, or 1
 /// for a refusal, a failure or a follow-up that failed.
 pub fn run(ports: &Ports, install: &Install, err: &mut dyn Write) -> i32 {
