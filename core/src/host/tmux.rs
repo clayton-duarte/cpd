@@ -23,14 +23,15 @@ use std::fmt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
 
-use super::deadline::{self, Failed};
+use super::deadline::Failed;
+use super::runner::{Runner, SystemRunner};
 use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
@@ -472,23 +473,50 @@ pub struct Tmux {
     tmpdir: Option<PathBuf>,
     /// The tmux program every call runs, when set (see [`Tmux::on_server_binary`]); otherwise `tmux` from `PATH`.
     program: Option<PathBuf>,
+    /// What starts the processes: how a call runs, not which server it is, so it takes no part in equality.
+    runner: Handle,
 }
+
+/// The [`Runner`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Handle(Arc<dyn Runner>);
+
+impl Default for Handle {
+    fn default() -> Handle {
+        Handle(Arc::new(SystemRunner))
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Runner")
+    }
+}
+
+impl PartialEq for Handle {
+    fn eq(&self, _: &Handle) -> bool {
+        true
+    }
+}
+
+impl Eq for Handle {}
 
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None }
+        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default() }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default() }
     }
 
     /// This server, with every call run by `runner` instead of the real processes.
-    pub fn with_runner(self, _runner: std::sync::Arc<dyn super::runner::Runner>) -> Tmux {
-        todo!()
+    pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> Tmux {
+        self.runner = Handle(runner);
+        self
     }
 
     pub fn socket(&self) -> &str {
@@ -543,7 +571,7 @@ impl Tmux {
         }
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
-            Some(limit) => deadline::output(&mut cmd, "tmux", limit),
+            Some(limit) => self.runner.0.output(&mut cmd, "tmux", limit),
             // In its own process group, as every other call.
             None => cmd.process_group(0).output().map_err(Failed::Io),
         };

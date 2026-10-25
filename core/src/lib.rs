@@ -44,6 +44,9 @@ pub mod session;
 pub mod spec;
 pub mod store;
 
+#[cfg(feature = "fakes")]
+pub mod fakes;
+
 #[cfg(test)]
 mod clock_tests;
 #[cfg(test)]

@@ -17,8 +17,8 @@ use super::file::Config;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::deadline::{self, Failed};
-use crate::host::runner::Runner;
+use crate::host::deadline::Failed;
+use crate::host::runner::{Runner, SystemRunner};
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
@@ -103,11 +103,6 @@ pub fn node() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("node"))
 }
 
-/// [`read`] on `runner`.
-pub fn read_with(_runner: &dyn Runner, _pi: &PiInstall, _config: &Config, _deadline: Duration) -> Result<Catalog, CpdError> {
-    todo!()
-}
-
 fn catalog_failed(message: impl Into<String>) -> CpdError {
     CpdError::new(ErrorCode::CatalogFailed, message)
 }
@@ -152,6 +147,11 @@ fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catal
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
 pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
+    read_with(&SystemRunner, pi, config, deadline)
+}
+
+/// [`read`] on `runner`.
+pub fn read_with(runner: &dyn Runner, pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h), (Letter::G, &config.tiers.g)];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -162,7 +162,7 @@ pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catal
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, "node", deadline).map_err(|e| match e {
+    let out = runner.output(&mut cmd, "node", deadline).map_err(|e| match e {
         Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
         Failed::Timeout(e) => e,
     })?;

@@ -25,8 +25,8 @@ use super::poll_run::{Finished, PollRun};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
-use cpd_core::host::deadline::{self, Failed};
-use cpd_core::host::runner::Runner;
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::{Runner, SystemRunner};
 use cpd_core::host::exe::started_as;
 use cpd_core::host::limit::limit;
 
@@ -249,8 +249,13 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 /// Runs `cpd pr poll` and returns its success value, or the failure it printed.
 fn poll(root: &Path) -> Result<Value, Failure> {
     let exe = started_as().map_err(|e| Failure::from(&e))?;
+    poll_with(&SystemRunner, &exe, root)
+}
+
+/// [`poll`] on `runner`, with `exe` the recorded path of cpd's own executable.
+pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<Value, Failure> {
     let argv = [&*exe.to_string_lossy(), "pr", "poll"];
-    let mut cmd = Command::new(&exe);
+    let mut cmd = Command::new(exe);
     cmd.args(&argv[1..])
         .env("CPD_HOME", root)
         // The engine's own selection is not the subprocess's.
@@ -259,19 +264,13 @@ fn poll(root: &Path) -> Result<Value, Failure> {
         .env_remove("CPD_ATTEMPT")
         .current_dir(root)
         .stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
+    let out = runner.output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
         Failed::Io(e) => {
             Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)))
         }
         Failed::Timeout(e) => Failure::from(&e),
     })?;
     printed(&out, &argv)
-}
-
-/// [`poll`] on `runner`, with `exe` the recorded path of cpd's own executable.
-#[allow(dead_code)] // a stub until the seam lands
-pub(super) fn poll_with(_runner: &dyn Runner, _exe: &Path, _root: &Path) -> Result<Value, Failure> {
-    todo!()
 }
 
 /// What a child printed: its success value (`ok` true, exit 0), or the failure it printed (`ok` false, with an

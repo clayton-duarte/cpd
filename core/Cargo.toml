@@ -9,6 +9,10 @@ publish.workspace = true
 name = "cpd_core"
 path = "src/lib.rs"
 
+[features]
+# The in-process fakes of tmux and git (`core/src/fakes`), for the tests of the crates above core.
+fakes = []
+
 [dependencies]
 clap.workspace = true
 minijinja.workspace = true

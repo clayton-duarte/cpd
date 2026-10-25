@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
-use crate::host::deadline::{self, Failed};
-use crate::host::runner::Runner;
+use crate::host::deadline::Failed;
+use crate::host::runner::{Runner, SystemRunner};
 
 /// The fields an op call adds to the command's output.
 pub type Fields = Map<String, Value>;
@@ -46,6 +46,11 @@ fn classify(exit: Option<i32>, stderr: &str) -> CpdError {
 
 /// Runs `op <args> --account my.1password.com`, with `stdin` (if any) written and closed. Returns stdout on success.
 fn run(args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
+    run_with(&SystemRunner, args, stdin)
+}
+
+/// [`run`] on `runner`.
+fn run_with(runner: &dyn Runner, args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
     let mut cmd = Command::new("op");
     cmd.args(args).args(["--account", ACCOUNT]);
     let writer = match stdin {
@@ -63,7 +68,7 @@ fn run(args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
             None
         }
     };
-    let result = deadline::output(&mut cmd, "op", DEADLINE);
+    let result = runner.output(&mut cmd, "op", DEADLINE);
     drop(cmd);
     if let Some(w) = writer {
         let _ = w.join();
@@ -95,25 +100,25 @@ fn fields(pairs: [(&str, Value); 1]) -> Fields {
 
 /// `op item get <item> --vault <vault> --fields label=<field> --reveal`: `{value}`.
 pub fn get(vault: &str, item: &str, field: &str) -> Result<Fields, CpdError> {
+    get_with(&SystemRunner, vault, item, field)
+}
+
+/// [`get`] on `runner`.
+pub fn get_with(runner: &dyn Runner, vault: &str, item: &str, field: &str) -> Result<Fields, CpdError> {
     let label = format!("label={field}");
-    let out = run(&["item", "get", item, "--vault", vault, "--fields", &label, "--reveal"], None)?;
+    let out = run_with(runner, &["item", "get", item, "--vault", vault, "--fields", &label, "--reveal"], None)?;
     let value = out.strip_suffix('\n').unwrap_or(&out);
     Ok(fields([("value", json!(value))]))
 }
 
-/// [`get`] on `runner`.
-pub fn get_with(_runner: &dyn Runner, _vault: &str, _item: &str, _field: &str) -> Result<Fields, CpdError> {
-    todo!()
+/// `op item list --vault <vault> --format json`: `{items: [{id, title}]}`.
+pub fn list(vault: &str) -> Result<Fields, CpdError> {
+    list_with(&SystemRunner, vault)
 }
 
 /// [`list`] on `runner`.
-pub fn list_with(_runner: &dyn Runner, _vault: &str) -> Result<Fields, CpdError> {
-    todo!()
-}
-
-/// `op item list --vault <vault> --format json`: `{items: [{id, title}]}`.
-pub fn list(vault: &str) -> Result<Fields, CpdError> {
-    let out = run(&["item", "list", "--vault", vault, "--format", "json"], None)?;
+pub fn list_with(runner: &dyn Runner, vault: &str) -> Result<Fields, CpdError> {
+    let out = run_with(runner, &["item", "list", "--vault", vault, "--format", "json"], None)?;
     let entries: Vec<Value> = serde_json::from_str(&out).map_err(|_| bad_json("a list"))?;
     let items = entries.iter().map(|e| json!({"id": e.get("id"), "title": e.get("title")})).collect::<Vec<_>>();
     Ok(fields([("items", json!(items))]))
