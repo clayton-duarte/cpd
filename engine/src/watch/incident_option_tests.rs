@@ -7,13 +7,21 @@ use std::os::unix::fs::PermissionsExt;
 
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
+use time::Duration;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::engine::Engine;
 use super::workers;
 
-/// One run of the status option step on a fresh home, with an `incident` row
-/// carrying `incident` (None: no row). Returns what the step sent to tmux.
-fn sent(incident: Option<&str>) -> String {
+/// `now - ago` as the RFC 3339 `started_at` the incident row holds.
+fn started_before(ago: Duration) -> String {
+    (OffsetDateTime::now_utc() - ago).format(&Rfc3339).expect("a time formats as RFC 3339")
+}
+
+/// One run of the status option step on a fresh home with an `incident` row whose `started_at`
+/// is `started_at` (None: no row). Returns what the step sent to tmux.
+fn sent(started_at: Option<&str>) -> String {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("home");
     std::fs::create_dir_all(&root).unwrap();
@@ -25,13 +33,13 @@ fn sent(incident: Option<&str>) -> String {
 
     let home = CpdHome::resolve(Some(root.into()), None).unwrap();
     let mut engine = Engine::for_test(home, Tmux::new("incident").with_program(&program));
-    if let Some(reason) = incident {
+    if let Some(started_at) = started_at {
         engine
             .store
             .write("test", |tx| {
                 tx.execute(
-                    "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, '2000-01-01T00:00:00.000Z', 'mgr', ?1, ?2)",
-                    rusqlite::params![reason, tx.id()],
+                    "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, ?1, 'mgr', 'pager down', ?2)",
+                    rusqlite::params![started_at, tx.id()],
                 )?;
                 Ok(())
             })
@@ -41,22 +49,34 @@ fn sent(incident: Option<&str>) -> String {
     std::fs::read_to_string(&calls).expect("the step called tmux")
 }
 
-/// While an `incident` row exists the step sets `@cpd_incident` to the elapsed time since the
-/// row's `started_at` (a coarse `{n}d {n}h` duration, the exact format unit-tested in core);
-/// with none it unsets the option. The reason is no longer written.
+/// The elapsed duration the step set on `@cpd_incident`.
+fn written(calls: &str) -> String {
+    let (_, rest) = calls.trim_end().split_once("@cpd_incident ").expect("the incident is set");
+    rest.split(';').next().unwrap().trim().to_owned()
+}
+
+/// While an `incident` row exists the step sets `@cpd_incident` to the duration since the row's
+/// `started_at` in the format hs-d640 settled: whole minutes, `<m>m` under an hour, `<h>h` plus
+/// ` <m>m` when the minutes are non-zero under a day, `<d>d` plus ` <h>h` when the hours are
+/// non-zero beyond; the reason is not written. With no row the step unsets the option.
 #[test]
-fn the_status_step_sets_the_incident_option() {
-    let on = sent(Some("pager down"));
-    assert!(on.contains("@cpd_incident"), "the option is named while incident mode is on: {on}");
-    assert!(!on.contains("-gu @cpd_incident"), "it is set, not unset, while on: {on}");
-    assert!(!on.contains("pager down"), "the option no longer carries the reason: {on}");
-    // The value is the coarse elapsed duration: a `{n}d {n}h` shape, since the started_at is far in the past.
-    let value = on.trim_end().split("@cpd_incident ").nth(1).expect("the incident set").trim().to_owned();
-    let (days, rest) = value.split_once('d').unwrap_or_else(|| panic!("a days unit in {value:?}"));
-    assert!(!days.is_empty() && days.chars().all(|c| c.is_ascii_digit()), "digits before `d`: {value:?}");
-    let (hours, tail) = rest.trim_start().split_once('h').unwrap_or_else(|| panic!("an hours unit in {value:?}"));
-    assert!(!hours.is_empty() && hours.chars().all(|c| c.is_ascii_digit()), "digits before `h`: {value:?}");
-    assert!(tail.trim().is_empty(), "the `{{n}}d {{n}}h` shape only: {value:?}");
+fn the_status_step_writes_the_elapsed_duration() {
+    let cases = [
+        (Duration::seconds(30), "0m"),
+        (Duration::minutes(5) + Duration::seconds(30), "5m"),
+        (Duration::minutes(59) + Duration::seconds(30), "59m"),
+        (Duration::hours(1) + Duration::seconds(30), "1h"),
+        (Duration::hours(1) + Duration::minutes(23) + Duration::seconds(30), "1h 23m"),
+        (Duration::days(1) + Duration::seconds(30), "1d"),
+        (Duration::days(2) + Duration::hours(4) + Duration::seconds(30), "2d 4h"),
+    ];
+    for (ago, want) in cases {
+        let on = sent(Some(&started_before(ago)));
+        assert!(on.contains("@cpd_incident"), "the option is named while incident mode is on: {on}");
+        assert!(!on.contains("-gu @cpd_incident"), "it is set, not unset, while on: {on}");
+        assert!(!on.contains("pager down"), "the option no longer carries the reason: {on}");
+        assert_eq!(written(&on), want, "the elapsed duration {ago:?}: {on}");
+    }
 
     let off = sent(None);
     assert!(off.contains("@cpd_incident"), "the option is named while incident mode is off: {off}");
