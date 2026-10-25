@@ -279,7 +279,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             }
         }
     }
-    for &(p, c) in &edges {
+    for &(p, _) in &edges {
         buf[(mid(p), bottom(p))].set_symbol(EXIT).set_style(lines);
     }
 
