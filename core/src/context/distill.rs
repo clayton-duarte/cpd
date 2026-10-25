@@ -11,13 +11,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Args;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::curation::{Curation, NotCurable, not_curable, Proposal, Reason, propose_rejecting};
 use super::render::Indexed;

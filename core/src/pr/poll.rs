@@ -4,7 +4,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};

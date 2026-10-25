@@ -106,7 +106,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
 /// [`follow`] on the ports of `env` (`env.ports.clock` for the poll's nap, `env.ports.spawn` for the exe it restarts
 /// from) and the writer `out` for its lines, not the process's stdout: what a test of the loop calls.
 /// `out` failing with `BrokenPipe` ends it as the reader's end does. With no `self_exe` to watch there is no restart.
-pub(crate) fn follow_in(env: &mut Env, args: FollowArgs, out: &mut dyn Write) -> Result<Output, CpdError> {
+pub fn follow_in(env: &mut Env, args: FollowArgs, out: &mut dyn Write) -> Result<Output, CpdError> {
     follow_loop(env, args, out, &|| false)
 }
 

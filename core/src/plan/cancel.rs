@@ -4,8 +4,7 @@
 //! archive of `plan archive` (§4.10).
 
 use std::env;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::Connection;
 use serde_json::{Value, json};
