@@ -1,6 +1,6 @@
-//! Engine step E12, the Worker archive (contract §3.7, §2.2 "Archived"; commands.md §10.10, hs-d516): every
-//! stopped Worker Session whose Attempt is `ended` is archived, once, with one `session-archived` Event; one whose
-//! Attempt is live is not. `cpd watch` on a prepared database, with a private tmux server and fake `pi`, `gh`, `cpd`.
+//! Engine step E12, the Worker archive (contract §3.7, §2.2 "Archived"; commands.md §10.10, hs-d516): an archived Worker is still
+//! readable by `attempt read` / `attempt show`. `cpd watch` on a prepared database, with a private tmux server and fake `pi`, `gh`,
+//! `cpd`. The archive itself (once per Worker, none for a live Attempt) is tested next to the step: `watch::archive_tests`.
 
 use crate::common;
 
@@ -13,7 +13,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
-use serde_json::{Value, json};
+use serde_json::json;
 
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
@@ -123,49 +123,6 @@ impl Fx {
     fn archived_at(&self, id: &str) -> Option<String> {
         self.env.query(&format!("SELECT archived_at FROM sessions WHERE id = '{id}'"))
     }
-
-    fn archive_events(&self) -> Vec<(String, Value)> {
-        self.env.read(|conn| {
-            let mut stmt = conn.prepare("SELECT session, data FROM events WHERE kind = 'session-archived' ORDER BY id")?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows.into_iter().map(|(s, d)| (s, serde_json::from_str(&d).unwrap())).collect())
-        })
-    }
-
-    /// Two ticks of the engine after now: the tick count is the number of `watch` heartbeats the test cannot see,
-    /// so it waits a few ticks of wall time.
-    fn some_ticks(&self) {
-        // time-claim: no further `session-archived` Event over a few engine ticks; no per-poll signal from the engine (an absence).
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-    }
-}
-
-#[test]
-fn ended_attempt_archives_its_worker_session() {
-    let fx = fx();
-    let engine = fx.start();
-
-    wait_until("the Worker of the ended Attempt is archived", || fx.archived_at("w-done").is_some());
-    fx.some_ticks();
-    drop(engine);
-
-    assert_eq!(fx.archive_events(), [("w-done".to_owned(), json!({"archived": true}))], "one Event, though many ticks ran");
-}
-
-#[test]
-fn live_attempt_keeps_its_worker_unarchived() {
-    let fx = fx();
-    let engine = fx.start();
-
-    // The ended Attempt's Worker is archived, so E12 ran; the live Attempt's is not.
-    wait_until("E12 ran", || fx.archived_at("w-done").is_some());
-    fx.some_ticks();
-    drop(engine);
-
-    assert_eq!(fx.archived_at("w-live"), None);
-    assert_eq!(fx.archived_at("lead1"), None);
 }
 
 #[test]
