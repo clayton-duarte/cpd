@@ -55,6 +55,11 @@ pub trait Spawn: Send + Sync {
     /// The pids of the live processes of this user that carry `key=value` in their environment (`cpd gate finish`
     /// finds a run's leftovers by `GATE_RUN=<id>`).
     fn with_env(&self, key: &str, value: &str) -> Vec<Pid>;
+    /// The parent of `p`, `None` when `p` is gone or the OS does not tell.
+    fn ppid(&self, p: Pid) -> Option<Pid>;
+    /// The value of `key` in the environment of `p`, `None` when it has none or the OS does not show it (on macOS an
+    /// Apple platform binary hides its environment).
+    fn env_of(&self, p: Pid, key: &str) -> Option<String>;
     /// Returns only on failure.
     fn exec(&self, l: &Launch) -> io::Error;
     fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)>;
@@ -242,8 +247,45 @@ impl Spawn for ProcessSpawn {
         (!words.is_empty()).then(|| words.join(" "))
     }
 
-    fn with_env(&self, _key: &str, _value: &str) -> Vec<Pid> {
-        todo!("ProcessSpawn::with_env: /proc/<pid>/environ on Linux, `ps -axww -E` on macOS")
+    /// Linux reads `/proc/<pid>/environ` (it survives `setsid`, `nohup` and a tmux server, which inherits its
+    /// starter's environment); macOS has no `/proc`, so `ps -axww -E` prints each process's environment after its
+    /// command. Not a match: this process, its ancestors and its descendants, and a process that is no longer alive
+    /// (a scan's own `ps` has exited when the pids are examined).
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        let entry = format!("{key}={value}");
+        let own = std::process::id();
+        let mut related: std::collections::HashSet<u32> = crate::driver::stall::descendants(own).into_iter().collect();
+        related.insert(own);
+        let mut up = crate::driver::stall::stat(own).map(|(ppid, _)| ppid);
+        while let Some(p) = up.filter(|p| *p > 1) {
+            if !related.insert(p) {
+                break;
+            }
+            up = crate::driver::stall::stat(p).map(|(ppid, _)| ppid);
+        }
+        let mut found: Vec<u32> = scan_env(&entry).into_iter().filter(|p| !related.contains(p)).collect();
+        found.retain(|p| self.alive(Pid(*p)));
+        found.sort_unstable();
+        found.into_iter().map(Pid).collect()
+    }
+
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        crate::driver::stall::stat(p.0).map(|(ppid, _)| Pid(ppid))
+    }
+
+    /// macOS: `ps -E -p <pid> -o command=` prints the environment after the command.
+    #[cfg(target_os = "macos")]
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        let out = Command::new("ps").args(["-E", "-p", &p.0.to_string(), "-o", "command="]).output().ok()?;
+        let prefix = format!("{key}=");
+        String::from_utf8_lossy(&out.stdout).split_whitespace().find_map(|w| w.strip_prefix(&prefix).map(str::to_owned))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        let raw = std::fs::read(format!("/proc/{}/environ", p.0)).ok()?;
+        let prefix = format!("{key}=");
+        raw.split(|&b| b == 0).find_map(|e| String::from_utf8_lossy(e).strip_prefix(&prefix).map(str::to_owned))
     }
 
     fn exec(&self, l: &Launch) -> io::Error {
@@ -280,6 +322,31 @@ impl Spawn for ProcessSpawn {
     }
 }
 
+/// The pids that carry the exact entry `entry` (`KEY=value`) in their environment.
+#[cfg(target_os = "macos")]
+fn scan_env(entry: &str) -> Vec<u32> {
+    let Ok(out) = Command::new("ps").args(["-axww", "-E", "-o", "pid=,command="]).output() else { return Vec::new() };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            words.any(|w| w == entry).then_some(pid)
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn scan_env(entry: &str) -> Vec<u32> {
+    crate::driver::stall::all_pids()
+        .into_iter()
+        .filter(|pid| {
+            // Another user's environ is unreadable: not ours to list.
+            std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|raw| raw.split(|&b| b == 0).any(|e| e == entry.as_bytes()))
+        })
+        .collect()
+}
+
 /// What `FakeSpawn` knows of a pid it handed out.
 enum Fate {
     Running,
@@ -295,6 +362,8 @@ struct Table {
     self_exe: Option<PathBuf>,
     exes: HashMap<Pid, PathBuf>,
     cmdlines: HashMap<Pid, String>,
+    /// The `env_set` of each launch that got a pid.
+    envs: HashMap<Pid, Vec<(String, String)>>,
 }
 
 impl Table {
@@ -304,6 +373,7 @@ impl Table {
         self.last_pid += 1;
         let pid = Pid(self.last_pid);
         self.pids.insert(pid, Fate::Running);
+        self.envs.insert(pid, l.env_set.clone());
         pid
     }
 }
@@ -407,8 +477,24 @@ impl Spawn for FakeSpawn {
         self.table().cmdlines.get(&p).cloned()
     }
 
-    fn with_env(&self, _key: &str, _value: &str) -> Vec<Pid> {
-        todo!("FakeSpawn::with_env: the live pids whose Launch env_set holds key=value")
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        let table = self.table();
+        let mut pids: Vec<Pid> = table
+            .envs
+            .iter()
+            .filter(|(pid, env)| matches!(table.pids.get(pid), Some(Fate::Running)) && env.iter().any(|(k, v)| k == key && v == value))
+            .map(|(pid, _)| *pid)
+            .collect();
+        pids.sort_unstable();
+        pids
+    }
+
+    fn ppid(&self, _p: Pid) -> Option<Pid> {
+        None
+    }
+
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        self.table().envs.get(&p)?.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.clone())
     }
 
     fn exec(&self, l: &Launch) -> io::Error {
