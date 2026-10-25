@@ -2830,6 +2830,8 @@ Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, one `session-me
 
 Idempotent: a second one is refused.
 
+**E3: Linear vs parallel Attempts** (hs-d680, hs-d682, hs-d683; contract §3.7 E3, A1). When E3 schedules a Ready Job, it derives which Attempt of a PR runs as the linear one (reusing the PR's workflow worktree on its Lead Branch) and which as parallel siblings (each with its own worktree): an Attempt is linear iff no other Attempt of the same PR is live when inserted. E3 passes this allocation to the driver starter, which takes the driver lock and enforces it atomically before starting, ensuring no two Attempts can share the workflow worktree. See §7.1, §7.2.
+
 **With `--ensure`:** starts the engine when it is not running, and returns at once. It fails and creates nothing when `$CPD_HOME` does not exist (hs-d519 3c/5, docs/research/hygiene.md, bug 3c/5).
 
 | Precondition | Code | Exit |
