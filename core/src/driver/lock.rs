@@ -168,21 +168,26 @@ impl Inherited {
 ///
 /// Call it before the process opens any file, so fd 3 cannot be one of its own.
 pub fn inherited(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Inherited, CpdError> {
+    inherited_on(DRIVER_FD, home, plan, attempt)
+}
+
+/// [`inherited`] for the descriptor `fd` (the driver's is [`DRIVER_FD`]): a test hands it one that is its own.
+pub(crate) fn inherited_on(fd: RawFd, home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Inherited, CpdError> {
     let path = home.attempt_lock(plan, attempt);
     let missing = |why: String| {
-        CpdError::new(ErrorCode::DriverLockMissing, format!("fd 3 is not the driver lock {}: {why}.", path.display()))
+        CpdError::new(ErrorCode::DriverLockMissing, format!("fd {fd} is not the driver lock {}: {why}.", path.display()))
             .with("plan", plan.as_str())
             .with("attempt", attempt.to_string())
             .with("lock", path.display().to_string())
     };
     // SAFETY: only probes the descriptor number; nothing is owned yet.
-    let open = fcntl(unsafe { BorrowedFd::borrow_raw(DRIVER_FD) }, FcntlArg::F_GETFD);
+    let open = fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFD);
     if let Err(errno) = open {
         return Err(missing(format!("it is not open ({errno})")));
     }
     // SAFETY: fd 3 is open and nothing else in this process owns it: the
     // driver calls this before it opens any file.
-    let file = unsafe { File::from_raw_fd(DRIVER_FD) };
+    let file = unsafe { File::from_raw_fd(fd) };
     let same = match (file.metadata(), fs::metadata(&path)) {
         (Ok(fd), Ok(on_disk)) => {
             if fd.dev() == on_disk.dev() && fd.ino() == on_disk.ino() {
@@ -206,6 +211,7 @@ pub fn inherited(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<I
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::IntoRawFd;
 
     fn home() -> (tempfile::TempDir, CpdHome, PlanId, AttemptId) {
         let dir = tempfile::tempdir().unwrap();
@@ -233,5 +239,70 @@ mod tests {
         assert!(probe(&home, &plan, &attempt).unwrap().is_none());
         drop(held);
         assert!(probe(&home, &plan, &attempt).unwrap().is_some());
+    }
+
+    /// The flags of the descriptor of `held`.
+    fn flags(held: &Inherited) -> FdFlag {
+        FdFlag::from_bits_truncate(fcntl(&held._file, FcntlArg::F_GETFD).unwrap())
+    }
+
+    /// The lock file of the Attempt, created, opened, with close-on-exec cleared (as a spawn leaves it on fd 3).
+    fn lock_file(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> File {
+        let path = home.attempt_lock(plan, attempt);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap();
+        fcntl(&file, FcntlArg::F_SETFD(FdFlag::empty())).unwrap();
+        file
+    }
+
+    #[test]
+    fn keeping_the_lock_across_exec_clears_close_on_exec_and_closing_it_on_exec_sets_it_again() {
+        let (_dir, home, plan, attempt) = home();
+        let held = Inherited { _file: lock_file(&home, &plan, &attempt) };
+        assert!(!flags(&held).contains(FdFlag::FD_CLOEXEC));
+
+        held.close_on_exec().unwrap();
+        assert!(flags(&held).contains(FdFlag::FD_CLOEXEC));
+
+        held.keep_across_exec().unwrap();
+        assert!(!flags(&held).contains(FdFlag::FD_CLOEXEC));
+    }
+
+    #[test]
+    fn the_inherited_lock_is_made_close_on_exec_so_the_drivers_children_never_hold_it() {
+        let (_dir, home, plan, attempt) = home();
+        let fd = lock_file(&home, &plan, &attempt).into_raw_fd();
+
+        let held = inherited_on(fd, &home, &plan, &attempt).unwrap();
+
+        assert_eq!(held._file.as_raw_fd(), fd);
+        assert!(flags(&held).contains(FdFlag::FD_CLOEXEC));
+    }
+
+    #[test]
+    fn a_descriptor_that_is_another_file_than_the_lock_is_refused_and_left_open() {
+        let (dir, home, plan, attempt) = home();
+        lock_file(&home, &plan, &attempt);
+        let other = File::create(dir.path().join("other.lock")).unwrap();
+        let fd = other.into_raw_fd();
+
+        let refused = inherited_on(fd, &home, &plan, &attempt).unwrap_err();
+
+        assert_eq!(refused.code(), ErrorCode::DriverLockMissing);
+        assert!(refused.message().contains("another file"), "{}", refused.message());
+        // Not ours to close: the refusal leaves it open (the test closes it here).
+        assert!(fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFD).is_ok());
+        drop(unsafe { File::from_raw_fd(fd) });
+    }
+
+    #[test]
+    fn a_descriptor_that_is_not_open_is_refused() {
+        let (_dir, home, plan, attempt) = home();
+        lock_file(&home, &plan, &attempt);
+
+        let refused = inherited_on(9999, &home, &plan, &attempt).unwrap_err();
+
+        assert_eq!(refused.code(), ErrorCode::DriverLockMissing);
+        assert!(refused.message().contains("not open"), "{}", refused.message());
     }
 }
