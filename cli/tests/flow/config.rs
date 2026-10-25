@@ -69,7 +69,8 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "distill_minutes": 15,
                 "stall_seconds": 1200,
                 "pi_stop_seconds": 10,
-                "sleep_seconds": 3600
+                "sleep_seconds": 3600,
+                "archive_sleep_seconds": 86400
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
@@ -222,6 +223,7 @@ distill_minutes = 1
 stall_seconds = 0
 pi_stop_seconds = 1
 sleep_seconds = 1
+archive_sleep_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
