@@ -20,6 +20,7 @@ mod context_reindex;
 mod context_search;
 mod context;
 mod driver_idle;
+mod driver_open;
 mod driver_reload;
 mod driver;
 mod host_repair;

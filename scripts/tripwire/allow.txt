@@ -26,9 +26,7 @@ cpd::session session_watchdog::  # m-session: session tests on a real tmux serve
 cpd::session session::  # m-session: session tests on a real tmux server
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_pending_waiting::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_idle::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver_reload::  # m-flow: flow commands that may reach a real tmux
-cpd::flow driver::  # m-flow: flow commands that may reach a real tmux
+cpd::flow context::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan_new_by_user::  # m-flow: flow commands that may reach a real tmux
