@@ -110,6 +110,12 @@ impl FoldsFile {
         Ok(())
     }
 
+    /// [`FoldsFile::save`] with the second counted on the clock of `ports`.
+    pub fn save_with(&mut self, ports: &cpd_core::ports::Ports, folds: &Folds) -> Result<(), String> {
+        let _ = (ports, folds);
+        todo!("FoldsFile::save_with")
+    }
+
     /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, folds: &Folds) -> io::Result<()> {
         let text = serde_json::to_vec(folds).map_err(io::Error::other)?;

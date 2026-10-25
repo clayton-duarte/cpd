@@ -92,6 +92,18 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     )
 }
 
+/// [`show`] on a [`Ctx`]: input, clock and frames are the context's.
+pub(crate) fn show_with<B: ratatui::backend::Backend>(
+    ctx: &mut crate::view_ports::Ctx<B>,
+    store: &mut Store,
+    poll: Duration,
+    follow: read::Follow,
+    log: Log,
+) -> Result<(), ViewError> {
+    let _ = (ctx, store, poll, follow, log);
+    todo!("logs::show_with")
+}
+
 /// The keys that close the view.
 fn closes(code: KeyCode) -> bool {
     matches!(code, KeyCode::Char('q') | KeyCode::Esc)

@@ -41,9 +41,9 @@ use cpd_core::store::Store;
 use view::View;
 
 /// How often the view looks at the session file and the store (§17).
-const CHECK: Duration = Duration::from_millis(500);
+pub(crate) const CHECK: Duration = Duration::from_millis(500);
 /// How long the loop waits for a key before it looks at the clock again.
-const TICK: Duration = Duration::from_millis(100);
+pub(crate) const TICK: Duration = Duration::from_millis(100);
 
 /// `cpd tui view worker <attempt> --plan <id>` or `cpd tui view worker --job <key> --plan <id>`.
 #[derive(clap::Args, Debug)]
@@ -95,6 +95,19 @@ struct Stamp {
     path: PathBuf,
     len: u64,
     modified: Option<SystemTime>,
+}
+
+/// [`event_loop`] on a [`Ctx`]: input, clock and frames are the context's.
+pub(crate) fn event_loop_with<B: ratatui::backend::Backend>(
+    ctx: &mut crate::view_ports::Ctx<B>,
+    store: &mut Store,
+    follow: read::Follow,
+    plan: &PlanId,
+    target: &Target,
+    first: Worker,
+) -> std::io::Result<()> {
+    let _ = (ctx, store, follow, plan, target, first);
+    todo!("worker::event_loop_with")
 }
 
 fn event_loop(

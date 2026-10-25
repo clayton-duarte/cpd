@@ -48,8 +48,8 @@ const LOG: &str = "merge";
 /// `pr merge` is the authority on the rest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
-    repo: String,
-    number: i64,
+    pub(crate) repo: String,
+    pub(crate) number: i64,
 }
 
 impl Pull {
@@ -88,7 +88,7 @@ pub struct Args {
 
 /// What the User's key or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
+pub(crate) enum Action {
     Merge,
     Cancel,
 }
@@ -227,6 +227,29 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
         Tmux::new(socket).run(&start_args(&args.pull, &args.client))?;
     }
     Ok(Output::Owned)
+}
+
+/// [`show`] on a [`Ctx`]: input and frames are the context's.
+pub(crate) fn show_with<B: ratatui::backend::Backend>(
+    ctx: &mut crate::view_ports::Ctx<B>,
+    pull: &Pull,
+    title: Option<&str>,
+) -> std::io::Result<Action> {
+    let _ = (ctx, pull, title);
+    todo!("merge::show_with")
+}
+
+/// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
+pub(crate) fn action_with(
+    ports: &cpd_core::ports::Ports,
+    home: &CpdHome,
+    tmux: &Tmux,
+    pull: &Pull,
+    client: &str,
+    run: crate::view_ports::RunFn,
+) -> Result<(), CpdError> {
+    let _ = (ports, home, tmux, pull, client, run);
+    todo!("merge::action_with")
 }
 
 /// Draws and takes input until the User confirms or cancels.

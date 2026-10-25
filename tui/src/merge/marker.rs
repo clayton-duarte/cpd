@@ -27,6 +27,18 @@ pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
     write_with(home, pull, false)
 }
 
+/// [`write`] stamped by the clock of `ports`.
+pub fn write_on(ports: &cpd_core::ports::Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    let _ = (ports, home, pull);
+    todo!("marker::write_on")
+}
+
+/// [`live`] with the pids asked of `ports.spawn`.
+pub fn live_with(ports: &cpd_core::ports::Ports, home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
+    let _ = (ports, home, open);
+    todo!("marker::live_with")
+}
+
 /// Rewrites the marker of `pull` as `{"pid", "at", "merged": true}` (hs-d550): `pr merge` succeeded, and the marker
 /// holds until a read stores the merge. Atomic, as [`write`].
 pub fn write_merged(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {

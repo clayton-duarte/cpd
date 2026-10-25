@@ -316,6 +316,12 @@ fn closes(event: &Event, scroll: &mut Scroll) -> bool {
     }
 }
 
+/// [`show`] on a [`Ctx`]: input and frames are the context's.
+pub(crate) fn show_with<B: ratatui::backend::Backend>(ctx: &mut crate::view_ports::Ctx<B>) -> std::io::Result<()> {
+    let _ = ctx;
+    todo!("legend::show_with")
+}
+
 fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
     let mut scroll = Scroll::default();
     loop {

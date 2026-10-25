@@ -496,6 +496,24 @@ fn open_lead(run_command: RunCommand, lead: &SessionId) -> Result<(), CpdError> 
     }
 }
 
+/// [`open_lead`] with the command run by `run`.
+fn open_lead_with(run: crate::view_ports::RunFn, lead: &SessionId) -> Result<(), CpdError> {
+    let _ = (run, lead);
+    todo!("open_lead_with")
+}
+
+/// [`exec_attach`] through `ports.spawn.exec`.
+fn exec_attach_with(ports: &cpd_core::ports::Ports, tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
+    let _ = (ports, tmux, cockpit, program);
+    todo!("exec_attach_with")
+}
+
+/// [`tmux_version`] with the installed tmux asked of `ports.runner`.
+fn tmux_version_with(ports: &cpd_core::ports::Ports, home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
+    let _ = (ports, home, config, store, tmux, restart);
+    todo!("tmux_version_with")
+}
+
 /// Runs another area's command (`cpd <words>`) in this process, through the
 /// command tree, and returns its success fields: its arguments and its effects
 /// stay that area's own, as with a subprocess.

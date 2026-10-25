@@ -255,6 +255,12 @@ fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io
     }
 }
 
+/// [`show`] on a [`Ctx`]: input and frames are the context's.
+pub(crate) fn show_with<B: ratatui::backend::Backend>(ctx: &mut crate::view_ports::Ctx<B>, dialog: &mut Dialog) -> std::io::Result<Outcome> {
+    let _ = (ctx, dialog);
+    todo!("dialog::show_with")
+}
+
 /// What `event` does to `dialog`: the outcome that closes it, if any.
 fn dispatch(dialog: &mut Dialog, event: Event) -> Option<Outcome> {
     match event {

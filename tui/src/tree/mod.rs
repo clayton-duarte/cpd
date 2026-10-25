@@ -29,7 +29,7 @@
 pub(crate) mod actions;
 mod ask;
 mod cursor;
-mod folds;
+pub(crate) mod folds;
 mod inbox;
 #[cfg(test)]
 mod inbox_indent;

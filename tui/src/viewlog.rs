@@ -20,6 +20,12 @@ impl ViewLog {
         ViewLog { path: home.run_dir().join("tui").join(format!("{view}.log")) }
     }
 
+    /// [`ViewLog::append`] stamped by the clock of `ports`.
+    pub fn append_with(&self, ports: &cpd_core::ports::Ports, line: &str) -> Result<(), String> {
+        let _ = (ports, line);
+        todo!("ViewLog::append_with")
+    }
+
     /// Appends `<RFC 3339 time> <line>`; `Err` with the reason when the file cannot be written.
     pub fn append(&self, line: &str) -> Result<(), String> {
         let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");

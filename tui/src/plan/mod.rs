@@ -145,6 +145,12 @@ fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdE
     snapshot_timed(store, width, now_ms, false)
 }
 
+/// [`snapshot`]'s chart, with the spinner frame and the time read on the clock of `ports`.
+pub(crate) fn snapshot_with(ports: &cpd_core::ports::Ports, store: &mut Store, width: u16) -> Result<Option<Centre>, CpdError> {
+    let _ = (ports, store, width);
+    todo!("plan::snapshot_with")
+}
+
 /// [`snapshot`], timing its layout when `timed`.
 fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
@@ -314,7 +320,7 @@ impl Ui {
 
 /// The Plans' scroll offsets in `$CPD_HOME/run/tui/plan-scroll.json` (commands.md §13.2, hs-d254): a JSON object
 /// `{"<plan id>": [x, y]}`. The view's own state, not Ledger state: the one file a view writes.
-struct Offsets {
+pub(crate) struct Offsets {
     path: PathBuf,
     /// What the file holds, as far as this view knows; a write is due when the offsets differ from it.
     saved: HashMap<PlanId, (u16, u16)>,
@@ -326,7 +332,7 @@ struct Offsets {
 const SAVE_EVERY: Duration = Duration::from_secs(1);
 
 impl Offsets {
-    fn at(home: &CpdHome) -> Offsets {
+    pub(crate) fn at(home: &CpdHome) -> Offsets {
         // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
         let path = home.run_dir().join("tui").join("plan-scroll.json");
         Offsets { path, saved: HashMap::new(), written: None }
@@ -334,7 +340,7 @@ impl Offsets {
 
     /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
     /// `{"<plan id>": [x, y]}`.
-    fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
+    pub(crate) fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
         let text = match fs::read(&self.path) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
@@ -344,6 +350,12 @@ impl Offsets {
             serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
         self.saved = offsets.clone();
         Ok(offsets)
+    }
+
+    /// [`Offsets::save`] with the second counted on the clock of `ports`.
+    pub(crate) fn save_with(&mut self, ports: &cpd_core::ports::Ports, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+        let _ = (ports, offsets, now);
+        todo!("Offsets::save_with")
     }
 
     /// When a write that is due but held back by [`SAVE_EVERY`] can be made, if one is waiting.

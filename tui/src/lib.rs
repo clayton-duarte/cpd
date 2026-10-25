@@ -113,6 +113,9 @@ mod tree;
 mod viewlog;
 pub mod widgets;
 mod worker;
+pub mod view_ports;
+#[cfg(test)]
+mod view_ports_tests;
 
 pub use runner::{Capture, ViewError, run_view};
 
