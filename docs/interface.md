@@ -143,12 +143,12 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
 | `cpd host approve` | Record the User's approval for one checkout repair (adapter) (§9.11) | internal | |
 | `cpd host repair` | Repair the skipped cpd install (Manager) (§9.11) | Manager | |
+| `cpd test` | The tests a change reaches, and named tests (commands.md §27) | | |
+| `cpd test changed` | Run the Rust tests the changed files can reach (§26.1) | Manager, Lead, Worker | |
+| `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
+| `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
+| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |
 | `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
-| `cpd tag` | Tag the commit that set the workspace version (commands.md §27.1) | Lead | |
-| `cpd version` | The release plumbing (commands.md §27) | | |
-| `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §27.2) | Lead | |
-| `cpd test` | The tests a change reaches, and named tests (commands.md §28) | | |
-| `cpd test changed` | Run the Rust tests the changed files can reach (§28.1) | Manager, Lead, Worker | |
-| `cpd test run` | Run the named tests (§28.2) | Manager, Lead, Worker | |
-| `cpd test list` | Exit 0 only when that one test exists (§28.3) | Manager, Lead, Worker | |
-| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§28.3) | Manager, Lead, Worker | |
+| `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
+| `cpd version` | The release plumbing (commands.md §26.2) | | |
+| `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |
