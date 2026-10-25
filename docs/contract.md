@@ -2431,6 +2431,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Live Plan or fork row name, unselected | yes (opens the Session) | fg 15 | palette: clickable text |
 | Plan or fork row name, selected (its Session is in the chat slot) | yes | fg 4 (beats the muted colour of archived and asleep rows) | palette: blue |
 | Archived Plan or fork row (dot, name, counters) | yes (opens its history) | fg 8 on every mark: archived wins over the clickable 15, and no mark is coloured | palette: muted |
+| Archived Manager row (dot, name) | yes (unarchives the Context and opens the Manager) | fg 8 on every mark: archived wins over the clickable 15, and no mark is coloured | palette: muted |
 | Asleep Session row (dot, name) | yes (resumes it) | fg 7 | palette: read-only text |
 | Asleep Session row (counters) | yes (resumes it) | fg 8 | palette: muted |
 | Keyboard cursor row (only while the pane has focus) | yes | block: 4 inverted, the whole row; its marks inherit the inversion | `palette::selected()` |
