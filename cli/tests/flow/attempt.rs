@@ -1,21 +1,23 @@
-//! `attempt submit`, `attempt read`, `attempt show` and `attempt list`
-//! (commands.md §6.1–§6.3). `attempt submit` without a hook runs in this process on the fake git ([`Git`]: repos of the
-//! `Universe`, no git process); the quick-check and kind-check tests still run the built binary against a temporary
-//! `$CPD_HOME` and temporary git repos (they run `sh` hooks). `attempt read`, `attempt show` and `attempt list` call no git and no hook,
-//! so their tests run the command tree in this process (`Fx`, [`Rows`]) against rows alone. The Plan, its Jobs,
-//! Attempts and Sessions are fixtures written straight into the database; the commands under test are the only ones
-//! that write the rest.
+//! `attempt submit`, `attempt read`, `attempt show` and `attempt list` (commands.md §6.1–§6.3). Every test runs in this
+//! process, on the fakes of `Fx::with_ports`. `attempt submit` runs on the fake git ([`Git`]: repos of the `Universe`, no git
+//! process), and the hooks and `[test-commands]` of a repo, which `cpd` runs with `sh -c`, are answered by a route of the
+//! `FakeRunner` ([`Git::sh`]): the tests pin the command `cpd` renders and what it makes of the answer, not what a shell does.
+//! `attempt read`, `attempt show` and `attempt list` call no git and no hook, so their tests run against rows alone
+//! ([`Rows`]). The Plan, its Jobs, Attempts and Sessions are fixtures written straight into the database; the commands under
+//! test are the only ones that write the rest.
 
 use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::fx::Fx as InProcess;
-use common::{Run, TestEnv, refused};
+use common::{Run, refused};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
@@ -23,76 +25,6 @@ use rusqlite::params;
 use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
-
-// ---------- fixtures ----------
-
-/// A repo with a Lead worktree for Plan `pay`, a database with its Context, Lead
-/// Session, Plan (phase `dispatch`) and Job `api` (`running`) with Attempt `api-a1`
-/// (`running`) in its own worktree, cut from the Lead Branch.
-struct Fx {
-    env: TestEnv,
-    home: CpdHome,
-    repo: PathBuf,
-    lead: PathBuf,
-    /// The worktree of `api-a1`.
-    work: PathBuf,
-}
-
-/// `files` are committed on `main` before the Lead worktree is cut from it.
-fn fixture(files: &[(&str, &str)]) -> Fx {
-    fixture_kind(files, "work", None)
-}
-
-/// [`fixture`] whose repo policy file is `file` (its `[hooks]`).
-fn hooked(file: &str) -> Fx {
-    let fx = fixture(&[]);
-    fx.env.repo_policy("acme", "pay", file);
-    fx
-}
-
-/// [`fixture`] with Job `api` of `kind` and, for a `test` Job, its `(tests, test_files)` as JSON arrays.
-fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>) -> Fx {
-    fixture_needing(files, kind, tests, None)
-}
-
-/// [`fixture_kind`] whose Job needs the merged `test` Job `t` naming `needs` (a JSON array), see [`Fx::attempt_needing`].
-fn fixture_needing(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> Fx {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    // The worktrees are created in this process, whose environment is not the TestEnv's.
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
-    }
-    if !files.is_empty() {
-        for (path, content) in files {
-            let full = repo.join(path);
-            fs::create_dir_all(full.parent().unwrap()).unwrap();
-            fs::write(full, content).unwrap();
-        }
-        env.git(&repo, &["add", "-A"]);
-        env.git(&repo, &["commit", "-q", "-m", "setup"]);
-    }
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("setup.log") };
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path;
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
-    env.repo_policy("acme", "pay", "");
-    let mut fx = Fx { env, home, repo, lead, work: PathBuf::new() };
-    fx.env.sql(&format!(
-        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
-         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
-         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-           VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
-        fx.repo.display(),
-        fx.lead.display()
-    ));
-    fx.work = fx.attempt_needing(&Pr { key: "repo".into(), repo: fx.repo.clone(), lead: fx.lead.clone() }, "api", "running", kind, tests, needs);
-    fx
-}
 
 /// A started PR of Plan `pay`: its key, repo and Lead worktree.
 struct Pr {
@@ -105,125 +37,12 @@ fn plan() -> PlanId {
     PlanId::parse(PLAN).unwrap()
 }
 
-impl Fx {
-    fn store(&self) -> Store {
-        Store::open(&self.home, 5000).unwrap()
-    }
-
-    /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>` and
-    /// its Lead worktree. `files` are committed on the Lead Branch.
-    fn add_pr(&self, key: &str, files: &[(&str, &str)]) -> Pr {
-        let repo = self.env.git_repo(key).canonicalize().unwrap();
-        for (name, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-            self.env.git(&repo, &["config", name, value]);
-        }
-        let branch = format!("cpd/pay/{key}");
-        let lead = pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("setup.log") };
-        prepare_lead_worktree(&repo, &plan(), &lead, &branch, "main", &setup).map_err(|f| f.error).unwrap();
-        for (path, content) in files {
-            let full = lead.join(path);
-            fs::create_dir_all(full.parent().unwrap()).unwrap();
-            fs::write(full, content).unwrap();
-        }
-        self.env.git(&lead, &["add", "-A"]);
-        self.env.git(&lead, &["commit", "-q", "-m", "setup", "--allow-empty"]);
-        self.env.repo_policy("acme", key, "");
-        self.env.sql(&format!(
-            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
-            repo.display(),
-            lead.display()
-        ));
-        Pr { key: key.into(), repo, lead }
-    }
-
-    /// A Job of `pr` with its Attempt `<key>-a1` in `status`: its worktree cut from the Lead Branch HEAD. Returns the worktree.
-    fn attempt_in(&self, pr: &Pr, key: &str, status: &str) -> PathBuf {
-        self.attempt_kind(pr, key, status, "work", None)
-    }
-
-    /// [`Fx::attempt_in`] for a Job of `kind` (`tests`: a `test` Job's `(tests, test_files)`, JSON arrays).
-    fn attempt_kind(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>) -> PathBuf {
-        self.attempt_needing(pr, key, status, kind, tests, None)
-    }
-
-    /// [`Fx::attempt_kind`] for a Job that needs the merged `test` Job `t` (its `tests` as a JSON array; `test_files` is `["tests/"]`): `t` and
-    /// the Dependency are written in the Job's own transaction, since a Dependency of a Locked Job is refused later (`dependencies_locked`).
-    fn attempt_needing(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> PathBuf {
-        let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
-        self.store()
-            .write("fixture", |tx| {
-                tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files, review)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7, ?8)",
-                    // The pseudo-kind `review` is a `work` Job with the review flag.
-                    params![key, "f".repeat(64), tx.id(), pr.key, if kind == "review" { "work" } else { kind }, tests.map(|t| t.0), tests.map(|t| t.1), kind == "review"],
-                )?;
-                if let Some(names) = needs {
-                    tx.execute(
-                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                                           created_txn, created_at, kind, tests, test_files, merged_sha)
-                           VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
-                                   ?2, 't', 'test', ?3, '[\"tests/\"]', 'c0ffee')",
-                        params![pr.key, tx.id(), names],
-                    )?;
-                    tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', ?1, 't')", params![key])?;
-                }
-                tx.execute(
-                    "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
-                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', ?6, ?3, ?4, ?5, 't')",
-                    params![attempt.to_string(), key, made.branch, made.path.to_str().unwrap(), made.base_sha, status],
-                )?;
-                Ok(())
-            })
-            .unwrap();
-        made.path
-    }
-
-    /// Commits `path` = `content` in the Attempt worktree.
-    fn commit(&self, path: &str, content: &str) -> String {
-        let full = self.work.join(path);
-        fs::create_dir_all(full.parent().unwrap()).unwrap();
-        fs::write(&full, content).unwrap();
-        self.env.git(&self.work, &["add", "-A"]);
-        self.env.git(&self.work, &["commit", "-q", "-m", &format!("edit {path}")]);
-        self.env.git(&self.work, &["rev-parse", "HEAD"])
-    }
-
-    fn submit(&self) -> Run {
-        self.submit_in(&self.work)
-    }
-
-    fn submit_in(&self, cwd: &Path) -> Run {
-        self.env.cpd_in(cwd, &["attempt", "submit", "api-a1", "--plan", PLAN])
-    }
-
-    fn cpd(&self, args: &[&str]) -> Run {
-        let mut all = vec!["attempt"];
-        all.extend(args);
-        all.extend(["--plan", PLAN]);
-        self.env.cpd(&all)
-    }
-
-    fn status(&self) -> String {
-        self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
-    }
-
-    fn events(&self, kind: &str) -> Vec<Value> {
-        self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
-    }
-}
-
 // ---------- fixtures without git: the rows alone, for the commands that read the store ----------
 
 /// The `base_sha` of the Attempts of [`Rows`]: no repo exists to cut one from.
 const BASE: &str = "0123456789abcdef0123456789abcdef01234567";
 
-/// [`fixture`] without a repo, a worktree or a git process: the same rows (Context, Lead Session, Plan, PR `repo`,
+/// A repo, a worktree and a git process left out: the rows of [`Git`] (Context, Lead Session, Plan, PR `repo`,
 /// Job `api` and its Attempt `api-a1`, both `running`) written by SQL, in an [`InProcess`] env, whose commands run in
 /// this process. The paths the rows name (`repo`, `lead`, the Attempts' worktrees) do not exist.
 struct Rows {
@@ -314,6 +133,8 @@ struct Git {
     lead: PathBuf,
     /// The worktree of `api-a1`.
     work: PathBuf,
+    /// What the route of `sh` answers with.
+    answer: Arc<Mutex<Answer>>,
 }
 
 /// `files` are committed on `main` before the Lead worktree is cut from it.
@@ -321,8 +142,14 @@ fn git_fixture(files: &[(&str, &str)]) -> Git {
     git_fixture_kind(files, "work")
 }
 
-/// [`git_fixture`] with Job `api` of `kind` (`work` or `review`).
+/// [`git_fixture`] with Job `api` of `kind` (`work`, `review`, `test` or `impl`).
 fn git_fixture_kind(files: &[(&str, &str)], kind: &str) -> Git {
+    git_fixture_needing(files, kind, None, None)
+}
+
+/// [`git_fixture_kind`] for a `test` Job's `(tests, test_files)` (JSON arrays) and, for an `impl` Job, the `tests` (a JSON array)
+/// of the merged `test` Job `t` it needs, see [`Git::attempt_needing`].
+fn git_fixture_needing(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> Git {
     let fx = InProcess::with_ports();
     let repo = fx.git_repo("pay").canonicalize().unwrap();
     for (path, content) in files {
@@ -344,14 +171,40 @@ fn git_fixture_kind(files: &[(&str, &str)], kind: &str) -> Git {
         repo.display(),
         lead.display()
     ));
-    let mut git = Git { fx, home, repo, lead, work: PathBuf::new() };
-    git.work = git.attempt_in(&Pr { key: "repo".into(), repo: git.repo.clone(), lead: git.lead.clone() }, "api", "running", kind);
+    let answer: Answer = Arc::new(|command, _| panic!("a command no test scripted (Git::sh): {command}"));
+    let answer = Arc::new(Mutex::new(answer));
+    let _ = (*fx.fakes.runner).clone().route("sh", Arc::new(Sh(answer.clone())));
+    let mut git = Git { fx, home, repo, lead, work: PathBuf::new(), answer };
+    git.work = git.attempt_needing(&Pr { key: "repo".into(), repo: git.repo.clone(), lead: git.lead.clone() }, "api", "running", kind, tests, needs);
     git
 }
 
 /// `f` with the fake ports of `fx` as the ambient ones: the core's git functions (`create_lead_worktree`, ...) run on them.
 fn in_fakes<R>(fx: &InProcess, f: impl FnOnce() -> R) -> R {
     Ports::scope(&fx.fakes.ports, f)
+}
+
+/// [`git_fixture`] whose repo policy file is `file` (its `[hooks]`): the commands of its hooks are answered by [`Git::sh`].
+fn hooked(file: &str) -> Git {
+    let fx = git_fixture(&[]);
+    fx.fx.env.repo_policy("acme", "pay", file);
+    fx
+}
+
+/// How `sh -c <command>` is answered, from the command and the directory it runs in.
+type Answer = Arc<dyn Fn(&str, &Path) -> Reply + Send + Sync>;
+
+/// The route of `sh` on the `FakeRunner`: it answers with the [`Answer`] of the moment (the last [`Git::sh`]), and a command is
+/// unscripted (the test fails) until a test gives one.
+struct Sh(Arc<Mutex<Answer>>);
+
+impl Handler for Sh {
+    fn handle(&self, call: &Call) -> Reply {
+        let [flag, command] = call.args.as_slice() else { panic!("sh was not called as `sh -c <command>`: {:?}", call.args) };
+        assert_eq!(flag, "-c", "{:?}", call.args);
+        let answer = self.0.lock().unwrap().clone();
+        answer(command, call.cwd.as_deref().expect("a hook runs in a directory"))
+    }
 }
 
 fn setup(fx: &InProcess, log: &str) -> Setup {
@@ -382,17 +235,34 @@ impl Git {
     /// A Job of `pr` and of `kind` (`work` or `review`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
     /// Lead Branch HEAD. Returns the worktree.
     fn attempt_in(&self, pr: &Pr, key: &str, status: &str, kind: &str) -> PathBuf {
+        self.attempt_needing(pr, key, status, kind, None, None)
+    }
+
+    /// [`Git::attempt_in`] for a Job of `kind` too of `test` (`tests`: its `(tests, test_files)`, JSON arrays) and `impl`
+    /// (`needs`: the merged `test` Job `t`'s `tests` as a JSON array; its `test_files` is `["tests/"]`): `t` and the Dependency are
+    /// written in the Job's own transaction, since a Dependency of a Locked Job is refused later (`dependencies_locked`).
+    fn attempt_needing(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> PathBuf {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let made = in_fakes(&self.fx, || create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup(&self.fx, "attempt.log"))).unwrap();
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at, kind, review)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'work', ?5)",
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files, review)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7, ?8)",
                     // The pseudo-kind `review` is a `work` Job with the review flag.
-                    params![key, "f".repeat(64), tx.id(), pr.key, kind == "review"],
+                    params![key, "f".repeat(64), tx.id(), pr.key, if kind == "review" { "work" } else { kind }, tests.map(|t| t.0), tests.map(|t| t.1), kind == "review"],
                 )?;
+                if let Some(names) = needs {
+                    tx.execute(
+                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                                           created_txn, created_at, kind, tests, test_files, merged_sha)
+                           VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                                   ?2, 't', 'test', ?3, '[\"tests/\"]', 'c0ffee')",
+                        params![pr.key, tx.id(), names],
+                    )?;
+                    tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', ?1, 't')", params![key])?;
+                }
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                      VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', ?6, ?3, ?4, ?5, 't')",
@@ -428,8 +298,26 @@ impl Git {
         self.fx.cpd_in(cwd, &["attempt", "submit", "api-a1", "--plan", PLAN])
     }
 
+    /// `cpd attempt <args> --plan pay`, in this process.
+    fn cpd(&self, args: &[&str]) -> Run {
+        let mut all = vec!["attempt"];
+        all.extend(args);
+        all.extend(["--plan", PLAN]);
+        self.fx.cpd(&all)
+    }
+
     fn status(&self) -> String {
         self.fx.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+    }
+
+    /// Every command `cpd` runs through `sh -c` (a hook, a `[test-commands]` command) is answered by `answer(command, cwd)`.
+    fn sh(&self, answer: impl Fn(&str, &Path) -> Reply + Send + Sync + 'static) {
+        *self.answer.lock().unwrap() = Arc::new(answer);
+    }
+
+    /// The commands `cpd` has run through `sh -c` so far (rendered), in order.
+    fn shells(&self) -> Vec<String> {
+        self.fx.calls("sh").into_iter().map(|call| call.args[1].clone()).collect()
     }
 
     fn txns(&self) -> i64 {
@@ -612,31 +500,37 @@ fn submit_takes_the_protected_list_from_the_policy_of_the_jobs_pr() {
 
 #[test]
 fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
-    let fx = fixture(&[]);
-    let web = fx.add_pr("web", &[]);
-    fx.env.repo_policy("acme", "web", "[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
-    let ui = fx.attempt_in(&web, "ui", "running");
-    fs::write(ui.join("ui.txt"), "ui\n").unwrap();
-    fx.env.git(&ui, &["add", "-A"]);
-    fx.env.git(&ui, &["commit", "-q", "-m", "ui"]);
+    let fx = git_fixture(&[]);
+    let web = fx.add_pr("web");
+    fx.fx.env.repo_policy("acme", "web", "[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
+    fx.sh(|_, _| Reply::ok("checking-web\n"));
+    let ui = fx.attempt_in(&web, "ui", "running", "work");
+    fx.commit_in(&ui, "ui.txt", "ui\n");
 
-    fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
+    fx.fx.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
 
-    assert_eq!(fs::read_to_string(fx.env.root().join("repos/target-seen.txt")).unwrap(), "cpd/pay/web\n");
-    let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
+    // The command is rendered with the Lead Branch of the Job's PR as `target` (it ran in the Attempt's worktree).
+    let shells = fx.fx.calls("sh");
+    assert_eq!(shells.len(), 1, "{shells:?}");
+    assert_eq!(shells[0].args, ["-c", "echo cpd/pay/web > ../target-seen.txt; echo checking-web"]);
+    assert_eq!(shells[0].cwd.as_deref(), Some(ui.canonicalize().unwrap().as_path()));
+    let tail: String = fx.fx.env.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
     assert!(tail.contains("checking-web"), "{tail}");
     // The first PR's Attempt has no hook of its own to run.
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    assert_eq!(fx.env.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
+    assert_eq!(fx.fx.env.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
+    assert_eq!(fx.shells().len(), 1, "no second command ran");
 }
 
 #[test]
 fn submit_runs_the_quick_check_and_keeps_its_tail() {
     let fx = hooked("[hooks.pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n");
+    // `pwd` prints the directory the command runs in.
+    fx.sh(|_, cwd| Reply::ok(&format!("checking\n{}\n", cwd.display())));
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
+    let tail: String = fx.fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
     assert!(tail.contains("checking"), "{tail}");
     assert!(tail.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {tail}");
     let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);
@@ -646,6 +540,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
 #[test]
 fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
     let fx = hooked("[hooks.pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n");
+    fx.sh(|_, _| Reply::exit(7, "", "broken\n"));
     fx.commit("a.txt", "a\n");
     let error = refused(&fx.submit(), "check_failed", 3);
     assert!(error["details"]["tail"].as_str().unwrap().contains("broken"), "{error}");
@@ -656,6 +551,27 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
     let events = fx.events("attempt-status");
     let spans: Vec<_> = events.iter().map(|e| (e["data"]["check"].as_str(), e["data"]["what"].as_str())).collect();
     assert_eq!(spans, [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
+}
+
+#[test]
+fn submit_refuses_a_quick_check_that_could_not_run() {
+    {
+        let killed = hooked("[hooks.pre-commit]\ncheck = \"echo before; kill -9 $$\"\n");
+        // The shell was killed by SIGKILL after it printed `before`.
+        killed.sh(|_, _| Reply::signal(9, "before\n", ""));
+        killed.commit("a.txt", "a\n");
+        let error = refused(&killed.submit(), "check_error", 1);
+        assert!(error["details"]["tail"].as_str().unwrap().contains("before"), "{error}");
+        assert_eq!(killed.status(), "running");
+    }
+
+    let invalid = hooked("[hooks.pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n");
+    invalid.commit("a.txt", "a\n");
+    let error = refused(&invalid.submit(), "check_error", 1);
+    assert!(error["details"]["reason"].as_str().unwrap().contains("hook_invalid"), "{error}");
+    assert_eq!(error["details"]["tail"], Value::Null);
+    assert!(error["details"].get("log").is_none(), "no log was written: {error}");
+    assert_eq!(invalid.shells(), Vec::<String>::new(), "a template that does not render runs nothing");
 }
 
 #[test]
@@ -671,56 +587,72 @@ fn submit_checks_its_arguments_and_selection() {
 }
 
 // ---------- attempt submit: the checks of the `test` and `impl` kinds (contract §7.7, commands.md §6.1) ----------
+//
+// The repo's commands run through `sh -c` on the `FakeRunner`: [`test_commands`] answers them, as `sh` would for the
+// commands of [`TESTS`], from the files of the Attempt worktree (`BROKEN`, `GREEN`). What `cpd` is tested on is what it
+// asks `sh` (the rendered command, its directory, its environment, the order) and what it makes of the answer.
 
-/// A repo's `[test-commands]`, as fake commands (they run in the Attempt worktree, `sh -c`): `build` fails while `BROKEN` exists,
-/// `run` fails unless `GREEN` exists, so a test Job that adds neither is red and one that adds `GREEN` is not. Each leaves a
-/// trace beside the worktree: `ran.txt` the named tests it was given, `slot.txt` the slot it was told it holds.
+/// A repo's `[test-commands]` (each command is one word of [`test_commands`], which stands for what the repo's would do): `build`
+/// fails while `BROKEN` exists, `run` fails unless `GREEN` exists, so a test Job that adds neither is red and one that adds
+/// `GREEN` is not. `run` is given the named tests (`run t::one`).
 const TESTS: &str = "[test-commands]\n\
-    build = \"echo building; test ! -e BROKEN\"\n\
-    run = \"echo running; echo {{ tests }} > ../ran.txt; echo slot=[$CPD_TEST_SLOT] > ../slot.txt; test -e GREEN\"\n";
+    build = \"build\"\n\
+    run = \"run {{ tests }}\"\n";
 
-/// `TESTS` with a `list` that exists for the one name `t::one` only; it traces the names it was asked about.
+/// `TESTS` with a `list` that exists for the names `t::one` and `t::two` only.
 const TESTS_LIST: &str = "[test-commands]\n\
-    build = \"true\"\n\
-    list = \"echo {{ test }} >> ../listed.txt; test {{ test }} = t::one || test {{ test }} = t::two\"\n\
-    run = \"echo {{ tests }} > ../ran.txt; false\"\n";
+    build = \"build\"\n\
+    list = \"list {{ test }}\"\n\
+    run = \"run {{ tests }}\"\n";
+
+/// The answer of `sh -c <command>` in the worktree `cwd` to a command of [`TESTS`] or [`TESTS_LIST`].
+fn test_commands(command: &str, cwd: &Path) -> Reply {
+    match command.split_once(' ').unwrap_or((command, "")) {
+        ("build", _) => Reply::exit(i32::from(cwd.join("BROKEN").exists()), "building\n", ""),
+        ("run", _) => Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", ""),
+        ("list", name) => Reply::exit(i32::from(!["t::one", "t::two"].contains(&name)), "", ""),
+        _ => panic!("a command nothing scripted: {command}"),
+    }
+}
 
 /// Job `api` is a `test` Job of the named test `t::one`, held in `tests/t.rs`.
-fn red(toml: &str) -> Fx {
-    let fx = fixture_kind(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
-    fx.env.repo_policy("acme", "pay", toml);
+fn red(toml: &str) -> Git {
+    red_naming(toml, r#"["t::one"]"#, r#"["tests/t.rs"]"#)
+}
+
+/// [`red`] with the `tests` and `test_files` (JSON arrays) of Job `api`.
+fn red_naming(toml: &str, tests: &str, files: &str) -> Git {
+    let fx = git_fixture_needing(&[], "test", Some((tests, files)), None);
+    fx.fx.env.repo_policy("acme", "pay", toml);
+    fx.sh(test_commands);
     fx
 }
 
 /// Job `api` is an `impl` Job that needs the merged `test` Job `t` (the tests `t::one` and `t::two`, in `tests/`).
-fn green(toml: &str, approved: Option<&str>) -> Fx {
+fn green(toml: &str, approved: Option<&str>) -> Git {
     green_naming(toml, approved, r#"["t::one","t::two"]"#)
 }
 
 /// [`green`] with the tests `t` names.
-fn green_naming(toml: &str, approved: Option<&str>, names: &str) -> Fx {
-    let fx = fixture_needing(&[], "impl", None, Some(names));
-    fx.env.repo_policy("acme", "pay", toml);
+fn green_naming(toml: &str, approved: Option<&str>, names: &str) -> Git {
+    let fx = git_fixture_needing(&[], "impl", None, Some(names));
+    fx.fx.env.repo_policy("acme", "pay", toml);
+    fx.sh(test_commands);
     if let Some(paths) = approved {
-        fx.env.sql(&format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"));
+        fx.fx.env.sql(&format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"));
     }
     fx
 }
 
-impl Fx {
-    /// A file the fake `[test-commands]` commands left beside the Attempt worktree (`None`: it was never written).
-    fn seen(&self, name: &str) -> Option<String> {
-        fs::read_to_string(self.work.parent().unwrap().join(name)).ok()
+impl Git {
+    /// The commands `cpd` has run through `sh -c` so far (rendered), in order, those that start with `word` (`""`: all).
+    fn ran(&self, word: &str) -> Vec<String> {
+        self.shells().into_iter().filter(|command| command.starts_with(word)).collect()
     }
 
     /// The log `<attempt>.tests-<what>.log` of `api-a1`.
     fn tests_log(&self, what: &str) -> PathBuf {
         self.home.root().join(format!("run/pay/logs/api-a1.tests-{what}.log"))
-    }
-
-    /// The `attempt-status` Events' `data`, oldest first.
-    fn statuses(&self) -> Vec<Value> {
-        self.events("attempt-status").iter().map(|e| e["data"].clone()).collect()
     }
 }
 
@@ -739,8 +671,27 @@ fn a_test_job_whose_build_fails_is_refused_tests_build_failed_and_run_never_runs
     assert!(details["tail"].as_str().unwrap().contains("building"), "{error}");
     assert_eq!(details["log"], fx.tests_log("build").to_str().unwrap());
     assert!(fs::read_to_string(fx.tests_log("build")).unwrap().contains("building"));
-    assert_eq!(fx.seen("ran.txt"), None, "`run` runs only after `build` succeeded");
+    assert_eq!(fx.ran("run"), Vec::<String>::new(), "`run` runs only after `build` succeeded");
     assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn a_test_job_whose_named_tests_pass_is_refused_tests_not_red_and_checked_again_at_every_submit() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// passes\n");
+    fx.commit("GREEN", "x\n");
+    let error = refused(&fx.submit(), "tests_not_red", 3);
+    assert_eq!((&error["details"]["job"], &error["details"]["tests"]), (&json!("api"), &json!(["t::one"])));
+    assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    assert_eq!(error["details"]["log"], fx.tests_log("run").to_str().unwrap());
+    assert_eq!(fx.ran("run"), ["run t::one"], "the run was given the named tests");
+    assert_eq!(fx.status(), "running");
+    // The Worker makes them fail and submits again: every submit runs the checks again.
+    fx.fx.git(&fx.work, &["rm", "-q", "GREEN"]);
+    fx.fx.git(&fx.work, &["commit", "-q", "-m", "red"]);
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(fx.ran("build").len(), 2, "the checks ran again");
 }
 
 #[test]
@@ -752,7 +703,7 @@ fn a_test_job_whose_named_tests_fail_passes_and_leaves_both_logs() {
     assert_eq!(fx.status(), "merging");
     assert!(fs::read_to_string(fx.tests_log("build")).unwrap().contains("building"));
     assert!(fs::read_to_string(fx.tests_log("run")).unwrap().contains("running"));
-    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one\n"));
+    assert_eq!(fx.ran("run"), ["run t::one"]);
 }
 
 #[test]
@@ -761,21 +712,100 @@ fn the_tests_commands_are_not_given_a_test_slot() {
     let fx = red(TESTS);
     fx.commit("tests/t.rs", "// fails\n");
     fx.submit().ok();
-    assert_eq!(fx.seen("slot.txt").as_deref(), Some("slot=[]\n"));
+    let runs: Vec<_> = fx.fx.calls("sh").into_iter().filter(|call| call.args[1].starts_with("run")).collect();
+    assert_eq!(runs.len(), 1);
+    let slot = runs[0].envs.iter().find(|(key, _)| key == "CPD_TEST_SLOT");
+    assert!(matches!(slot, None | Some((_, None))), "the run holds no slot: {slot:?}");
+}
+
+#[test]
+fn a_test_job_must_change_a_path_its_test_files_name_or_is_refused_test_files_missing() {
+    let fx = red_naming(TESTS, r#"["t::one"]"#, r#"["tests/t.rs","tests/more/"]"#);
+    fx.commit("tests/t.rs", "// red\n");
+    let error = refused(&fx.submit(), "test_files_missing", 3);
+    assert_eq!(error["details"]["paths"], json!(["tests/more/"]));
+    assert_eq!(fx.ran(""), Vec::<String>::new(), "no command ran: the guard guards no file");
+    assert!(!fx.tests_log("build").exists());
+    // A directory prefix matches a file inside it.
+    fx.commit("tests/more/m.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigured() {
+    {
+        let fx = red("");
+        fx.commit("tests/t.rs", "// red\n");
+        let error = refused(&fx.submit(), "tests_unconfigured", 3);
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("--shape docs") && message.contains("config"), "{message}");
+        assert_eq!(fx.status(), "running");
+    }
+
+    let fx = green("", None);
+    fx.commit("src/lib.rs", "// green\n");
+    refused(&fx.submit(), "tests_unconfigured", 3);
+}
+
+#[test]
+fn a_test_commands_table_with_a_list_is_read() {
+    // The table is part of the repo's policy file (contract §7.7, §8.3); a table that is not as documented is `policy_invalid`.
+    let fx = red("[protected]\npaths = [\"verify.sh\"]\n[test-commands]\nbuild = \"build\"\nlist = \"list {{ test }}\"\nrun = \"run {{ tests }}\"\n");
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(fx.ran(""), ["build", "list t::one", "run t::one"], "the table's three commands, `list` with the variable `test`");
 }
 
 #[test]
 fn list_refuses_a_name_that_matches_no_test_before_run_for_a_test_job() {
-    let fx = fixture_kind(&[], "test", Some((r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#)));
-    fx.env.repo_policy("acme", "pay", TESTS_LIST);
+    let fx = red_naming(TESTS_LIST, r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#);
     fx.commit("tests/t.rs", "// red\n");
     let error = refused(&fx.submit(), "tests_not_found", 3);
     let details = &error["details"];
     assert_eq!((&details["job"], &details["tests"]), (&json!("api"), &json!(["t::typo"])), "only the name that matches nothing");
     assert_eq!(details["log"], fx.tests_log("list").to_str().unwrap());
-    assert_eq!(fx.seen("listed.txt").as_deref(), Some("t::one\nt::typo\n"), "`list` runs once per named test, with the variable `test`");
-    assert_eq!(fx.seen("ran.txt"), None, "before `run`");
+    assert_eq!(fx.ran("list"), ["list t::one", "list t::typo"], "`list` runs once per named test, with the variable `test`");
+    assert_eq!(fx.ran("run"), Vec::<String>::new(), "before `run`");
     assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn list_refuses_a_name_that_matches_no_test_for_an_impl_job_too_and_passes_when_every_name_exists() {
+    {
+        let fx = green_naming(TESTS_LIST, None, r#"["t::one","t::missing"]"#);
+        fx.commit("src/lib.rs", "// green\n");
+        let error = refused(&fx.submit(), "tests_not_found", 3);
+        assert_eq!(error["details"]["tests"], json!(["t::missing"]));
+        assert_eq!(fx.ran("run"), Vec::<String>::new());
+    }
+
+    // Every name exists: `list` does not decide, `run` does (here it fails: a red test Job passes).
+    let fx = red(TESTS_LIST);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.ran("list"), ["list t::one"]);
+    assert_eq!(fx.ran("run"), ["run t::one"]);
+}
+
+#[test]
+fn a_command_that_cannot_run_is_tests_error_and_changes_nothing() {
+    // `kill -9 $$` is a reply of the shell killed by SIGKILL; a template that does not render runs nothing.
+    type Script = fn(&str, &Path) -> Reply;
+    let cases: [(&str, Script, &str); 3] = [
+        ("[test-commands]\nbuild = \"build\"\nrun = \"run\"\n", |_, _| Reply::signal(9, "", ""), "build killed by a signal"),
+        ("[test-commands]\nbuild = \"build\"\nrun = \"run\"\n", |command, cwd| if command == "build" { test_commands(command, cwd) } else { Reply::signal(9, "", "") }, "run killed by a signal"),
+        ("[test-commands]\nbuild = \"echo {{ no_such_variable }}\"\nrun = \"run\"\n", test_commands, "hook_invalid"),
+    ];
+    for (toml, script, what) in cases {
+        let fx = red(toml);
+        fx.sh(script);
+        fx.commit("tests/t.rs", "// red\n");
+        let error = refused(&fx.submit(), "tests_error", 1);
+        assert_eq!(error["details"]["job"], "api", "{what}");
+        assert_eq!(fx.status(), "running", "{what}");
+    }
 }
 
 #[test]
@@ -787,7 +817,7 @@ fn an_impl_job_is_run_against_the_union_of_the_tests_of_the_test_jobs_it_needs()
     assert_eq!(out["submitted"], true, "{out}");
     assert_ne!(out["sha"], sha);
     assert_eq!(fx.status(), "merging");
-    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one t::two\n"), "derived: the Job names no tests of its own");
+    assert_eq!(fx.ran("run"), ["run t::one t::two"], "derived: the Job names no tests of its own");
     assert!(fs::read_to_string(fx.tests_log("run")).unwrap().contains("running"));
 }
 
@@ -809,7 +839,88 @@ fn an_impl_job_whose_build_fails_is_refused_tests_build_failed() {
     fx.commit("BROKEN", "x\n");
     let error = refused(&fx.submit(), "tests_build_failed", 3);
     assert_eq!(error["details"]["log"], fx.tests_log("build").to_str().unwrap());
-    assert_eq!(fx.seen("ran.txt"), None);
+    assert_eq!(fx.ran("run"), Vec::<String>::new());
+}
+
+#[test]
+fn an_impl_job_may_not_touch_the_files_of_the_test_job_it_needs_unless_the_lead_approved_the_path() {
+    let fx = green(TESTS, None);
+    fx.commit("GREEN", "x\n");
+    fx.commit("tests/t.rs", "// edited to pass\n");
+    fx.commit("tests/new/n.rs", "// a new file in a guarded directory\n");
+    let error = refused(&fx.submit(), "tests_tampered", 3);
+    let mut paths: Vec<String> = serde_json::from_value(error["details"]["paths"].clone()).unwrap();
+    paths.sort();
+    assert_eq!((paths, &error["details"]["jobs"]), (vec!["tests/new/n.rs".to_owned(), "tests/t.rs".to_owned()], &json!(["t"])));
+    assert_eq!(fx.ran("run"), Vec::<String>::new(), "refused before the tests ran");
+    assert_eq!(fx.status(), "running");
+
+    // Approving one path is not approving the other; both approved, the Job passes (`test_approved` is read at the check).
+    fx.fx.env.sql("UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'api'");
+    assert_eq!(refused(&fx.submit(), "tests_tampered", 3)["details"]["paths"], json!(["tests/new/n.rs"]));
+    fx.fx.env.sql("UPDATE jobs SET test_approved = '[\"tests/t.rs\",\"tests/new/\"]' WHERE key = 'api'");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn only_an_impl_job_is_guarded_and_only_the_files_of_the_test_jobs_it_needs() {
+    // A `test` Job may change its own files, and an `impl` Job anything else.
+    {
+        let fx = red(TESTS);
+        fx.commit("tests/t.rs", "// red\n");
+        fx.submit().ok();
+    }
+    let fx = green(TESTS, None);
+    fx.commit("GREEN", "x\n");
+    fx.commit("src/tests/lib.rs", "// not under tests/ at the root\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
+    {
+        let toml = ("[hooks.pre-commit]\ncheck = \"exit 7\"\n", "[test-commands]\nbuild = \"build\"\nrun = \"false\"\n");
+        let fx = git_fixture_needing(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)), None);
+        fx.fx.env.repo_policy("acme", "pay", &format!("{}{}", toml.0, toml.1));
+        fx.sh(|command, cwd| if command == "exit 7" { Reply::exit(7, "", "") } else { test_commands(command, cwd) });
+        fx.commit("tests/t.rs", "// red\n");
+        refused(&fx.submit(), "check_failed", 3);
+        assert_eq!(fx.ran(""), ["exit 7"], "the tests did not run");
+        assert!(!fx.tests_log("build").exists(), "the tests did not run");
+        assert_eq!(fx.statuses(), [span("start"), span("end")]);
+    }
+
+    // A `work` Job in a repo that has `[test-commands]`: no kind check runs, and its checks are one span.
+    let fx = git_fixture(&[]);
+    fx.fx.env.repo_policy("acme", "pay", TESTS);
+    fx.commit("BROKEN", "x\n");
+    fx.submit().ok();
+    assert_eq!(fx.ran("run"), Vec::<String>::new());
+    assert!(!fx.tests_log("build").exists());
+    assert_eq!(fx.ran(""), Vec::<String>::new(), "no command ran at all");
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+}
+
+#[test]
+fn a_kind_check_is_a_span_of_the_attempt_that_ends_also_when_it_refuses() {
+    // Refused: `start` then `end`, and the Attempt stays running.
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// passes\n");
+    fx.commit("GREEN", "x\n");
+    refused(&fx.submit(), "tests_not_red", 3);
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
+    assert!(fx.home.locks_dir().join("check-pay--api-a1.lock").exists(), "held by the submit, removed when the Attempt ends");
+
+    // Passed: the span closes before the Attempt becomes `merging`.
+    fx.fx.git(&fx.work, &["rm", "-q", "GREEN"]);
+    fx.fx.git(&fx.work, &["commit", "-q", "-m", "red"]);
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    // The Events carry the Attempt and the Job.
+    let events = fx.events("attempt-status");
+    assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
 }
 
 #[test]
@@ -826,10 +937,21 @@ fn a_work_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_a
 #[test]
 fn a_refused_quick_check_ends_the_checks_span_and_leaves_the_attempt_running() {
     let fx = hooked("[hooks.pre-commit]\ncheck = \"exit 7\"\n");
+    fx.sh(|_, _| Reply::exit(7, "", ""));
     fx.commit("a.txt", "x\n");
     refused(&fx.submit(), "check_failed", 3);
     assert_eq!(fx.statuses(), [span("start"), span("end")]);
     assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn a_test_jobs_quick_check_and_tests_run_in_one_checks_span() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    let txns = fx.status_txns();
+    assert_eq!(txns[1], txns[2]);
 }
 
 /// Guards the rule that a review Job has no checks and no span (green today).
@@ -945,6 +1067,7 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
 #[test]
 fn show_names_the_check_log_once_a_quick_check_has_run() {
     let fx = hooked("[hooks.pre-commit]\ncheck = \"echo hi\"\n");
+    fx.sh(|_, _| Reply::ok("hi\n"));
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let out = fx.cpd(&["show", "api-a1"]).ok();
