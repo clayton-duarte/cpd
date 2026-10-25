@@ -1071,6 +1071,9 @@ pub mod pill;
 mod pill_tests;
 
 #[cfg(test)]
+mod incident_tests;
+
+#[cfg(test)]
 mod no_inbox;
 
 #[cfg(test)]
