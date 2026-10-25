@@ -105,8 +105,8 @@ fn build(config_extra: &str, with_origin: bool) -> (Fx, PathBuf) {
             exec(
                 tx,
                 &format!(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', cpd_txn(), 't', 't');",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                       VALUES ('pay', 'repo', '{repo}', 'repo', 'main', 'dispatch', 'cpd/pay', '{lead}', 'Charge the card', cpd_txn(), 't', 't');",
                     repo = fx.repo.display(),
                     lead = fx.lead.display()
                 ),
@@ -306,8 +306,8 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, ?5, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, 'main', 'dispatch', ?3, ?4, 'A title', ?5, 't', 't')",
                     params![key, repo.to_str().unwrap(), branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())
@@ -330,8 +330,8 @@ impl Fx {
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
-                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                     VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, ?6, 't', 't')",
+                    "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?1, ?3, 'dispatch', ?4, ?5, 'A title', ?6, 't', 't')",
                     params![key, repo.to_str().unwrap(), base_pr.branch, branch, path.to_str().unwrap(), tx.id()],
                 )?;
                 Ok(())
@@ -512,7 +512,7 @@ impl Fx {
 /// Lead worktree not synced (step 9) and the Ledger not written (step 10).
 fn die_after_step_8(fx: &Fx, worktree: &Path) -> String {
     let old = fx.lead_sha();
-    fx.git(worktree, &["rebase", "-q", &old]);
+    fx.git(worktree, &["rebase", &old]);
     let tip = fx.git(worktree, &["rev-parse", "HEAD"]);
     fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/pay", &tip, &old]);
     tip
@@ -591,7 +591,7 @@ fn merge_conflict_aborts_the_rebase_and_goes_up_the_ladder() {
     // The rebase was aborted; nothing moved.
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
     assert_eq!(fx.status(&worktree), "");
-    let rebasing = fx.git(&worktree, &["rev-parse", "--git-path", "rebase-merge"]);
+    let rebasing = fx.git(&worktree, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge"]);
     assert!(!worktree.join(rebasing).exists(), "a rebase is still in progress");
     assert_eq!(fx.lead_sha(), old);
     // A ladder cause: the Job is queued again at the next Tier.
@@ -1340,7 +1340,7 @@ fn two_prs(same_repo: bool, with_origin: bool) -> (Fx, Pr, Pr) {
 /// [`die_after_step_8`] for a Job of `pr`.
 fn die_after_step_8_on(fx: &Fx, pr: &Pr, worktree: &Path) -> String {
     let old = fx.tip(pr);
-    fx.git(worktree, &["rebase", "-q", &old]);
+    fx.git(worktree, &["rebase", &old]);
     let tip = fx.git(worktree, &["rev-parse", "HEAD"]);
     fx.git(&pr.repo, &["update-ref", &format!("refs/heads/{}", pr.branch), &tip, &old]);
     tip
