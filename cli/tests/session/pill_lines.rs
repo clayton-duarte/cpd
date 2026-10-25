@@ -63,7 +63,7 @@ fn status_line_pills_follow_the_rule() {
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
-        italic_pill("colour9", " Incident Mode: #{@cpd_incident}"),
+        italic_pill("colour9", "Incident Mode: #{@cpd_incident}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
         pill("colour8", "#{@cpd_version}"),
     );

@@ -10,7 +10,7 @@ fn the_status_line_has_no_inbox_pill() {
     let right = &format[format.find("#[align=right]").expect("a right-aligned side") + "#[align=right]".len()..];
     let caps = right.matches('\u{e0b6}').count();
     assert_eq!(caps, 3, "the right side is three pills, the incident's, the workers' and the version's: {right}");
-    let incident = right.find(" Incident Mode: ").expect("the incident pill");
+    let incident = right.find("Incident Mode: ").expect("the incident pill");
     let workers = right.find("#{@cpd_workers}").expect("the workers pill");
     let version = right.find("#{@cpd_version}").expect("the version pill");
     let first_cap = right.find('\u{e0b6}').unwrap();

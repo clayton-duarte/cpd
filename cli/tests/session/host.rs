@@ -523,7 +523,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
          #[fg=colour8]";
     let suffix = "#[default]#[align=right]\
-         #{?@cpd_incident,#[fg=colour9]\u{e0b6}#[reverse]#[italics] Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[fg=colour8]\u{2500}#[default],}\
+         #{?@cpd_incident,#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[fg=colour8]\u{2500}#[default],}\
          #[fg=colour8]\u{e0b6}#[reverse]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
