@@ -280,6 +280,9 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a second
 /// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
+/// While `@cpd_host_alert` is set (E6, hs-d618) the version pill is the bright red block (index 9,
+/// the clickable pair of the failed colour) inside `#[range=user|host]`, the range a click runs;
+/// else it stays the grey (index 8) pill it always was.
 ///
 /// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
@@ -290,7 +293,7 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     };
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}{alert},{plain}}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!()),
         legend = button("legend", legend_glyph!()),
@@ -298,7 +301,10 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
-        version = status(m.nothing, "#{@cpd_version}"),
+        // The red branch: the bright red clickable pair of the failed meaning, in the click range.
+        alert = format!("{}#[default]", pill::range("host", &pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
+        // The plain branch: the grey pill, only while `@cpd_version` is set.
+        plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}", status(m.nothing, "#{@cpd_version}")),
     )
 });
 
@@ -1097,7 +1103,12 @@ mod tests {
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
         assert!(tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 1, "the text is drawn once: {}", *STATUS_FORMAT);
+        assert_eq!(
+            STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(),
+            2,
+            "each branch draws the text once: {}",
+            *STATUS_FORMAT
+        );
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.

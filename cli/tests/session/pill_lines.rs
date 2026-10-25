@@ -53,13 +53,14 @@ fn status_line_pills_follow_the_rule() {
          #{{e|+:#{{?{long},#{{@cpd_workers_width}},#{{@cpd_workers_short_width}}}},1}}}}}}\
          #[default]#[align=right]\
          {}\
-         #{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}\
+         #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
          {JOIN}",
         button("reset", cpd_core::host::tmux::RESET_GLYPH),
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
+        pill("colour9", "#{@cpd_version}"),
         pill("colour8", "#{@cpd_version}"),
     );
     // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.

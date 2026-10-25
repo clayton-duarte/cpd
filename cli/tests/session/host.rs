@@ -526,7 +526,7 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
          #[fg=colour8]\u{e0b6}#[reverse]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[noreverse]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}\
+         #{?#{@cpd_host_alert},#[fg=colour8]\u{2500}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
          #[fg=colour8]\u{2500}#[default]";
     let format = cpd_core::host::tmux::STATUS_FORMAT.as_str();
     assert!(format.starts_with(&prefix), "{format}");

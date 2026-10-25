@@ -9,7 +9,7 @@ fn the_status_line_has_no_inbox_pill() {
     assert!(!format.contains("@cpd_inbox"), "no option of the Inbox counter is read (`@cpd_inbox`, `@cpd_inbox_tier`): {format}");
     let right = &format[format.find("#[align=right]").expect("a right-aligned side") + "#[align=right]".len()..];
     let caps = right.matches('\u{e0b6}').count();
-    assert_eq!(caps, 2, "the right side is two pills, the workers' and the version's: {right}");
+    assert_eq!(caps, 3, "the right side is the workers pill and the version pill's two colour branches: {right}");
     let workers = right.find("#{@cpd_workers}").expect("the workers pill");
     let version = right.find("#{@cpd_version}").expect("the version pill");
     let first_cap = right.find('\u{e0b6}').unwrap();
