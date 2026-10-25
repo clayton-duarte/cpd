@@ -1683,6 +1683,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the Gate passes (§7.3, §7.6 `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 | the PR's status is still `dispatch` at the transaction (another `pr open` committed first) | `cas_lost` | 3 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing: the Gate does not run there (hs-d243; `dirty_target` is no longer a refusal of this command).
 
@@ -1798,6 +1799,7 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required fo
 | the gate worktree's `pre-start` passes; `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-start.log` | `gate_error` | 1 |
 | the Gate passes on the rebased Lead Branch (§7.3, §7.6 `pr rebase` step 8); `details.tail` is its last 60 lines, `details.log` the full log | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
@@ -2073,6 +2075,7 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 | the Gate passes (§7.3, as `pr open` step 2); `details.tail` is its last 60 lines, `details.log` the full log `run/<plan>/logs/pr-<key>.pre-merge.log` | `gate_failed` | 3 |
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 | the push is rejected and the remote tip does not contain G (the remote moved: a `pr rebase` pushed, or someone else); `details.stderr` is git's stderr; the Lead runs `pr rebase` | `push_rejected` | 3 |
+| the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
