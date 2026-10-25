@@ -65,7 +65,6 @@ cpd::pr merge::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_cleanup_cancel::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_cleanup::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_crud::  # m-pr-a: pr commands that may reach a real tmux
-cpd::pr pr_local_needs::  # m-pr-a: pr commands that may reach a real tmux
 cpd::pr pr_push::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
