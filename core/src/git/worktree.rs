@@ -25,6 +25,13 @@ pub fn attempt_branch(plan: &PlanId, attempt: &AttemptId) -> String {
     format!("cpd/{plan}--{attempt}")
 }
 
+/// Whether an Attempt is **linear** (hs-d680, hs-d682): it runs in its PR's one workflow worktree, on the Lead
+/// Branch, so its branch is the Lead Branch. The first of concurrent siblings is linear; a parallel sibling has
+/// its own `cpd/<plan>--<attempt>` worktree and branch.
+pub fn is_linear(attempt_branch: &str, lead_branch: &str) -> bool {
+    attempt_branch == lead_branch
+}
+
 /// `<repo-parent>/<repo-name>.<suffix>`: a sibling of the repo's main checkout.
 fn sibling(repo: &Path, suffix: &str) -> Result<PathBuf, CpdError> {
     let (Some(parent), Some(name)) = (repo.parent(), repo.file_name()) else {

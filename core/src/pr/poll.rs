@@ -629,6 +629,11 @@ pub(super) fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
     for attempt in &merged.attempts {
+        // A linear Attempt runs in the workflow worktree on the Lead Branch: `remove_merged_lead` below handles it
+        // (with the dirty/unpushed keep), never `discard_worktree` (hs-d680).
+        if git::worktree::is_linear(&attempt.branch, &merged.lead_branch) {
+            continue;
+        }
         if Path::new(&attempt.worktree).exists()
             && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
         {

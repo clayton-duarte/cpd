@@ -311,8 +311,10 @@ impl Driver {
             let pr = crate::ids::PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
         }
-        // A2: the worktree from the Lead Branch HEAD, and pre-start.
-        log("A2: creating the worktree and running pre-start");
+        // A2 (hs-d680): a linear Attempt reuses the PR's workflow worktree as it is; a parallel sibling creates
+        // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
+        let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
+        log(if linear { "A2: reusing the workflow worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
         let setup = Setup {
             timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
             log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
@@ -324,18 +326,29 @@ impl Driver {
                 return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
             }
         };
-        let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
-            Ok(created) => created,
-            Err(e) => {
-                let detail = format!("Setting up the worktree failed: {}", e.message());
-                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+        let base_sha = if linear {
+            match verify_linear_worktree(target) {
+                Ok(sha) => sha,
+                Err(e) => {
+                    let detail = format!("The workflow worktree is not usable: {}", e.message());
+                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                }
             }
+        } else {
+            let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
+                Ok(created) => created,
+                Err(e) => {
+                    let detail = format!("Setting up the worktree failed: {}", e.message());
+                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                }
+            };
+            created.base_sha
         };
         let (plan, id) = (&self.plan, &self.id);
         self.store.write(SOURCE, |tx| {
             tx.execute(
                 "UPDATE attempts SET base_sha = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
-                params![plan.as_str(), id.to_string(), created.base_sha],
+                params![plan.as_str(), id.to_string(), base_sha],
             )?;
             Ok(())
         })?;
@@ -713,8 +726,24 @@ impl Driver {
     /// the driver lock file (this process keeps fd 3 until it exits). A
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
+        let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
         let mut result = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id);
-        if merged && result.is_ok() {
+        if linear {
+            // A9 (hs-d680): a merged linear Attempt keeps the workflow worktree and the Lead Branch. A failed or
+            // cancelled one resets the Lead Branch to its `base_sha` and discards what the Attempt left, then keeps
+            // the worktree.
+            if !merged {
+                match self.linear_base_sha() {
+                    Ok(Some(base_sha)) => {
+                        if let Err(e) = reset_linear_lead_branch(&target.worktree, &target.lead_branch, &base_sha) {
+                            result = result.and(Err(e));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => result = result.and(Err(e)),
+                }
+            }
+        } else if merged && result.is_ok() {
             result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }
         let removed = lock::remove(&self.home, &self.plan, &self.id);
@@ -723,6 +752,18 @@ impl Driver {
             log(&format!("A9 failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
         }
+    }
+
+    /// The `base_sha` the Attempt recorded at A2, for the A9 reset of a failed or cancelled linear Attempt.
+    fn linear_base_sha(&mut self) -> Result<Option<String>, CpdError> {
+        let (plan, id) = (&self.plan, &self.id);
+        self.store.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT base_sha FROM attempts WHERE plan = ?1 AND id = ?2",
+                params![plan.as_str(), id.to_string()],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
+        })
     }
 
     /// commands.md §6.4: an unexpected failure appends `error` and ends the
@@ -759,19 +800,50 @@ impl Driver {
     }
 }
 
-/// A9 for a linear Attempt (hs-d680/hs-d682/hs-d683, `wlinear-tests`): its branch is the PR's Lead Branch, so a
+/// A2 for a linear Attempt (hs-d680): its workflow worktree must exist, be on the Lead Branch and be clean; the
+/// Lead Branch tip becomes its `base_sha`. No worktree is created and no `pre-start` runs (A2).
+fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
+    let worktree = &target.worktree;
+    if !worktree.exists() {
+        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} does not exist", worktree.display())));
+    }
+    match git::run::current_branch(worktree)? {
+        Some(branch) if branch == target.lead_branch => {}
+        Some(branch) => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("the workflow worktree {} is on {branch}, not the Lead Branch {}", worktree.display(), target.lead_branch),
+            ))
+        }
+        None => return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} has a detached HEAD", worktree.display()))),
+    }
+    let status = git::run::ok(worktree, &["--no-optional-locks", "status", "--porcelain"])?;
+    if !status.trim().is_empty() {
+        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} is not clean", worktree.display())).with("status", status.trim()));
+    }
+    git::run::rev_parse(worktree, &format!("refs/heads/{}", target.lead_branch))
+}
+
+/// A9 for a linear Attempt (hs-d680/hs-d682/hs-d683): its branch is the PR's Lead Branch, so a
 /// failed or cancelled Attempt puts the Lead Branch back to the `base_sha` it started from (`git -C <workflow
 /// worktree> reset --hard <base_sha>`), discarding what the Attempt left, and the workflow worktree is kept.
-///
-/// Stub for the red tests of Job `wlinear-tests`; Job `wlinear-impl` implements it and calls it from
-/// [`Driver::cleanup`] when a linear Attempt ends failed or cancelled.
 pub(super) fn reset_linear_lead_branch(
     lead_worktree: &std::path::Path,
     lead_branch: &str,
     base_sha: &str,
 ) -> Result<(), CpdError> {
-    let _ = (lead_worktree, lead_branch, base_sha);
-    todo!("wlinear-impl: reset the Lead Branch of a failed linear Attempt to its base_sha")
+    match git::run::current_branch(lead_worktree)? {
+        Some(branch) if branch == lead_branch => {}
+        other => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("Cannot reset the Lead Branch: the workflow worktree {} is on {other:?}, not {lead_branch}.", lead_worktree.display()),
+            ))
+        }
+    }
+    // One call moves the Lead Branch and discards the Attempt's working-tree changes.
+    git::run::ok(lead_worktree, &["reset", "--hard", base_sha])?;
+    Ok(())
 }
 
 #[cfg(test)]
