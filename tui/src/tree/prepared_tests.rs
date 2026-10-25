@@ -597,3 +597,29 @@ fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot()
     assert_eq!(blue_text(&buf), ["alpha"], "the Context's name, and no Plan's: {rows:?}");
     assert_ne!(fg_of(&buf, "╭", NEEDS_YOU), blue(), "its dot keeps the dot's colour");
 }
+
+// ---------- the empty Context's clickable ` ╰󰬪 new` (hs-d688) ----------
+
+/// A live Context with no Plan or fork row ends with the clickable ` ╰\u{F0B2A} new` (hs-d688): the corner and the glyph
+/// muted (colour 8), the word `new` in the clickable colour 15. An ARCHIVED empty Context keeps the plain muted
+/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order PR may have moved `gamma`.
+#[test]
+fn an_empty_live_context_draws_the_clickable_new_row() {
+    let mut env = Env::new();
+    populate(&mut env);
+    let muted = palette::muted_text().fg.unwrap();
+    let buf = draw(&mut env.view(), 46, 20);
+    let rows = text_rows(&buf);
+    let live = rows.iter().find(|r| r.contains('\u{F0B2A}'));
+    assert_eq!(live.map(String::as_str), Some(" ╰\u{F0B2A} new"), "a live empty Context ends with the clickable new row:\n{}", rows.join("\n"));
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "╰"), muted, "the corner is muted (colour 8)");
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "the glyph is muted (colour 8)");
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
+    // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
+    env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
+    let buf = draw(&mut env.view(), 46, 20);
+    let rows = text_rows(&buf);
+    let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
+    assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "its glyph stays muted (colour 8)");
+}
