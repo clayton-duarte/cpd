@@ -1029,6 +1029,29 @@ fn status_porcelain_collapses_an_untracked_directory_to_one_line() {
 }
 
 #[test]
+fn ls_files_others_lists_the_untracked_entries_nul_terminated_and_collapses_a_directory() {
+    let mut w = world();
+    let repo = w.repo();
+    repo.write("README.md", "changed\n");
+    repo.write("loose.txt", "l\n");
+    repo.write("u/q", "q\n");
+    repo.write("u/deep/r", "r\n");
+    let args = ["ls-files", "--others", "--exclude-standard", "--directory"];
+    let out = w.git(repo.dir(), &[args.as_slice(), &["-z"]].concat());
+    assert_eq!((out.code, out.stdout.as_str()), (0, "loose.txt\0u/\0"));
+    let out = w.git(repo.dir(), &args);
+    assert_eq!((out.code, out.stdout.as_str()), (0, "loose.txt\nu/\n"));
+}
+
+#[test]
+fn ls_files_without_others_is_unsupported() {
+    let mut w = world();
+    let repo = w.repo();
+    let out = w.git(repo.dir(), &["ls-files"]);
+    assert_eq!((out.code, out.stderr.as_str()), (1, "fake-git: unsupported: ls-files (without --others)\n"));
+}
+
+#[test]
 fn status_porcelain_marks_a_tracked_file_deleted_from_disk() {
     let mut w = world();
     let repo = w.repo();
