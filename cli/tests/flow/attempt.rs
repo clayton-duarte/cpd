@@ -16,9 +16,11 @@ use std::time::Duration;
 use common::fx::Fx as InProcess;
 use common::{Run, refused};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
+use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::merge::{self, End, Failure};
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use rusqlite::params;
@@ -315,6 +317,22 @@ impl Git {
         *self.answer.lock().unwrap() = Arc::new(answer);
     }
 
+    /// Driver step A8 for Attempt `id` (`merging`), in this process, on the same fakes, store and config the driver uses: the
+    /// merge runs the quick check (`gate.merge`, the repo's `pre-commit`, contract §7.4 step 6, hs-d679), which `submit` does not.
+    fn merge(&self, id: &str) -> merge::Merge {
+        let config = Config::load(&self.home).unwrap();
+        let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+        let catalog = Catalog {
+            pi_version: "1.0.0".to_owned(),
+            o: model("p/opus"),
+            s: model("p/sonnet"),
+            h: model("p/haiku"),
+            g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] },
+        };
+        let ctx = merge::Ctx { home: &self.home, config: &config, catalog: &catalog, source: "attempt test", metrics: &|_| None };
+        in_fakes(&self.fx, || merge::merge(&mut self.store(), &ctx, &plan(), &AttemptId::parse(id).unwrap())).unwrap()
+    }
+
     /// The commands `cpd` has run through `sh -c` so far (rendered), in order.
     fn shells(&self) -> Vec<String> {
         self.fx.calls("sh").into_iter().map(|call| call.args[1].clone()).collect()
@@ -502,75 +520,110 @@ fn submit_takes_the_protected_list_from_the_policy_of_the_jobs_pr() {
 fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
     let fx = git_fixture(&[]);
     let web = fx.add_pr("web");
-    fx.fx.env.repo_policy("acme", "web", "[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
+    fx.fx.env.repo_policy("acme", "web", "[gate]\nmerge = \"local\"\n[hooks.pre-commit]\ncheck = \"echo {{ target }} > ../target-seen.txt; echo checking-web\"\n");
     fx.sh(|_, _| Reply::ok("checking-web\n"));
     let ui = fx.attempt_in(&web, "ui", "running", "work");
     fx.commit_in(&ui, "ui.txt", "ui\n");
 
     fx.fx.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
+    // The quick check moved from the submit to the merge (contract §7.3, §7.4 step 6, hs-d679): the submit runs none.
+    assert_eq!(fx.shells(), Vec::<String>::new(), "submit runs no quick check");
+    fx.merge("ui-a1");
 
     // The command is rendered with the Lead Branch of the Job's PR as `target` (it ran in the Attempt's worktree).
     let shells = fx.fx.calls("sh");
     assert_eq!(shells.len(), 1, "{shells:?}");
     assert_eq!(shells[0].args, ["-c", "echo cpd/pay/web > ../target-seen.txt; echo checking-web"]);
     assert_eq!(shells[0].cwd.as_deref(), Some(ui.canonicalize().unwrap().as_path()));
-    let tail: String = fx.fx.env.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
-    assert!(tail.contains("checking-web"), "{tail}");
     // The first PR's Attempt has no hook of its own to run.
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    assert_eq!(fx.fx.env.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
+    fx.merge("api-a1");
     assert_eq!(fx.shells().len(), 1, "no second command ran");
+}
+
+/// The repo policy's `[gate]` that runs its `pre-commit` (the quick check) at the merge: since hs-d679 the quick check is not
+/// the submit's (contract §7.3 R20, §7.4 step 6, commands.md §6.1), so the tests below that keep their historical names pin
+/// both halves: `attempt submit` runs no hook, and the merge runs it, in the Attempt's worktree, keeping its output.
+const MERGE_GATE: &str = "[gate]\nmerge = \"local\"\n";
+
+/// The `outcome` and `cause` the merge ended the Attempt with, and its detail.
+fn failed(merged: &merge::Merge) -> (Failure, &str) {
+    match &merged.end {
+        End::Failed { cause, detail } => (*cause, detail),
+        other => panic!("the merge did not fail the Attempt: {other:?}"),
+    }
 }
 
 #[test]
 fn submit_runs_the_quick_check_and_keeps_its_tail() {
-    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n");
+    let fx = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n"));
     // `pwd` prints the directory the command runs in.
     fx.sh(|_, cwd| Reply::ok(&format!("checking\n{}\n", cwd.display())));
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    let tail: String = fx.fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
-    assert!(tail.contains("checking"), "{tail}");
-    assert!(tail.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {tail}");
+    // The submit ran nothing: the Attempt is `merging` with no tail and no log.
+    assert_eq!(fx.shells(), Vec::<String>::new());
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(fx.fx.env.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
     let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);
-    assert!(fs::read_to_string(log).unwrap().contains("checking"));
+    assert!(!log.exists(), "submit wrote no quick check log");
+
+    // The merge runs it, in the worktree, and its output is the log.
+    assert_eq!(fx.merge("api-a1").end.outcome(), "merged");
+    let ran = fx.fx.calls("sh");
+    assert_eq!(ran.len(), 1, "{ran:?}");
+    let log = fs::read_to_string(log).unwrap();
+    assert!(log.contains("checking"), "{log}");
+    assert!(log.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {log}");
 }
 
 #[test]
 fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
-    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n");
+    let fx = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"echo broken >&2; exit 7\"\n"));
     fx.sh(|_, _| Reply::exit(7, "", "broken\n"));
     fx.commit("a.txt", "a\n");
-    let error = refused(&fx.submit(), "check_failed", 3);
-    assert!(error["details"]["tail"].as_str().unwrap().contains("broken"), "{error}");
-    let log = error["details"]["log"].as_str().unwrap();
-    assert!(log.ends_with("logs/api-a1.pre-commit.log"), "{log}");
+    // The submit refuses nothing: a failed quick check is the merge's `gate_failed`, with its tail and log in the detail.
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(fx.shells(), Vec::<String>::new());
+
+    let merged = fx.merge("api-a1");
+    let (cause, detail) = failed(&merged);
+    assert_eq!(cause, Failure::GateFailed, "{detail}");
+    assert!(detail.contains("exit 7") && detail.contains("broken"), "the tail: {detail}");
+    let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);
+    assert!(log.ends_with("logs/api-a1.pre-commit.log"), "{log:?}");
+    assert!(detail.contains(log.to_str().unwrap()), "the log: {detail}");
     assert!(fs::read_to_string(log).unwrap().contains("broken"));
-    assert_eq!(fx.status(), "running");
     let events = fx.events("attempt-status");
     let spans: Vec<_> = events.iter().map(|e| (e["data"]["check"].as_str(), e["data"]["what"].as_str())).collect();
-    assert_eq!(spans, [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
+    assert_eq!(&spans[..2], [(Some("start"), Some("checks")), (Some("end"), Some("checks"))], "{events:?}");
 }
 
 #[test]
 fn submit_refuses_a_quick_check_that_could_not_run() {
     {
-        let killed = hooked("[hooks.pre-commit]\ncheck = \"echo before; kill -9 $$\"\n");
+        let killed = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"echo before; kill -9 $$\"\n"));
         // The shell was killed by SIGKILL after it printed `before`.
         killed.sh(|_, _| Reply::signal(9, "before\n", ""));
         killed.commit("a.txt", "a\n");
-        let error = refused(&killed.submit(), "check_error", 1);
-        assert!(error["details"]["tail"].as_str().unwrap().contains("before"), "{error}");
-        assert_eq!(killed.status(), "running");
+        killed.submit().ok();
+        assert_eq!(killed.status(), "merging", "the submit does not run it");
+        let merged = killed.merge("api-a1");
+        let (cause, detail) = failed(&merged);
+        assert_eq!(cause, Failure::GateError, "{detail}");
+        assert!(detail.contains("before"), "{detail}");
     }
 
-    let invalid = hooked("[hooks.pre-commit]\ncheck = \"echo {{ no_such_variable }}\"\n");
+    let invalid = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"echo {{{{ no_such_variable }}}}\"\n"));
     invalid.commit("a.txt", "a\n");
-    let error = refused(&invalid.submit(), "check_error", 1);
-    assert!(error["details"]["reason"].as_str().unwrap().contains("hook_invalid"), "{error}");
-    assert_eq!(error["details"]["tail"], Value::Null);
-    assert!(error["details"].get("log").is_none(), "no log was written: {error}");
+    invalid.submit().ok();
+    let merged = invalid.merge("api-a1");
+    let (cause, detail) = failed(&merged);
+    assert_eq!(cause, Failure::GateError, "{detail}");
+    assert!(detail.contains("hook_invalid"), "{detail}");
+    assert_eq!(detail.split("tail:").nth(1).map(str::trim), Some(""), "no tail: {detail}");
     assert_eq!(invalid.shells(), Vec::<String>::new(), "a template that does not render runs nothing");
 }
 
@@ -907,15 +960,21 @@ fn only_an_impl_job_is_guarded_and_only_the_files_of_the_test_jobs_it_needs() {
 #[test]
 fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
     {
-        let toml = ("[hooks.pre-commit]\ncheck = \"exit 7\"\n", "[test-commands]\nbuild = \"build\"\nrun = \"false\"\n");
+        // The quick check is the merge's now (hs-d679): a repo whose `pre-commit` would fail has it run by no submit, and
+        // the kind's checks are the only ones of the span.
+        let toml = (
+            "[gate]\nmerge = \"local\"\n[hooks.pre-commit]\ncheck = \"exit 7\"\n",
+            "[test-commands]\nbuild = \"build\"\nrun = \"false\"\n",
+        );
         let fx = git_fixture_needing(&[], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)), None);
         fx.fx.env.repo_policy("acme", "pay", &format!("{}{}", toml.0, toml.1));
-        fx.sh(|command, cwd| if command == "exit 7" { Reply::exit(7, "", "") } else { test_commands(command, cwd) });
+        // `run = "false"` is red, as a `test` Job's tests must be.
+        fx.sh(|command, cwd| if command == "false" { Reply::exit(1, "", "") } else { test_commands(command, cwd) });
         fx.commit("tests/t.rs", "// red\n");
-        refused(&fx.submit(), "check_failed", 3);
-        assert_eq!(fx.ran(""), ["exit 7"], "the tests did not run");
-        assert!(!fx.tests_log("build").exists(), "the tests did not run");
-        assert_eq!(fx.statuses(), [span("start"), span("end")]);
+        fx.submit().ok();
+        assert_eq!(fx.ran(""), ["build", "false"], "the tests ran, the quick check did not");
+        assert!(fx.tests_log("build").exists(), "the tests ran");
+        assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
     }
 
     // A `work` Job in a repo that has `[test-commands]`: no kind check runs, and its checks are one span.
@@ -962,12 +1021,15 @@ fn a_work_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_a
 
 #[test]
 fn a_refused_quick_check_ends_the_checks_span_and_leaves_the_attempt_running() {
-    let fx = hooked("[hooks.pre-commit]\ncheck = \"exit 7\"\n");
+    let fx = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"exit 7\"\n"));
     fx.sh(|_, _| Reply::exit(7, "", ""));
     fx.commit("a.txt", "x\n");
-    refused(&fx.submit(), "check_failed", 3);
-    assert_eq!(fx.statuses(), [span("start"), span("end")]);
-    assert_eq!(fx.status(), "running");
+    // A failing quick check refuses nothing at the submit (hs-d679): the span closes with the Attempt `merging`, and the
+    // merge is what the failure ends, the Attempt `failed` / `gate_failed`.
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(failed(&fx.merge("api-a1")).0, Failure::GateFailed);
 }
 
 #[test]
@@ -1092,14 +1154,20 @@ fn show_returns_every_field_its_escalations_and_its_paths() {
 
 #[test]
 fn show_names_the_check_log_once_a_quick_check_has_run() {
-    let fx = hooked("[hooks.pre-commit]\ncheck = \"echo hi\"\n");
+    let fx = hooked(&format!("{MERGE_GATE}[hooks.pre-commit]\ncheck = \"echo hi\"\n"));
     fx.sh(|_, _| Reply::ok("hi\n"));
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
+    // No quick check has run at the submit (hs-d679): no tail, no log to name.
     let out = fx.cpd(&["show", "api-a1"]).ok();
     assert_eq!(out["attempt"]["status"], "merging");
-    assert_eq!(out["attempt"]["check_tail"], "hi");
+    assert_eq!(out["attempt"]["check_tail"], Value::Null);
+    assert_eq!(out["paths"]["check"], Value::Null);
+    // The merge runs it: `show` names the log.
+    fx.merge("api-a1");
+    let out = fx.cpd(&["show", "api-a1"]).ok();
     let check = out["paths"]["check"].as_str().unwrap();
+    assert_eq!(fs::read_to_string(check).unwrap(), "hi\n");
     assert!(check.ends_with("run/pay/logs/api-a1.pre-commit.log"), "{check}");
     assert_eq!(out["paths"]["worker_file"], Value::Null);
     assert_eq!(out["paths"]["spec"], Value::Null);
