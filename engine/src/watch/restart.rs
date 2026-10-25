@@ -40,7 +40,8 @@ use cpd_core::env::Env;
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{installed_version, older_version};
-use cpd_core::host::runner::Runner;
+use cpd_core::host::deadline::Failed as RunFailed;
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner, SystemRunner};
 use cpd_core::host::{Tmux, exe};
 use cpd_core::session;
 use cpd_core::store::Store;
@@ -268,31 +269,38 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
 
 /// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
 fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
-    let installed_cpd = exe::started_as()?;
-    let out = Command::new(installed_cpd)
-        .arg("tui")
-        .current_dir(home.root())
-        .env("CPD_HOME", home.root())
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run cpd tui: {e}.")))?;
+    rebuild_cockpit_with(&SystemRunner, &exe::started_as()?, home)
+}
+
+/// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.
+pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHome) -> Result<(), CpdError> {
+    let root = home.root().to_owned();
+    let call = Call {
+        tool: "cpd".to_owned(),
+        program: exe.to_string_lossy().into_owned(),
+        args: vec!["tui".to_owned()],
+        envs: [("CPD_HOME", Some(root.to_string_lossy().into_owned()))]
+            .into_iter()
+            .chain(["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(|n| (n, None)))
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect(),
+        cwd: Some(root),
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    let out = runner.run(&call).map_err(|e| {
+        let why = match e {
+            RunFailed::Io(e) => e.to_string(),
+            RunFailed::Timeout(e) => e.message().to_owned(),
+        };
+        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run cpd tui: {why}."))
+    })?;
     if !out.status.success() {
         let tail = String::from_utf8_lossy(&out.stdout).trim().to_owned() + &String::from_utf8_lossy(&out.stderr);
         return Err(CpdError::new(ErrorCode::TmuxFailed, format!("cpd tui failed after the server was killed: {}", tail.trim())));
     }
     Ok(())
-}
-
-/// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.
-#[allow(dead_code)]
-pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHome) -> Result<(), CpdError> {
-    let _ = (runner, exe, home);
-    todo!("rebuild_cockpit_with")
 }
 
 /// Waits until no engine holds its lock: the killed server's panes got `SIGHUP`, and `cpd tui`

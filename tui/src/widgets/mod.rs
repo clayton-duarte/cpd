@@ -28,7 +28,7 @@ pub mod legend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
-use std::process::Command;
+use cpd_core::host::runner::{Runner, SystemRunner};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -457,20 +457,15 @@ const UNKNOWN: &str = "?";
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
 fn hostname() -> String {
-    read_hostname(Path::new("/proc/sys/kernel/hostname"))
-        .or_else(|| std::env::var("HOSTNAME").ok().map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
-        .or_else(|| {
-            let out = Command::new("hostname").output().ok().filter(|o| o.status.success())?;
-            Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|n| !n.is_empty())
-        })
-        .unwrap_or_else(|| UNKNOWN.to_owned())
+    hostname_with(&SystemRunner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
-#[allow(dead_code)]
-pub(crate) fn hostname_with(runner: &dyn cpd_core::host::runner::Runner, file: &Path, env: Option<&str>) -> String {
-    let _ = (runner, file, env);
-    todo!("hostname_with")
+pub(crate) fn hostname_with(runner: &dyn Runner, file: &Path, env: Option<&str>) -> String {
+    read_hostname(file)
+        .or_else(|| env.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+        .or_else(|| host::run_with(runner, "hostname", &[]).map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+        .unwrap_or_else(|| UNKNOWN.to_owned())
 }
 
 /// The first line of the file at `path`, when it has one.

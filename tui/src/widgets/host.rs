@@ -10,6 +10,8 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner, SystemRunner};
+
 /// CPU %, GPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and any
 /// is `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10). `gpus` has one entry per GPU,
 /// in the tool's order; empty means no GPU was found (no tool, or no GPU in its output), and the row has no GPU part.
@@ -38,7 +40,7 @@ pub struct Sampler {
 impl Sampler {
     pub fn sample(&mut self) -> Usage {
         if cfg!(target_os = "macos") {
-            Usage { cpu: macos_cpu(), gpus: macos_gpus(), mem: macos_mem() }
+            macos_usage_with(&SystemRunner)
         } else {
             let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
@@ -57,22 +59,28 @@ fn read_file(path: &str) -> Option<String> {
 
 /// `program`'s stdout when it ran and exited 0.
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    run_with(&SystemRunner, program, args)
 }
 
 /// [`run`] on `runner`: `program`'s stdout when it ran and exited 0.
-#[allow(dead_code)]
-pub(crate) fn run_with(runner: &dyn cpd_core::host::runner::Runner, program: &str, args: &[&str]) -> Option<String> {
-    let _ = (runner, program, args);
-    todo!("run_with")
+pub(crate) fn run_with(runner: &dyn Runner, program: &str, args: &[&str]) -> Option<String> {
+    let call = Call {
+        tool: program.to_owned(),
+        program: program.to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: Vec::new(),
+        cwd: None,
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    let out = runner.run(&call).ok().filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// The macOS [`Usage`] (`ioreg`, `sysctl`, `ps`, `vm_stat`) read through `runner`.
-#[allow(dead_code)]
-pub(crate) fn macos_usage_with(runner: &dyn cpd_core::host::runner::Runner) -> Usage {
-    let _ = runner;
-    todo!("macos_usage_with")
+pub(crate) fn macos_usage_with(runner: &dyn Runner) -> Usage {
+    Usage { cpu: macos_cpu(runner), gpus: macos_gpus(runner), mem: macos_mem(runner) }
 }
 
 /// The GPUs' utilization on Linux, from **one** `nvidia-smi` that prints it every 2 s for as long as the view runs (`-lms`).
@@ -133,18 +141,18 @@ impl Drop for Gpus {
     }
 }
 
-fn macos_gpus() -> Vec<Option<u8>> {
-    run("ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
+fn macos_gpus(runner: &dyn Runner) -> Vec<Option<u8>> {
+    run_with(runner, "ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
 }
 
-fn macos_cpu() -> Option<u8> {
-    let ncpu = run("sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
-    parse_ps(&run("ps", &["-A", "-o", "%cpu="])?, ncpu)
+fn macos_cpu(runner: &dyn Runner) -> Option<u8> {
+    let ncpu = run_with(runner, "sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
+    parse_ps(&run_with(runner, "ps", &["-A", "-o", "%cpu="])?, ncpu)
 }
 
-fn macos_mem() -> Option<u8> {
-    let bytes = run("sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
-    parse_vm_stat(&run("vm_stat", &[])?, bytes)
+fn macos_mem(runner: &dyn Runner) -> Option<u8> {
+    let bytes = run_with(runner, "sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
+    parse_vm_stat(&run_with(runner, "vm_stat", &[])?, bytes)
 }
 
 /// `part` of `whole` as a whole percent, rounded, at most 100; `None` for an empty whole.
