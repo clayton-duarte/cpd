@@ -61,8 +61,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
-| `cpd gate finish` (§26) | the run's report on stderr, and its exit status | like `slot`: it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
-| `cpd slot` (§23) | what the command it runs prints, and its exit status | it runs a command inside a test slot and is transparent to it; only its own refusals print the envelope, on stderr |
+| `cpd gate finish` (§26) | the run's report on stderr, and its exit status | it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>`, and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
 | `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
@@ -204,7 +203,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd host approve` (§9.17) | | no | yes |
 | `cpd host repair` (§9.17) | Manager | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
-| `cpd slot` (§23) | Manager, Lead, Worker | no | no |
 | `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
@@ -1528,8 +1526,6 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (review Job only) `run/<plan>/reviews/<job>.md` exists and is not empty (contract §7.3, precondition 3) | `review_missing` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
 | (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
-| the quick check passes (skipped for a review Job, B2: nothing was changed to check; no `pre-commit` hook: it passes without running, R20); `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
-| the quick check ran (not killed, not `hook_invalid`) | `check_error` | 1 |
 | (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
 | (kinds `test`, `impl`) the repo's policy has `[test-commands]` | `tests_unconfigured` | 3 |
 | (kinds `test`, `impl`) the repo's `build` exits zero; `details` `{job, tests, tail, log}` | `tests_build_failed` | 3 |
@@ -1549,9 +1545,9 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (the same) the Attempt worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
 
 Effects:
-- **One check span** (contract §7.7, hs-d604, hs-d605): every check below, in order, runs inside ONE span, `what` `checks`: the tamper check, the red-test guard, the quick check (the Hooks bullet), the kind check and, for an `open` or `update` Job, the base check and the Gate. The preconditions of §7.3 run before it; a review Job has no checks and no span.
-- **Hooks:** `pre-commit` only, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log`. With no `pre-commit` hook nothing runs, no log is written and `check_tail` stays null; `pre-merge` never runs at submit (R20).
-- **Kind checks** (contract §7.7, hs-d340, hs-d341), after the quick check and only for the kinds that have one: a `test` or `impl` Job's `[test-commands]` commands (`build`, then `run`; output in `run/<plan>/logs/<attempt>.tests-build.log` and `<attempt>.tests-run.log`; with `list`, once per name between them, `<attempt>.tests-list.log`), or an `open` or `update` Job's lookup, base check and Gate (`git fetch origin <base>`; `gh pr list` for `open`; `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`). The span holds `locks/check-<plan>--<attempt>.lock`, and the Gate holds one test slot (the pool of §23: the same wait, no cap: **the wait counts toward no limit**, hs-d497); it appends `attempt-status` with `check` `start` (before the first check) and `end` (contract §5.2; on a pass in the transaction of the Rows below, on a refusal before the error returns), so the Attempt's timeout and the stall kill do not count it, the quick check and the tamper check included. A refusal changes nothing else: the Worker fixes, commits and submits again, and the checks run again.
+- **One check span** (contract §7.7, hs-d679): every check below, in order, runs inside ONE span, `what` `checks`: the tamper check, the red-test guard, and the kind check; for an `open` or `update` Job the base check and the Gate also run at the merge (contract §7.4, hs-d679). The preconditions of §7.3 run before it; a review Job has no checks and no span.
+- **Hooks:** `pre-commit` only, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log`. With no `pre-commit` hook nothing runs, no log is written and `check_tail` stays null; `pre-merge` only runs at the merge (§7.3, hs-d679).
+- **Kind checks** (contract §7.7, hs-d340, hs-d341), for the kinds that have one: a `test` or `impl` Job's `[test-commands]` commands (`build`, then `run`; output in `run/<plan>/logs/<attempt>.tests-build.log` and `<attempt>.tests-run.log`; with `list`, once per name between them, `<attempt>.tests-list.log`), or an `open` or `update` Job's lookup and base check (`git fetch origin <base>`; `gh pr list` for `open`; `run/<plan>/logs/pr-<key>.pre-merge.log`). The span holds `locks/check-<plan>--<attempt>.lock`; it appends `attempt-status` with `check` `start` (before the first check) and `end` (contract §5.2; on a pass in the transaction of the Rows below, on a refusal before the error returns), so the Attempt's timeout and the stall kill do not count it, the tamper check included. A refusal changes nothing else: the Worker fixes, commits and submits again, and the checks run again.
 - **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`, `check_tail`; the Job stays `running`; the span's `end` Event is appended in the same transaction. **Event** `attempt-status` `{from: "running", to: "merging"}`.
 - The driver sees `merging` at A5 and starts the merge (A8, §7.4). For a review Job the merge changes nothing: the Attempt and the Job end `merged` with the Lead Branch unchanged and `merged_sha` its tip (contract §3.4, §7.4). An `open` or `update` Job's merge does not rebase, pushes the Lead Branch and, for an `open` Job, opens the pull request and moves the PR in step 10's transaction (contract §7.4, §7.7): `pr-opened` and `plan-phase` follow its `job-merged`.
 
