@@ -40,6 +40,8 @@ mod workers;
 #[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
+mod testkit;
+#[cfg(test)]
 mod pill_texts;
 #[cfg(test)]
 mod poll_run_tests;
