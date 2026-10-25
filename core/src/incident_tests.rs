@@ -806,9 +806,9 @@ fn the_incident_lead_falls_back_to_the_alphabetically_first_plan() {
         })
         .unwrap();
 
-    // `pay` sorts before `ops`, so its `lead_session` `lead1` is the fallback (`ops`'s is `lead2`).
+    // `ops` sorts before `pay`, so its `lead_session` `lead2` is the fallback (`pay`'s is `lead1`).
     let lead = f.store.read(|c| incident::lead(c)).unwrap();
-    assert_eq!(lead.map(|s| s.as_str().to_owned()).as_deref(), Some("lead1"), "the alphabetically first Plan's Lead");
+    assert_eq!(lead.map(|s| s.as_str().to_owned()).as_deref(), Some("lead2"), "the alphabetically first Plan's Lead");
 
     // With no incident row there is no Lead to resolve.
     f.store

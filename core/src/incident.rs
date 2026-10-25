@@ -130,12 +130,27 @@ pub fn plans(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
     Ok(plans)
 }
 
-/// The Lead Session a click on the incident pill opens (commands.md §9.13, hs-d678). Stub: the
-/// implementation Job `pillclick-impl` replaces it, storing the first `--plan` Plan's `lead_session`
-/// at a fresh start and falling back to the alphabetically first Plan's Lead for a pre-migration row.
+/// The Lead Session a click on the incident pill opens (commands.md §9.13, hs-d678). The stored
+/// `incident.lead` is used when set; a null one (a row written before the migration) falls back to
+/// the alphabetically first Plan's Lead. `None` when there is no incident row or no resolvable Lead.
 pub fn lead(conn: &Connection) -> Result<Option<SessionId>, CpdError> {
-    let _ = conn;
-    Ok(None)
+    let stored: Option<Option<String>> = conn.query_row("SELECT lead FROM incident WHERE id = 1", [], |r| r.get(0)).optional()?;
+    let Some(stored) = stored else { return Ok(None) };
+    let id = match stored {
+        Some(id) => id,
+        None => match conn
+            .query_row(
+                "SELECT p.lead_session FROM incident_plans ip JOIN plans p ON p.id = ip.plan ORDER BY ip.plan LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+        {
+            Some(id) => id,
+            None => return Ok(None),
+        },
+    };
+    SessionId::parse(&id).map(Some).map_err(|e| CpdError::bad_row(format!("incident.lead: {e}")))
 }
 
 /// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
@@ -179,6 +194,7 @@ pub fn start(
                 return Err(CpdError::plan_not_found(plan));
             }
         }
+        let lead: String = tx.query_row("SELECT lead_session FROM plans WHERE id = ?1", [plans[0].as_str()], |r| r.get(0))?;
         if let Some((until_plan, key)) = &until {
             if !plans.contains(until_plan) {
                 return Err(CpdError::new(
@@ -222,6 +238,7 @@ pub fn start(
                 for plan in plans {
                     tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES (?1, ?2)", params![plan.as_str(), tx.id()])?;
                 }
+                tx.execute("UPDATE incident SET lead = ?1 WHERE id = 1", [lead.as_str()])?;
             }
             if until_changed {
                 tx.execute(
@@ -240,8 +257,8 @@ pub fn start(
         }
         let started_at = clock::now();
         tx.execute(
-            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr, lead)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 started_at,
                 caller.as_str(),
@@ -249,6 +266,7 @@ pub fn start(
                 tx.id(),
                 until.as_ref().map(|(plan, _)| plan.as_str()),
                 until_pr,
+                lead,
             ],
         )?;
         for plan in plans {
