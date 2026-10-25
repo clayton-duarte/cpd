@@ -129,3 +129,9 @@ Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd
 Rules and decisions for a Lead are written to the Context as records, not sent as messages. A decision record reaches the Lead at its turn start, and it reads what applies to it. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and the Lead reads it at turn start; it adds the work queued, with a Spec that cites the decision, and needs no Plan review. Work with an open design choice is a draft and gets a Plan review; message the Lead to notify it.
 
 A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.
+
+## 5. The host Manager
+
+The Context `host` (id immutable: `"host"`) is created by dotfiles' `scripts/cpd-install.sh` when it is absent. It is not a product Manager; it keeps the machine healthy. Its first and only job so far is the skipped cpd install (hs-d618, contract §3.7 E6).
+
+**The incident.** When dotfiles' `scripts/cpd-install.sh` skips the fast-forward of the cpd checkout ($HOME/projects/cpd: tracked files changed, `main` diverged from origin/main, or HEAD on another branch or detached), the status line's version pill turns red. A click on it opens the host Manager and wakes it with the incident: the Manager's one message says to show the User what a repair would discard (read-only git commands), ask with the tool `cpd_host_approve`, and then run `cpd host repair`. The Manager never writes in the checkout with bash (the adapter refuses it), never uses git stash, and repairs only through `cpd_host_approve` then `cpd host repair` (§9.11, commands.md §9.11-9.12). After the repair, the pill returns to normal at the next sync tick (up to 5 minutes; User decision).

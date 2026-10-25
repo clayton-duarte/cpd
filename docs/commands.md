@@ -4628,3 +4628,19 @@ Output:
 
 Idempotent: no; every call writes a new file.
 
+
+### 9.11 `host approve` and `host repair`
+
+**Manager only, internal commands.** The host Manager approves and executes a cpd checkout repair when the install is skipped (hs-d618, contract §3.7 E6).
+
+**`cpd host approve`** (internal; written by the adapter's `cpd_host_approve` tool after the User's Allow once): creates a private approval file for the Session, valid 10 minutes, one repair. Output: `{"ok": true}`.
+
+**`cpd host repair`** (Manager only; contract §3.7 E6): repairs the skipped cpd install by resetting the checkout's main branch to origin/main, saving the diff and old HEAD. Needs an approval of the calling Session. Steps, all `git -C $HOME/projects/cpd`: (a) `rev-parse HEAD` (old head); (b) `diff HEAD` and, when non-empty, write to `$CPD_HOME/run/cpd-install-backups/<ts>.patch` (0600; <ts> = UTC `YYYYMMDDTHHMMSSZ`); (c) `update-ref refs/cpd-host/<ts> <old head>`; (d) `checkout --force -B main origin/main`. Untracked files, other branches and stashes are never touched; no fetch (the script fetched). The approval is consumed only after the last step succeeds. A failing git step stops it with `git_failed` naming the argv. Output JSON: `{"ok":true,"saved":{"ref":"refs/cpd-host/<ts>","patch":"<path or null>"},"head":"<new sha>"}`. The pill clears at the next sync tick after a repair (contract §3.7 E6).
+
+### 9.12 `cpd tui action host`
+
+(internal; hs-d618): what a click on the red version pill runs when `@cpd_host_alert` is set. Reads the install state file; when it is not `skipped` it does nothing. Finds the live (not archived) Manager of Context `host`; none: reports on the client with `display-message -c <client>` `cpd: no host Manager: apply dotfiles`. Else: brings that Manager into the chat slot as `session open` does (a stopped or asleep Manager is resumed), then, when `$CPD_HOME/run/cpd-install-notified` does not hold this incident's `since`, sends the Manager one message (as the User, `session send` with `--unblocks "cpd install skipped"`) and writes `since` and a newline to that file atomically; a later click on the same incident only opens the Manager. Message text (fixed): `cpd install skipped: <reason> (since <since>). Checkout: ~/projects/cpd. Read it with git -C ~/projects/cpd status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair.` (contract §3.7 E6, §1.4, commands.md §15.<n>).
+
+### 15.<n> The pi tool `cpd_host_approve`
+
+**Manager only** (internal; hs-d618): a pi tool the adapter runs on behalf of the host Manager after the User's dialog choice. Parameters: `reason` (one line, at most 200 characters; the reason the repair is needed, from the install state file). Dialog `Allow once` / `Deny` (buttons; no title given by pi, so the tool provides it in the message). Button text: the dialog says `Allow once: approve the repair. It discards tracked changes of ~/projects/cpd and resets main to origin/main after saving the diff and the old HEAD.` (brief, from the spec). On `Allow once`: run `cpd host approve` and tell the Manager to run `cpd host repair` now (the message unblocks it). On `Deny`: say so and not to retry (contract §3.7 E6). The adapter refuses an agent's bash `cpd host approve` with the reason `cpd: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.<n>); refused: cpd host approve` (model: §15.17).
