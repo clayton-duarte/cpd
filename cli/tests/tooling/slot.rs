@@ -14,7 +14,7 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::host::runner::Runner;
 use cpd_core::ports::Ports;
 use cpd_core::slot::{Args, Ended, Slots, run_with};
