@@ -162,7 +162,7 @@ pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], tim
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
 /// and a timeout (60 s) are `gh_failed`.
 fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    run_on(&*Ports::current().runner, cwd, args)
+    run_on(&SystemRunner, cwd, args)
 }
 
 /// [`run`] on `runner`.

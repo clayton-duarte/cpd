@@ -12,8 +12,7 @@ use super::{TAIL_LINES, tail};
 use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
-use crate::ports::Ports;
+use crate::host::runner::{Runner, SystemRunner};
 
 /// A local git call's deadline (contract §7): a local repo answers in seconds.
 const LOCAL_DEADLINE: Duration = Duration::from_secs(60);
@@ -53,7 +52,7 @@ pub(super) fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i3
 /// code. Only a git that cannot start, dies from a signal (`git_failed`) or runs
 /// past its deadline (`tool_timeout`) is an error.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
-    run_with(&*Ports::current().runner, dir, args)
+    run_with(&SystemRunner, dir, args)
 }
 
 /// [`run`] on `runner`.
@@ -83,7 +82,7 @@ pub fn run_with(runner: &dyn Runner, dir: &Path, args: &[&str]) -> Result<Out, C
 /// Like [`run`], but any non-zero exit is `git_failed` (with `argv`, `exit` and
 /// the last 60 lines of `stderr` in `details`). Returns stdout unchanged.
 pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
-    ok_with(&*Ports::current().runner, dir, args)
+    ok_with(&SystemRunner, dir, args)
 }
 
 /// [`ok`] on `runner`.
