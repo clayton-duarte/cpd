@@ -518,7 +518,10 @@ fn a_stuck_job_wakes_its_context_manager() {
     assert_eq!(messages.len(), 1, "{messages:?}");
     let (session, _, data) = &messages[0];
     assert_eq!((session.as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
-    assert!(data["text"].as_str().unwrap().starts_with("Job pay/api failed "), "{data}");
+    // hs-d647: the stuck Jobs of a PR are one message (contract §3.7 "A stuck Job").
+    let text = data["text"].as_str().unwrap();
+    assert!(text.starts_with("Jobs of PR pay/repo failed "), "{data}");
+    assert!(text.contains("pay/api (2 min ago, crashed)"), "{data}");
 }
 
 // ---------- @cpd_workers ----------

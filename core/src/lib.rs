@@ -7,6 +7,7 @@
 
 // Shared foundations (Job rs-workspace).
 pub mod args;
+pub mod atomic;
 pub mod clock;
 pub mod env;
 pub mod error;

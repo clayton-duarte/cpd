@@ -291,7 +291,7 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 ///
 /// While `@cpd_incident` is set (incident mode is on, hs-d634, hs-d640), the incident pill, the literal
 /// `Incident Mode: ` followed by the elapsed duration in colour 9 with reverse video and the `italics`
-/// attribute, opens the right group before the workers pill, joined to it by a single `\u{2500}`; the
+/// attribute, follows the fill before the workers pill, joined to it by a single `\u{2500}`; the
 /// fill and the long-form test are shorter by its width (a join, two caps and the 15-cell label, 18
 /// cells) and it has no click range.
 ///
@@ -307,7 +307,7 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     // `Meaning::Failed` bright pair (index 9).
     let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}"));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}{alert},{plain}}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}{alert},{plain}}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!()),
         legend = button("legend", legend_glyph!()),

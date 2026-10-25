@@ -289,11 +289,11 @@ fn unexpected_listing(tmux: &Tmux, line: &str) -> CpdError {
 }
 
 /// The tree's width on reset.
-const TREE_WIDTH: &str = "25%";
+const TREE_WIDTH: &str = "20%";
 /// The widgets' width on reset.
-const WIDGETS_WIDTH: &str = "25%";
+const WIDGETS_WIDTH: &str = "30%";
 /// The Plan view's height on reset.
-const PLAN_HEIGHT: &str = "25%";
+const PLAN_HEIGHT: &str = "30%";
 /// The Worker pane's width on reset.
 const WORKER_WIDTH: &str = "30%";
 
@@ -408,7 +408,9 @@ pub(crate) fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdEr
     size.ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}.")).with("socket", tmux.socket()))
 }
 
-/// `display-popup …` aimed at `client` (`-c`), so it opens there only.
+/// `display-popup …` aimed at `client` (`-c`), so it opens there only. The popup's argument vector stays as it
+/// was, with `-c` at index 1; the shared builder (`crate::popup::args`) places `-c` after `-B` for the merge, so
+/// the splice cannot move to the builder without changing the legend's, Logs' and the dialogs' vectors.
 pub(crate) fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
     popup.splice(1..1, ["-c".to_owned(), client.to_owned()]);
     popup
@@ -679,7 +681,7 @@ mod tests {
     fn the_reset_applies_the_sizes_in_order() {
         // %0 tree, %1 chat, %2 widgets, %3 plan
         let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
-        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 25%", "resize-pane -t %2 -x 25%", "resize-pane -t %3 -y 25%"]);
+        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 30%", "resize-pane -t %3 -y 30%"]);
     }
 
     #[test]

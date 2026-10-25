@@ -12,6 +12,19 @@ const LABEL: &str = "Incident Mode: ";
 /// `Incident Mode: ` plus the value's cells (contract §6.1, the right group).
 const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
 
+/// The incident pill's left cap sits directly after the fill: no `#[align=right]` builds a
+/// separate right screen between the fill's reset and the incident branch, so the branch opens
+/// with its left cap `\u{e0b6}` immediately after the fill's `#[default]` (contract §6.1.1, hs-d640).
+#[test]
+fn the_incident_pill_is_first_after_the_fill() {
+    let f: &str = &STATUS_FORMAT;
+    assert!(!f.contains("#[align=right]"), "no right-aligned side clips the incident pill's left cap: {f}");
+    assert!(
+        f.contains("#[default]#{?@cpd_incident,#[fg=colour9]\u{e0b6}"),
+        "the incident branch opens with its left cap immediately after the fill's reset: {f}"
+    );
+}
+
 /// The incident pill is guarded by `@cpd_incident`, reads `Incident Mode: ` immediately followed
 /// by the option's value (15 cells, no leading space), is colour 9 and its text is reversed and
 /// italic, and it stands first in the right group, before the workers pill.

@@ -109,10 +109,9 @@ fn assert_layout(panes: &[Pane]) {
     assert_eq!(plan.left, slot.left, "{panes:?}");
     assert!(plan.left > tree.left && widgets.left > plan.left, "{panes:?}");
     assert!(slot.top > plan.top, "{panes:?}");
-    // 25 % of the 215 columns each, give or take tmux's rounding and borders.
-    for side in [tree, widgets] {
-        assert!((50..=56).contains(&side.width), "{panes:?}");
-    }
+    // The tree 20 % and the widgets 30 % of the 215 columns, give or take tmux's rounding and borders.
+    assert!((42..=44).contains(&tree.width), "{panes:?}");
+    assert!((63..=65).contains(&widgets.width), "{panes:?}");
     assert!(panes.iter().all(|p| !p.dead && p.view != "statusbar"), "{panes:?}");
     // The status line takes the session's one row: tree and widgets run from the header to the last row.
     let bottom = |p: &Pane| p.top + p.height;
@@ -420,7 +419,7 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     let tree = view(&main_panes(&env), "tree").clone();
     tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "70"]);
     outer.click(1, 29);
-    wait_until("the reset", || (28..=32).contains(&view(&main_panes(&env), "tree").width));
+    wait_until("the reset", || (22..=26).contains(&view(&main_panes(&env), "tree").width));
     assert_eq!(actions().len(), 3);
 }
 

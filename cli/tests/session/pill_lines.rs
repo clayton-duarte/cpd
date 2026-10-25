@@ -54,7 +54,7 @@ fn status_line_pills_follow_the_rule() {
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}\
          #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},#{{?@cpd_incident,#{{e|+:#{{n:@cpd_incident}},18}},0}}}},\
          #{{e|+:#{{?{long},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}}}\
-         #[default]#[align=right]\
+         #[default]\
          #{{?@cpd_incident,{}{JOIN},}}\
          {}\
          #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
@@ -70,7 +70,7 @@ fn status_line_pills_follow_the_rule() {
     );
     // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.
     let fill = want.find("#[fg=colour8]#{R:").expect("the fill") + "#[fg=colour8]".len();
-    let right = want.find("#[default]#[align=right]").expect("the right group");
+    let right = want.find("#[default]#{?@cpd_incident").expect("the right group");
     assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {}", *STATUS_FORMAT);
     assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {}", *STATUS_FORMAT);
     for old in ["colour236", "push-default", "pop-default"] {

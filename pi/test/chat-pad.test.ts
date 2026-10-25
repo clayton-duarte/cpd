@@ -76,3 +76,37 @@ test("the adapter leaves one empty row at the bottom of the pi screen", async (t
   assert.deepEqual([...statuses.keys()], [KEY], "exactly one such entry after the second start");
   assert.equal(render(60).length, 3);
 });
+
+test("the adapter leaves one empty row at the top of the pi screen", async (t) => {
+  initTheme();
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  // pi's `ctx.ui.setHeader(factory)`: installing a factory replaces the built-in header (contract §6.1 Q5).
+  const headers: unknown[] = [];
+  const base = f.pi.ctx.bind(f.pi);
+  f.pi.ctx = () => {
+    const ctx = base();
+    (ctx.ui as unknown as Record<string, unknown>).setHeader = (factory: unknown) => {
+      headers.push(factory);
+    };
+    return ctx;
+  };
+
+  type Header = { render(width: number): string[] };
+  const headerLines = (factory: unknown): string[] => {
+    assert.equal(typeof factory, "function", "the adapter installs a factory");
+    return (factory as () => Header)().render(60).map((l) => l.replace(SGR, ""));
+  };
+
+  f.load();
+  await f.pi.fire("session_start");
+
+  assert.equal(headers.length, 1, "once, at session_start");
+  assert.deepEqual(headerLines(headers[0]), [""], "exactly one empty line at the top");
+
+  // /reload: a new session_start replaces the previous header; still exactly one empty line, never two
+  await f.pi.fire("session_start", { reason: "reload" });
+  assert.equal(headers.length, 2, "set again at the reload");
+  assert.deepEqual(headerLines(headers[1]), [""], "still exactly one empty line, never two");
+});
