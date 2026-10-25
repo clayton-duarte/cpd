@@ -107,7 +107,6 @@ pub const TABLE: &[Entry] = &[
     ("doctor", &[], false),
     ("config", &[], false),
     ("tiers", &[Lead], false),
-    ("slot", &[Manager, Lead, Worker], false),
     ("secret get", &[Lead, Manager, Worker], false),
     ("secret list", &[Lead, Manager], false),
     ("secret create", &[Lead, Manager], false),

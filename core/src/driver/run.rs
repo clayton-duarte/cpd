@@ -24,7 +24,6 @@ use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
 use crate::host::spawn::{Pid as SpawnPid, Spawn};
-use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
@@ -38,7 +37,7 @@ use crate::store::{Persist, Store};
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
 
-/// How often A4 looks at the Attempt, its Session and its pane (tests: `CPD_TEST_DRIVER_POLL`, [`limit`]).
+/// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
 
 /// What A4 knows of the Worker's pane at a poll.
@@ -63,10 +62,10 @@ pub(super) struct PaneWatch {
     failed: bool,
 }
 
-/// One A4 poll on `ports`: the nap of `DRIVER_POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
+/// One A4 poll on `ports`: the nap of `POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
 /// (`PaneWatch::look_with` on `ports.spawn`).
 pub(super) fn poll_with(ports: &Ports, watch: &mut PaneWatch, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
-    ports.clock.sleep(limit("DRIVER_POLL", POLL));
+    ports.clock.sleep(POLL);
     watch.look_with(&*ports.spawn, tmux, pane)
 }
 

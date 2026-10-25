@@ -71,6 +71,15 @@ fn ctl_pane_exit_fires_pane_died_with_the_pane_as_target_and_expanded_formats() 
 }
 
 #[test]
+fn respawn_pane_without_a_target_in_a_hook_is_the_hooks_pane_not_the_active_one() {
+    let t = T::new();
+    four(&t);
+    t.ok(&["set-hook", "-g", "pane-died", "respawn-pane"]);
+    t.ok(&["__ctl", "pane-exit", "%0", "--status", "1"]);
+    assert_eq!(t.ok(&["display-message", "-p", "-t", "%0", "#{pane_dead}"]), "0\n");
+}
+
+#[test]
 fn pane_died_fires_inside_the_same_call() {
     let t = T::new();
     t.server();

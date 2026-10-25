@@ -1,20 +1,28 @@
 //! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
 //! following and scrolling with ratatui's `TestBackend` over a store in this process (`Fx`: no process), the view
-//! itself on a private tmux server, and the button's
-//! `cpd tui action logs` (`tmux` on `PATH` is a fake that answers the client's size and records `display-popup`).
+//! loop itself (`logs::show_with`, the legend's too) on a `SharedBackend` with a scripted input and the `ManualClock`
+//! (`common::screen::Script`: the keys, the polls that find nothing, what another process commits between two polls and
+//! a look at the screen), and the button's
+//! `cpd tui action logs`, in this process through `run_with` on `Fx::with_ports` (the fake tmux route answers the client's
+//! size and the `FakeRunner` records `display-popup`).
 
 use crate::common;
 
-use std::fs;
+use std::path::PathBuf;
+use std::time::Duration;
 
 use common::fx::Fx;
-use common::{CPD, TestEnv, wait_until};
+use common::screen::{Screen, Script, SharedBackend, Step, wheel};
+use common::TestEnv;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::logs::{self, Log};
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read;
+use cpd_tui::view_ports::Ctx;
+use cpd_tui::widgets::legend;
+use ratatui::crossterm::event::{KeyCode, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -174,152 +182,184 @@ fn scrolling_moves_a_line_or_a_page_and_stops_at_both_ends() {
     assert!(log.follows());
 }
 
-// ---------- the view, on a private tmux server ----------
+// ---------- the view loop, in this process ----------
 
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    fs::write(
-        env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    env
+/// How often the view looks at the store when nothing else wakes it (`events.poll_ms` of the old test's config).
+const POLL: Duration = Duration::from_millis(50);
+
+/// The log view over the store of `fx`, as `logs::run` opens it (the latest 500 Events, at `event` when there is one), run
+/// on `steps` in a terminal of `screen`; what it returned. The script must be over when the view closed.
+fn run_log(fx: &Fx, screen: &SharedBackend, event: Option<i64>, steps: Vec<Step>) -> Result<(), cpd_tui::ViewError> {
+    let mut store = open(&fx.env);
+    let first = read::logs(&mut store, logs::RECENT).unwrap();
+    let log = match event {
+        Some(id) => Log::at(logs::with_event(&mut store, first.events, id).unwrap(), id),
+        None => Log::new(first.events),
+    };
+    let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), screen, steps);
+    let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
+    let result = logs::show_with(&mut ctx, &mut store, POLL, follow, log);
+    drop(ctx);
+    assert_eq!(input.remaining(), 0, "the view closed before its script was over");
+    result
 }
 
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap()
-}
-
-fn start(env: &TestEnv, view: &[&str], width: u16, height: u16) -> String {
-    let mut args = vec!["new-session", "-d", "-s", "view", "-x", "", "-y", "", "-P", "-F", "#{pane_id}", CPD, "tui", "view"];
-    let (w, h) = (width.to_string(), height.to_string());
-    args[5] = &w;
-    args[7] = &h;
-    args.extend(view);
-    tmux_out(env, &args).trim().to_owned()
-}
-
-fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
-    tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
-}
-
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    common::wait_screen(what, || screen(env, pane), done)
-}
-
-/// The log view in a pane showing `events` rows of Events under the title's rows.
-fn start_log(env: &TestEnv, args: &[&str], width: u16, events: u16) -> String {
-    let view: Vec<&str> = ["logs"].into_iter().chain(args.iter().copied()).collect();
-    start(env, &view, width, events + HEAD)
-}
-
-/// Waits for the rows under the title; the title itself is asserted to be a section title between two empty rows.
-fn wait_log(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 3 && done(&r[3..]));
+/// The rows under the title of `screen`; the title itself is asserted to be a section title between two empty rows.
+fn log_rows(screen: &Screen) -> Vec<String> {
+    let rows = screen.rows();
     assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "an empty row above and below the title: {rows:?}");
     assert!(rows[1].starts_with(" ──\u{E0B6}Logs\u{E0B4}─"), "the title is a section title: {:?}", rows[1]);
     rows[3..].to_vec()
 }
 
-/// One notch of the wheel at 1-based `column`, `row` of the pane, as the terminal sends it (SGR: 64 up, 65 down).
-fn wheel(env: &TestEnv, pane: &str, up: bool, column: u16, row: u16) {
-    tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<{};{column};{row}M", if up { 64 } else { 65 })]);
+/// A look at the rows under the title: `check` holds for them.
+fn look_log(what: &'static str, check: impl Fn(&[String]) -> bool + 'static) -> Step {
+    Step::look(move |screen| {
+        let rows = log_rows(screen);
+        assert!(check(&rows), "{what}: {rows:?}");
+    })
+}
+
+/// A look at the whole screen: `check` holds for its rows.
+fn look(what: &'static str, check: impl Fn(&[String]) -> bool + 'static) -> Step {
+    Step::look(move |screen| {
+        let rows = screen.rows();
+        assert!(check(&rows), "{what}: {rows:?}");
+    })
+}
+
+/// What another process does: appends `n` Events `event <first>` … to the store at `home`.
+fn commit_later(home: PathBuf, first: usize, n: usize) -> Step {
+    Step::then(move || {
+        let mut store = Store::open(&CpdHome::resolve(Some(home.clone().into()), None).unwrap(), 5000).unwrap();
+        append_numbered(&mut store, first, n);
+    })
+}
+
+/// What another process does: runs `text` on the database file of the store at `home`, not through `Store`.
+fn raw_later(home: PathBuf, text: &'static str) -> Step {
+    Step::then(move || rusqlite::Connection::open(home.join("cpd.db")).unwrap().execute_batch(text).unwrap())
 }
 
 #[test]
 fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
-    let env = env();
-    let mut store = open(&env);
-    append_numbered(&mut store, 0, 10);
-    let pane = start_log(&env, &[], 30, 4);
-    let rows = wait_log(&env, &pane, "the latest Events", |r| r.get(3).is_some_and(|l| l == " 00:00:09 event 9"));
-    assert_eq!(rows[0], " 00:00:06 event 6");
-
-    // a new Event follows at the bottom
-    append_numbered(&mut store, 10, 1);
-    wait_log(&env, &pane, "the new Event", |r| r.get(3).is_some_and(|l| l == " 00:00:10 event 10"));
-
-    // k scrolls up and the view stops following; j comes back and follows again
-    tmux_out(&env, &["send-keys", "-t", &pane, "k", "k"]);
-    wait_log(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
-    append_numbered(&mut store, 11, 1);
-    // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
-    // Event 11: it did not follow it.
-    tmux_out(&env, &["send-keys", "-t", &pane, "k"]);
-    let rows = wait_log(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
-    assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
-    tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
-    wait_log(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
-    tmux_out(&env, &["send-keys", "-t", &pane, "Up", "PageUp", "PageUp", "PageUp"]);
-    wait_log(&env, &pane, "the top", |r| r.first().is_some_and(|l| l == " 00:00:00 event 0"));
-
-    // the wheel scrolls too, three rows a notch, and the bottom follows again
-    wheel(&env, &pane, false, 5, 3);
-    wait_log(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l == " 00:00:03 event 3"));
-    wheel(&env, &pane, false, 5, 3);
-    wait_log(&env, &pane, "the wheel down again", |r| r.first().is_some_and(|l| l == " 00:00:06 event 6"));
-    wheel(&env, &pane, true, 5, 3);
-    let rows = wait_log(&env, &pane, "the wheel up", |r| r.first().is_some_and(|l| l == " 00:00:03 event 3"));
-    assert_eq!(rows[3], " 00:00:06 event 6");
-    append_numbered(&mut store, 12, 1);
-    wheel(&env, &pane, false, 5, 3);
-    wait_log(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l == " 00:00:06 event 6"));
-    for _ in 0..4 {
-        wheel(&env, &pane, false, 5, 3);
-    }
-    wait_log(&env, &pane, "the bottom", |r| r.get(3).is_some_and(|l| l == " 00:00:12 event 12"));
-    append_numbered(&mut store, 13, 1);
-    wait_log(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:13 event 13"));
-
-    // q closes it
-    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
-    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+    let fx = Fx::new();
+    let home = fx.env.cpd_home();
+    append_numbered(&mut open(&fx.env), 0, 10);
+    let screen = SharedBackend::new(30, 4 + HEAD);
+    let first = |row: &'static str| move |r: &[String]| r.first().is_some_and(|l| l == row);
+    let last = |row: &'static str| move |r: &[String]| r.get(3).is_some_and(|l| l == row);
+    let steps = vec![
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_eq!(rows[0], " 00:00:06 event 6", "the latest Events");
+            assert_eq!(rows[3], " 00:00:09 event 9");
+        }),
+        // a new Event follows at the bottom
+        commit_later(home.clone(), 10, 1),
+        Step::Idle,
+        look_log("the new Event", last(" 00:00:10 event 10")),
+        // k scrolls up and the view stops following; j comes back and follows again
+        Step::ch('k'),
+        Step::ch('k'),
+        look_log("scrolled up", first(" 00:00:05 event 5")),
+        commit_later(home.clone(), 11, 1),
+        // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
+        // Event 11: it did not follow it.
+        Step::ch('k'),
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_eq!(rows[0], " 00:00:04 event 4", "scrolled up once more");
+            assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
+        }),
+        Step::key(KeyCode::PageDown),
+        look_log("following again", last(" 00:00:11 event 11")),
+        Step::key(KeyCode::Up),
+        Step::key(KeyCode::PageUp),
+        Step::key(KeyCode::PageUp),
+        Step::key(KeyCode::PageUp),
+        look_log("the top", first(" 00:00:00 event 0")),
+        // the wheel scrolls too, three rows a notch, and the bottom follows again
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        look_log("the wheel down", first(" 00:00:03 event 3")),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        look_log("the wheel down again", first(" 00:00:06 event 6")),
+        Step::Event(wheel(MouseEventKind::ScrollUp, 4, 2)),
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_eq!(rows[0], " 00:00:03 event 3", "the wheel up");
+            assert_eq!(rows[3], " 00:00:06 event 6");
+        }),
+        commit_later(home.clone(), 12, 1),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        look_log("the wheel down", first(" 00:00:06 event 6")),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 2)),
+        look_log("the bottom", last(" 00:00:12 event 12")),
+        commit_later(home.clone(), 13, 1),
+        Step::Idle,
+        look_log("following again", last(" 00:00:13 event 13")),
+        // q closes it
+        Step::ch('q'),
+    ];
+    run_log(&fx, &screen, None, steps).unwrap();
 
     // so does Esc
-    let pane = start_log(&env, &[], 30, 4);
-    wait_log(&env, &pane, "the Events", |r| r.get(3).is_some_and(|l| l.contains("event 13")));
-    tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
-    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+    let screen = SharedBackend::new(30, 4 + HEAD);
+    let steps = vec![look_log("the Events", |r| r.get(3).is_some_and(|l| l.contains("event 13"))), Step::key(KeyCode::Esc)];
+    run_log(&fx, &screen, None, steps).unwrap();
 }
 
 /// A failed read keeps the Events on screen and shows the error in the last row; the next poll reads again, and the
 /// error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
 #[test]
 fn a_failed_read_keeps_the_events_and_shows_the_error_until_a_read_succeeds() {
-    let env = env();
-    let mut store = open(&env);
-    append_numbered(&mut store, 0, 10);
-    let pane = start(&env, &["logs"], 60, 7);
-    wait_screen(&env, &pane, "the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
-    // not through `Store`, which refuses a changed schema
-    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
-    raw("ALTER TABLE events RENAME TO events_gone;");
-    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(6).is_some_and(|l| l.contains("no such table")));
-    assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay, one row less: {rows:?}");
-    raw("ALTER TABLE events_gone RENAME TO events;");
-    wait_screen(&env, &pane, "the error to go", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
+    let fx = Fx::new();
+    let home = fx.env.cpd_home();
+    append_numbered(&mut open(&fx.env), 0, 10);
+    let screen = SharedBackend::new(60, 7);
+    let steps = vec![
+        look("the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9")),
+        // not through `Store`, which refuses a changed schema
+        raw_later(home.clone(), "ALTER TABLE events RENAME TO events_gone;"),
+        Step::Idle,
+        Step::look(|s| {
+            let rows = s.rows();
+            assert!(rows[6].contains("no such table"), "the error in the last row: {rows:?}");
+            assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay, one row less: {rows:?}");
+        }),
+        raw_later(home, "ALTER TABLE events_gone RENAME TO events;"),
+        Step::Idle,
+        look("the error to go", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9")),
+        Step::ch('q'),
+    ];
+    run_log(&fx, &screen, None, steps).unwrap();
 }
 
 /// A follow that fails is shown in the last row, as a failed read is (tui-G4): the highest Event id fell below the
 /// cursor, which is what a replaced database looks like. The Events stay.
 #[test]
 fn a_follow_that_fails_is_shown_and_the_events_stay() {
-    let env = env();
-    let mut store = open(&env);
-    append_numbered(&mut store, 0, 10);
-    let pane = start(&env, &["logs"], 80, 7);
-    wait_screen(&env, &pane, "the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
-    // not through `Store`, which keeps the Events append-only
-    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
-    raw("DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;");
-    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(6).is_some_and(|l| l.contains("Event cursor")));
-    assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay: {rows:?}");
+    let fx = Fx::new();
+    let home = fx.env.cpd_home();
+    append_numbered(&mut open(&fx.env), 0, 10);
+    let screen = SharedBackend::new(80, 7);
+    let steps = vec![
+        look("the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9")),
+        // not through `Store`, which keeps the Events append-only
+        raw_later(home, "DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;"),
+        Step::Idle,
+        Step::look(|s| {
+            let rows = s.rows();
+            assert!(rows[6].contains("Event cursor"), "the error in the last row: {rows:?}");
+            assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay: {rows:?}");
+        }),
+        Step::ch('q'),
+    ];
+    run_log(&fx, &screen, None, steps).unwrap();
 }
 
 #[test]
@@ -333,45 +373,59 @@ fn the_logs_view_needs_a_terminal() {
 
 #[test]
 fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes_it() {
-    let env = env();
-    let pane = start(&env, &["legend"], 100, 10);
-    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with(" ──\u{E0B6}Legend: What")));
-    assert!(rows[1].contains(" 1-8/"), "{:?}", rows[1]);
-    assert_eq!(rows[0], "", "an empty row above the title");
-    assert!(rows[3].contains("Meanings"), "{rows:?}");
-    wheel(&env, &pane, false, 5, 5);
-    let rows = wait_screen(&env, &pane, "the wheel down", |r| r.get(1).is_some_and(|l| l.contains(" 4-11/")));
-    assert!(rows[1].starts_with(" ──\u{E0B6}Legend: What"), "the title stays");
-    assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
-    wheel(&env, &pane, true, 5, 5);
-    wait_screen(&env, &pane, "the wheel up", |r| r.get(1).is_some_and(|l| l.contains(" 1-8/")));
-    tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
-    wait_screen(&env, &pane, "a page down", |r| r.get(1).is_some_and(|l| l.contains(" 9-16/")));
-    tmux_out(&env, &["send-keys", "-t", &pane, "x"]);
-    wait_until("the legend to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+    let fx = Fx::new();
+    let screen = SharedBackend::new(100, 10);
+    let title = |rows: &[String]| rows[1].starts_with(" ──\u{E0B6}Legend: What");
+    let steps = vec![
+        Step::look(move |s| {
+            let rows = s.rows();
+            assert!(title(&rows), "the legend: {rows:?}");
+            assert!(rows[1].contains(" 1-8/"), "{:?}", rows[1]);
+            assert_eq!(rows[0], "", "an empty row above the title");
+            assert!(rows[3].contains("Meanings"), "{rows:?}");
+        }),
+        Step::Event(wheel(MouseEventKind::ScrollDown, 4, 4)),
+        Step::look(move |s| {
+            let rows = s.rows();
+            assert!(rows[1].contains(" 4-11/"), "the wheel down: {rows:?}");
+            assert!(title(&rows), "the title stays");
+            assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
+        }),
+        Step::Event(wheel(MouseEventKind::ScrollUp, 4, 4)),
+        look("the wheel up", |r| r[1].contains(" 1-8/")),
+        Step::key(KeyCode::PageDown),
+        look("a page down", |r| r[1].contains(" 9-16/")),
+        Step::ch('x'),
+    ];
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), &screen, steps);
+    let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
+    legend::show_with(&mut ctx).unwrap();
+    drop(ctx);
+    assert_eq!(input.remaining(), 0, "the legend closed on the key, the last step");
 }
 
 // ---------- the button ----------
 
-/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60 (the popup is at most 48 rows), `display-popup` does nothing.
-fn fake_tmux(env: &TestEnv) {
-    env.fake(
-        "tmux",
-        "case \"$*\" in\n *'display -p -c /dev/pts/9 '*) echo '200 60';;\n *display-popup*) ;;\n *) exit 1;;\nesac",
-    );
+/// An `Fx` on fake ports with the fake tmux server of the cockpit and client `/dev/pts/9`, 200x60 (the popup is at most
+/// 48 rows).
+fn fx_with_client() -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
+    fx.tmux_route.fake().add_client("/dev/pts/9", 200, 60);
+    fx
 }
 
-fn popups(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
+/// The `display-popup` calls of the fake tmux, as the runner saw them (the whole argv, global flags first).
+fn popups(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
 #[test]
 fn the_logs_action_opens_the_popup_on_the_clicking_client() {
-    let env = env();
-    fake_tmux(&env);
-    let run = env.cpd(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
-    let popup = popups(&env).remove(0);
+    let fx = fx_with_client();
+    fx.cpd_silent(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
+    let popup = popups(&fx).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     // `tmux -u -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
     // Sized like the legend, at most 80 % of the 200x60 client (`logs::popup_args`): 160x48.
@@ -381,13 +435,12 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
         popup[at..],
         ["display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &w.to_string(), "-h", &h.to_string(), "cpd tui view logs"]
     );
-    assert!(popup[..at].starts_with(&["-u".to_owned(), "-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
+    assert!(popup[..at].starts_with(&["-u".to_owned(), "-L".to_owned(), fx.env.tmux_socket().to_owned()]), "{popup:?}");
 
     // the legend action opens the legend, not the log
-    let run = env.cpd(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
-    assert_eq!(popups(&env).len(), 2);
-    assert!(popups(&env)[1].contains(&" legend ".to_owned()));
+    fx.cpd_silent(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
+    assert_eq!(popups(&fx).len(), 2);
+    assert!(popups(&fx)[1].contains(&" legend ".to_owned()));
 }
 
 // ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
@@ -450,30 +503,44 @@ fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_th
 
 #[test]
 fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_does_not_follow() {
-    let env = env();
-    let mut store = open(&env);
-    append_numbered(&mut store, 0, 600);
+    let fx = Fx::new();
+    let home = fx.env.cpd_home();
+    append_numbered(&mut open(&fx.env), 0, 600);
     // `event 2` is Event 3: older than the 500 the view starts with, so it is read on its own and shown first
-    let pane = start_log(&env, &["--event", "3"], 30, 5);
-    let rows = wait_log(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
-    assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
-    append_numbered(&mut store, 600, 1);
-    // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
-    // it did not follow it.
-    tmux_out(&env, &["send-keys", "-t", &pane, "j"]);
-    let rows = wait_log(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
-    assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
-    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
-    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+    let screen = SharedBackend::new(30, 5 + HEAD);
+    let steps = vec![
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_eq!(rows[0], " 00:00:02 event 2", "the Event");
+            assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
+        }),
+        commit_later(home, 600, 1),
+        // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
+        // it did not follow it.
+        Step::ch('j'),
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_ne!(rows[0], " 00:00:02 event 2", "scrolled down once");
+            assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
+        }),
+        Step::ch('q'),
+    ];
+    run_log(&fx, &screen, Some(3), steps).unwrap();
 
     // an Event among the latest 500 is in the middle of the view
-    let pane = start_log(&env, &["--event", "301"], 30, 5);
-    let rows = wait_log(&env, &pane, "the Event", |r| r.get(2).is_some_and(|l| l == " 00:05:00 event 300"));
-    assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 00:04:58 event 298", " 00:05:02 event 302"));
-    tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
-    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+    let screen = SharedBackend::new(30, 5 + HEAD);
+    let steps = vec![
+        Step::look(|s| {
+            let rows = log_rows(s);
+            assert_eq!(rows[2], " 00:05:00 event 300", "the Event");
+            assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 00:04:58 event 298", " 00:05:02 event 302"));
+        }),
+        Step::key(KeyCode::Esc),
+    ];
+    run_log(&fx, &screen, Some(301), steps).unwrap();
 
     // an Event that does not exist: the bottom, as without the option
-    let pane = start_log(&env, &["--event", "99999"], 30, 5);
-    wait_log(&env, &pane, "the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600"));
+    let screen = SharedBackend::new(30, 5 + HEAD);
+    let steps = vec![look_log("the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600")), Step::ch('q')];
+    run_log(&fx, &screen, Some(99999), steps).unwrap();
 }

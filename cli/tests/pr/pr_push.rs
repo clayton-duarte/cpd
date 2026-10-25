@@ -1,19 +1,22 @@
-//! `pr push` (commands.md §9.9, contract §7.6): the built binary against a temporary
-//! repo with a bare `origin` and a Plan written straight into the database. It takes
-//! no lock (hs-d243): its Gate runs in a gate worktree of its own, and a Job merges
-//! into the PR while it runs.
+//! `pr push` (commands.md §9.9, contract §7.6): `cpd pr push` in-process on `run_with` over the fake ports (the git
+//! route with a bare `origin`, a `sh` handler for the Gate's hooks) and a Plan written straight into the database. It
+//! takes no lock (hs-d243): its Gate runs in a gate worktree of its own, and a Job merges into the PR while it runs.
 
 use crate::common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
-use common::{CPD, Run, TestEnv};
+use common::Run;
+use common::fx::Fx as Kit;
 use cpd_core::config::{Catalog, Config, TierModel};
+use cpd_core::fakes::git::{Head, Universe};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::merge::{self, Ctx, End};
 use cpd_core::store::Store;
@@ -22,34 +25,41 @@ use serde_json::{Value, json};
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
 
-/// A repo with a bare `origin`, the Lead worktree of Plan `pay` (branch `cpd/pay`)
-/// pushed to `origin`, and PR `repo` of the Plan with the given status.
+/// A repo with a bare `origin`, the Lead worktree of Plan `pay` (branch `cpd/pay`) pushed to `origin`, and PR `repo` of
+/// the Plan with the given status. It derefs to the [`Kit`] (`env`, `git`, `calls`, ...).
 struct Fx {
-    env: TestEnv,
+    kit: Kit,
     home: CpdHome,
     repo: PathBuf,
     origin: PathBuf,
     lead: PathBuf,
 }
 
-fn fx(status: &str) -> Fx {
-    let env = TestEnv::new();
-    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
-    env.repo_policy("acme", "pay", "");
-    let origin = env.root().join("repos/origin.git");
-    env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.local_origin(&repo, &origin);
-    env.git(&repo, &["push", "-q", "origin", "main"]);
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let lead = create_lead_worktree(&repo, &PlanId::parse("pay").unwrap(), "main", &setup).unwrap().path;
-    env.git(&lead, &["config", "user.name", "cpd test"]);
-    env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
-    env.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
+impl Deref for Fx {
+    type Target = Kit;
 
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
+    fn deref(&self) -> &Kit {
+        &self.kit
+    }
+}
+
+fn fx(status: &str) -> Fx {
+    let kit = Kit::with_ports();
+    kit.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
+    let repo = kit.keyed_repo("pay").canonicalize().unwrap();
+    let origin = kit.env.root().join("repos/origin.git");
+    kit.git(kit.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    kit.local_origin(&repo, &origin);
+    kit.git(&repo, &["push", "-q", "origin", "main"]);
+    let setup = Setup { timeout: Duration::from_secs(30), log: kit.env.root().join("lead.log") };
+    let lead = kit.scoped(|| create_lead_worktree(&repo, &PlanId::parse("pay").unwrap(), "main", &setup)).unwrap().path;
+    kit.git(&lead, &["config", "user.name", "cpd test"]);
+    kit.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
+    kit.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
+
+    kit.env.write_config(&format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", kit.env.tmux_socket()));
+    let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
     // What `pr open` writes for a PR that has a pull request: its row, number and url.
     let (phase, state, columns, values, done) = match status {
         "dispatch" => ("dispatch", "", "", String::new(), "NULL"),
@@ -78,7 +88,7 @@ fn fx(status: &str) -> Fx {
         repo = repo.display(),
         lead = lead.display(),
     );
-    let fx = Fx { env, home, repo, origin, lead };
+    let fx = Fx { kit, home, repo, origin, lead };
     fx.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
     fx
 }
@@ -88,19 +98,13 @@ impl Fx {
         Store::open(&self.home, 5000).unwrap()
     }
 
-    fn git(&self, dir: &std::path::Path, args: &[&str]) -> String {
-        self.env.git(dir, args)
-    }
-
     fn push(&self) -> Run {
-        self.env.cpd(&["pr", "push", "--plan", "pay"])
+        self.cpd(&["pr", "push", "--plan", "pay"])
     }
 
     /// Commits `name` on the Lead Branch; returns the new tip.
     fn commit(&self, name: &str) -> String {
-        fs::write(self.lead.join(name), name).unwrap();
-        self.git(&self.lead, &["add", "-A"]);
-        self.git(&self.lead, &["commit", "-q", "-m", name]);
+        self.commit_file(&self.lead, name, name, name);
         self.lead_sha()
     }
 
@@ -109,6 +113,17 @@ impl Fx {
         self.env.repo_policy("acme", "pay", &format!("[hooks]\n{toml}"));
         self.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
         self.lead_sha()
+    }
+
+    /// The Gate's hooks (`sh -c <command>`) answer by `script`: what a shell would print, exit and leave in the gate
+    /// worktree it runs in (the Gate is external software: nothing runs it).
+    fn sh(&self, script: impl Fn(&Ran) -> Reply + Send + Sync + 'static) {
+        let _ = (*self.fakes.runner).clone().route("sh", Arc::new(Sh { universe: self.universe.clone(), script: Box::new(script) }));
+    }
+
+    /// The commands the Gate's hooks were run with (`sh -c <command>`), in order.
+    fn commands(&self) -> Vec<String> {
+        self.calls("sh").iter().map(|call| call.args[1].clone()).collect()
     }
 
     fn lead_sha(&self) -> String {
@@ -129,20 +144,13 @@ impl Fx {
         rest.to_owned()
     }
 
-    /// `cpd pr push --plan pay`, started in the background.
-    fn spawn_push(&self) -> Child {
-        Child(Some(self.env.command(CPD).args(["pr", "push", "--plan", "pay"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()))
-    }
-
     /// Job `m` of the PR with Attempt `m-a1` in `merging`, as `attempt submit` leaves it: its
     /// worktree cut from the Lead Branch, with one commit writing `m.txt`.
     fn submitted(&self) -> AttemptId {
         let attempt = AttemptId::parse("m-a1").unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup).unwrap();
-        fs::write(made.path.join("m.txt"), "m\n").unwrap();
-        self.git(&made.path, &["add", "-A"]);
-        self.git(&made.path, &["commit", "-q", "-m", "m"]);
+        let made = self.scoped(|| create_attempt_worktree(&self.repo, &self.lead, &plan(), &attempt, &setup)).unwrap();
+        self.commit_file(&made.path, "m.txt", "m\n", "m");
         let sha = self.git(&made.path, &["rev-parse", "HEAD"]);
         self.store()
             .write("fixture", |tx| {
@@ -170,7 +178,7 @@ impl Fx {
         let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
         let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
         let ctx = Ctx { home: &self.home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
-        merge::merge(&mut self.store(), &ctx, &plan(), attempt).unwrap().end
+        self.scoped(|| merge::merge(&mut self.store(), &ctx, &plan(), attempt)).unwrap().end
     }
 
     /// Moves `cpd/pay` on `origin` by a commit the Lead Branch lacks, through a second clone.
@@ -180,9 +188,7 @@ impl Fx {
         self.git(&clone, &["config", "user.name", "someone"]);
         self.git(&clone, &["config", "user.email", "someone@cpd.invalid"]);
         self.git(&clone, &["checkout", "-q", "cpd/pay"]);
-        fs::write(clone.join("remote.txt"), "remote\n").unwrap();
-        self.git(&clone, &["add", "-A"]);
-        self.git(&clone, &["commit", "-q", "-m", "remote"]);
+        self.commit_file(&clone, "remote.txt", "remote\n", "remote");
         self.git(&clone, &["push", "-q", "origin", "cpd/pay"]);
         self.remote_sha()
     }
@@ -196,52 +202,116 @@ fn code(run: &Run) -> (String, i32) {
     (run.error()["code"].as_str().unwrap().to_owned(), run.exit)
 }
 
-/// A child process, killed when dropped: a test that panics leaves none behind.
-struct Child(Option<std::process::Child>);
+/// What a Gate hook's `sh` is asked: the gate worktree it runs in and that worktree's `HEAD`.
+struct Ran {
+    cwd: PathBuf,
+    head: String,
+}
 
-impl Child {
-    /// Its stdout as JSON, once it has exited.
-    fn finish(mut self) -> Value {
-        let out = self.0.take().unwrap().wait_with_output().unwrap();
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+/// What `git rev-parse HEAD; ls` prints in the hook's directory.
+fn head_and_files(ran: &Ran) -> String {
+    let mut files: Vec<String> = fs::read_dir(&ran.cwd)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    files.sort();
+    format!("{}\n{}\n", ran.head, files.join("\n"))
+}
+
+fn ran(universe: &Mutex<Universe>, call: &Call) -> Ran {
+    let cwd = call.cwd.clone().expect("a hook runs in a directory");
+    let head = match universe.lock().unwrap().head(&cwd) {
+        Head::Detached(oid) => oid.to_string(),
+        Head::Branch(branch) => panic!("the Gate's hook runs on the branch {branch}: it is detached at G"),
+    };
+    Ran { cwd, head }
+}
+
+/// The Gate's `sh`, answering by `script`.
+struct Sh {
+    universe: Arc<Mutex<Universe>>,
+    script: Box<dyn Fn(&Ran) -> Reply + Send + Sync>,
+}
+
+impl Handler for Sh {
+    fn handle(&self, call: &Call) -> Reply {
+        (self.script)(&ran(&self.universe, call))
     }
 }
 
-impl Drop for Child {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+/// A `pre-merge` paused mid-run: `sh -c <paused-gate>` prints the gated commit and its files, reaches `started`,
+/// waits at `go` (two barriers, no sleep), then prints them again.
+struct Paused {
+    universe: Arc<Mutex<Universe>>,
+    started: Barrier,
+    go: Barrier,
+}
+
+const PAUSED_GATE: &str = "paused-gate";
+
+impl Handler for Paused {
+    fn handle(&self, call: &Call) -> Reply {
+        assert_eq!(call.args[1], PAUSED_GATE, "the only hook of the test");
+        let first = head_and_files(&ran(&self.universe, call));
+        self.started.wait();
+        self.go.wait();
+        Reply::ok(&format!("{first}{}", head_and_files(&ran(&self.universe, call))))
+    }
+}
+
+/// Lets a paused Gate go when it drops, so a failed assertion does not leave the `pr push` thread blocked for ever.
+struct Release<'a>(Option<&'a Paused>);
+
+impl Release<'_> {
+    fn release(&mut self) {
+        if let Some(gate) = self.0.take() {
+            gate.go.wait();
         }
     }
 }
 
-/// A `pre-merge` paused mid-run: it prints the gated commit and its files, creates
-/// `<root>/gate-started`, waits for `<root>/gate-go` (at most 60 s), then prints
-/// them again.
-fn paused_gate(root: &Path) -> String {
-    let (started, go) = (root.join("gate-started"), root.join("gate-go"));
-    format!(
-        "pre-merge = \"git rev-parse HEAD; ls; touch {}; i=0; while [ ! -e {} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; git rev-parse HEAD; ls\"\n",
-        started.display(),
-        go.display()
-    )
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
-/// Waits until the [`paused_gate`] has started.
-fn await_gate(root: &Path) {
-    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
-}
+impl Fx {
+    /// Sets the Gate's `pre-merge` to the paused gate, commits it on the Lead Branch and returns that commit and the gate.
+    fn paused_gate(&self) -> (String, Arc<Paused>) {
+        let gated = self.hooks(&format!("pre-merge = \"{PAUSED_GATE}\"\n"));
+        let gate = Arc::new(Paused { universe: self.universe.clone(), started: Barrier::new(2), go: Barrier::new(2) });
+        let _ = (*self.fakes.runner).clone().route("sh", gate.clone());
+        (gated, gate)
+    }
 
-/// Lets the [`paused_gate`] finish.
-fn release_gate(root: &Path) {
-    fs::write(root.join("gate-go"), "").unwrap();
+    /// `cpd pr push --plan pay` on a thread, until its Gate is paused; runs `during` then, lets the Gate finish and
+    /// returns the push's stdout as JSON and what `during` returned.
+    fn push_paused<R>(&self, gate: &Paused, during: impl FnOnce() -> R) -> (Value, R) {
+        let ports = self.fakes.ports.clone();
+        std::thread::scope(|s| {
+            let push = s.spawn(move || {
+                let argv = ["cpd", "pr", "push", "--plan", "pay"].map(std::ffi::OsString::from);
+                let mut stdout = Vec::new();
+                cpd::run_with(&ports, argv, &mut stdout);
+                String::from_utf8(stdout).unwrap()
+            });
+            let mut release = Release(Some(gate));
+            gate.started.wait();
+            let during = during();
+            release.release();
+            let stdout = push.join().unwrap();
+            (serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stdout}")), during)
+        })
+    }
 }
 
 #[test]
 fn push_gates_then_pushes_the_lead_branch() {
     let fx = fx("open");
     fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    fx.sh(|ran| Reply::ok(&format!("{}\n", ran.head)));
     let tip = fx.commit("more.txt");
     assert_ne!(fx.remote_sha(), tip);
 
@@ -257,16 +327,16 @@ fn push_gates_then_pushes_the_lead_branch() {
 fn push_again_runs_the_gate_and_pushes_nothing() {
     let fx = fx("open");
     // The gate worktree is removed after each run: the record goes to the repo's common dir.
-    fx.hooks("pre-merge = \"echo gated >> \\\"$(git rev-parse --path-format=absolute --git-common-dir)/gated\\\"\"\n");
+    let gate = "echo gated >> \"$(git rev-parse --path-format=absolute --git-common-dir)/gated\"";
+    fx.hooks(&format!("pre-merge = {gate:?}\n"));
+    fx.sh(|_| Reply::ok(""));
     let tip = fx.lead_sha();
     fx.push().ok();
 
     let out = fx.push().ok();
 
     assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "pushed": false, "sha": tip, "remote": tip}));
-    let gated = fx.git(&fx.lead, &["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-    let gated = fs::read_to_string(PathBuf::from(gated).join("gated")).unwrap();
-    assert_eq!(gated.lines().count(), 2, "the Gate ran both times");
+    assert_eq!(fx.commands(), [gate, gate], "the Gate ran both times");
 }
 
 #[test]
@@ -274,6 +344,7 @@ fn push_with_a_failed_gate_pushes_nothing() {
     let fx = fx("open");
     let before = fx.remote_sha();
     fx.hooks("pre-merge = \"echo the suite is red; exit 3\"\n");
+    fx.sh(|_| Reply::exit(3, "the suite is red\n", ""));
 
     let run = fx.push();
 
@@ -287,13 +358,13 @@ fn push_with_a_failed_gate_pushes_nothing() {
 fn push_with_gate_ci_runs_no_gate_and_pushes() {
     let fx = fx("open");
     fx.env.owner_policy("acme", "[pr]\ngate = \"ci\"\n");
-    let marker = fx.env.root().join("hook-ran");
-    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+    fx.hooks("pre-merge = \"touch hook-ran; exit 3\"\n");
+    fx.sh(|_| Reply::exit(3, "", ""));
 
     let out = fx.push().ok();
 
     assert_eq!(out["pushed"], true);
-    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.commands(), Vec::<String>::new(), "the pre-merge hook ran under pr.gate ci");
     assert_eq!(fx.remote_sha(), fx.lead_sha());
 }
 
@@ -317,9 +388,7 @@ fn move_base(fx: &Fx, path: &str, content: &str) -> String {
     fx.git(fx.env.root(), &["clone", "-q", fx.origin.to_str().unwrap(), clone.to_str().unwrap()]);
     fx.git(&clone, &["config", "user.name", "someone"]);
     fx.git(&clone, &["config", "user.email", "someone@cpd.invalid"]);
-    fs::write(clone.join(path), content).unwrap();
-    fx.git(&clone, &["add", "-A"]);
-    fx.git(&clone, &["commit", "-q", "-m", "base moved"]);
+    fx.commit_file(&clone, path, content, "base moved");
     fx.git(&clone, &["push", "-q", "origin", "main"]);
     fx.git(&clone, &["rev-parse", "HEAD"])
 }
@@ -359,6 +428,7 @@ fn push_refuses_a_pr_that_is_not_open() {
 fn push_gates_the_commit_and_leaves_the_lead_worktrees_local_changes_alone() {
     let fx = fx("open");
     fx.hooks("pre-merge = \"ls\"\n");
+    fx.sh(|ran| Reply::ok(&head_and_files(ran).split_once('\n').unwrap().1.to_owned()));
     let tip = fx.commit("more.txt");
     fs::write(fx.lead.join("scratch.txt"), "x").unwrap();
 
@@ -389,24 +459,19 @@ fn push_when_the_remote_already_contains_the_gated_commit_pushes_nothing() {
 #[test]
 fn a_job_merges_into_the_pr_during_its_gate_and_neither_waits() {
     let fx = fx("open");
-    let gated = fx.hooks(&paused_gate(fx.env.root()));
+    let (gated, gate) = fx.paused_gate();
     let attempt = fx.submitted();
 
-    let child = fx.spawn_push();
-    await_gate(fx.env.root());
     // The merge runs to its end while the Gate is paused: no lock to wait for.
-    let end = fx.merge(&attempt);
-    let End::Merged { sha: merged } = end else { panic!("{end:?}") };
-    release_gate(fx.env.root());
-    let out = child.finish();
+    let (out, end) = fx.push_paused(&gate, || fx.merge(&attempt));
 
+    let End::Merged { sha: merged } = end else { panic!("{end:?}") };
     // The Gate saw G, twice the same: the merge did not change its files.
     let log = fx.gate_log();
-    let (first, second) = log.split_at(log.find(&format!("\n{gated}\n")).unwrap_or_else(|| panic!("{log}")) + 1);
-    assert!(first.starts_with(&format!("{gated}\n")) && !first.contains("m.txt"), "{log}");
-    assert_eq!(first, second, "{log}");
+    assert!(log.starts_with(&format!("{gated}\n")), "the Gate did not run on G: {log}");
     // The merge pushed its own commit (rule P), which contains G: `pr push` pushed nothing.
     assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "pushed": false, "sha": gated, "remote": merged}));
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &gated, &merged]).is_empty(), "the remote holds G");
     assert_eq!(fx.remote_sha(), merged);
     // The Lead worktree followed the Lead Branch (rule S).
     assert_eq!(fx.lead_sha(), merged);
@@ -418,18 +483,16 @@ fn a_job_merges_into_the_pr_during_its_gate_and_neither_waits() {
 fn push_of_a_pr_merged_during_its_gate_pushes_nothing() {
     let fx = fx("open");
     let before = fx.remote_sha();
-    fx.hooks(&paused_gate(fx.env.root()));
+    let (_, gate) = fx.paused_gate();
 
-    let child = fx.spawn_push();
-    await_gate(fx.env.root());
-    fx.store()
-        .write("pr poll", |tx| {
-            tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
-            Ok(())
-        })
-        .unwrap();
-    release_gate(fx.env.root());
-    let out = child.finish();
+    let (out, ()) = fx.push_paused(&gate, || {
+        fx.store()
+            .write("pr poll", |tx| {
+                tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+                Ok(())
+            })
+            .unwrap();
+    });
 
     assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
     assert_eq!(fx.remote_sha(), before, "nothing pushed");

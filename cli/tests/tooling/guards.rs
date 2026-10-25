@@ -216,3 +216,58 @@ fn the_shell_test_list_scan_names_a_missing_file_a_missing_reason_and_a_repeat()
         ]
     );
 }
+
+/// The `path:line: text` of every merge-conflict marker in `text`: a line starting with `<<<<<<< ` or `>>>>>>> `, and
+/// a line equal to `=======` when the same text also has a `<<<<<<< ` line (a lone `=======` is a legal setext heading
+/// or markdown table line).
+fn conflict_marker_lines(path: &str, text: &str) -> Vec<String> {
+    let has_open = text.lines().any(|l| l.starts_with("<<<<<<< "));
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> ") || (has_open && *l == "======="))
+        .map(|(n, l)| format!("{path}:{}: {l}", n + 1))
+        .collect()
+}
+
+/// Every file of the tree at `dir` with a source extension, skipping `target/`, `node_modules/`, `.git/` and the
+/// worktrees (`.cpd/`, `.worktrees/`, `worktrees/`). std `fs` only: no git, no process.
+fn source_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+    const SKIP: [&str; 6] = ["target", "node_modules", ".git", ".cpd", ".worktrees", "worktrees"];
+    const EXTENSIONS: [&str; 7] = ["rs", "md", "toml", "sh", "ts", "json", "txt"];
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if path.is_dir() {
+            if !SKIP.contains(&name.as_str()) {
+                source_files(&path, found);
+            }
+        } else if path.extension().is_some_and(|e| EXTENSIONS.iter().any(|x| e == *x)) {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn no_tracked_source_file_carries_a_merge_conflict_marker() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    source_files(&root, &mut files);
+    assert!(files.len() > 200, "the scan saw {} files under {}: it scans the wrong directory", files.len(), root.display());
+    let marked: Vec<String> = files
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok().map(|text| (path, text)))
+        .flat_map(|(path, text)| conflict_marker_lines(&path.display().to_string(), &text))
+        .collect();
+    assert!(marked.is_empty(), "merge-conflict markers committed:\n{}", marked.join("\n"));
+}
+
+#[test]
+fn the_conflict_marker_scan_names_each_marker_and_spares_a_lone_setext_line() {
+    let conflict = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> origin/main\n";
+    assert_eq!(
+        conflict_marker_lines("f.rs", conflict),
+        ["f.rs:2: <<<<<<< HEAD", "f.rs:4: =======", "f.rs:6: >>>>>>> origin/main"]
+    );
+    assert!(conflict_marker_lines("f.md", "Title\n=======\n\n| a |\n").is_empty());
+    assert!(conflict_marker_lines("f.md", "x <<<<<<< y\n  >>>>>>> z\n").is_empty());
+}

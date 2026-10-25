@@ -46,7 +46,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "machine": "hs",
             "host": "hs",
             "concurrency": 3,
-            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
@@ -56,6 +55,12 @@ fn config_defaults_context_distill_tier_to_gx() {
             "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
+            "context_engine_enabled": true,
+            "context_engine_bridge": "",
+            "context_engine_python": "",
+            "context_engine_dir": "",
+            "context_engine_timeout_ms": 30000,
+            "context_engine_reindex_timeout_ms": 600000,
             "plannotator_ports": "19432-19456",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
@@ -87,6 +92,18 @@ fn config_defaults_context_distill_tier_to_gx() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// hs-d679: the test-slot pool is gone, so `test_concurrency` is not a config key: it is refused
+/// like every unknown key, with its key path.
+#[test]
+fn test_concurrency_is_not_a_config_key() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &format!("{MINIMAL}test_concurrency = 2\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "test_concurrency");
 }
 
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
@@ -179,7 +196,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -199,7 +216,6 @@ version = 1
 machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
-test_concurrency = 64
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
@@ -209,6 +225,12 @@ context_distill_tier = "GX"
 open_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
+context_engine_enabled = false
+context_engine_bridge = "/b/bridge.py"
+context_engine_python = "/b/venv/bin/python"
+context_engine_dir = "/b/engine"
+context_engine_timeout_ms = 4294967295
+context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
 [tiers]
 O = "a/b/c"
@@ -248,10 +270,19 @@ work_session = "w"
         adapter = adapter.display(),
         socket = "s".repeat(32),
     );
+    let defaults = config_with(&fx, MINIMAL).ok();
     let out = config_with(&fx, &text).ok();
+    let source_keys = |v: &Value| -> Vec<String> { v["sources"].as_object().unwrap().keys().cloned().collect() };
+    // The table names every key of the schema: the defaults list them all, so a new key cannot be missed.
+    assert_eq!(source_keys(&out), source_keys(&defaults));
+    assert_eq!(out["config"]["context_engine_enabled"], false);
+    assert_eq!(out["config"]["context_engine_bridge"], "/b/bridge.py");
+    assert_eq!(out["config"]["context_engine_python"], "/b/venv/bin/python");
+    assert_eq!(out["config"]["context_engine_dir"], "/b/engine");
+    assert_eq!(out["config"]["context_engine_timeout_ms"], 4294967295u32);
+    assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
-    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));

@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -84,8 +84,6 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
-    /// Run a command inside a test slot (commands.md §23)
-    Slot(slot::Args),
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
@@ -177,7 +175,6 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
-        Command::Slot(a) => transparent_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
@@ -188,8 +185,8 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// `cpd slot` and `cpd test` are transparent to their command (commands.md §23, §27): they end the process with the
-/// command's exit status, and their own refusals are the error envelope on stderr. It never returns.
+/// `cpd test` is transparent to its command (commands.md §27): it ends the process with the command's exit status,
+/// and its own refusals are the error envelope on stderr. It never returns.
 fn transparent_exit(result: Result<u8, CpdError>) -> ! {
     match result {
         Ok(status) => std::process::exit(i32::from(status)),
@@ -205,7 +202,7 @@ fn repo_root() -> Result<std::path::PathBuf, CpdError> {
     std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
 }
 
-/// `cpd gate finish` ends the process with the run's status, its report on stderr (as `cpd slot`). It never returns.
+/// `cpd gate finish` ends the process with the run's status, its report on stderr. It never returns.
 fn gate_exit(result: Result<gate::Finished, CpdError>) -> ! {
     match result {
         Ok(done) => {
