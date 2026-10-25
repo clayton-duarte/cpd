@@ -61,6 +61,20 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// [`run`] on `runner`: `program`'s stdout when it ran and exited 0.
+#[allow(dead_code)]
+pub(crate) fn run_with(runner: &dyn cpd_core::host::runner::Runner, program: &str, args: &[&str]) -> Option<String> {
+    let _ = (runner, program, args);
+    todo!("run_with")
+}
+
+/// The macOS [`Usage`] (`ioreg`, `sysctl`, `ps`, `vm_stat`) read through `runner`.
+#[allow(dead_code)]
+pub(crate) fn macos_usage_with(runner: &dyn cpd_core::host::runner::Runner) -> Usage {
+    let _ = runner;
+    todo!("macos_usage_with")
+}
+
 /// The GPUs' utilization on Linux, from **one** `nvidia-smi` that prints it every 2 s for as long as the view runs (`-lms`).
 /// A tool spawned and reaped at every sample would count its reads and writes against the view's idle budget (the kernel
 /// adds a reaped child's I/O to its parent's: tui-F1, tui-F2, `cli/tests/it/tui_idle.rs`). A missing tool, or one that fails

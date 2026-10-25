@@ -40,6 +40,7 @@ use cpd_core::env::Env;
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{installed_version, older_version};
+use cpd_core::host::runner::Runner;
 use cpd_core::host::{Tmux, exe};
 use cpd_core::session;
 use cpd_core::store::Store;
@@ -287,6 +288,13 @@ fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
     Ok(())
 }
 
+/// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.
+#[allow(dead_code)]
+pub(super) fn rebuild_cockpit_with(runner: &dyn Runner, exe: &Path, home: &CpdHome) -> Result<(), CpdError> {
+    let _ = (runner, exe, home);
+    todo!("rebuild_cockpit_with")
+}
+
 /// Waits until no engine holds its lock: the killed server's panes got `SIGHUP`, and `cpd tui`
 /// starts the next engine with `watch --ensure`, which does nothing while the old one still holds it.
 fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
@@ -400,6 +408,10 @@ fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
     let pid_path = home.tmux_restart_pid();
     record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
+
+#[cfg(test)]
+#[path = "restart_runner_tests.rs"]
+mod restart_runner_tests;
 
 #[cfg(test)]
 mod tests {

@@ -488,6 +488,13 @@ pub fn call(action: &Action) -> Result<Value, Failure> {
     }
 }
 
+/// [`call`] on `runner`.
+#[allow(dead_code)]
+pub fn call_with(runner: &dyn cpd_core::host::runner::Runner, action: &Action) -> Result<Value, Failure> {
+    let _ = (runner, action);
+    todo!("call_with")
+}
+
 /// [`call`], the failure in the words of the dialog.
 fn command(action: &Action) -> Result<Value, String> {
     call(action).map_err(|failure| match failure {

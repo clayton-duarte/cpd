@@ -22,7 +22,7 @@ mod draw_tests;
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;
-mod host;
+pub(crate) mod host;
 pub mod legend;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -464,6 +464,13 @@ fn hostname() -> String {
             Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|n| !n.is_empty())
         })
         .unwrap_or_else(|| UNKNOWN.to_owned())
+}
+
+/// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
+#[allow(dead_code)]
+pub(crate) fn hostname_with(runner: &dyn cpd_core::host::runner::Runner, file: &Path, env: Option<&str>) -> String {
+    let _ = (runner, file, env);
+    todo!("hostname_with")
 }
 
 /// The first line of the file at `path`, when it has one.
