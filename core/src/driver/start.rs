@@ -213,8 +213,29 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
-    let worktree = git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?;
-    Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree })
+    // A linear Attempt (hs-d680) is the PR's only live Attempt: it runs in the PR's one workflow worktree on the
+    // Lead Branch. A live sibling gets its own worktree and branch (A1). Counted here, inside the same transaction
+    // that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    let live: i64 = conn.query_row(
+        "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",
+        params![plan.as_str(), job.pr.as_str(), attempt.to_string()],
+        |r| r.get(0),
+    )?;
+    let (branch, worktree) = if live == 0 {
+        let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
+            "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), job.pr.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let lead_worktree = lead_worktree.ok_or_else(|| {
+            CpdError::new(ErrorCode::StoreFailed, format!("PR {} of Plan {plan} has no workflow worktree.", job.pr)).with("pr", job.pr.as_str())
+        })?;
+        (lead_branch, PathBuf::from(lead_worktree))
+    } else {
+        (git::attempt_branch(plan, &attempt), git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?)
+    };
+    Ok(Next { branch, attempt, tier, origin, worktree })
 }
 
 /// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is
