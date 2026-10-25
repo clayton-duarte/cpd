@@ -97,6 +97,7 @@ impl Rig {
                 home,
                 cpd_home: CpdHome::resolve(Some(OsString::from(cpd_home)), None).unwrap(),
                 pid: 4242,
+                lock_wait: super::DEFAULT_LOCK_WAIT,
             },
         };
         let clone = rig.git(&root, &["clone", "-q", rig.origin.dir().to_str().unwrap(), rig.install.root.to_str().unwrap()]);

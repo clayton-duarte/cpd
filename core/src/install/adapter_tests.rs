@@ -94,6 +94,7 @@ impl Rig {
                 home,
                 cpd_home: CpdHome::resolve(Some(OsString::from(cpd_home)), None).unwrap(),
                 pid: 4242,
+                lock_wait: super::DEFAULT_LOCK_WAIT,
             },
         };
         (*rig.fakes.runner).clone().with_git(&rig.route);

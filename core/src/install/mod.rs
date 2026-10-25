@@ -18,6 +18,13 @@ use crate::git::run::{Out, run_with};
 use crate::home::CpdHome;
 use crate::ports::Ports;
 
+#[cfg(test)]
+mod followup_tests;
+
+/// How long the engine restart waits for the killed engine to release `locks/watch.lock` (docs/implementing.md,
+/// "`cpd install`"): the default of `CPD_INSTALL_LOCK_WAIT_SECS`.
+pub const DEFAULT_LOCK_WAIT: Duration = Duration::from_secs(60);
+
 /// The built binary's `--version` answers at once: it opens the store, nothing more.
 const VERSION_DEADLINE: Duration = Duration::from_secs(60);
 
@@ -33,6 +40,8 @@ pub struct Install {
     pub cpd_home: CpdHome,
     /// The pid of the installing process: it names the temporary files (`.cpd.tmp.<pid>`).
     pub pid: u32,
+    /// `$CPD_INSTALL_LOCK_WAIT_SECS`, else [`DEFAULT_LOCK_WAIT`]: the bound of the wait for `locks/watch.lock` to be free.
+    pub lock_wait: Duration,
 }
 
 /// The migrations of the checkout (contract §3.7).
