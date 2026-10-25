@@ -1522,7 +1522,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | Precondition | Code | Exit |
 |---|---|---|
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
-| the caller's cwd is inside the Attempt worktree, on the Attempt branch | `wrong_worktree` | 3 |
+| the caller's cwd is inside the Attempt worktree, on the Attempt branch; for a linear Attempt, the worktree is the workflow worktree and the branch is the Lead Branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
 | at least one commit ahead of `base_sha`; **for a review Job (B2) instead**: no commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits`; `review_commits` | 3 |
 | (review Job only) `run/<plan>/reviews/<job>.md` exists and is not empty (contract §7.3, precondition 3) | `review_missing` | 3 |
@@ -1545,8 +1545,8 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
 | (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
 | (kinds `open`, `update`) HEAD does not conflict with `origin/<base>`, freshly fetched (`git merge-tree --write-tree --name-only origin/<base> HEAD`; hs-d490: the base is merged only on a conflict, and a base that merely moved ahead is no refusal); `details` `{pr, base, base_sha, sha, files, next}`, `next` = `["git -C <worktree> merge --no-edit origin/<base>", "cpd attempt submit <attempt>"]` | `base_conflict` | 3 |
-| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
-| (the same) the gate worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
+| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in the Attempt worktree (the workflow worktree for linear Attempts); `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
+| (the same) the Attempt worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
 
 Effects:
 - **One check span** (contract §7.7, hs-d604, hs-d605): every check below, in order, runs inside ONE span, `what` `checks`: the tamper check, the red-test guard, the quick check (the Hooks bullet), the kind check and, for an `open` or `update` Job, the base check and the Gate. The preconditions of §7.3 run before it; a review Job has no checks and no span.

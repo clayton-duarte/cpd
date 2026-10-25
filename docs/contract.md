@@ -3464,7 +3464,7 @@ What follows: the Lead worktree's state does not affect the Gate, so its local c
 
 ### 7.7 Job kinds: the checks at submit, the open Job and the update Job (hs-d340, hs-d341)
 
-What each kind of Job (§2.2 "Job kinds") adds to `attempt submit` (§7.3) and to the merge (§7.4). Every check runs in the Attempt worktree or in a gate worktree of cpd's own (§7.1), never in the Lead worktree, and holds one machine-wide test slot while it runs the Gate, not while it runs the named tests (§7.6 "The test slot", hs-d464). Targeted runs only (hs-d338): a check runs the tests a Job names and the repo's Gate, never a suite nobody named.
+What each kind of Job (§2.2 "Job kinds") adds to `attempt submit` (§7.3) and to the merge (§7.4). Every check runs in the Attempt worktree, which for a linear Job is the workflow worktree (§7.2, §7.4), never in the workflow worktree for a parallel Job (they have their own Attempt worktree). Targeted runs only (hs-d338): a check runs the tests a Job names and the repo's Gate, never a suite nobody named.
 
 **The repo's test commands.** The repo policy file (§8.3) may hold a table `[test-commands]`:
 
