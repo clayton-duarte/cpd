@@ -10,10 +10,9 @@
 
 use crate::common;
 
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{ExitCode, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -53,7 +52,6 @@ const POLL_OK: &str = concat!(
     empty_search!(),
     r#"'; exit 0"#
 );
-const POLL_FAILS: &str = "echo 'poll said no' >&2; exit 9";
 /// How long the view may take to close once confirmed while `gh pr merge` blocks. The claim is that it does not wait
 /// for `gh`, so the wait is for the view's own work only.
 const CLOSES: Duration = Duration::from_secs(15);
@@ -116,11 +114,6 @@ fn gh_with(env: &TestEnv, merge_state: &str, merge_exit: i32, release: Option<&P
     env.fake_gh(&format!(
         "case \"$1 $2\" in\n\"pr view\") echo '{{\"state\":\"OPEN\",\"mergeStateStatus\":\"{merge_state}\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}'; exit 0;;\n\"pr merge\") {wait}echo 'merge said no' >&2; exit {merge_exit};;\n\"api graphql\") {graphql};;\nesac\nexit 9"
     ));
-}
-
-/// A `gh` that merges at once; the poll fails.
-fn gh(env: &TestEnv, merge_state: &str, merge_exit: i32) {
-    gh_with(env, merge_state, merge_exit, None, POLL_FAILS);
 }
 
 fn release(env: &TestEnv) {
@@ -430,20 +423,10 @@ fn the_confirm_closes_the_view_at_once_and_the_merge_then_the_poll_run_in_the_ba
 
 // ---------- the action: what it runs, and what a failure does ----------
 
-/// `cpd tui action merge o/r#7 --client <client>` for the real binary, which prints nothing and exits 0 whatever happens
-/// (§13.2).
-fn action(env: &TestEnv, client: &str) {
-    let run = env.cpd(&["tui", "action", "merge", REF, "--client", client]);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
-}
-
-/// The same, in this process through `run_with` on the ports of `fx`: it exits 0 and writes nothing to the output
-/// (`Output::Owned`, so not through `Fx::cpd`, which refuses an empty output).
+/// `cpd tui action merge o/r#7 --client <client>` in this process through `run_with` on the ports of `fx`: it exits 0 and
+/// writes nothing to the output, whatever happens (§13.2).
 fn act(fx: &Fx, client: &str) {
-    let argv = ["cpd", "tui", "action", "merge", REF, "--client", client].map(OsString::from);
-    let mut stdout = Vec::new();
-    let code = cpd::run_with(&fx.fakes.ports, argv, &mut stdout);
-    assert!(code == ExitCode::SUCCESS && stdout.is_empty(), "{code:?} {:?}", String::from_utf8_lossy(&stdout));
+    fx.cpd_silent(&["tui", "action", "merge", REF, "--client", client]);
 }
 
 /// What `gh api graphql`, the poll, answers.
@@ -461,6 +444,10 @@ enum Poll {
 /// in the reply, at the moment of the call.
 struct Gh {
     poll: Poll,
+    /// `mergeStateStatus` of the `pr view`: `CLEAN` merges, anything else is refused.
+    merge_state: &'static str,
+    /// The exit code of `gh pr merge`; not 0 prints `merge said no`.
+    merge_exit: i32,
     /// The marker of [`REF`] and the directory of the markers.
     marker: PathBuf,
     markers: PathBuf,
@@ -479,7 +466,8 @@ impl Handler for Gh {
             ["pr", "view", ..] => {
                 note("view");
                 Reply::ok(&format!(
-                    "{{\"state\":\"OPEN\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}"
+                    "{{\"state\":\"OPEN\",\"mergeStateStatus\":\"{}\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}",
+                    self.merge_state
                 ))
             }
             ["pr", "merge", ..] => {
@@ -488,7 +476,10 @@ impl Handler for Gh {
                 if at_merge.is_none() && present {
                     *at_merge = Some((fs::read_to_string(&self.marker).unwrap(), files_in(&self.markers)));
                 }
-                Reply::ok("")
+                match self.merge_exit {
+                    0 => Reply::ok(""),
+                    code => Reply::exit(code, "", "merge said no\n"),
+                }
             }
             ["api", "graphql", _, query, ..] => {
                 note("poll");
@@ -505,8 +496,15 @@ impl Handler for Gh {
 
 /// Makes the `gh` of `fx` the [`Gh`] answering the poll as `poll` says; the handler, to read what it noted.
 fn gh_route(fx: &Fx, poll: Poll) -> Arc<Gh> {
+    gh_route_with(fx, poll, "CLEAN", 0)
+}
+
+/// [`gh_route`] whose `pr view` says OPEN with `merge_state` and whose `pr merge` exits `merge_exit`.
+fn gh_route_with(fx: &Fx, poll: Poll, merge_state: &'static str, merge_exit: i32) -> Arc<Gh> {
     let gh = Arc::new(Gh {
         poll,
+        merge_state,
+        merge_exit,
         marker: marker(&fx.env),
         markers: markers(&fx.env),
         seen: Mutex::default(),
@@ -544,73 +542,83 @@ fn a_poll_that_fails_after_a_merge_is_a_log_line_and_no_dialog() {
     assert!(naming(tmux.clone(), "display-popup").is_empty() && naming(tmux.clone(), "display-message").is_empty(), "{tmux:?}");
 }
 
+/// An `Fx` like [`fx`]'s with the fake server of the cockpit and the client `client` attached (120 x 30), whose popups
+/// write the outcome of a dialog the User closed (`confirmed`).
+fn fx_on_client(client: &str) -> Fx {
+    let fx = fx();
+    fx.cockpit();
+    fx.tmux_route.fake().add_client(client, 120, 30);
+    fx.tmux_route.fake().on_popup(|_| Some(r#"{"confirmed":true}"#.to_owned()));
+    fx
+}
+
 #[test]
 fn a_refused_merge_opens_the_failure_dialog_on_the_client_logs_it_and_runs_no_poll() {
     // `pr merge` refuses (not CLEAN any more), or `gh pr merge` fails with `merge said no`
     let blocked = "merge o/r#7: merge_not_clean: o/r#7 is OPEN and BLOCKED: only an OPEN pull request that is CLEAN is merged.";
     for (state, exit, text, merge_calls) in [("BLOCKED", 0, blocked, 0), ("CLEAN", 1, "merge o/r#7: gh_failed: ", 1)] {
-        let env = env();
-        gh_with(&env, state, exit, None, POLL_OK);
-        fake_cpd(&env);
-        fake_tmux(&env);
-        let (outer, client) = Outer::attach(&env, 120, 30);
-        // the User confirms in the popup's view; the failure is the background action's
-        let pane = start_on(&env, &client);
-        wait_dialog(&env, &pane);
-        tmux_out(&env, &["send-keys", "-t", &pane, "y"]);
+        let fx = fx_on_client(CLIENT);
+        gh_route_with(&fx, Poll::Merged, state, exit);
+        // the failure is the background action's: the User's confirm in the popup's view started it (`run-shell -b`)
+        act(&fx, CLIENT);
 
         // the cockpit's one failure dialog, a `text` dialog of the kit, on that client: `<what failed>: <code>: <message>`
-        let shown = outer.wait_screen("the failure dialog", |r| has(r, &text[..text.len().min(40)]));
-        assert!(has(&shown, &text[..text.len().min(40)]), "{state}: {shown:?}");
-        let popups = tmux_calls(&env, "display-popup");
+        let popups = naming(args_of(&fx, "tmux"), "display-popup");
         assert_eq!(popups.len(), 1, "{state}: one dialog: {popups:?}");
-        assert!(popups[0].windows(2).any(|w| w == ["-c", &client]), "{state}: on the client: {popups:?}");
+        assert!(popups[0].windows(2).any(|w| w == ["-c", CLIENT]), "{state}: on the client: {popups:?}");
         assert!(popups[0].last().unwrap().starts_with("cpd tui view dialog text "), "{state}: a `text` dialog: {popups:?}");
+        assert!(popups[0].last().unwrap().contains(&format!("--body='{text}")), "{state}: its text: {popups:?}");
         // the log line is there with the dialog: the same text
-        let log = merge_log(&env);
+        let log = merge_log(&fx.env);
         assert_eq!(log.len(), 1, "{state}: {log:?}");
         assert!(log[0].starts_with(text), "{state}: {log:?}");
         assert!(log[0].starts_with("merge o/r#7: ") && log[0].len() > "merge o/r#7: gh_failed: ".len(), "{state}: {log:?}");
 
-        outer.keys(&["q"]);
-        wait_action_done(&env);
         // a failed merge runs no poll
-        assert_eq!(merges(&env).len(), merge_calls, "{state}");
-        assert!(call_order(&env).iter().all(|c| c != "api graphql"), "{state}: {:?}", call_order(&env));
-        assert_eq!(tmux_calls(&env, "display-popup").len(), 1, "{state}: never a second dialog");
+        assert_eq!(merges_of(args_of(&fx, "gh")).len(), merge_calls, "{state}");
+        let order = order_of(args_of(&fx, "gh"));
+        assert!(order.iter().all(|c| c != "api graphql"), "{state}: {order:?}");
+        assert_eq!(naming(args_of(&fx, "tmux"), "display-popup").len(), 1, "{state}: never a second dialog");
+        assert!(naming(args_of(&fx, "tmux"), "display-message").is_empty(), "{state}: the dialog opened, no message");
     }
 }
 
 #[test]
 fn when_the_dialog_cannot_open_the_log_line_is_first_then_the_client_gets_the_message() {
-    let env = env();
-    gh(&env, "BLOCKED", 0);
-    // every tmux call notes whether the log line was already there; a `display-popup` fails (the dialog cannot open)
-    let seen = env.root().join("tmux-saw-log");
-    let log = env.cpd_home().join("run/tui/merge.log");
-    fake_tmux_before(
-        &env,
-        &format!(
-            "if [ -s '{log}' ]; then echo log >> '{seen}'; else echo no-log >> '{seen}'; fi\ncase \"$*\" in *display-popup*) echo 'no popup' >&2; exit 1;; esac",
-            log = log.display(),
-            seen = seen.display()
-        ),
-    );
+    let fx = fx();
+    gh_route_with(&fx, Poll::Merged, "BLOCKED", 0);
+    // every tmux call notes whether the log line was already there (a rule that matches nothing, so the route answers);
+    // a `display-popup` fails (the dialog cannot open)
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = fx.env.cpd_home().join("run/tui/merge.log");
+    let noted = seen.clone();
+    let runner = (*fx.fakes.runner).clone();
+    let _ = runner
+        .on(
+            "tmux",
+            move |_| {
+                noted.lock().unwrap().push(fs::metadata(&log).is_ok_and(|m| m.len() > 0));
+                false
+            },
+            Reply::ok(""),
+        )
+        .on("tmux", |call| call.args.iter().any(|a| a == "display-popup"), Reply::exit(1, "", "no popup\n"));
     // no client of this name, no tmux server even: nothing can show the error, and the action still ends quietly
-    action(&env, "/dev/pts/nobody");
+    act(&fx, "/dev/pts/nobody");
     let text = "merge o/r#7: merge_not_clean: ";
-    let log = merge_log(&env);
+    let log = merge_log(&fx.env);
     assert_eq!(log.len(), 1, "{log:?}");
     assert!(log[0].starts_with(text), "{log:?}");
-    assert!(call_order(&env).iter().all(|c| c != "api graphql"), "no poll: {:?}", call_order(&env));
+    let order = order_of(args_of(&fx, "gh"));
+    assert!(order.iter().all(|c| c != "api graphql"), "no poll: {order:?}");
     // after the dialog, the message on that client, as every `tui action` does for its own failures
-    let messages = tmux_calls(&env, "display-message");
-    assert_eq!(messages.len(), 1, "{:?}", env.calls("tmux"));
+    let messages = naming(args_of(&fx, "tmux"), "display-message");
+    assert_eq!(messages.len(), 1, "{:?}", args_of(&fx, "tmux"));
     assert!(messages[0].windows(2).any(|w| w == ["-c", "/dev/pts/nobody"]), "{messages:?}");
     assert!(messages[0].last().unwrap().contains(text), "{messages:?}");
     // the log line was written before the first tmux call of the action, so before the dialog was tried
-    let saw = fs::read_to_string(&seen).unwrap();
-    assert!(saw.lines().count() >= 1 && saw.lines().all(|l| l == "log"), "{saw:?}");
+    let seen = seen.lock().unwrap();
+    assert!(!seen.is_empty() && seen.iter().all(|logged| *logged), "{seen:?}");
 }
 
 // ---------- the merge marker (hs-d495; commands.md §13.2 "A merge in progress", contract §1.4) ----------
@@ -657,28 +665,6 @@ pub(crate) fn put_marker(env: &TestEnv, file: &str, pid: u32) {
 /// The marker of [`REF`].
 fn marker(env: &TestEnv) -> PathBuf {
     markers(env).join("o__r__7.json")
-}
-
-/// What the fake `gh` noted for `call` (`view`, `merge`, `poll`): one `present` or `absent` line per call, by whether
-/// [`marker`] existed then.
-fn saw(env: &TestEnv, call: &str) -> Vec<String> {
-    fs::read_to_string(env.root().join(format!("saw-{call}"))).unwrap_or_default().lines().map(str::to_owned).collect()
-}
-
-/// [`gh_with`] that notes, at each `pr view`, `pr merge` and `api graphql` (the poll), whether the marker exists
-/// ([`saw`]) and, at `pr merge`, keeps a copy of its text in `<root>/saw-merge-text`.
-fn gh_noting(env: &TestEnv, merge_state: &str, merge_exit: i32, release: Option<&Path>) {
-    let wait = release.map_or(String::new(), |file| {
-        format!("_i=0; while [ ! -e '{}' ] && [ $_i -lt 1200 ]; do _i=$((_i+1)); sleep 0.05; done; ", file.display())
-    });
-    env.fake_gh(&format!(
-        "_m='{marker}'; _r='{root}'\nnote() {{ if [ -e \"$_m\" ]; then echo present >> \"$_r/saw-$1\"; else echo absent >> \"$_r/saw-$1\"; fi; }}\n\
-         case \"$1 $2\" in\n\"pr view\") note view; echo '{{\"state\":\"OPEN\",\"mergeStateStatus\":\"{merge_state}\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}'; exit 0;;\n\
-         \"pr merge\") note merge; [ -e \"$_m\" ] && cp \"$_m\" \"$_r/saw-merge-text\"; {wait}echo 'merge said no' >&2; exit {merge_exit};;\n\
-         \"api graphql\") note poll; {POLL_OK};;\nesac\nexit 9",
-        marker = marker(env).display(),
-        root = env.root().display()
-    ));
 }
 
 /// The marker's JSON in `text`: its `pid` and its `at`, which must be an RFC 3339 time, and nothing else.
@@ -731,24 +717,31 @@ fn the_action_writes_the_marker_before_the_merge_keeps_it_through_the_merge_and_
 #[test]
 fn a_refused_or_failed_merge_removes_the_marker_before_the_failure_dialog_opens() {
     for (state, exit) in [("BLOCKED", 0), ("CLEAN", 1)] {
-        let env = env();
-        gh_noting(&env, state, exit, None);
+        let fx = fx();
+        let gh = gh_route_with(&fx, Poll::Merged, state, exit);
         // the client is there (`display -p -c` answers its size), and `display-popup` notes whether the marker exists when the
         // dialog is opened, and fails
-        let marker = marker(&env);
-        fake_tmux_before(
-            &env,
-            &format!(
-                "case \"$*\" in *\"display -p -c\"*) echo '100 30'; exit 0;; *display-popup*) if [ -e '{m}' ]; then echo present >> '{r}/saw-popup'; else echo absent >> '{r}/saw-popup'; fi; echo 'no popup' >&2; exit 1;; esac",
-                m = marker.display(),
-                r = env.root().display()
-            ),
+        fx.cockpit();
+        fx.tmux_route.fake().add_client("/dev/pts/nobody", 100, 30);
+        let popup_saw = Arc::new(Mutex::new(Vec::new()));
+        let (note, marker) = (popup_saw.clone(), marker(&fx.env));
+        let _ = (*fx.fakes.runner).clone().on(
+            "tmux",
+            move |call| {
+                let popup = call.args.iter().any(|a| a == "display-popup");
+                if popup {
+                    note.lock().unwrap().push(if marker.exists() { "present" } else { "absent" });
+                }
+                popup
+            },
+            Reply::exit(1, "", "no popup\n"),
         );
-        action(&env, "/dev/pts/nobody");
-        assert_eq!(saw(&env, "view"), ["present"], "{state}: written before `cpd pr merge` runs anything");
-        assert_eq!(saw(&env, "popup"), ["absent"], "{state}: the dialog opens after the marker is gone");
-        assert_eq!(marker_files(&env), Vec::<String>::new(), "{state}: no exit leaves it behind");
-        assert!(call_order(&env).iter().all(|c| c != "api graphql"), "{state}: a failed merge runs no poll");
+        act(&fx, "/dev/pts/nobody");
+        assert_eq!(noted(&gh, "view"), ["present"], "{state}: written before `cpd pr merge` runs anything");
+        assert_eq!(*popup_saw.lock().unwrap(), ["absent"], "{state}: the dialog opens after the marker is gone");
+        assert_eq!(marker_files(&fx.env), Vec::<String>::new(), "{state}: no exit leaves it behind");
+        let order = order_of(args_of(&fx, "gh"));
+        assert!(order.iter().all(|c| c != "api graphql"), "{state}: a failed merge runs no poll: {order:?}");
     }
 }
 
