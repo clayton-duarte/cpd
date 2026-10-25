@@ -51,7 +51,6 @@ use crate::fold;
 use crate::palette;
 use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
-use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, Place, PlanNode, SessionNode, Tree};
 use super::actions::{Action, Subject};
 
@@ -263,23 +262,22 @@ pub fn session_label(s: &SessionNode) -> String {
 
 /// `36⋅0⋅0⋅1⋅5`: each count in its status colour (colour 8 when zero), `⋅` between. The failed count is always red.
 pub fn counters(plan: &PlanNode) -> Line<'static> {
-    let phase = plan.head.phase;
+    let (first, _) = plan.head.counts.first();
     let mut spans = Vec::new();
-    for (i, n) in plan.head.counts.counters(phase).into_iter().enumerate() {
+    for (i, n) in plan.head.counts.counters().into_iter().enumerate() {
         if i > 0 {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(i, first, n)));
     }
     Line::from(spans)
 }
 
 /// Style of the `index`th counter of `JobCounts::counters`: its status colour, or colour 8 when the count is zero. The
-/// first counter is the queued Jobs, in phase `plan` the drafts.
-fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
+/// first counter is the drafts when there are any, else the queued Jobs (`first`).
+fn counter_style(index: usize, first: JobStatus, n: usize) -> Style {
     let (status, merging) = match index {
-        0 if phase == Phase::Plan => (JobStatus::Draft, false),
-        0 => (JobStatus::Queued, false),
+        0 => (first, false),
         1 => (JobStatus::Running, false),
         2 => (JobStatus::Running, true),
         3 => (JobStatus::Failed, false),
@@ -639,6 +637,7 @@ mod tests {
 
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
+    use cpd_core::plan::Phase;
     use cpd_core::session::State;
     use crate::palette::{IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED, color};
 
