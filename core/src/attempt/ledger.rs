@@ -167,6 +167,10 @@ pub enum End {
     Merged { sha: String },
     /// `cancelled` / `cancel_requested`.
     Cancelled,
+    /// The stop incident mode requested (contract §3.4/§3.7): the Attempt ended
+    /// `cancelled` / `cancel_requested` and its Job returns to `queued` at the same
+    /// Tier, as an Interrupted Attempt. Stub: the inc-engine Job implements it.
+    Interrupted,
     /// `failed` / `cause`; `detail` explains it (for `merge_conflict`, the files).
     Failed { cause: Cause, detail: String },
 }
@@ -175,7 +179,7 @@ impl End {
     pub fn outcome(&self) -> &'static str {
         match self {
             End::Merged { .. } => "merged",
-            End::Cancelled => "cancelled",
+            End::Cancelled | End::Interrupted => "cancelled",
             End::Failed { .. } => "failed",
         }
     }
@@ -183,7 +187,7 @@ impl End {
     pub fn cause(&self) -> &'static str {
         match self {
             End::Merged { .. } => "merged",
-            End::Cancelled => "cancel_requested",
+            End::Cancelled | End::Interrupted => "cancel_requested",
             End::Failed { cause, .. } => cause.as_str(),
         }
     }
@@ -307,6 +311,7 @@ pub fn end_opened(
             };
             ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
+        End::Interrupted => unimplemented!("incident mode interruption is not implemented yet"),
         End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
                 let text = format!(

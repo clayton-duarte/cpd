@@ -16,6 +16,9 @@ mod show;
 mod span;
 mod submit;
 
+#[cfg(test)]
+mod incident_tests;
+
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;

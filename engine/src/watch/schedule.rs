@@ -21,6 +21,14 @@ const BACKOFF_CAP_SECONDS: u64 = 300;
 /// The back-off's unit: `2^k` of it (tests shorten it with `CPD_TEST_BACKOFF_UNIT`, [`limit`]).
 const BACKOFF_UNIT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Whether incident mode lets E3 start a Ready Job of urgency `urgent` (contract §3.7): while one
+/// `incident` row exists, only urgent Ready Jobs start. Stub: the inc-engine Job implements it
+/// (it holds E4, E7, E9, E10 and E11 in the same way).
+pub(super) fn incident_starts(conn: &Connection, urgent: bool) -> bool {
+    let _ = (conn, urgent);
+    unimplemented!("incident mode is not implemented yet")
+}
+
 /// How long E3 waits after the last of `k` Attempts in a row whose driver never
 /// started: `min(2^k, 300)` seconds.
 fn backoff_seconds(k: u32) -> u64 {

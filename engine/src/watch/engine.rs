@@ -146,6 +146,15 @@ impl Engine {
     }
 }
 
+/// Whether incident mode holds `step` (contract §3.7): E4 (open Jobs), E7 (PR start), E9 (Context curation),
+/// E10 (Session titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1,
+/// E2, E5, E8, E12 and E13 run as usual. E3 is not held: it starts only urgent Jobs ([`schedule`]).
+/// Stub: the inc-engine Job implements it and calls it from each held step.
+pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
+    let _ = (engine, step);
+    unimplemented!("incident mode is not implemented yet")
+}
+
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
 /// another Plan too, and the base PR, if any, started), and not marked `start_failed_at` (§3.7). Oldest Plan first,
 /// then by key.
