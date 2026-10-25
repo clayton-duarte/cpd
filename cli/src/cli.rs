@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot, testsel};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -92,6 +92,9 @@ pub enum Command {
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
+    /// The tests a change reaches, and named tests (commands.md §26)
+    #[command(subcommand)]
+    Test(testsel::Command),
 }
 
 /// Parses `argv` and runs the command on the real ports.
@@ -101,17 +104,17 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
 
 /// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
 /// the Jobs that convert them to `Env::open_with` land.
-pub fn run_with(_ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    run_on(argv, cpd_tui::on_a_terminal())
+pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_on(ports, argv, cpd_tui::on_a_terminal())
 }
 
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_on(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(Cli { command: Some(command) }) => dispatch(command),
+        Ok(Cli { command: Some(command) }) => dispatch(ports, command),
         Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
@@ -128,7 +131,7 @@ fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Ou
     }
 }
 
-fn dispatch(command: Command) -> Result<Output, CpdError> {
+fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Context(c) => context::run(c),
         Command::Plan(c) => plan::run(c),
@@ -149,15 +152,16 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
-        Command::Slot(a) => slot_exit(slot::run(a)),
+        Command::Slot(a) => transparent_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Test(c) => transparent_exit(testsel::exec(ports, c)),
     }
 }
 
-/// `cpd slot` is transparent to its command (commands.md §23): it ends the process with the command's exit status, and
-/// its own refusals are the error envelope on stderr. It never returns.
-fn slot_exit(result: Result<u8, CpdError>) -> ! {
+/// `cpd slot` and `cpd test` are transparent to their command (commands.md §23, §26): they end the process with the
+/// command's exit status, and their own refusals are the error envelope on stderr. It never returns.
+fn transparent_exit(result: Result<u8, CpdError>) -> ! {
     match result {
         Ok(status) => std::process::exit(i32::from(status)),
         Err(err) => {
@@ -260,7 +264,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run_on(argv(words), false).expect_err("expected a failure")
+        run_on(&Ports::real(), argv(words), false).expect_err("expected a failure")
     }
 
     #[test]

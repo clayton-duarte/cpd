@@ -44,6 +44,7 @@ pub mod secret;
 pub mod session;
 pub mod spec;
 pub mod store;
+pub mod testsel;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
