@@ -1181,9 +1181,9 @@ fn engine_on_git() -> (Ip, PathBuf, PathBuf) {
     fx.engine_routes_on_tmux();
     let repo = fx.git_repo("pay").canonicalize().unwrap();
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap().path;
-    fx.engine_plan_at(&repo, &lead);
-    (fx, repo, lead)
+    let created = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap();
+    fx.engine_plan_on(&repo, &created.path, &created.branch);
+    (fx, repo, created.path)
 }
 
 /// Attempt `api-a1` of Plan `pay` in `merging`, its worktree cut from the Lead Branch with one commit, its driver
