@@ -3395,10 +3395,11 @@ fn rebase_continue_does_not_overwrite_a_push_it_has_not_seen() {
 #[test]
 fn rebase_continue_refuses_when_the_lead_branch_moved_during_the_stop() {
     let fx = rebase_fx("deploy");
+    // The parent of the Lead Branch's tip after the conflicting commit (the fake git does not read `<sha>^`).
+    let moved = fx.lead_sha();
     let before = fx.conflicting(&["lead"]);
     assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
     // A merge lands during the stop: the ref moves under the rebase.
-    let moved = fx.git(&fx.repo, &["rev-parse", &format!("{before}^")]);
     fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/pay", &moved]);
     fx.resolve("resolved");
 
@@ -3514,7 +3515,9 @@ fn rebase_succeeds_when_the_remote_already_contains_the_rebased_commit() {
         git_in_hook(&ports, &lead, &["add", "-A"]);
         git_in_hook(&ports, &lead, &["commit", "-q", "-m", "m"]);
         let merged = git_out_in_hook(&ports, &repo, &["rev-parse", "refs/heads/cpd/pay"]);
-        git_in_hook(&ports, &lead, &["push", "-q", "--force", "origin", "cpd/pay"]);
+        // `push --force`, as the fake git has it: a lease on the very value the remote branch holds.
+        let held = git_out_in_hook(&ports, &repo, &["rev-parse", "refs/remotes/origin/cpd/pay"]);
+        git_in_hook(&ports, &lead, &["push", "-q", &format!("--force-with-lease=refs/heads/cpd/pay:{held}"), "origin", "cpd/pay"]);
         *during.lock().unwrap() = Some((rebased, merged));
         Reply::ok("")
     });
