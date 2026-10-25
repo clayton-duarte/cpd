@@ -419,8 +419,8 @@ pub struct StartFailure {
 
 /// The temporary worktree `pr rebase` rewrites the Lead Branch in (contract §7.6): detached at the
 /// snapshot it rebases, so the Lead worktree itself is never rewritten and two rebases of one PR do
-/// not race on its index. It is not a Gate worktree: no test slot, no clean-up sweep, and the run
-/// that adds it removes it.
+/// not race on its index. It belongs to one rebase run: no test slot, no clean-up sweep, and the
+/// run that adds it removes it.
 #[derive(Debug)]
 pub struct RebaseWorktree {
     repo: PathBuf,

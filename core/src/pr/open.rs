@@ -1,6 +1,6 @@
-//! `pr open` (commands.md §9.1, contract §7.6): the Gate on the Lead Branch's
-//! tip G in a gate worktree, the push of G by rule P, the PR, for one PR of the
-//! Plan. No lock and no R (hs-d243).
+//! `pr open` (commands.md §9.1, contract §7.6): the PR's `open` Job, whose merge runs
+//! the Gate in its Attempt worktree and opens the pull request, for one PR of the Plan.
+//! No lock and no R (hs-d243).
 
 use std::path::Path;
 

@@ -1,9 +1,9 @@
 //! `pr push` (commands.md §9.9, contract §7.6): the built binary against a temporary
 //! repo with a bare `origin` and a Plan written straight into the database. It takes
-//! no lock (hs-d243): its Gate runs in a gate worktree of its own, and a Job merges
-//! into the PR while it runs. `pr push` is a repair: it runs `gate.pr` (the repo's
-//! `pre-merge`) in the Lead worktree at G (hs-d679); the merge itself, in its Attempt
-//! worktree, runs `gate.merge` (the repo's `pre-commit`).
+//! no lock (hs-d243): its Gate and a Job's merge into the PR run at once. `pr push` is
+//! a repair: it runs `gate.pr` (the repo's `pre-merge`) in the Lead worktree at G
+//! (hs-d679); the merge itself, in its Attempt worktree, runs `gate.merge` (the
+//! repo's `pre-commit`).
 
 use crate::common;
 
@@ -260,7 +260,7 @@ fn push_gates_then_pushes_the_lead_branch() {
 #[test]
 fn push_again_runs_the_gate_and_pushes_nothing() {
     let fx = fx("open");
-    // The gate worktree is removed after each run: the record goes to the repo's common dir.
+    // The record goes to the repo's common dir, beside every worktree of the repo.
     fx.hooks("pre-merge = \"echo gated >> \\\"$(git rev-parse --path-format=absolute --git-common-dir)/gated\\\"\"\n");
     let tip = fx.lead_sha();
     fx.push().ok();
@@ -404,13 +404,12 @@ fn a_job_merges_into_the_pr_during_its_gate_and_neither_waits() {
     release_gate(fx.env.root());
     let out = child.finish();
 
-    // The Gate saw G, twice the same: the merge did not change its files.
+    // The Gate ran on G in the Lead worktree; the merge landing there during it is not waited for and not lost.
     let log = fx.gate_log();
-    let (first, second) = log.split_at(log.find(&format!("\n{gated}\n")).unwrap_or_else(|| panic!("{log}")) + 1);
-    assert!(first.starts_with(&format!("{gated}\n")) && !first.contains("m.txt"), "{log}");
-    assert_eq!(first, second, "{log}");
+    assert!(log.starts_with(&format!("{gated}\n")), "the Gate did not run on G: {log}");
     // The merge pushed its own commit (rule P), which contains G: `pr push` pushed nothing.
     assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "pushed": false, "sha": gated, "remote": merged}));
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &gated, &merged]).is_empty(), "the remote holds G");
     assert_eq!(fx.remote_sha(), merged);
     // The Lead worktree followed the Lead Branch (rule S).
     assert_eq!(fx.lead_sha(), merged);

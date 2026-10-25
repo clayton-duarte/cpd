@@ -12,6 +12,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::policy::Gate;
 
 const COMMAND: &str = "pr push";
 
@@ -27,15 +28,16 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let lead = pr.lead(&id)?.clone();
     let policy = pr_policy(&mut env, &id, &key)?;
 
-    // 1. G, read once; 2. the Lead worktree brought to G, then the Gate on it there.
+    // 1. G, read once; 2. when the PR's gate is local, the Lead worktree brought to G and the Gate on it there.
     let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
-    require_clean_lead(&lead, &id, pr)?;
-    git::sync_lead(&lead, &branch)?;
-    let hidden = hide_untracked(&lead)?;
-    let gated = gate(&env, &policy, &id, pr, &lead, &sha, &format!("pr push --pr {key}"));
-    let restored = hidden.restore();
-    restored?;
-    gated?;
+    if policy.gate.pr == Gate::Local {
+        require_clean_lead(&lead, &id, pr)?;
+        git::sync_lead(&lead, &branch)?;
+        let hidden = hide_untracked(&lead)?;
+        let gated = gate(&env, &policy, &id, pr, &lead, &sha, &format!("pr push --pr {key}"));
+        hidden.restore()?;
+        gated?;
+    }
 
     // The PR is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(&id)?;

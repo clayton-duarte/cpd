@@ -257,7 +257,7 @@ fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
 }
 
 /// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
-/// and `pre-merge` of the gate worktree. The contract's layout (§1.4) names these
+/// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
 fn pr_log(home: &CpdHome, plan: &PlanId, key: &PrKey, hook: Hook) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
@@ -456,15 +456,12 @@ impl Drop for Hidden {
         if self.moved.is_empty() {
             return;
         }
-        let fail = |e: std::io::Error| {
-            CpdError::new(ErrorCode::GateError, format!("Cannot put back {}'s untracked files after the Gate: {e}.", self.lead.display()))
-        };
         for (entry, held) in std::mem::take(&mut self.moved) {
             let target = self.lead.join(&entry);
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::rename(&held, &target).map_err(fail);
+            let _ = std::fs::rename(&held, &target);
         }
         let _ = std::fs::remove_dir(&self.dir);
     }

@@ -458,9 +458,8 @@ pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: 
     Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
 }
 
-/// `error`, after removing the gate worktree; the removal's own failure is
-/// dropped (the leftover is swept once this process has ended), so that the
-/// error the Lead acts on is the one that stopped the command.
+/// `error`, after removing the temporary rebase worktree; the removal's own failure is
+/// dropped, so that the error the Lead acts on is the one that stopped the command.
 fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
     let _ = worktree.remove();
     error
