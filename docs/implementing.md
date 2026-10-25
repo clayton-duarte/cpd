@@ -124,11 +124,11 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `secret*`, `host_repair` |
-  | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env`, `host_pill` |
-  | `store` | `store*`, `events`, `home` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `host_repair` |
+  | `session` | `session*`, `host`, `board`, `host_pill` |
+  | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fx`, `guards`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fx`, `guards`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run*`, `pill_parity`, `pill_sites`, `run_with`, `smoke`, `testkit*` |
 
 ### Time in tests
 
@@ -360,7 +360,7 @@ PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command th
 - **Virtual time.** `fx.advance(d)` advances the `ManualClock` by `d`. `fx.until(cond)` advances it in steps until `cond` holds, bounded by a virtual limit, and fails with the last state when the limit passes. They replace `wait_until`, `poll`, `wait_some` and `wait_screen`; no test sleeps or reads the wall clock (see `Time in tests`).
 - **Launched children.** A `cpd` child a command launches (a driver, a poll) is recorded by `FakeSpawn`, never started. The test takes it with `fx.take_launch(i)` and runs it itself with `fx.run_launch(..)`, which calls `run_with`.
 - **Screens.** `Screen` and `Keys` are helpers on `ratatui::backend::TestBackend` for the tui views: `Keys` feeds key and mouse events to the view's own handler, `Screen` reads the rendered buffer as text. They replace `capture-pane` and `send-keys`.
-- **Not in this PR.** The git and tmux fixtures are in `The git and tmux fixtures of Fx`. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script, as a named exception list.
+- **Not in this PR.** The git and tmux fixtures are in `The git and tmux fixtures of Fx`. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script: each file is one line of `scripts/tripwire/shell-tests.txt` (`<file> # <reason>`), the named exception list.
 
 ## The Gate leak check
 

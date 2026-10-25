@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use cpd_core::fakes::tmux::TmuxRoute;
 use cpd_core::clock::Clock;
 use cpd_core::error::CpdError;
 use cpd_core::host::runner::{Call, Handler, Reply};
@@ -140,7 +141,8 @@ impl Tree {
             .name(format!("{name} view"))
             .spawn(move || {
                 let mut written = written;
-                entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote)
+                // what the view reaches through `Ports::current()` is the fake too, never the real ports
+                Ports::scope(&ports, || entry(&ports, &mut FakeTty::new(true), &mut written, shown.terminal(), &mut remote))
             })
             .expect("a thread for the view");
         let mut tree = Tree {
@@ -329,9 +331,11 @@ fn read_log(home: &Path) -> String {
 /// An `Fx` on fake ports with the config the tree needs (`cpd` is faked: no real binary, no tmux server).
 pub fn fx() -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n",
-    );
+    // The socket is the env's own, the one `Fx::tmux` and `dialogs` start the fake server on.
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
+        fx.env.tmux_socket()
+    ));
     fx
 }
 
@@ -344,14 +348,99 @@ pub fn engine(fx: &Fx) -> Flock<File> {
 
 /// A fake `cpd` that succeeds with `reply`, and a cockpit with no pane and no client (see [`fake_cockpit`]).
 pub fn fake_cpd(fx: &Fx, reply: &str) {
-    fx.fake("cpd", Reply::ok(reply));
+    cpd_says(fx, reply);
     fake_cockpit(fx);
 }
 
 /// A fake `cpd` that fails with `reply` (exit 3), and a cockpit with no pane and no client.
 pub fn fake_cpd_fails(fx: &Fx, reply: &str) {
-    fx.fake("cpd", Reply::exit(3, reply, ""));
+    cpd_fails(fx, reply);
     fake_cockpit(fx);
+}
+
+/// A fake `cpd` that succeeds with `reply`: the tmux route stays the fake server's (see [`dialogs`]).
+pub fn cpd_says(fx: &Fx, reply: &str) {
+    fx.fake("cpd", Reply::ok(reply));
+}
+
+/// A fake `cpd` that fails with `reply` (exit 3): the tmux route stays the fake server's.
+pub fn cpd_fails(fx: &Fx, reply: &str) {
+    fx.fake("cpd", Reply::exit(3, reply, ""));
+}
+
+/// The popups of the dialog kit on the fake tmux server of an `Fx` ([`dialogs`]): the User's answer to the next ones, and
+/// the commands the popups ran. (The popup's own drawing and keys are `tui_dialog.rs`'s.)
+pub struct Dialogs {
+    answer: Arc<Mutex<String>>,
+    route: Arc<TmuxRoute>,
+    socket: String,
+}
+
+/// A fake tmux server with one client attached, whose `display-popup` plays the dialog kit's popup: it writes the answer
+/// ([`Dialogs::confirm`], [`Dialogs::cancel`], [`Dialogs::type_in`]; a cancel until one is given) to the `--out` file of the
+/// popup's command, as the view would (`FakeTmux::on_popup`); every other command is the fake's.
+/// One helper for the tree files; declare it before the [`Tree`].
+pub fn dialogs(fx: &Fx) -> Dialogs {
+    let ok = |args: &[&str]| {
+        let out = fx.tmux(args);
+        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    ok(&["new-session", "-d", "-s", "cpd", "-x", "200", "-y", "60"]);
+    fx.tmux_route.fake().add_client("/dev/pts/9", 200, 60);
+    let dialogs = Dialogs { answer: Arc::default(), route: fx.tmux_route.clone(), socket: fx.env.tmux_socket().to_owned() };
+    dialogs.cancel();
+    let answer = dialogs.answer.clone();
+    fx.tmux_route.fake().on_popup(move |_| Some(answer.lock().unwrap_or_else(PoisonError::into_inner).clone()));
+    dialogs
+}
+
+impl Dialogs {
+    fn answer(&self, json: &serde_json::Value) {
+        *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = json.to_string();
+    }
+
+    /// The next popups are confirmed (a `confirm`'s button, an `input`'s Enter with no text).
+    pub fn confirm(&self) {
+        self.answer(&serde_json::json!({"confirmed": true}));
+    }
+
+    /// The next popups are cancelled.
+    pub fn cancel(&self) {
+        self.answer(&serde_json::json!({"confirmed": false}));
+    }
+
+    /// The next `input` popups accept `text`.
+    pub fn type_in(&self, text: &str) {
+        self.answer(&serde_json::json!({"confirmed": true, "value": text}));
+    }
+
+    /// Every popup opened so far: the command each ran, without its `--out` (a temporary file).
+    pub fn popups(&self) -> Vec<String> {
+        self.raw().iter().map(|p| without_out(p.last().expect("a popup has a command"))).collect()
+    }
+
+    /// The argv of every `display-popup` so far (the subcommand name first).
+    pub fn raw(&self) -> Vec<Vec<String>> {
+        self.route.fake().state(&self.socket).popups()
+    }
+
+    /// Waits, in virtual time, until the view has handled what was sent before: `?` opens the legend's popup, the mark.
+    pub fn settled(&self, tree: &mut Tree) {
+        let before = self.raw().len();
+        tree.keys(&["?"]);
+        tree.until_that("the legend's popup", |_| self.raw().len() > before);
+        let popups = self.raw();
+        assert_eq!(popups.len(), before + 1, "{popups:?}");
+        assert!(popups[before].contains(&" legend ".to_owned()), "the legend's: {:?}", popups[before]);
+    }
+}
+
+/// `command` without its ` --out='<path>'`, when it has one.
+fn without_out(command: &str) -> String {
+    const OUT: &str = " --out='";
+    let Some(start) = command.find(OUT) else { return command.to_owned() };
+    let end = start + OUT.len() + command[start + OUT.len()..].find('\'').expect("the closing quote of --out");
+    format!("{}{}", &command[..start], &command[end + 1..])
 }
 
 /// A tmux server that lists no pane and no client: what a command that opens a Session reads, and what a dialog needs

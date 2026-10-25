@@ -416,6 +416,19 @@ impl Fx {
         self.fakes.clock.advance(d);
     }
 
+    /// A second env with a migrated store, made as [`Fx::new`]'s own: starts no process. Its commands run on this `Fx`
+    /// with its `$CPD_HOME`: `fx.cpd_with(env.root(), args, &[("CPD_HOME", ..)])`.
+    pub fn another_env(&self) -> TestEnv {
+        bare_with_store()
+    }
+
+    /// Runs `f` with the variables `set` added to the process's environment, put back after it, also when `f` panics:
+    /// for code that reads the environment outside a `cpd` command (`TestEnv::bare` reads `TMPDIR`). Under this `Fx`'s lock.
+    pub fn with_vars<T>(&self, set: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let _scope = Scope::enter(&std::env::current_dir().expect("the current directory"), set, &[]);
+        f()
+    }
+
     /// Returns as soon as `cond` holds, advancing the `ManualClock` by [`TICK`] between two looks; panics
     /// `waited <limit> virtual time` when it never holds within [`LIMIT`].
     pub fn until(&self, mut cond: impl FnMut() -> bool) {
@@ -424,6 +437,19 @@ impl Fx {
             assert!(self.fakes.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time");
             self.advance(TICK);
         }
+    }
+
+    /// The pid of a process the `FakeSpawn` runs: it is alive until [`Fx::ended_pid`] or an `exit` of the test.
+    pub fn live_pid(&self) -> u32 {
+        let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };
+        self.fakes.spawn.spawn(&launch).expect("the FakeSpawn starts nothing and cannot fail").0
+    }
+
+    /// The pid of a process the `FakeSpawn` ran and that has ended.
+    pub fn ended_pid(&self) -> u32 {
+        let pid = self.live_pid();
+        self.fakes.spawn.exit(Pid(pid), 0);
+        pid
     }
 
     /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
@@ -860,6 +886,20 @@ impl Fx {
         self.cpd(args)
     }
 
+    /// Runs `f` with the process's stderr pointing at a file of the env's, and gives its result and what was written there:
+    /// the lines the product prints with `eprintln!` (a `Run`'s `stderr` is empty). The descriptor is put back after, also
+    /// on a panic. A harness that captures the output itself (the libtest default) takes `eprintln!` first and leaves the
+    /// file empty: nextest, the Gate's runner, does not.
+    pub fn with_stderr<T>(&self, f: impl FnOnce() -> T) -> (T, String) {
+        let path = self.env.root().join("stderr-capture");
+        let file = std::fs::File::create(&path).expect("create the stderr file");
+        let result = {
+            let _saved = Stderr::enter(&file);
+            f()
+        };
+        (result, std::fs::read_to_string(&path).expect("read the stderr file"))
+    }
+
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
         self.cpd_with(cwd, args, &[])
@@ -994,7 +1034,7 @@ pub fn bare_with_store() -> TestEnv {
 }
 
 /// The number of `code`, which `ExitCode` does not give.
-fn exit_code(code: ExitCode) -> i32 {
+pub fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 
@@ -1020,6 +1060,25 @@ impl Drop for NoTerminal {
     fn drop(&mut self) {
         let _ = dup2_stdin(&self.stdin);
         let _ = dup2_stdout(&self.stdout);
+    }
+}
+
+/// The process's stderr pointing at a file, put back on drop.
+struct Stderr {
+    saved: OwnedFd,
+}
+
+impl Stderr {
+    fn enter(file: &std::fs::File) -> Stderr {
+        let saved = Stderr { saved: dup(std::io::stderr()).expect("dup stderr") };
+        dup2_stderr(file).expect("point stderr at the file");
+        saved
+    }
+}
+
+impl Drop for Stderr {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
     }
 }
 
