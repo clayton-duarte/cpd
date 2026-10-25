@@ -939,7 +939,7 @@ fn q_does_not_quit_the_view() {
 
 #[test]
 fn without_a_terminal_it_is_refused_before_anything_is_read() {
-    let env = env();
-    let run = env.cpd(&["tui", "view", "plan"]);
+    let fx = Fx::with_ports();
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "plan"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (3, json!("not_a_terminal")), "{run:?}");
 }
