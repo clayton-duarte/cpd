@@ -1437,7 +1437,7 @@ mod tests {
         let rows = lines(&buf);
         assert_eq!(rows[11..], [format!("╭{STOPPED} gamma"), TERMINATOR.to_owned(), String::new(), format!("╭{STOPPED} zeta"), EXPAND.to_owned()], "{rows:#?}");
         unfold(&mut state, &t, "zeta");
-        let buf = render(&t, &mut state, 44, 18, false);
+        let buf = render(&t, &mut state, 44, 19, false);
         let rows = lines(&buf);
         assert_eq!(
             rows[14..],
@@ -1445,11 +1445,12 @@ mod tests {
                 format!("╭{STOPPED} zeta"),
                 row_of(&format!("├─{STOPPED} zp"), "0⋅0⋅0⋅0⋅2", 44),
                 format!("├─{STOPPED} zp·f-zp"),
+                format!("├─{STOPPED} zeta-manager"),
                 COLLAPSE.to_owned()
             ],
             "{rows:#?}"
         );
-        for y in 14..18 {
+        for y in 14..19 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     // the closing row's arrow and word are the fold toggle's colour 7; everything else is muted

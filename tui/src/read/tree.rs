@@ -184,12 +184,12 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             .filter(|s| !s.is_archived())
             .map(|s| {
                 let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false);
-                (s.context, (dot, s.place, s.is_asleep()))
+                (s.context.clone(), (dot, s.place, s.is_asleep()))
             })
             .collect();
         let mut archived_managers: BTreeMap<ContextId, Vec<SessionNode>> = BTreeMap::new();
         for manager in all_managers.into_iter().filter(SessionNode::is_archived) {
-            archived_managers.entry(manager.context).or_default().push(manager);
+            archived_managers.entry(manager.context.clone()).or_default().push(manager);
         }
 
         let mut stmt = conn
