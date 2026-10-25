@@ -11,10 +11,13 @@ pub mod target;
 
 pub use state::{KeyLog, Pane, SessionRow, State, WindowRow};
 
+use crate::host::runner::Runner;
 use rusqlite::Connection;
 use state::{db_path, next_id};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use target::{resolve, Kind, Loc};
 
 type R<T> = Result<T, String>;
@@ -34,9 +37,58 @@ pub struct Outcome {
     pub stderr: String,
 }
 
+/// Where a call keeps the server's state: a file for the bin (a process boundary), memory for the route.
+pub enum Backing {
+    /// The directory (the `TMUX_TMPDIR`) that holds `fake-tmux-<socket>.db`.
+    File(PathBuf),
+    /// One in-memory connection per `(TMUX_TMPDIR, socket)` of a [`FakeTmux`]: no file, no fsync.
+    Memory,
+}
+
+/// The in-memory fake tmux: state per `(TMUX_TMPDIR, socket)` behind a `Mutex`, and the `Runner` that
+/// `run-shell` calls. Two values share nothing. Stub of Job `port-tmux-tests`: the bodies are `todo!()`.
+pub struct FakeTmux {
+    conns: Mutex<HashMap<(PathBuf, String), Connection>>,
+    runner: Option<Arc<dyn Runner>>,
+}
+
+impl FakeTmux {
+    pub fn new() -> FakeTmux {
+        FakeTmux { conns: Mutex::default(), runner: None }
+    }
+    /// The `Runner` that `run-shell`, a hook or a binding calls with `/bin/sh -c <command>`.
+    pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> FakeTmux {
+        self.runner = Some(runner);
+        self
+    }
+    /// One client call, as [`run`] but on this value's memory state.
+    pub fn run(&self, _inv: &Invocation) -> Outcome {
+        let _ = (&self.conns, &self.runner);
+        todo!("FakeTmux::run")
+    }
+    /// A read-only view of what the server on `socket` holds.
+    pub fn state(&self, _socket: &str) -> State {
+        todo!("FakeTmux::state")
+    }
+    /// Adds a client of `w` by `h` cells, attached after the ones already added.
+    pub fn add_client(&self, _name: &str, _w: u32, _h: u32) {
+        todo!("FakeTmux::add_client")
+    }
+    /// The text `capture-pane -p` prints for `pane` (`%n`).
+    pub fn set_screen(&self, _pane: &str, _text: &str) {
+        todo!("FakeTmux::set_screen")
+    }
+}
+
+impl Default for FakeTmux {
+    fn default() -> FakeTmux {
+        FakeTmux::new()
+    }
+}
+
 /// The one entry the bin and the unit tests share.
 pub fn run(inv: &Invocation) -> Outcome {
-    match run_commands(inv) {
+    match run_commands(inv, Backing::File(inv.tmux_tmpdir.clone())) {
         Ok(stdout) => Outcome { code: 0, stdout, stderr: String::new() },
         Err(e) => Outcome { code: 1, stdout: String::new(), stderr: format!("{e}\n") },
     }
@@ -66,7 +118,7 @@ struct Cx<'a> {
     depth: u8,
 }
 
-fn run_commands(inv: &Invocation) -> R<String> {
+fn run_commands(inv: &Invocation, backing: Backing) -> R<String> {
     let mut socket = "default".to_string();
     let mut i = 0;
     while i < inv.argv.len() {
@@ -94,7 +146,11 @@ fn run_commands(inv: &Invocation) -> R<String> {
     let _ = first;
     let meta = std::fs::metadata(&inv.tmux_tmpdir)
         .map_err(|e| format!("error creating {} ({e})", inv.tmux_tmpdir.display()))?;
-    let path = db_path(&inv.tmux_tmpdir, &socket);
+    let dir = match backing {
+        Backing::File(dir) => dir,
+        Backing::Memory => todo!("run_commands on Backing::Memory"),
+    };
+    let path = db_path(&dir, &socket);
     let creating = !path.exists() && commands.iter().any(|c| c[0] == "new-session");
     if !path.exists() && !creating {
         return Err(format!("no server running on {}/tmux-{}/{socket}", inv.tmux_tmpdir.display(), meta.uid()));
@@ -604,5 +660,11 @@ fn display_message(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod gaps_tests;
+#[cfg(test)]
+mod nested_tests;
+#[cfg(test)]
+mod state_tests;
 #[cfg(test)]
 mod tests;
