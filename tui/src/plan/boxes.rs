@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::{Margin, Position, Rect},
     style::Modifier,
     text::{Line, Span},
     widgets::Widget,
@@ -23,6 +23,7 @@ use ratatui::{
 use cpd_core::plan::Phase;
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
@@ -43,12 +44,7 @@ impl Widget for ChartBody<'_> {
         if self.chart.pills.is_empty() {
             Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(area, buf);
         }
-        let src = &self.chart.buf;
-        for y in 0..src.area.height.min(area.height) {
-            for x in 0..src.area.width.min(area.width) {
-                buf[(area.x + x, area.y + y)] = src[(x, y)].clone();
-            }
-        }
+        copy_cells(&self.chart.buf, Rect::new(0, 0, area.width, area.height), buf, Position::new(area.x, area.y));
     }
 }
 
@@ -361,6 +357,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
+    use crate::test_text::rows;
     use crate::read::PrState;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
@@ -402,10 +399,7 @@ mod tests {
     }
 
     fn text(c: &Chart) -> String {
-        (0..c.buf.area.height)
-            .map(|y| (0..c.buf.area.width).map(|x| c.buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows(&c.buf).join("\n")
     }
 
     fn snap(c: &Chart, want: &str) {

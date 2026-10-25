@@ -30,6 +30,7 @@ mod guard_popup_tests;
 mod guard_terminal_tests;
 #[cfg(test)]
 mod section_title_tests;
+mod buffer;
 mod cells;
 mod chat;
 mod cockpit;
@@ -100,6 +101,8 @@ pub mod section;
 mod section_width_tests;
 mod no_notes;
 mod terminal_writes;
+#[cfg(test)]
+mod test_text;
 mod tree;
 mod viewlog;
 pub mod widgets;

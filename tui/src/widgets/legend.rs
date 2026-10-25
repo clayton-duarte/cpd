@@ -10,7 +10,7 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
@@ -20,6 +20,7 @@ use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
+use crate::buffer::copy_cells;
 use crate::cells;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
@@ -272,11 +273,7 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     f.render_widget(SectionTitle::new(INTRO, None), head);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
-    for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
-        for x in 0..window.width {
-            f.buffer_mut()[(window.x + x, window.y + y)] = buf[(x, y + scroll.offset() as u16)].clone();
-        }
-    }
+    copy_cells(&buf, Rect::new(0, scroll.offset() as u16, window.width, window.height), f.buffer_mut(), Position::new(window.x, window.y));
     if scroll.scrollable() {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
@@ -355,6 +352,7 @@ mod tests {
     use super::*;
     use crate::section;
     use crate::read::Kind;
+    use crate::test_text::row;
 
     static CAP_L: &str = "\u{e0b6}";
     static CAP_R: &str = "\u{e0b4}";
@@ -535,10 +533,6 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw_scrolled(f, f.area(), scroll)).unwrap();
         terminal.backend().buffer().clone()
-    }
-
-    fn row(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
     }
 
     #[test]

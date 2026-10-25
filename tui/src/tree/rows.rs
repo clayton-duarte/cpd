@@ -632,13 +632,16 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Position;
     use ratatui::style::{Color, Modifier};
 
+    use crate::buffer::copy_cells;
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
     use cpd_core::plan::Phase;
     use cpd_core::session::State;
     use crate::palette::{IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED, color};
+    use crate::test_text::{row as text, rows as lines};
 
     const WORKING: &str = SPINNER[0];
     use crate::read::{Dot, Place};
@@ -670,20 +673,8 @@ mod tests {
         terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
         let full = terminal.backend().buffer();
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        for y in 0..height {
-            for x in 0..width {
-                buf[(x, y)] = full[(x, y)].clone();
-            }
-        }
+        copy_cells(full, Rect::new(0, 0, width, height), &mut buf, Position::new(0, 0));
         buf
-    }
-
-    fn text(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
-    }
-
-    fn lines(buf: &Buffer) -> Vec<String> {
-        (0..buf.area.height).map(|y| text(buf, y)).collect()
     }
 
     /// A row of an area `width` wide: `left`, then `right`, which ends `RIGHT_PAD` columns before the right edge.
