@@ -497,20 +497,9 @@ struct Attempt {
 }
 
 impl Merged {
-    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead
-    /// worktree, or a gate worktree of the PR (contract §7.1).
+    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead worktree (contract §7.1).
     fn on_disk(&self) -> bool {
-        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists()) || self.has_gate_worktree()
-    }
-
-    /// Whether `<repo-parent>` holds an entry named as a gate worktree of this PR.
-    fn has_gate_worktree(&self) -> bool {
-        // The path of pid 0 ends in `gate-0`; without the `0` it is the name every gate worktree of the PR starts with.
-        let Ok(path) = git::gate_worktree_path(Path::new(&self.repo), &self.plan, &self.pr, 0) else { return false };
-        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return false };
-        let Some(prefix) = name.strip_suffix('0') else { return false };
-        let Ok(entries) = fs::read_dir(dir) else { return false };
-        entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.starts_with(prefix)))
+        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists())
     }
 }
 
@@ -633,10 +622,9 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
     clean(merged)
 }
 
-/// Removes the Attempt worktrees of the PR that are on disk, then its gate worktrees whose
-/// pid is dead, then its Lead worktree, first brought up to date by rule S. Each removal
-/// runs in the PR's repo, so the order does not matter; a failure does not stop the others.
-/// What it did not remove.
+/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree, first
+/// brought up to date by rule S. Each removal runs in the PR's repo, so the order does not
+/// matter; a failure does not stop the others. What it did not remove.
 fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
@@ -646,12 +634,6 @@ fn clean(merged: &Merged) -> Vec<Failure> {
         {
             failures.push((attempt.worktree.clone(), reason(&e)));
         }
-    }
-    // A gate worktree whose pid lives belongs to a Gate still running: it stays (§7.2).
-    if merged.has_gate_worktree()
-        && let Err(e) = git::sweep_gate_worktrees(repo, &merged.plan, &merged.pr)
-    {
-        failures.push((merged.repo.clone(), reason(&e)));
     }
     if let Some(lead) = &merged.lead_worktree {
         // Rule S first, so a tree a merge left stale is not kept as dirty. Every stop of it is

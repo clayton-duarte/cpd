@@ -1,7 +1,7 @@
 //! `pr rebase` (commands.md §9.3, contract §7.6): the Lead Branch onto the base
-//! in a gate worktree, guard U, a compare-and-swap of the Lead Branch, rule S,
-//! the Gate on the rebased commit in that gate worktree, and the push with a
-//! lease. No lock (hs-d243): merges into the PR go on meanwhile.
+//! in a temporary rebase worktree, guard U, a compare-and-swap of the Lead Branch,
+//! rule S, the Gate on the rebased commit, and the push with a lease. No lock
+//! (hs-d243): merges into the PR go on meanwhile.
 //!
 //! A conflict is not abandoned (hs-d289): the rebase stays in progress in the Lead
 //! worktree, and `--continue` (the rest of the rebase, the Gate, the push) or
@@ -16,12 +16,12 @@ use serde_json::json;
 use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::open::{agent, hold_refused};
-use super::{Args, Env, RebaseArgs, gate, gate_hooks, illegal_phase, pr_policy, refusal, short};
+use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, pr_policy, short};
 use crate::config::{self, Catalog};
-use crate::policy::{Gate, Policy};
+use crate::policy::Policy;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
+use crate::git::{self, Push, RebaseWorktree, TAIL_LINES, tail};
 use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
@@ -78,9 +78,8 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         if let Some(files) = git::merge_conflicts(repo, &onto, &old)? {
             return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
         }
-        // 4. A gate worktree at S, rebased there: R'.
-        git::sweep_gate_worktrees(repo, &id, &key)?;
-        let worktree = GateWorktree::add(repo, &id, &key, &old)?;
+        // 4. A temporary rebase worktree at S, rebased there: R'.
+        let worktree = RebaseWorktree::add(repo, &id, &key, &old)?;
         let new = match rebase_onto(worktree.path(), &onto) {
             Ok(None) => match git::run::rev_parse(worktree.path(), "HEAD") {
                 Ok(new) => new,
@@ -134,14 +133,12 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         }
     }
 
-    // 8. The Gate on R', in the gate worktree; it is removed whatever the result.
+    // 8. The Gate on R' in the temporary worktree, `pre-start` then `pre-merge`; it is removed whatever the result.
     let again = format!("pr rebase --pr {key}");
-    // Under a `gate.pr` other than `local` (§8.3) nothing runs: the gate worktree only goes.
-    if policy.gate.pr == Gate::Local {
-        worktree.gate_and_remove(&gate_hooks(&env, &policy, &id, &pr))?.map_err(|r| refusal(&id, &pr, &new, r, &again))?;
-    } else {
-        worktree.remove()?;
-    }
+    let gated = gate_in(&env, &policy, &id, &pr, worktree.path(), &new, true, &again);
+    let removed = worktree.remove();
+    gated?;
+    removed?;
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
@@ -196,7 +193,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     }
     let new = git::run::rev_parse(&lead, "HEAD")?;
     // C5 and C6: no rule S, the Lead worktree is the one that was rebased.
-    gate(&env, &policy, &id, &pr, &new, &format!("pr rebase --pr {key}"))?;
+    gate(&env, &policy, &id, &pr, &lead, &new, &format!("pr rebase --pr {key}"))?;
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
@@ -263,7 +260,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let new = git::run::rev_parse(lead, "HEAD")?;
     guard_u(env, id, &pr.key, repo, &old)?;
     let lease = last_seen(repo, branch)?;
-    gate(env, policy, id, pr, &new, &format!("pr rebase --pr {}", pr.key))?;
+    gate(env, policy, id, pr, lead, &new, &format!("pr rebase --pr {}", pr.key))?;
     push_rebased(env, args, id, pr, &old, &new, &lease)
 }
 
@@ -464,7 +461,7 @@ pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: 
 /// `error`, after removing the gate worktree; the removal's own failure is
 /// dropped (the leftover is swept once this process has ended), so that the
 /// error the Lead acts on is the one that stopped the command.
-fn removing(worktree: GateWorktree, error: CpdError) -> CpdError {
+fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
     let _ = worktree.remove();
     error
 }

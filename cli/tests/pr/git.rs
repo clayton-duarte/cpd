@@ -15,13 +15,12 @@ use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook, run_hook_with};
 use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::git::{
-    GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
+    Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
     discard_worktree, push_commit, lead_branch, lead_worktree_path, tamper_check,
     touched_protected,
 };
-use cpd_core::git::gate::Slots;
-use cpd_core::home::{CpdHome, Hook};
-use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::home::Hook;
+use cpd_core::ids::{AttemptId, PlanId};
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
@@ -906,157 +905,12 @@ fn rule_s_on_an_up_to_date_lead_worktree_is_done_and_touches_nothing() {
     m.assert_at_tip_and_clean(&tip);
 }
 
-// ------------------------------------------------------- gate worktree
-
-fn key() -> PrKey {
-    PrKey::parse("api").unwrap()
-}
-
-/// The `pre-start` and `pre-merge` pipelines of `wt` (written as a `.config/wt.toml` was).
-struct Pipes {
-    pre_start: Pipeline,
-    pre_merge: Pipeline,
-}
-
-fn pipes(wt: &str) -> Pipes {
-    Pipes { pre_start: pipeline(wt, Hook::PreStart), pre_merge: pipeline(wt, Hook::PreMerge) }
-}
-
-fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str, pipes: &'a Pipes) -> GateHooks<'a> {
-    GateHooks {
-        pre_start_commands: &pipes.pre_start,
-        pre_merge_commands: &pipes.pre_merge,
-        lead_branch,
-        base: "main",
-        pre_start: setup(env, "pr-api.pre-start.log"),
-        pre_merge: setup(env, "pr-api.pre-merge.log"),
-        slots: Slots::new(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 2),
-    }
-}
-
-/// A Lead worktree whose tip `G` carries a `.config/wt.toml` that would fail every hook: the Gate ignores it.
-/// Returns `(repo, lead, G)`.
-fn gated(env: &TestEnv) -> (PathBuf, cpd_core::git::Created, String) {
-    let repo = env.git_repo("pay");
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-    commit_file(env, &lead.path, ".config/wt.toml", "pre-start = \"exit 9\"\npre-merge = \"exit 9\"\n");
-    let g = env.git(&lead.path, &["rev-parse", "HEAD"]);
-    (repo, lead, g)
-}
-
-fn worktrees(env: &TestEnv, repo: &Path) -> String {
-    env.git(repo, &["worktree", "list", "--porcelain"])
-}
-
-#[test]
-fn a_failing_pre_start_refuses_the_gate_without_pre_merge_and_removes_the_worktree() {
-    let env = TestEnv::new();
-    let marker = env.root().join("pre-merge-ran");
-    let wt = format!("pre-start = \"echo no setup; exit 4\"\npre-merge = \"touch {}\"\n", marker.display());
-    let (repo, lead, g) = gated(&env);
-    let pipes = pipes(&wt);
-    let hooks = gate_hooks(&env, &lead.branch, &pipes);
-
-    let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
-
-    assert_eq!(refused.hook, Hook::PreStart);
-    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 4 });
-    assert_eq!(refused.tail.as_deref(), Some("no setup"));
-    assert_eq!(refused.log, hooks.pre_start.log);
-    assert!(!marker.exists(), "pre-merge did not run");
-    assert!(!worktrees(&env, &repo).contains(".gate-"));
-}
-
-#[test]
-fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
-    let env = TestEnv::new();
-    let (repo, lead, g) = gated(&env);
-    let pipes = pipes("pre-merge = \"echo red; exit 6\"\n");
-    let hooks = gate_hooks(&env, &lead.branch, &pipes);
-
-    let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
-
-    assert_eq!(refused.hook, Hook::PreMerge);
-    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
-    assert_eq!(refused.tail.as_deref(), Some("red"));
-    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The test slot").
-    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "gate: slot 0 taken after 0 s\nred\n");
-    assert!(!worktrees(&env, &repo).contains(".gate-"));
-}
+// ------------------------------------------------------------ deadline (contract §1.2, §7)
 
 /// strerror(0): "Success" on Linux, "Undefined error: 0" on macOS.
 fn strerror_zero() -> &'static str {
     if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" }
 }
-
-/// The pid of a process that has ended.
-fn dead_pid(env: &TestEnv) -> u32 {
-    let mut child = common::spawn(&mut env.command("true")).unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
-
-#[test]
-fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
-    let env = TestEnv::new();
-    let (repo, _lead, g) = gated(&env);
-    // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
-    let adding = repo.join(".git/worktrees/adding");
-    fs::create_dir_all(&adding).unwrap();
-    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
-    fs::write(adding.join("commondir"), "").unwrap();
-    let path = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
-    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", "--detach", path.to_str().unwrap(), &g])).unwrap();
-    assert!(String::from_utf8_lossy(&broken.stderr).contains(&format!("worktrees/adding/commondir: {}", strerror_zero())), "{broken:?}");
-
-    let added = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: the add outlasts an entry that stays half-created for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_dir_all(&adding).unwrap();
-        });
-        GateWorktree::add(&repo, &plan(), &key(), &g)
-    });
-
-    let gate = added.unwrap();
-    assert!(gate.path().exists());
-    gate.remove().unwrap();
-    // Any other failure is not retried.
-    let err = GateWorktree::add(&repo, &plan(), &key(), "no-such-commit").unwrap_err();
-    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
-}
-
-#[test]
-fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
-    let env = TestEnv::new();
-    let (repo, _lead, g) = gated(&env);
-    let dead = dead_pid(&env);
-    let add = |key: &PrKey, pid: u32| {
-        let path = gate_worktree_path(&repo, &plan(), key, pid).unwrap();
-        env.git(&repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", "cpd gate", path.to_str().unwrap(), &g]);
-        path
-    };
-    let leftover = add(&key(), dead);
-    let other_pr = add(&PrKey::parse("web").unwrap(), dead);
-    let live = GateWorktree::add(&repo, &plan(), &key(), &g).unwrap();
-    assert!(worktrees(&env, &repo).contains("locked cpd gate"));
-
-    let removed = sweep_gate_worktrees(&repo, &plan(), &key()).unwrap();
-
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert_eq!(removed[0].file_name(), leftover.file_name());
-    assert!(!leftover.exists());
-    assert!(other_pr.exists(), "another PR's leftover is its own sweep's");
-    assert!(live.path().exists(), "a live pid's gate worktree is left alone");
-    // A locked leftover whose directory is gone is swept too.
-    fs::remove_dir_all(&other_pr).unwrap();
-    assert_eq!(sweep_gate_worktrees(&repo, &plan(), &PrKey::parse("web").unwrap()).unwrap().len(), 1);
-    live.remove().unwrap();
-    assert!(!worktrees(&env, &repo).contains(".gate-"));
-}
-
-// ------------------------------------------------------------ deadline (contract §1.2, §7)
 
 // ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
 //

@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_list_with};
+use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_add, worktree_list_with};
 use super::{TAIL_LINES, tail};
 use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
@@ -415,6 +415,39 @@ impl Step {
 pub struct StartFailure {
     pub step: Step,
     pub error: CpdError,
+}
+
+/// The temporary worktree `pr rebase` rewrites the Lead Branch in (contract §7.6): detached at the
+/// snapshot it rebases, so the Lead worktree itself is never rewritten and two rebases of one PR do
+/// not race on its index. It is not a Gate worktree: no test slot, no clean-up sweep, and the run
+/// that adds it removes it.
+#[derive(Debug)]
+pub struct RebaseWorktree {
+    repo: PathBuf,
+    path: PathBuf,
+}
+
+impl RebaseWorktree {
+    /// `git -C <repo> worktree add --detach --lock --reason "cpd rebase <pid>" W <sha>`, `W` the
+    /// rebase worktree of this process's pid.
+    pub fn add(repo: &Path, plan: &PlanId, key: &PrKey, sha: &str) -> Result<RebaseWorktree, CpdError> {
+        let pid = std::process::id();
+        let path = sibling(repo, &format!("{plan}.{key}.rebase-{pid}"))?;
+        let reason = format!("cpd rebase {pid}");
+        let target = path.to_string_lossy().into_owned();
+        worktree_add(repo, &["--detach", "--lock", "--reason", &reason, &target, sha], &path)?;
+        Ok(RebaseWorktree { repo: repo.to_path_buf(), path })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// `git -C <repo> worktree remove --force --force W`.
+    pub fn remove(self) -> Result<(), CpdError> {
+        let path = self.path.to_string_lossy();
+        ok(&self.repo, &["worktree", "remove", "--force", "--force", &path]).map(|_| ())
+    }
 }
 
 /// A Lead worktree that exists on its Lead Branch with `pre-start` passed;
