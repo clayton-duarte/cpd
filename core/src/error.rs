@@ -99,6 +99,8 @@ error_codes! {
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
+    // The holographic engine rail (contract §4.6, hs-d677).
+    EngineFailed = "engine_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,
@@ -219,6 +221,7 @@ error_codes! {
     OwnerInUse = "owner_in_use" => Refused,
     HostApprovalRequired = "host_approval_required" => Refused,
     NotAManager = "not_a_manager" => Refused,
+    EngineDisabled = "engine_disabled" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -232,6 +235,7 @@ error_codes! {
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
+    EngineMissing = "engine_missing" => NotFound,
 
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
