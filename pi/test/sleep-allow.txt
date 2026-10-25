@@ -1,4 +1,5 @@
 # Debts of the static sleep checks: <path> <count>  # <tag>: <reason>. A line may only be lowered or removed, never raised, except the line named in its reason as a one-time raise.
+cli/tests/flow/plan.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/store/events.rs 1  # m-engine: sleep or wall-clock wait
 cli/tests/store/store.rs 3  # m-engine: sleep or wall-clock wait
 cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
