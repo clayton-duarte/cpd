@@ -86,7 +86,7 @@ impl Fx {
     /// What the engine's own calls get when a test does not care: tmux has no server, and `cpd pr poll` (E5, through the
     /// runner, from the executable the engine recorded: [`ENGINE_EXE`]) finds no pull request.
     pub fn engine_routes(&self) {
-        self.engine_routes_without_poll();
+        self.engine_base_routes();
         let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
         self.fake("cpd", Reply::ok(&poll.to_string()));
     }
@@ -94,11 +94,13 @@ impl Fx {
     /// [`Fx::engine_routes`] with the poll run for real, in this process: `cpd pr poll` is [`Fx::cpd_runs_in_process`], so the
     /// poll's own `gh` calls go to the `gh` of the `FakeRunner` (script it with [`Fx::fake_gh`] or [`Fx::route_fn`]).
     pub fn engine_routes_polling(&self) {
-        self.engine_routes_without_poll();
+        self.engine_base_routes();
         self.cpd_runs_in_process();
     }
 
-    fn engine_routes_without_poll(&self) {
+    /// What every engine test needs of the runner, with no answer for `cpd pr poll` yet: the engine's executable
+    /// ([`ENGINE_EXE`]) and a tmux that has no server.
+    pub fn engine_base_routes(&self) {
         self.fakes.spawn.set_self_exe(ENGINE_EXE);
         self.fake("tmux", Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"));
     }

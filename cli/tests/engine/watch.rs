@@ -9,6 +9,7 @@ mod checkout;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv,
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
-use cpd_core::host::runner::{Call, Reply};
+use cpd_core::host::runner::{Call, FakeRunner, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -439,9 +440,15 @@ fn ensure_fails_when_the_engine_does_not_start() {
 /// A home for the engine on fake ports ([`Fx::watch`]): its config, the routes it needs, Context `ctx`. No tmux, no git, no
 /// process, no wait: the clock is the `ManualClock`, so a time a test sets is exact.
 fn engine(config_extra: &str) -> Ip {
+    let fx = engine_home(config_extra);
+    fx.engine_routes();
+    fx
+}
+
+/// [`engine`] with no answer yet for the runner's calls ([`Ip::engine_routes`], [`Ip::engine_routes_polling`]).
+fn engine_home(config_extra: &str) -> Ip {
     let fx = Ip::with_ports();
     fx.engine_config(config_extra);
-    fx.engine_routes();
     fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
     fx
 }
@@ -1413,57 +1420,81 @@ fn the_engine_in_process_runs_n_more_ticks_after_an_earlier_run() {
     assert_eq!(fx.events("watch-started").len(), 2);
 }
 
-// ---------- E5: the update Job on a conflict (contract §3.7 E5, §7.6 step 6; hs-d340, hs-d497) ----------
+// ---------- E5: the poll, in-process (contract §3.7 E5, §7.6 step 6; hs-d340, hs-d354, hs-d497) ----------
+//
+// `cpd pr poll` is what the engine's poll thread runs; here it is `run_with` in this process ([`Ip::engine_routes_polling`]) and its `gh`
+// calls are a closure route of the `FakeRunner`. Time is the `ManualClock`: a poll that lasts a while is a reply that `takes` it.
 
-/// Plan `pay` in `deploy` with PR `repo` `open` (pull request `acme/pay` #812, stored `mergeable`, `clean`), Job `api` merged, and a queued
-/// Job `blocked` that waits for a draft, so no other Job of the PR could run: E3 starts nothing. The fake `gh`'s search answers
-/// what `search.json` says; the test writes it.
-fn fx_open_pr() -> Fx {
-    let fx = fx_bare("");
-    fx.fixture(&format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
-         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-           VALUES ('pay', 'ctx', 'Pay the bills', 'deploy', 'lead1', 't', 't');
-         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
-           VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay the bills', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at, pr_number, pr_url, pr_opened_at, pull_request)
-           VALUES ('pay', 'repo', '{repo}', 'main', 'open', 'cpd/pay', '{lead}', '{PR_TITLE}', 'config', cpd_txn(), 't', 't', 812, 'https://github.com/acme/pay/pull/812', 'opened', (SELECT id FROM pull_requests));",
-        repo = fx.repo.display(),
-        lead = fx.lead.display()
-    ));
-    fx.add_merged_api();
-    fx.add_draft("later");
-    fx.add_job("blocked", &["later"], "");
-    let search = fx.env.root().join("search.json");
-    fs::write(&search, common::pay_search("MERGEABLE", "CLEAN")).unwrap();
-    fx.env.fake_gh(&format!("cat '{}'", search.display()));
+/// What GitHub says to the poll's search of pull request 812: a text the test changes between two runs of the engine.
+struct Says(Arc<Mutex<String>>);
+
+impl Says {
+    fn set(&self, mergeable: &str, merge_state: &str) {
+        *self.0.lock().unwrap() = common::pay_search(mergeable, merge_state);
+    }
+}
+
+/// An engine home whose E5 runs the poll for real (in this process), one poll about every tick ([`PR_POLL_EVERY_TICK`]).
+fn polling(config_extra: &str) -> Ip {
+    let fx = engine_home(config_extra);
+    fx.engine_routes_polling();
+    fx.export(PR_POLL_EVERY_TICK.0, PR_POLL_EVERY_TICK.1);
     fx
 }
 
-impl Fx {
-    /// What the fake `gh`'s search says of pull request 812.
-    fn github_says(&self, mergeable: &str, merge_state: &str) {
-        fs::write(self.env.root().join("search.json"), common::pay_search(mergeable, merge_state)).unwrap();
-    }
+/// Plan `pay` in `deploy` with PR `repo` `open` (pull request `acme/pay` #812, stored `mergeable`, `clean`), Job `api` merged, and a queued
+/// Job `blocked` that waits for a draft, so no other Job of the PR could run: E3 starts nothing. `gh` answers the search with what
+/// [`Says`] holds.
+fn open_pr() -> (Ip, Says) {
+    // The update Job is queued at the config's `open_tier` (default H3 since #383): this one is S1.
+    let fx = polling("open_tier = \"S1\"");
+    fx.engine_plan();
+    fx.env.sql(
+        "UPDATE plans SET title = 'Pay the bills', phase = 'deploy' WHERE id = 'pay';
+         INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, mergeable, merge_state, created_at, merged_at, changed_at)
+           VALUES ('acme/pay', 812, 'https://github.com/acme/pay/pull/812', 'Pay the bills', 0, 'open', 'none', 'none', 'mergeable', 'clean', 'opened', NULL, 'opened');
+         UPDATE prs SET status = 'open', pr_number = 812, pr_url = 'https://github.com/acme/pay/pull/812', pr_opened_at = 'opened',
+            pull_request = (SELECT id FROM pull_requests WHERE number = 812) WHERE plan = 'pay' AND key = 'repo';",
+    );
+    fx.add_merged_api();
+    fx.add_draft_in("repo", "later");
+    fx.add_job("blocked", &["later"], "");
+    let says = Says(Arc::new(Mutex::new(common::pay_search("MERGEABLE", "CLEAN"))));
+    let text = says.0.clone();
+    fx.route_fn("gh", move |_| Reply::ok(&text.lock().unwrap()));
+    (fx, says)
+}
+
+/// Whether `call` is the poll's search (the one `gh api graphql` of a poll that no pull request is stored for).
+fn is_search(call: &Call) -> bool {
+    call.args.iter().any(|arg| arg.contains("search(type"))
+}
+
+/// How many polls have searched so far (`gh` calls that are the search), in all the runs of the engine.
+fn searches(runner: &FakeRunner) -> usize {
+    runner.calls().iter().filter(|call| call.program.ends_with("gh") && is_search(call)).count()
+}
+
+/// Runs the engine until `n` more polls have called `gh`, and stops it: the poll in flight is then taken into the store.
+fn polls(fx: &Ip, n: usize) {
+    let runner = fx.fakes.runner.clone();
+    let to = searches(&runner) + n;
+    fx.watch_steps(move |_| searches(&runner) >= to).unwrap();
 }
 
 /// The poll queues the PR's `update` Job in the transaction that stores `conflicting`, once per transition, and a base that merely moved
 /// (`BEHIND`, still `MERGEABLE`) queues nothing (hs-d497: no `behind` detection). The conflict is no `pr-feedback`.
 #[test]
 fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_that_merely_moved() {
-    let fx = fx_open_pr();
-    let engine = fx.start();
+    let (fx, says) = open_pr();
 
-    fx.github_says("MERGEABLE", "BEHIND");
-    wait_until("the poll to store that the base moved", || fx.env.query::<String>("SELECT merge_state FROM pull_requests WHERE number = 812") == "behind");
-    fx.env.wait_whole_ticks(3);
+    says.set("MERGEABLE", "BEHIND");
+    polls(&fx, 3);
+    assert_eq!(fx.env.query::<String>("SELECT merge_state FROM pull_requests WHERE number = 812"), "behind", "the poll stored that the base moved");
     assert_eq!(fx.jobs_of_kind("update"), Vec::<(String, String)>::new(), "a base that merely moved queues nothing");
 
-    fx.github_says("CONFLICTING", "DIRTY");
-    wait_until("the update Job", || !fx.jobs_of_kind("update").is_empty());
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
+    says.set("CONFLICTING", "DIRTY");
+    polls(&fx, 4);
 
     assert_eq!(fx.jobs_of_kind("update"), [("up-repo".to_owned(), "queued".to_owned())], "once per conflict, however many polls see it");
     let row: (String, String, i64, bool) = fx.env.read(|conn| {
@@ -1479,52 +1510,35 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
     assert_eq!(added.len(), 1, "{added:?}");
     let data = &added[0].3;
     assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["pr"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
-    assert_eq!(fx.count("pr-feedback"), 0, "a conflict is no pr-feedback reason any more");
+    assert_eq!(fx.events("pr-feedback").len(), 0, "a conflict is no pr-feedback reason any more");
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay'"), "open", "the PR's status does not change");
 }
 
 /// The update Job that ended is a cause that ended: a conflict that comes after it is a new transition, and a new Job, `up-repo-2`.
 #[test]
 fn e5_queues_a_new_update_job_for_a_conflict_that_comes_after_the_first_job_ended() {
-    let fx = fx_open_pr();
-    let engine = fx.start();
-    fx.github_says("CONFLICTING", "DIRTY");
-    wait_until("the update Job", || !fx.jobs_of_kind("update").is_empty());
+    let (fx, says) = open_pr();
+    says.set("CONFLICTING", "DIRTY");
+    polls(&fx, 2);
+    assert_eq!(fx.jobs_of_kind("update").len(), 1);
 
     // The Job ran and merged; GitHub recomputes (`unknown`), then says the pull request is clean, then conflicts again.
-    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'up-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'up-repo';");
-    fx.github_says("UNKNOWN", "UNKNOWN");
-    fx.env.wait_whole_ticks(2);
-    fx.github_says("MERGEABLE", "CLEAN");
-    fx.env.wait_whole_ticks(2);
+    fx.env.sql("UPDATE jobs SET status = 'running' WHERE key = 'up-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'up-repo';");
+    says.set("UNKNOWN", "UNKNOWN");
+    polls(&fx, 3);
+    says.set("MERGEABLE", "CLEAN");
+    polls(&fx, 3);
     assert_eq!(fx.jobs_of_kind("update").len(), 1);
-    fx.github_says("CONFLICTING", "DIRTY");
-    wait_until("the second update Job", || fx.jobs_of_kind("update").len() == 2);
-    engine.stop();
+    says.set("CONFLICTING", "DIRTY");
+    polls(&fx, 3);
 
     assert_eq!(fx.jobs_of_kind("update"), [("up-repo".to_owned(), "merged".to_owned()), ("up-repo-2".to_owned(), "queued".to_owned())]);
 }
 
-impl Fx {
-    /// The Context's live Manager, Session `mgr1`.
-    fn add_manager(&self) {
-        self.fixture(
-            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-               VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'idle', 't', 't');",
-        );
-    }
-
-    /// Job `api` merged: the PR's open Job can be Ready once nothing else of the PR is left.
-    fn add_merged_api(&self) {
-        self.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-    }
-}
-
-// ---------- E5 ----------
-
-/// Plan `pay` in phase `deploy`.
-fn in_pr(fx: &Fx) {
-    fx.fixture(
+/// Plan `pay` in phase `deploy`, PR `repo` open as pull request 7.
+fn in_pr(fx: &Ip) {
+    fx.engine_plan();
+    fx.env.sql(
         "UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
@@ -1533,62 +1547,144 @@ fn in_pr(fx: &Fx) {
     );
 }
 
+/// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
+const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
+
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 fn search_reply(remaining: u32, reset_at: &str) -> String {
     format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
 
-/// Milliseconds since the epoch, as the fake `gh` writes them.
-fn epoch_ms(at: &str) -> i128 {
-    OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
+/// `gh` answers every search with an empty result that takes `takes`; the time of each call, on the `ManualClock`, is noted.
+fn gh_noting_starts(fx: &Ip, takes: Duration) -> Arc<Mutex<Vec<Duration>>> {
+    let starts = Arc::new(Mutex::new(Vec::new()));
+    let (clock, noted) = (fx.fakes.clock.clone(), starts.clone());
+    fx.route_fn("gh", move |_| {
+        noted.lock().unwrap().push(clock.elapsed());
+        Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")).takes(takes)
+    });
+    starts
 }
 
 #[test]
 fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_plans() {
-    // No Plan at all: E5 polls anyway.
-    let fx = fx_bare("");
-    let log = fx.env.root().join("poll.log");
-    // A poll that lasts 0.2 s, so that "after the end" differs from "after the start", and that notes both.
-    fx.env.fake_gh(&format!(
-        r#"echo "start $({now})" >> '{log}'; sleep 0.2; echo "end $({now})" >> '{log}'; echo '{}'; exit 0"#,
-        search_reply(4987, "2099-01-01T00:00:00Z"),
-        now = NOW_NS,
-        log = log.display()
-    ));
-
+    // No Plan at all: E5 polls anyway. A poll that lasts 0.2 s, so that "after the end" differs from "after the start".
+    let fx = polling("");
     // The poll period, `pr_poll_seconds`, is 0.3 s here (its test override): longer than a poll and than a tick.
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.3")]);
-    wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("end").count()) >= 3);
-    engine.stop();
+    fx.export("CPD_TEST_PR_POLL", "0.3");
+    let starts = gh_noting_starts(&fx, Duration::from_millis(200));
 
-    // start, end, start, end, …: a poll never starts before the previous one ended, and `pr_poll_seconds` after its end.
-    let notes: Vec<(String, i128)> = fs::read_to_string(&log)
-        .unwrap()
-        .lines()
-        .map(|l| {
-        let (what, ns) = l.split_once(' ').unwrap();
-        (what.to_owned(), ns.parse::<i128>().unwrap() / 1_000_000)
-    })
-        .collect();
-    for (i, pair) in notes.windows(2).enumerate() {
-        match (i % 2, pair[0].0.as_str(), pair[1].0.as_str()) {
-            (0, "start", "end") => assert!(pair[1].1 - pair[0].1 >= 200, "{notes:?}"),
-            (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 300, "the next poll starts 0.3 s after the end of the last: {notes:?}"),
-            _ => panic!("polls overlap or are out of order: {notes:?}"),
-        }
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 3).unwrap();
+
+    // A poll never starts before the previous one ended (0.2 s after its start), and `pr_poll_seconds` (0.3 s) after its end.
+    let starts = starts.lock().unwrap();
+    for pair in starts.windows(2) {
+        assert!(pair[1] - pair[0] >= Duration::from_millis(500), "the next poll starts 0.3 s after the end of the last, which ends 0.2 s after its start: {starts:?}");
     }
-    assert_eq!(fx.count("error"), 0);
+    assert_eq!(fx.events("error").len(), 0);
+}
+
+/// engine-W9: a poll of 0.1 s with a tick of 5 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
+/// every 0.3 s (end + 0.2 s), not at the next tick.
+///
+/// What the test looks at is when each tick begins (the mark the engine leaves on its lock): the engine's clock runs only while the
+/// engine naps, so the test holds the engine at its first nap of every tick until the poll that tick started has ended
+/// ([`Ip::watch_gated`]); a tick then begins at a time that the polls alone decide.
+#[test]
+fn e5_polls_at_its_due_time_not_at_the_next_tick() {
+    use std::sync::mpsc::channel;
+    use std::time::SystemTime;
+    /// The longest a gate waits for the poll thread: a failing test's answer, never a pause of a passing one.
+    const WAIT: Duration = Duration::from_secs(10);
+
+    let fx = engine_home("");
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let tick = format!("tick_seconds = 1\n");
+    assert!(text.contains(&tick), "{text}");
+    fs::write(&config, text.replace(&tick, "tick_seconds = 5\n")).unwrap();
+    fx.engine_base_routes();
+    fx.export("CPD_TEST_PR_POLL", "0.2");
+    // `cpd pr poll`: it says it began, waits for the test to let it go, and lasts 0.1 s.
+    let (entered_tx, entered_rx) = channel::<()>();
+    let (go_tx, go_rx) = channel::<()>();
+    let (ended_tx, ended_rx) = channel::<()>();
+    let (entered_tx, go_rx, ended_tx) = (Mutex::new(entered_tx), Mutex::new(go_rx), Mutex::new(ended_tx));
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2099-01-01T00:00:00.000Z"}});
+    fx.route_fn("cpd", move |_| {
+        entered_tx.lock().unwrap().send(()).unwrap();
+        go_rx.lock().unwrap().recv_timeout(WAIT).expect("the engine held at its nap lets the poll go");
+        Reply::ok(&poll.to_string()).takes(Duration::from_millis(100))
+    });
+
+    let lock = fx.home().watch_lock();
+    let ticks = Arc::new(Mutex::new(Vec::<SystemTime>::new()));
+    let seen = ticks.clone();
+    fx.watch_gated(
+        move |_| {
+            let began = fs::metadata(&lock).unwrap().modified().unwrap();
+            let mut ticks = seen.lock().unwrap();
+            if ticks.last() == Some(&began) {
+                return false;
+            }
+            ticks.push(began);
+            // A tick began, and at the start of it E5 (due) started a poll: hold here until it ended.
+            entered_rx.recv_timeout(WAIT).unwrap_or_else(|_| panic!("a tick began and no poll started in it (E5 was not due): ticks at {ticks:?}"));
+            go_tx.send(()).unwrap();
+            ended_rx.recv_timeout(WAIT).expect("the poll ended");
+            ticks.len() >= 3
+        },
+        move || ended_tx.lock().unwrap().send(()).unwrap(),
+    )
+    .unwrap();
+
+    let ticks = ticks.lock().unwrap();
+    for pair in ticks.windows(2) {
+        let gap = pair[1].duration_since(pair[0]).unwrap();
+        assert!((Duration::from_millis(300)..Duration::from_secs(4)).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {ticks:?}");
+    }
+    assert_eq!(fx.calls("cpd").len(), 3);
+    assert_eq!(fx.events("error").len(), 0);
+}
+
+/// The one test of `pr_poll_seconds` itself, the config key (no test override): whole seconds.
+#[test]
+fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds() {
+    let fx = engine_home("");
+    fx.engine_routes_polling();
+    in_pr(&fx);
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("pr_poll_seconds = 3600", "pr_poll_seconds = 1")).unwrap();
+    let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
+    let (clock, noted) = (fx.fakes.clock.clone(), starts.clone());
+    fx.route_fn("gh", move |call| {
+        if is_search(call) {
+            noted.lock().unwrap().push(clock.elapsed());
+            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+        } else {
+            Reply::ok(LOOKUP_OPEN)
+        }
+    });
+
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 2).unwrap();
+
+    // Ten ticks of 0.1 s to a poll: a poll per tick would come within a few of them.
+    let starts = starts.lock().unwrap();
+    let gap = starts[1] - starts[0];
+    assert!(gap >= Duration::from_secs(1), "one poll per pr_poll_seconds (1 s), not one per tick: {gap:?}");
+    assert_eq!(fx.events("error").len(), 0);
 }
 
 #[test]
 fn e5_reports_a_failing_poll_once() {
-    let fx = fx("");
+    let fx = polling("");
     in_pr(&fx);
-    fx.env.fake_gh("echo 'gh: boom' >&2; exit 1");
+    fx.route_fn("gh", |_| Reply::exit(1, "", "gh: boom\n"));
 
-    let engine = fx.start();
-    wait_until("three polls", || fx.env.calls("gh").len() >= 3);
-    engine.stop();
+    polls(&fx, 3);
 
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
@@ -1600,161 +1696,234 @@ fn e5_reports_a_failing_poll_once() {
 // ---------- E5: a gh HTTP 5xx or timeout is transient (hs-d354) ----------
 
 /// What GitHub's 502 looks like through `gh api graphql`: nginx's HTML page on stdout and `gh`'s message on stderr, exit 1.
-const GH_502: &str = "echo '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1";
+fn gh_502() -> Reply {
+    Reply::exit(
+        1,
+        "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>\n",
+        &format!("{GH_502_LINE}\n"),
+    )
+}
 
-fn failing_file(fx: &Fx) -> PathBuf {
+/// The stderr of [`gh_502`].
+const GH_502_LINE: &str = "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)";
+
+fn failing_file(fx: &Ip) -> PathBuf {
     fx.env.cpd_home().join("run/pr-poll-failing.json")
 }
 
 /// `run/pr-poll-failing.json` as the engine keeps it: the `call` that failed and `since` when it first did, `minutes` ago.
-fn fail_since(fx: &Fx, call: &str, minutes: i64) {
+fn fail_since(fx: &Ip, call: &str, minutes: i64) {
     fs::create_dir_all(failing_file(fx).parent().unwrap()).unwrap();
     fs::write(failing_file(fx), json!({"call": call, "since": ago(minutes)}).to_string()).unwrap();
 }
 
-fn failing(fx: &Fx) -> Option<Value> {
+fn failing(fx: &Ip) -> Option<Value> {
     fs::read_to_string(failing_file(fx)).ok().map(|t| serde_json::from_str(&t).unwrap())
 }
 
 /// Sets `watch.pr_poll_transient_minutes`.
-fn transient_minutes(fx: &Fx, minutes: u32) {
+fn transient_minutes(fx: &Ip, minutes: u32) {
     let config = fx.env.cpd_home().join("config.toml");
     let text = fs::read_to_string(&config).unwrap();
     fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_transient_minutes = {minutes}\n"))).unwrap();
 }
 
 /// What the Manager was sent that is not E4's: `data.text` of every `session-message`.
-fn messages(fx: &Fx) -> Vec<String> {
+fn messages(fx: &Ip) -> Vec<String> {
     fx.events("session-message").into_iter().map(|e| e.3["text"].as_str().unwrap().to_owned()).collect()
+}
+
+/// `gh` that answers `failure` until the returned flag is set, then finds no pull request.
+fn gh_failing_until_healed(fx: &Ip, failure: Reply) -> Arc<AtomicBool> {
+    let healed = Arc::new(AtomicBool::new(false));
+    let flag = healed.clone();
+    fx.route_fn("gh", move |_| if flag.load(Ordering::SeqCst) { Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")) } else { failure.clone() });
+    healed
 }
 
 #[test]
 fn e5_a_gh_502_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
-    let fx = fx("");
-    fx.add_manager();
-    let healed = fx.env.root().join("healed");
-    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_502}; fi", healed.display()));
+    let fx = polling("");
+    fx.manager("mgr1");
+    let healed = gh_failing_until_healed(&fx, gh_502());
 
-    let engine = fx.start();
-    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
-    wait_until("the engine's record of the failure", || failing(&fx).is_some());
-    let record = failing(&fx).unwrap();
+    polls(&fx, 3);
+    let record = failing(&fx).expect("the engine's record of the failure");
     assert_eq!(record["call"], "search");
     let since = parse_time(record["since"].as_str().unwrap());
     assert!((OffsetDateTime::now_utc() - since).whole_seconds() < 60, "the first failure was just now: {record}");
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
 
     // The next poll heals it: the record is gone, and nothing was ever raised.
-    fs::write(&healed, "").unwrap();
-    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
-    let log = watch_log(&fx);
+    healed.store(true, Ordering::SeqCst);
+    polls(&fx, 3);
+    assert_eq!(failing(&fx), None, "the record is deleted by a poll that succeeded");
+    assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
+    let log = engine_log(&fx);
     assert!(log.contains("pr poll: gh search failed transiently (HTTP 502), failing since "), "{log}");
     assert!(log.contains("): retrying at the next poll"), "{log}");
 }
 
 #[test]
 fn e5_a_gh_timeout_is_transient_too() {
-    let fx = fx("");
-    fx.add_manager();
-    // `gh` hangs; the poll's 15 s kill is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
-    fx.env.fake_gh(&format!("exec sleep {SLEEP_SECONDS}"));
-    let mut vars = common::PLAN_POLLS.to_vec();
-    vars.push(("CPD_TEST_DEADLINE_GH", "0.3"));
+    let fx = polling("");
+    fx.manager("mgr1");
+    // `gh` hangs for longer than the poll's 15 s deadline (contract §1.2, `CPD_TEST_DEADLINE_GH` shortens it, not needed on a virtual clock).
+    fx.route_fn("gh", |_| Reply::ok("").takes(Duration::from_secs(SLEEP_SECONDS)));
 
-    let engine = fx.start_with(Path::new(CPD), &vars);
-    wait_until("the first failure to be handled", || fx.count("error") >= 1 || watch_log(&fx).contains("failed transiently"));
-    engine.stop();
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
-    assert!(watch_log(&fx).contains("pr poll: gh search failed transiently (timeout), failing since "), "{}", watch_log(&fx));
+    polls(&fx, 1);
+
+    assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
+    let log = engine_log(&fx);
+    assert!(log.contains("pr poll: gh search failed transiently (timeout), failing since "), "{log}");
     assert_eq!(failing(&fx).unwrap()["call"], "search");
 }
 
-/// A `fx` with a Manager, a `gh` that always answers 502 and `run/pr-poll-failing.json` for `minutes` minutes of failing.
-fn fx_with_manager_failing(minutes: i64) -> Fx {
-    let fx = fx("");
-    fx.add_manager();
-    fx.env.fake_gh(GH_502);
+/// An engine home with a Manager, a `gh` that always answers `failure` and `run/pr-poll-failing.json` for `minutes` minutes of failing.
+fn polling_with_manager_failing(minutes: i64, failure: Reply) -> Ip {
+    let fx = polling("");
+    fx.manager("mgr1");
+    fx.route_fn("gh", move |_| failure.clone());
     fail_since(&fx, "search", minutes);
     fx
 }
 
 #[test]
+fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_before() {
+    // Nine minutes of failing (the record the engine kept, as if it had polled that long): still nothing.
+    {
+        let fx = polling_with_manager_failing(9, gh_502());
+        polls(&fx, 3);
+        assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
+        assert_eq!(failing(&fx).unwrap()["call"], "search");
+    }
+
+    // Eleven: one error Event for the machine, and one message to the Manager, not one per tick.
+    let fx = polling_with_manager_failing(11, gh_502());
+    let since = failing(&fx).unwrap()["since"].clone();
+    polls(&fx, 5);
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!((plan, job, attempt), (&None, &None, &None));
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!((&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]), (&json!("search"), &since, &json!(11), &json!("HTTP 502"), &json!(1)));
+    assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
+    assert!(details["stderr"].as_str().unwrap().contains(GH_502_LINE), "{details}");
+
+    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
+    // The failure stays: the record keeps its first time, the polls (and their log lines) go on.
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+    assert!(engine_log(&fx).matches("failed transiently (HTTP 502)").count() >= 2, "{}", engine_log(&fx));
+}
+
+#[test]
 fn e5_counts_the_failing_window_from_pr_poll_transient_minutes() {
     for (minutes, raised) in [(4, 0), (6, 1)] {
-        let fx = fx_with_manager_failing(minutes);
+        let fx = polling_with_manager_failing(minutes, gh_502());
         transient_minutes(&fx, 5);
-        let engine = fx.start();
-        fx.env.wait_whole_ticks(3);
-        engine.stop();
-        assert_eq!(fx.count("error"), raised, "failing for {minutes} minutes, limit 5");
+        polls(&fx, 3);
+        assert_eq!(fx.events("error").len(), raised, "failing for {minutes} minutes, limit 5");
     }
 }
 
 /// `gh`'s own failure to parse a response that GitHub cut off mid-body (hs-d354, 2026-10-20 16:43:13Z): exit 1, this on stderr, an empty stdout.
-const GH_CUT: &str = "echo 'unexpected end of JSON input' >&2; exit 1";
+fn gh_cut() -> Reply {
+    Reply::exit(1, "", "unexpected end of JSON input\n")
+}
 
 #[test]
 fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
-    let fx = fx("");
-    fx.add_manager();
-    let healed = fx.env.root().join("healed");
-    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_CUT}; fi", healed.display()));
+    let fx = polling("");
+    fx.manager("mgr1");
+    let healed = gh_failing_until_healed(&fx, gh_cut());
 
-    let engine = fx.start();
-    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
-    wait_until("the engine's record of the failure", || failing(&fx).is_some());
-    assert_eq!(failing(&fx).unwrap()["call"], "search");
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    polls(&fx, 3);
+    assert_eq!(failing(&fx).expect("the engine's record of the failure")["call"], "search");
+    assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
 
     // The next poll heals it: the record is gone, and nothing was ever raised.
-    fs::write(&healed, "").unwrap();
-    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
-    let log = watch_log(&fx);
+    healed.store(true, Ordering::SeqCst);
+    polls(&fx, 3);
+    assert_eq!(failing(&fx), None, "the record is deleted by a poll that succeeded");
+    assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
+    let log = engine_log(&fx);
     assert!(log.contains("pr poll: gh search failed transiently (unexpected end of JSON input), failing since "), "{log}");
     assert!(log.contains("): retrying at the next poll"), "{log}");
 }
 
-/// The shell command that prints the epoch in nanoseconds: BSD `date` has no `%N`.
-const NOW_NS: &str = r#"perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%d%06d000\n",$s,$u'"#;
+#[test]
+fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
+    // Nine minutes of failing: still nothing.
+    {
+        let fx = polling_with_manager_failing(9, gh_cut());
+        polls(&fx, 3);
+        assert_eq!((fx.events("error").len(), messages(&fx)), (0, Vec::<String>::new()));
+        assert_eq!(failing(&fx).unwrap()["call"], "search");
+    }
+
+    // Eleven: one error Event and one message to the Manager, not one per tick.
+    let fx = polling_with_manager_failing(11, gh_cut());
+    let since = failing(&fx).unwrap()["since"].clone();
+    polls(&fx, 5);
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!(
+        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]),
+        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1))
+    );
+    assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
+    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+}
+
+#[test]
+fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
+    for (name, failure, line) in [
+        ("a 401", Reply::exit(1, "", "gh: HTTP 401: Bad credentials\n"), "gh: HTTP 401: Bad credentials"),
+        ("an HTML page with no 5xx status", Reply::exit(1, "<html><body>nginx</body></html>\n", "gh: exit status 1\n"), "gh: exit status 1"),
+    ] {
+        // A transient failure was recorded a minute ago; this one is not that.
+        let fx = polling_with_manager_failing(1, failure);
+        polls(&fx, 4);
+
+        let errors = fx.events("error");
+        assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+        let data = &errors[0].3;
+        assert_eq!((&data["source"], &data["code"], &data["details"]["transient"], &data["details"]["call"]), (&json!("watch"), &json!("gh_failed"), &json!(false), &json!("search")), "{name}");
+        assert!(data["details"]["stderr"].as_str().unwrap().contains(line), "{name}: {data}");
+        assert_eq!(failing(&fx), None, "{name}: a failure that is not transient deletes the record");
+        assert!(!engine_log(&fx).contains("failed transiently"), "{name}");
+    }
+}
 
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
-    let fx = fx("");
-    let log = fx.env.root().join("poll.log");
-    let first = fx.env.root().join("first-poll-done");
-    // The first poll leaves 50 requests until `reset_at`, 0.5 s after it (written to `reset-at`); the next one, which
-    // E5 must not run before that (it polls every tick otherwise), 4987.
-    let reset_file = fx.env.root().join("reset-at");
-    fx.env.fake_gh(&format!(
-        r#"echo "start $({now})" >> '{log}'
-if [ ! -e '{first}' ]; then
-  touch '{first}'; ms=$(( $({now}) / 1000000 + 500 ))
-  reset=$(perl -MPOSIX -e '$ms=shift; print strftime("%Y-%m-%dT%H:%M:%S",gmtime(int($ms/1000))).sprintf(".%03dZ",$ms%1000)' "$ms"); printf %s "$reset" > '{reset_file}'
-  echo '{low}' | sed "s/RESET_AT/$reset/"
-else echo '{ok}'; fi; exit 0"#,
-        now = NOW_NS,
-        log = log.display(),
-        first = first.display(),
-        reset_file = reset_file.display(),
-        low = search_reply(50, "RESET_AT"),
-        ok = search_reply(4987, "2099-01-01T00:00:00Z"),
-    ));
+    let fx = polling("");
+    // The first poll leaves 50 requests until `reset_at`, a minute from now; the next one, which E5 must not run before that (it
+    // polls every tick otherwise), 4987. The engine reads the reset against the wall clock and waits it out on the `ManualClock`.
+    let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+    let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
+    let (clock, noted, low) = (fx.fakes.clock.clone(), starts.clone(), search_reply(50, &reset_at));
+    fx.route_fn("gh", move |_| {
+        let mut noted = noted.lock().unwrap();
+        noted.push(clock.elapsed());
+        Reply::ok(&if noted.len() == 1 { low.clone() } else { search_reply(4987, "2099-01-01T00:00:00Z") })
+    });
 
-    let engine = fx.start();
-    wait_until("the second poll", || fx.env.calls("gh").len() >= 2);
-    engine.stop();
-    let reset_at = fs::read_to_string(&reset_file).unwrap();
+    let seen = starts.clone();
+    fx.watch_steps(move |_| seen.lock().unwrap().len() >= 2).unwrap();
 
-    // The second poll started at or after `reset_at`: the ticks in between ran no poll.
-    let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.strip_prefix("start ").unwrap().parse::<i128>().unwrap() / 1_000_000).collect();
+    // The second poll started when the reset came (a minute, less what the test took to get here): the ticks in between ran no poll.
+    let starts = starts.lock().unwrap();
     assert_eq!(starts.len(), 2, "{starts:?}");
-    assert!(starts[1] >= epoch_ms(&reset_at), "polled {} ms before the reset", epoch_ms(&reset_at) - starts[1]);
+    assert!(starts[1] - starts[0] >= Duration::from_secs(55), "polled {:?} after the first, before the reset ({reset_at})", starts[1] - starts[0]);
     // One Event, for the machine, with what the User needs; resuming raised nothing more.
     let errors = fx.events("error");
     assert_eq!(errors.len(), 1, "{errors:?}");
