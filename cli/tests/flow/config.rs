@@ -210,7 +210,6 @@ version = 1
 machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
-context_recent_days = 3650
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0

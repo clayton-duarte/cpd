@@ -197,7 +197,7 @@ fn run_log(fx: &Fx, screen: &SharedBackend, event: Option<i64>, steps: Vec<Step>
         None => Log::new(first.events),
     };
     let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
-    let mut input = Script::new(&fx.fakes.clock, screen, steps);
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), screen, steps);
     let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
     let result = logs::show_with(&mut ctx, &mut store, POLL, follow, log);
     drop(ctx);
@@ -397,7 +397,7 @@ fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes
         look("a page down", |r| r[1].contains(" 9-16/")),
         Step::ch('x'),
     ];
-    let mut input = Script::new(&fx.fakes.clock, &screen, steps);
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), &screen, steps);
     let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
     legend::show_with(&mut ctx).unwrap();
     drop(ctx);

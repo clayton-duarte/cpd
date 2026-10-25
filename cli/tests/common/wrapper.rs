@@ -161,6 +161,9 @@ impl Spawn for PaneSpawn {
     fn env_of(&self, p: Pid, key: &str) -> Option<String> {
         self.inner.env_of(p, key)
     }
+    fn descendants(&self, root: Pid) -> Vec<Pid> {
+        self.inner.descendants(root)
+    }
     fn exec(&self, l: &Launch) -> io::Error {
         let _ = self.inner.exec(l);
         self.log().execs.push(l.clone());
