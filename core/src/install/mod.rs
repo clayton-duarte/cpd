@@ -2,13 +2,21 @@
 //!
 //! The steps, in order: the preflight, the migration check, the verdict of the built binary, the binary, the
 //! adapter swap, the follow-ups, the tag. Only the migration check, the verdict and the binary exist so far as
-//! tests (`migration_tests`); `run` is a stub until the Job that implements it.
+//! tests (`migration_tests`); `run` stops after the binary until the Jobs that implement the rest.
 
+use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
+use std::process::{Command, Output};
+use std::time::Duration;
 
+use crate::git::run::{Out, run_with};
 use crate::home::CpdHome;
 use crate::ports::Ports;
+
+/// The built binary's `--version` answers at once: it opens the store, nothing more.
+const VERSION_DEADLINE: Duration = Duration::from_secs(60);
 
 /// What `cpd install --root <checkout>` is given, read once at the edge (the environment is not read below it).
 pub struct Install {
@@ -24,10 +32,126 @@ pub struct Install {
     pub pid: u32,
 }
 
+/// The migrations of the checkout (contract §3.7).
+const MIGRATIONS: &str = "core/src/store/migrations";
+
+/// Why the install stops: the line printed after `cpd install refused: ` (or as it is, for a failure) and the exit.
+struct Stop(String);
+
 /// Runs the install; the human text (refusals, warnings, `installed ...`) goes to `err`. The exit code: 0, or 1
 /// for a refusal, a failure or a follow-up that failed.
-pub fn run(_ports: &Ports, _install: &Install, _err: &mut dyn Write) -> i32 {
-    todo!("cpd install: the migration check, the verdict, the binary replace")
+pub fn run(ports: &Ports, install: &Install, err: &mut dyn Write) -> i32 {
+    match steps(ports, install, err) {
+        Ok(()) => 0,
+        Err(Stop(text)) => {
+            let _ = writeln!(err, "{text}");
+            1
+        }
+    }
+}
+
+fn refused(text: impl std::fmt::Display) -> Stop {
+    Stop(format!("cpd install refused: {text}"))
+}
+
+fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<(), Stop> {
+    check_migrations(ports, install)?;
+    check_verdict(ports, install)?;
+    let dest = replace_binary(install)?;
+    let _ = writeln!(err, "installed {} and {}", dest.display(), install.home.join(".local/share/cpd/pi").display());
+    Ok(())
+}
+
+/// The branch check (contract §3.7): refuses a build that carries a migration file that is not, byte for byte, on
+/// `origin/main`. A file only origin/main has does not count (the store check decides that).
+fn check_migrations(ports: &Ports, install: &Install) -> Result<(), Stop> {
+    let root = install.root.as_path();
+    let fetched = run_with(&*ports.runner, root, &["fetch", "--quiet", "origin", "main"]);
+    if !matches!(fetched, Ok(Out { code: 0, .. })) {
+        return Err(refused("cannot fetch origin/main to check that this build's migrations are on it."));
+    }
+    let dir = root.join(MIGRATIONS);
+    let mut names = Vec::new();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with('.') && entry.path().is_file() {
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    let mut unmerged = Vec::new();
+    for name in names {
+        let on_main = run_with(&*ports.runner, root, &["show", &format!("origin/main:{MIGRATIONS}/{name}")]);
+        let file = fs::read(dir.join(&name)).map_err(|e| Stop(format!("cpd install failed: cannot read {}: {e}", dir.join(&name).display())))?;
+        match on_main {
+            Ok(Out { code: 0, stdout, .. }) if stdout == String::from_utf8_lossy(&file) => {}
+            _ => unmerged.push(name),
+        }
+    }
+    if unmerged.is_empty() {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "this build carries migration {} that is not on origin/main, and a preview would apply it to {} before the PR merges. \
+         Merge main into this branch, or wait until the PR merges, then install again.",
+        unmerged.join(", "),
+        install.cpd_home.db().display()
+    )))
+}
+
+/// The verdict of the built binary (the store check, contract §3.7): its `--version`, with the caller's `CPD_HOME`.
+fn check_verdict(ports: &Ports, install: &Install) -> Result<(), Stop> {
+    let built = install.target_dir.join("release/cpd");
+    let mut cmd = Command::new(&built);
+    cmd.arg("--version").env("CPD_HOME", install.cpd_home.root());
+    let out = ports.runner.output(&mut cmd, "cpd", VERSION_DEADLINE);
+    let text = |out: &Output| format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let out = match out {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => return Err(refused(format!("{} --version failed:\n{}", built.display(), text(&out).trim_end()))),
+        Err(e) => return Err(refused(format!("{} --version failed:\n{e:?}", built.display()))),
+    };
+    let json: Option<serde_json::Value> = serde_json::from_slice(&out.stdout).ok();
+    let Some(store) = json.as_ref().and_then(|v| v.get("store")).filter(|s| s.is_null() || s.is_object()) else {
+        return Err(refused(format!("{} --version reports no store verdict:\n{}", built.display(), text(&out).trim_end())));
+    };
+    if store.get("opens").and_then(|o| o.as_bool()) != Some(false) {
+        return Ok(());
+    }
+    let refusal = store.get("refusal");
+    let field = |name: &str| refusal.and_then(|r| r.get(name)).and_then(|v| v.as_str()).unwrap_or("");
+    let fix = match field("code") {
+        "store_too_new" => "\nmerge main into this branch, then install again",
+        "migration_changed" => {
+            "\nthe branch's migration differs from the one this store applied; restore it from origin/main or wait for the store to be repaired"
+        }
+        "migration_order" => "\nrename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again",
+        _ => "",
+    };
+    Err(refused(format!("this build cannot open {}: {}{fix}", install.cpd_home.db().display(), field("message"))))
+}
+
+/// The binary replace: a copy at `.cpd.tmp.<pid>` of the destination's directory, mode 755, renamed over the
+/// destination, so a running `cpd` keeps its old inode and the path is always the old or the new one.
+fn replace_binary(install: &Install) -> Result<PathBuf, Stop> {
+    let built = install.target_dir.join("release/cpd");
+    let dest_dir = install.home.join(".local/bin");
+    let dest = dest_dir.join("cpd");
+    let tmp = dest_dir.join(format!(".cpd.tmp.{}", install.pid));
+    let failed = |what: &str, e: std::io::Error| Stop(format!("cpd install failed: {what}: {e}"));
+    fs::create_dir_all(&dest_dir).map_err(|e| failed(&format!("cannot create {}", dest_dir.display()), e))?;
+    let put = || -> std::io::Result<()> {
+        fs::copy(&built, &tmp)?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
+        fs::rename(&tmp, &dest)
+    };
+    put().map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        failed(&format!("cannot install {} as {}", built.display(), dest.display()), e)
+    })?;
+    Ok(dest)
 }
 
 #[cfg(test)]
