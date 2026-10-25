@@ -136,7 +136,7 @@ impl Watch {
 
 /// `pid`'s parent and state ('Z' for a zombie) from `libproc`'s BSD info.
 #[cfg(target_os = "macos")]
-fn stat(pid: u32) -> Option<(u32, char)> {
+pub(crate) fn stat(pid: u32) -> Option<(u32, char)> {
     // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
     const SZOMB: u32 = 5;
     let info = libproc::proc_pid::pidinfo::<libproc::bsd_info::BSDInfo>(i32::try_from(pid).ok()?, 0).ok()?;
@@ -145,7 +145,7 @@ fn stat(pid: u32) -> Option<(u32, char)> {
 
 /// `pid`'s parent and state from `/proc/<pid>/stat`.
 #[cfg(not(target_os = "macos"))]
-fn stat(pid: u32) -> Option<(u32, char)> {
+pub(crate) fn stat(pid: u32) -> Option<(u32, char)> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // `pid (comm) state ppid …`; comm may hold spaces and parentheses.
     let rest = &text[text.rfind(')')? + 1..];
@@ -157,18 +157,18 @@ fn stat(pid: u32) -> Option<(u32, char)> {
 
 /// Every pid: `libproc`'s process list on macOS, the numbers in `/proc` elsewhere.
 #[cfg(target_os = "macos")]
-fn all_pids() -> Vec<u32> {
+pub(crate) fn all_pids() -> Vec<u32> {
     libproc::processes::pids_by_type(libproc::processes::ProcFilter::All).unwrap_or_default()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn all_pids() -> Vec<u32> {
+pub(crate) fn all_pids() -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/proc") else { return Vec::new() };
     entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok()).collect()
 }
 
 /// Every live descendant of `root`, not `root` itself, in pid order.
-pub(super) fn descendants(root: u32) -> Vec<u32> {
+pub(crate) fn descendants(root: u32) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for pid in all_pids() {
         if let Some((ppid, state)) = stat(pid)

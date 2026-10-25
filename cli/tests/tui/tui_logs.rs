@@ -324,8 +324,8 @@ fn a_follow_that_fails_is_shown_and_the_events_stay() {
 
 #[test]
 fn the_logs_view_needs_a_terminal() {
-    let env = env();
-    let run = env.cpd(&["tui", "view", "logs"]);
+    let fx = Fx::with_ports();
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "logs"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
 }
 

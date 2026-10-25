@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{TAIL_LINES, tail};
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
 use crate::host::runner::Runner;
@@ -106,11 +107,23 @@ fn retry_transient(
     dir: &Path,
     args: &[&str],
     transient: fn(&str) -> bool,
+    between: impl FnMut(),
+) -> Result<String, CpdError> {
+    retry_transient_with(&SystemRunner, &SystemClock, dir, args, transient, between)
+}
+
+/// [`retry_transient`] on `runner`, its naps on `clock`.
+fn retry_transient_with(
+    runner: &dyn Runner,
+    clock: &dyn Clock,
+    dir: &Path,
+    args: &[&str],
+    transient: fn(&str) -> bool,
     mut between: impl FnMut(),
 ) -> Result<String, CpdError> {
     let mut round = 1;
     loop {
-        let out = run(dir, args)?;
+        let out = run_with(runner, dir, args)?;
         if out.code == 0 {
             return Ok(out.stdout);
         }
@@ -121,7 +134,7 @@ fn retry_transient(
         round += 1;
         between();
         let jitter = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() % 401);
-        std::thread::sleep(Duration::from_millis(100 + u64::from(jitter)));
+        clock.sleep(Duration::from_millis(100 + u64::from(jitter)));
     }
 }
 
@@ -157,7 +170,12 @@ pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
 /// `git worktree list --porcelain`, as [`ok`], read again while it fails on a
 /// half-written or half-removed admin dir ([`is_admin_dir_race`], contract §7).
 pub fn worktree_list(dir: &Path) -> Result<String, CpdError> {
-    retry_transient(dir, &["worktree", "list", "--porcelain"], is_admin_dir_race, || {})
+    worktree_list_with(&SystemRunner, &SystemClock, dir)
+}
+
+/// [`worktree_list`] on `runner`, its naps on `clock`.
+pub fn worktree_list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<String, CpdError> {
+    retry_transient_with(runner, clock, dir, &["worktree", "list", "--porcelain"], is_admin_dir_race, || {})
 }
 
 /// `git worktree add <args>`, as [`ok`], retried while it fails on a concurrent
@@ -213,13 +231,23 @@ mod tests {
 
 /// `git rev-parse <rev>`, trimmed.
 pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, CpdError> {
-    Ok(ok(dir, &["rev-parse", "--verify", "--end-of-options", rev])?.trim().to_owned())
+    rev_parse_with(&SystemRunner, dir, rev)
+}
+
+/// [`rev_parse`] on `runner`.
+pub fn rev_parse_with(runner: &dyn Runner, dir: &Path, rev: &str) -> Result<String, CpdError> {
+    Ok(ok_with(runner, dir, &["rev-parse", "--verify", "--end-of-options", rev])?.trim().to_owned())
 }
 
 /// Whether `refs/heads/<branch>` exists.
 pub fn branch_exists(dir: &Path, branch: &str) -> Result<bool, CpdError> {
+    branch_exists_with(&SystemRunner, dir, branch)
+}
+
+/// [`branch_exists`] on `runner`.
+pub fn branch_exists_with(runner: &dyn Runner, dir: &Path, branch: &str) -> Result<bool, CpdError> {
     let reference = format!("refs/heads/{branch}");
-    let out = run(dir, &["rev-parse", "--verify", "--quiet", &reference])?;
+    let out = run_with(runner, dir, &["rev-parse", "--verify", "--quiet", &reference])?;
     match out.code {
         0 => Ok(true),
         1 => Ok(false),
@@ -248,7 +276,12 @@ pub fn origin_url(dir: &Path) -> Result<Option<String>, CpdError> {
 
 /// The checked-out branch of the worktree at `dir`; `None` when detached.
 pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
-    let out = run(dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    current_branch_with(&SystemRunner, dir)
+}
+
+/// [`current_branch`] on `runner`.
+pub fn current_branch_with(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, CpdError> {
+    let out = run_with(runner, dir, &["symbolic-ref", "--short", "-q", "HEAD"])?;
     match out.code {
         0 => Ok(Some(out.stdout.trim().to_owned())),
         1 => Ok(None),

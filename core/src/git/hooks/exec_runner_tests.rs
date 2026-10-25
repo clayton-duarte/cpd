@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
-use super::exec::{Ended, Executed, Rendered, run_with};
+use super::exec::{Ended, Executed, Rendered, run_on, run_with};
 use crate::clock::ManualClock;
 use crate::host::runner::{Call, FakeRunner, Handler, Reply};
 
@@ -252,4 +252,18 @@ fn nothing_unscripted_is_called() {
     let runner = runner().on("sh", |_| true, Reply::ok(""));
     run(&runner, &[vec![hook(Some("a"), "a"), hook(Some("b"), "b")]], LIMIT, 60);
     assert!(runner.unscripted().is_empty());
+}
+
+#[test]
+fn what_one_block_took_on_the_clock_is_not_left_to_the_next() {
+    // One timeout for the whole run, measured on the clock the runner's replies move: the first block takes 4 s of
+    // the 5, so the second is called with 1 s.
+    let clock = ManualClock::new();
+    let runner = answers(FakeRunner::new(clock.clone()), "one", Reply::ok("").takes(Duration::from_secs(4))).on("sh", |_| true, Reply::ok(""));
+    let dir = tempfile::tempdir().unwrap();
+    let log = File::create(dir.path().join("hook.log")).unwrap();
+    let blocks = [vec![hook(None, "one")], vec![hook(None, "two")]];
+    let done = run_on(&runner, &clock, &blocks, Path::new("/work/tree"), Duration::from_secs(5), &[], log, 60);
+    let deadlines: Vec<Duration> = runner.calls().iter().map(|c| c.deadline).collect();
+    assert_eq!((done.failure, deadlines), (None, vec![Duration::from_secs(5), Duration::from_secs(1)]));
 }

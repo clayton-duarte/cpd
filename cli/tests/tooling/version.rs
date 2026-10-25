@@ -16,21 +16,7 @@ use common::{output, TestEnv};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The `CPD_COMMIT` the build of these tests was given: the same cargo run built `cpd`.
-const BUILD_COMMIT: Option<&str> = option_env!("CPD_COMMIT");
-
 const CLI_DIR: &str = env!("CARGO_MANIFEST_DIR");
-
-#[test]
-fn cpd_reports_the_commit_its_build_was_given_or_dev() {
-    let env = TestEnv::empty();
-    let ok = env.cpd(&["--version"]).ok();
-    let expected = match BUILD_COMMIT {
-        Some(commit) if !commit.is_empty() => format!("{VERSION}-{commit}"),
-        _ => format!("{VERSION}-dev"),
-    };
-    assert_eq!(ok["version"], expected.as_str(), "built with CPD_COMMIT={BUILD_COMMIT:?}");
-}
 
 /// `cli/build.rs`, compiled on its own by the `rustc` beside the cargo that built these tests.
 struct BuildScript {

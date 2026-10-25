@@ -22,10 +22,13 @@
 
 use std::cell::Cell;
 use std::ffi::OsString;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Output};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
+
+use nix::unistd::{dup, dup2_stdin, dup2_stdout};
 
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
@@ -98,6 +101,13 @@ impl Fx {
         let mut fx = Fx::with(env);
         fx.on_fake_ports = true;
         fx
+    }
+
+    /// Sets `key` in the process's environment until this `Fx` drops, which puts the environment back: for a test
+    /// that reads what the product does with a variable it inherits (the hooks withhold `TMUX`, `PI_*`, `CPD_*`).
+    pub fn export(&self, key: &str, value: &str) {
+        // SAFETY: under this `Fx`'s lock, as `enter`.
+        unsafe { std::env::set_var(key, value) };
     }
 
     /// Scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
@@ -357,6 +367,14 @@ impl Fx {
         self.cpd_in(self.env.root(), args)
     }
 
+    /// Runs `cpd <args>` from this env's root with stdin and stdout pointing at `/dev/null` for the call, so the product's
+    /// `on_a_terminal` is false whatever the test process's own stdin and stdout are (a run in a terminal): the refusal
+    /// `not_a_terminal` of a command that owns its terminal. The two descriptors are put back after, also on a panic.
+    pub fn cpd_without_a_terminal(&self, args: &[&str]) -> Run {
+        let _detached = NoTerminal::enter();
+        self.cpd(args)
+    }
+
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
         self.cpd_with(cwd, args, &[])
@@ -430,6 +448,31 @@ fn bare_with_store() -> TestEnv {
 /// The number of `code`, which `ExitCode` does not give.
 fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
+}
+
+/// Stdin and stdout of the process pointing at `/dev/null`, put back on drop.
+struct NoTerminal {
+    stdin: OwnedFd,
+    stdout: OwnedFd,
+}
+
+impl NoTerminal {
+    fn enter() -> NoTerminal {
+        let null = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null").expect("open /dev/null");
+        let stdin = dup(std::io::stdin()).expect("dup stdin");
+        let stdout = dup(std::io::stdout()).expect("dup stdout");
+        let saved = NoTerminal { stdin, stdout };
+        dup2_stdin(&null).expect("point stdin at /dev/null");
+        dup2_stdout(&null).expect("point stdout at /dev/null");
+        saved
+    }
+}
+
+impl Drop for NoTerminal {
+    fn drop(&mut self) {
+        let _ = dup2_stdin(&self.stdin);
+        let _ = dup2_stdout(&self.stdout);
+    }
 }
 
 /// The extra variables and the directory of one call, restored when it ends or unwinds.

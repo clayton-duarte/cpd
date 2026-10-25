@@ -83,11 +83,17 @@ pub struct DismissArgs {
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
+    run_with(&Ports::real(), command)
+}
+
+/// [`run`] on `ports`: the time of every command is `ports.clock.utc()`, and `snooze tomorrow` reads the local offset
+/// through `ports.runner`.
+pub fn run_with(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
-        Command::List(args) => list(args),
-        Command::Show(args) => show(args),
-        Command::Snooze(args) => snooze(args),
-        Command::Dismiss(args) => dismiss(args),
+        Command::List(args) => list(ports, args),
+        Command::Show(args) => show(ports, args),
+        Command::Snooze(args) => snooze(ports, args),
+        Command::Dismiss(args) => dismiss(ports, args),
     }
 }
 
@@ -163,9 +169,9 @@ fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError
 }
 
 /// `inbox list` (§21.1).
-fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, .. } = Env::open()?;
-    let now = OffsetDateTime::now_utc();
+fn list(ports: &Ports, args: ListArgs) -> Result<Output, CpdError> {
+    let Env { home, mut store, .. } = Env::open_with(ports)?;
+    let now = ports.clock.utc();
     let filter = |state| Filter { context: args.context.clone(), state };
     let (open, visible, closed, cursor, manager) = store.read(|conn| {
         if let Some(context) = &args.context {
@@ -238,9 +244,9 @@ fn open_item(conn: &Connection, id: i64) -> Result<Item, CpdError> {
 }
 
 /// `inbox show` (§21.2).
-fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let Env { mut store, .. } = Env::open()?;
-    let now = OffsetDateTime::now_utc();
+fn show(ports: &Ports, args: ShowArgs) -> Result<Output, CpdError> {
+    let Env { mut store, .. } = Env::open_with(ports)?;
+    let now = ports.clock.utc();
     let item = store.read(|conn| model::get(conn, args.id)?.ok_or_else(|| not_found(args.id)))?;
     Ok(Output::success(json!({"item": item_json(&item, now)?})))
 }
@@ -295,8 +301,8 @@ pub fn snooze_until_on(ports: &Ports, until: Until) -> Result<OffsetDateTime, Cp
 }
 
 /// `inbox snooze` (§21.3).
-fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
-    let Env { mut store, ports, .. } = Env::open()?;
+fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
+    let Env { mut store, .. } = Env::open_with(ports)?;
     let now = ports.clock.utc();
     let until = timestamp(snooze_until(&*ports.runner, args.until, now)?);
     let item = store.write("inbox snooze", |tx| {
@@ -310,9 +316,9 @@ fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
 }
 
 /// `inbox dismiss` (§21.4).
-fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
-    let Env { mut store, .. } = Env::open()?;
-    let now = OffsetDateTime::now_utc();
+fn dismiss(ports: &Ports, args: DismissArgs) -> Result<Output, CpdError> {
+    let Env { mut store, .. } = Env::open_with(ports)?;
+    let now = ports.clock.utc();
     // Already dismissed writes nothing, not even a `txns` row.
     let before = store.read(|conn| open_item(conn, args.id))?;
     if before.dismissed_at.is_some() {

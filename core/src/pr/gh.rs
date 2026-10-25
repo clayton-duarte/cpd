@@ -15,8 +15,7 @@ use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecisio
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
 use crate::host::deadline::Failed;
-use crate::host::runner::Runner;
-use crate::ports::Ports;
+use crate::host::runner::{Runner, SystemRunner};
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -144,12 +143,8 @@ pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeo
     run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
 }
 
-/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
-fn run_timed(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
-    run_timed_with(&*Ports::current().runner, cwd, args, timeout)
-}
-
-/// [`run_timed`] on `runner`: one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
+/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result):
+/// one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
 pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
     let mut command = Command::new("gh");
     command.args(args).current_dir(cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());
@@ -277,10 +272,10 @@ pub struct MergeView {
 }
 
 /// The pull request `number` of `repo`, read fresh from GitHub.
-pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
+pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
     let n = number.to_string();
     let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"];
-    parse(&args, &run(cwd, &args)?)
+    parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
@@ -298,10 +293,10 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
 
 /// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`.
-pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
     let n = number.to_string();
     let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
-    run(cwd, &args).map(drop)
+    run_on(runner, cwd, &args).map(drop)
 }
 
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
@@ -600,11 +595,11 @@ fn polled_call(call: &str, e: CpdError) -> CpdError {
 
 /// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
 /// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
-fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
+fn graphql(runner: &dyn Runner, cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
     let args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
-    match run_timed(cwd, &refs, timeout)? {
+    match run_timed_with(runner, cwd, &refs, timeout)? {
         Ok(out) => Ok((args, out)),
         Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
     }
@@ -612,9 +607,9 @@ fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
-pub fn search_open(cwd: &Path) -> Result<Search, CpdError> {
+pub fn search_open(runner: &dyn Runner, cwd: &Path) -> Result<Search, CpdError> {
     let search = || {
-        let (args, out) = graphql(cwd, SEARCH_QUERY)?;
+        let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         parse_search(&Reply { args: &refs, out: &out })
     };
@@ -668,11 +663,11 @@ fn repo_parts(repo: &str) -> Option<(&str, &str)> {
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
+pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    let found = lookup_call(cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
+    let found = lookup_call(runner, cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
     Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
@@ -680,11 +675,11 @@ pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>
 /// selected, both required in the reply. An `OPEN` pull request carries what the viewer's own flags are
 /// (`authored` = `viewerDidAuthor`, `review_requested` = a latest review request); a merged or closed one has neither.
 /// `None` for one GitHub cannot find. Failures are the lookup's (`details.call` `lookup`). An empty `prs` makes no call.
-pub fn read_absent(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
+pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    lookup_call(cwd, prs, true).map_err(|e| polled_call("lookup", e))
+    lookup_call(runner, cwd, prs, true).map_err(|e| polled_call("lookup", e))
 }
 
 /// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
@@ -705,9 +700,9 @@ fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError>
     Ok(query)
 }
 
-fn lookup_call(cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
+fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
     let query = lookup_query(prs, viewer)?;
-    let (args, out) = graphql(cwd, &query)?;
+    let (args, out) = graphql(runner, cwd, &query)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer)
 }
@@ -755,6 +750,11 @@ mod tests {
     use super::*;
 
     const ARGS: [&str; 4] = ["api", "graphql", "-f", "query=Q"];
+
+    /// A runner that answers nothing: the tests that use it make no call.
+    fn runner() -> crate::host::runner::FakeRunner {
+        crate::host::runner::FakeRunner::new(crate::clock::ManualClock::new())
+    }
 
     fn reply(stdout: &str, exit: i32) -> Output {
         Output { stdout: stdout.to_owned(), stderr: "gh: boom".to_owned(), exit: Some(exit) }
@@ -1016,7 +1016,7 @@ mod tests {
         }
         let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
         assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
-        assert_eq!(read_absent(Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]
@@ -1044,8 +1044,9 @@ mod tests {
     #[test]
     fn a_repo_that_is_not_owner_name_is_refused_before_gh_runs() {
         let nowhere = Path::new("/nonexistent");
+        let runner = runner();
         for repo in ["", "a", "a/", "/b", "a/b/c", "a b/c", "o/n\"}) { x", "o\"/n", "ö/n"] {
-            let e = lookup(nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
+            let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{repo:?}");
             assert!(e.message().contains("owner/name"), "{repo:?}: {}", e.message());
         }
@@ -1053,7 +1054,7 @@ mod tests {
 
     #[test]
     fn an_empty_lookup_makes_no_call() {
-        assert_eq!(lookup(Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]

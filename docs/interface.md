@@ -139,6 +139,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
 | `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
 | `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |
+| `cpd gate` | The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26) | | |
+| `cpd gate finish` | Check what the run left behind, stop and remove it, report it (the Gate's leak check) | | |
 | `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
 | `cpd host approve` | Record the User's approval for one checkout repair (adapter) (§9.11) | internal | |
 | `cpd host repair` | Repair the skipped cpd install (Manager) (§9.11) | Manager | |
@@ -146,3 +148,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tag` | Tag the commit that set the workspace version (commands.md §27.1) | Lead | |
 | `cpd version` | The release plumbing (commands.md §27) | | |
 | `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §27.2) | Lead | |
+| `cpd test` | The tests a change reaches, and named tests (commands.md §28) | | |
+| `cpd test changed` | Run the Rust tests the changed files can reach (§28.1) | Manager, Lead, Worker | |
+| `cpd test run` | Run the named tests (§28.2) | Manager, Lead, Worker | |
+| `cpd test list` | Exit 0 only when that one test exists (§28.3) | Manager, Lead, Worker | |
+| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§28.3) | Manager, Lead, Worker | |

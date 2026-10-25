@@ -1,15 +1,18 @@
-//! `cpd tui view history` (commands.md §13.2, §17), end to end: the built binary
-//! (but for the refusals before drawing, which run in this process, `Fx`) runs in a pane of a private tmux server (its terminal), over a prepared
-//! store and a fixture pi session file; a test reads the screen
-//! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are
-//! unit-tested in `tui/src/history/` and `tui/src/worker/`.
+//! `cpd tui view history` (commands.md §13.2, §17): the frame drawn over a prepared store and a fixture pi session
+//! file (on a `TestBackend`, in this process) and the refusals before drawing (`run_with`, in this process, `Fx`); the
+//! keys still run the built binary in a pane of a private tmux server (its terminal), where a test reads the screen
+//! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are unit-tested in `tui/src/history/` and
+//! `tui/src/worker/`.
 
 use crate::common;
 
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
+use common::screen::Screen;
 use common::{CPD, TestEnv};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use serde_json::json;
 
 // ---------- the prepared store ----------
@@ -121,15 +124,29 @@ impl<'a> Pane<'a> {
 
 // ---------- tests ----------
 
+/// The view's first frame in a `width` × `height` pane over the file of the Session `l1` of `fx`, as the rows the pane shows.
+fn drawn(fx: &Fx, width: u16, height: u16) -> Vec<String> {
+    let (name, archived, file): (String, bool, String) = fx
+        .env
+        .read(|c| c.query_row("SELECT name, archived_at IS NOT NULL, file FROM sessions WHERE id = 'l1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))));
+    let text = std::fs::read_to_string(file).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| cpd_tui::draw_history(&name, archived, &text, f)).unwrap();
+    let mut rows = Screen::from_buffer(terminal.backend().buffer()).rows();
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop();
+    }
+    rows
+}
+
 #[test]
 fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), true);
-    let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
     assert_eq!(
-        screen,
+        drawn(&fx, 40, 12),
         [
             TOP,
             "16:33:44 you",
@@ -144,12 +161,13 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
 
 #[test]
 fn a_session_that_is_not_archived_says_read_only_only() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), false);
-    let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), false);
+    let screen = drawn(&fx, 40, 12);
     assert_eq!(screen[0], "old lead (read-only)");
+    assert!(screen.iter().any(|r| r.contains("󰘌 ok")), "{screen:?}");
 }
 
 #[test]
@@ -175,8 +193,8 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
 
 #[test]
 fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
-    // In this process (`Fx`): `load` refuses before `run_view` looks at the terminal, so no terminal is reached.
-    let fx = Fx::new();
+    // `load` refuses before `run_view` looks at the terminal, so no terminal is reached.
+    let fx = Fx::with_ports();
     let env = &fx.env;
     configure(env);
     populate(env, None, true);
@@ -193,8 +211,20 @@ fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
 
 #[test]
 fn the_view_needs_a_terminal() {
-    // Stays on `TestEnv` and the built binary: the refusal is the real isatty of the process's stdin and stdout, which
-    // `Fx` (the test process's own) must not decide; it waits for the `run_with` seam (on_a_terminal injected).
+    let fx = Fx::with_ports();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "history", "l1"]);
+    assert_eq!(run.exit, 3, "{run:?}");
+    let error = run.error();
+    assert_eq!(error["code"], "not_a_terminal");
+    assert_eq!(error["details"]["command"], "tui view history");
+}
+
+/// The one smoke of the built binary for the refusal (until `tooling/smoke.rs` has it): the real `isatty` of piped stdio.
+#[test]
+fn the_built_binary_needs_a_terminal() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file), true);
