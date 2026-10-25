@@ -21,6 +21,7 @@ use ratatui::{
     widgets::Widget,
 };
 
+use crate::cells;
 use crate::palette::{self, Meaning};
 use crate::pill;
 use cpd_core::config::Tier;
@@ -142,14 +143,10 @@ pub enum Dir {
 const GAP: u16 = 3;
 
 fn truncate(s: &str, w: usize) -> String {
-    if s.chars().count() <= w {
-        s.to_string()
-    } else {
-        s.chars().take(w.saturating_sub(1)).collect::<String>() + "…"
-    }
+    cells::truncate(s, w)
 }
 
-/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` characters) and the right half (`│<tier>[│aN]`).
+/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` columns) and the right half (`│<tier>[│aN]`).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
     (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{}", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
