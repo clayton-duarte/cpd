@@ -37,7 +37,7 @@ mod cockpit;
 mod host_click;
 pub mod dialog;
 pub mod fold;
-mod history;
+pub mod history;
 mod input_box;
 #[cfg(test)]
 mod layout_dialog_tests;
@@ -237,7 +237,7 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
             View::Plan => plan::run(ports, run_command),
             View::Widgets => widgets::run(ports, run_command),
             View::Worker(args) => worker::run(ports, args),
-            View::History(args) => history::run(args),
+            View::History(args) => history::run(ports, args),
             View::Legend => widgets::legend::run(ports),
             View::Logs(args) => logs::run(ports, args),
             View::Merge(args) => merge::run(ports, args),
