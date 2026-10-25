@@ -241,6 +241,12 @@ impl Fx {
         String::from_utf8(out.stdout).expect("git's stdout is UTF-8").trim_end().to_owned()
     }
 
+    /// `git` with `dir` as the cwd, through the route, whatever its exit code: for a command whose exit 1 is an answer
+    /// (`config --get-regexp` with no match).
+    pub fn git_output(&self, dir: &Path, args: &[&str]) -> Output {
+        self.run_tool("git", Some(dir), &[], args)
+    }
+
     /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
     pub fn git_repo(&self, name: &str) -> PathBuf {
         self.repo_of_universe(name);
@@ -294,7 +300,7 @@ impl Fx {
     /// what runs after `pr add` and must find no remote (`TestEnv::drop_unreachable_origin`, over the git route).
     pub fn drop_unreachable_origin(&self, repo: &Path) {
         // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
-        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        let rewritten = self.git_output(repo, &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
         if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
             self.git(repo, &["remote", "remove", "origin"]);
         }
