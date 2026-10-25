@@ -433,6 +433,11 @@ impl Universe {
         let (r, w) = self.place(wt);
         self.repos[r].wts[w].locked = Some(reason.to_owned());
     }
+    /// Unlocks the worktree at `wt` (`git worktree unlock`).
+    pub fn unlock_worktree(&mut self, wt: &Path) {
+        let (r, w) = self.place(wt);
+        self.repos[r].wts[w].locked = None;
+    }
     /// `Some(reason)` while the worktree at `wt` is locked (empty: no reason given).
     pub fn lock_reason(&self, wt: &Path) -> Option<String> {
         let (r, w) = self.place(wt);

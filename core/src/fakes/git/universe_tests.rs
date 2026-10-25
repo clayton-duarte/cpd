@@ -402,6 +402,19 @@ fn a_taken_worktree_id_gets_the_first_free_number() {
 }
 
 #[test]
+fn a_worktree_is_locked_with_a_reason_and_unlocked() {
+    let mut fx = fx();
+    let (repo, _, _) = fx.on_main();
+    let wt_path = fx.root().join("wt");
+    fx.u.add_worktree(repo, &wt_path, Head::Branch("feat".to_owned()));
+    assert_eq!(fx.u.lock_reason(&wt_path), None);
+    fx.u.lock_worktree(&wt_path, "why");
+    assert_eq!(fx.u.lock_reason(&wt_path).as_deref(), Some("why"));
+    fx.u.unlock_worktree(&wt_path);
+    assert_eq!(fx.u.lock_reason(&wt_path), None);
+}
+
+#[test]
 fn the_main_worktree_comes_first_and_the_main_admin_dir_is_the_git_dir() {
     let mut fx = fx();
     let (repo, dir, _) = fx.on_main();

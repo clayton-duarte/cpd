@@ -1,40 +1,55 @@
 //! The clean-up `pr poll` runs when it sees a PR merged (commands.md §9.2,
-//! contract §7.2; hs-d138, hs-d142): the built binary against temporary repos
-//! with a bare `origin`, a fake `gh`, and Plans written straight into the database.
+//! contract §7.2; hs-d138, hs-d142): `cpd pr poll` in-process on `run_with` over the fake ports (the git route with a
+//! bare `origin`, a `gh` handler, the `FakeSpawn` for the Gate's pid), and Plans written straight into the database.
 
 use crate::common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
-use common::{CPD, TestEnv};
+use common::fx::Fx as Kit;
 use cpd_core::git::{Setup, create_attempt_worktree, gate_worktree_path, prepare_lead_worktree, pr_lead_worktree_path};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
 
-/// The fake `gh`: the search, the lookup and `gh pr view` (the pull request's `headRefOid`, contract §7.2 "The recorded
-/// head") are answered from files in `gh/`; without a `view.json`, `gh pr view` fails.
-const GH: &str = r#"
-dir="$(dirname "$0")/../gh"
-case "$1 $2" in
-  "api graphql")
-    case "$4" in
-      *"search(type: ISSUE"*) cat "$dir/search.json" ;;
-      *"p0: repository"*) cat "$dir/lookup.json" ;;
-      *) echo "unexpected graphql query: $4" >&2; exit 9 ;;
-    esac ;;
-  "pr view") cat "$dir/view.json" ;;
-  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
-esac
-"#;
+/// What the fake `gh` prints: the search, the lookup and `gh pr view` (the pull request's `headRefOid`, contract §7.2 "The
+/// recorded head"); without a view, `gh pr view` fails.
+struct Answers {
+    search: String,
+    lookup: String,
+    view: Option<String>,
+}
+
+/// The in-process `gh` of the clean-up tests; any call but those three exits 9.
+pub(crate) struct Gh(Mutex<Answers>);
+
+impl Handler for Gh {
+    fn handle(&self, call: &Call) -> Reply {
+        let answers = self.0.lock().unwrap();
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..] {
+            ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => Reply::ok(&answers.search),
+            ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => Reply::ok(&answers.lookup),
+            ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
+            ["pr", "view", ..] => match &answers.view {
+                Some(view) => Reply::ok(view),
+                None => Reply::exit(1, "", "no such file: view.json\n"),
+            },
+            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
+        }
+    }
+}
 
 /// A pull request of `acme/pay` as the search and the lookup print it.
-fn node(number: i64, state: &str) -> String {
+pub(crate) fn node(number: i64, state: &str) -> String {
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
@@ -43,7 +58,7 @@ fn node(number: i64, state: &str) -> String {
     )
 }
 
-fn search_answer(nodes: &[String]) -> String {
+pub(crate) fn search_answer(nodes: &[String]) -> String {
     format!(
         r#"{{"data":{{"search":{{"issueCount":{},"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
         nodes.len(),
@@ -52,60 +67,63 @@ fn search_answer(nodes: &[String]) -> String {
 }
 
 /// One PR of the Plan: its Lead worktree and one failed Attempt's worktree.
-struct Pr {
-    key: &'static str,
-    number: i64,
-    lead: PathBuf,
-    lead_branch: String,
-    attempt: PathBuf,
-    attempt_branch: String,
+pub(crate) struct Pr {
+    pub(crate) key: &'static str,
+    pub(crate) number: i64,
+    pub(crate) lead: PathBuf,
+    pub(crate) lead_branch: String,
+    pub(crate) attempt: PathBuf,
+    pub(crate) attempt_branch: String,
 }
 
 /// Plan `pay` in phase `deploy`, in one repo with a bare `origin`, with one PR per key; every PR is
-/// open, its Lead Branch is pushed and its Lead worktree is clean.
-struct Fx {
-    env: TestEnv,
-    home: CpdHome,
-    repo: PathBuf,
-    prs: Vec<Pr>,
+/// open, its Lead Branch is pushed and its Lead worktree is clean. It derefs to the [`Kit`] (`env`, `git`, `calls`, ...).
+pub(crate) struct Fx {
+    kit: Kit,
+    pub(crate) home: CpdHome,
+    pub(crate) repo: PathBuf,
+    pub(crate) prs: Vec<Pr>,
+    gh: Arc<Gh>,
+}
+
+impl Deref for Fx {
+    type Target = Kit;
+
+    fn deref(&self) -> &Kit {
+        &self.kit
+    }
 }
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
 }
 
-fn fx(keys: &[&'static str]) -> Fx {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
+pub(crate) fn fx(keys: &[&'static str]) -> Fx {
+    let kit = Kit::with_ports();
     // The PRs are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
-    env.repo_policy("acme", "pay", "");
-    let origin = env.root().join("repos/origin.git");
-    env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.local_origin(&repo, &origin);
-    env.git(&repo, &["push", "-q", "origin", "main"]);
+    let repo = kit.keyed_repo("pay").canonicalize().unwrap();
+    let origin = kit.env.root().join("repos/origin.git");
+    kit.git(kit.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    kit.local_origin(&repo, &origin);
+    kit.git(&repo, &["push", "-q", "origin", "main"]);
 
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
-    let gh = env.root().join("gh");
-    fs::create_dir_all(&gh).unwrap();
-    fs::write(gh.join("search.json"), search_answer(&[])).unwrap();
-    fs::write(gh.join("lookup.json"), r#"{"data":{}}"#).unwrap();
-    env.fake_gh(GH);
+    kit.env.write_config(&format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", kit.env.tmux_socket()));
+    let home = CpdHome::resolve(Some(kit.env.cpd_home().into()), None).unwrap();
+    let gh = Arc::new(Gh(Mutex::new(Answers { search: format!("{}\n", search_answer(&[])), lookup: "{\"data\":{}}\n".to_owned(), view: None })));
+    let _ = (*kit.fakes.runner).clone().route("gh", gh.clone());
 
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("setup.log") };
+    let setup = Setup { timeout: Duration::from_secs(30), log: kit.env.root().join("setup.log") };
     let mut prs = Vec::new();
     for (i, key) in keys.iter().enumerate() {
         let lead_branch = format!("cpd/pay/{key}");
         let lead = pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &lead_branch).unwrap();
-        let prepared = prepare_lead_worktree(&repo, &plan(), &lead, &lead_branch, "main", &setup).map_err(|f| f.error).unwrap();
-        env.git(&lead, &["config", "user.name", "cpd test"]);
-        env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
-        fs::write(lead.join(format!("{key}.txt")), "x\n").unwrap();
-        env.git(&lead, &["add", "-A"]);
-        env.git(&lead, &["commit", "-q", "-m", key]);
-        env.git(&lead, &["push", "-q", "-u", "origin", &lead_branch]);
+        let prepared = kit.scoped(|| prepare_lead_worktree(&repo, &plan(), &lead, &lead_branch, "main", &setup)).map_err(|f| f.error).unwrap();
+        kit.git(&lead, &["config", "user.name", "cpd test"]);
+        kit.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
+        kit.commit_file(&lead, &format!("{key}.txt"), "x\n", key);
+        kit.git(&lead, &["push", "-q", "-u", "origin", &lead_branch]);
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
-        let made = create_attempt_worktree(&repo, &lead, &plan(), &attempt, &setup).unwrap();
+        let made = kit.scoped(|| create_attempt_worktree(&repo, &lead, &plan(), &attempt, &setup)).unwrap();
         prs.push(Pr {
             key,
             number: 812 + i as i64,
@@ -115,7 +133,6 @@ fn fx(keys: &[&'static str]) -> Fx {
             attempt_branch: made.branch,
         });
     }
-
     let mut sql = String::from(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -138,7 +155,7 @@ fn fx(keys: &[&'static str]) -> Fx {
             lead = pr.lead.display(),
         );
     }
-    let fx = Fx { env, home, repo, prs };
+    let fx = Fx { kit, home, repo, prs, gh };
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(&sql)?;
@@ -163,42 +180,40 @@ fn fx(keys: &[&'static str]) -> Fx {
 }
 
 impl Fx {
-    fn store(&self) -> Store {
+    pub(crate) fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
     }
 
-    fn git(&self, dir: &Path, args: &[&str]) -> String {
-        self.env.git(dir, args)
-    }
-
-    fn gh(&self, file: &str, text: &str) {
-        fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
+    /// What `gh`'s search and lookup answer, as the text of their stdout.
+    pub(crate) fn answer(&self, search: &str, lookup: &str) {
+        let mut answers = self.gh.0.lock().unwrap();
+        answers.search = format!("{search}\n");
+        answers.lookup = format!("{lookup}\n");
     }
 
     /// The pull requests GitHub reports: `open` ones in the search, `merged` ones in the lookup.
     fn github(&self, open: &[&str], merged: &[&str]) {
         let number = |key: &str| self.prs.iter().find(|p| p.key == key).unwrap().number;
         let nodes: Vec<String> = open.iter().map(|k| node(number(k), "OPEN")).collect();
-        self.gh("search.json", &search_answer(&nodes));
         let aliases: Vec<String> =
             merged.iter().enumerate().map(|(i, k)| format!(r#""p{i}":{{"pullRequest":{}}}"#, node(number(k), "MERGED"))).collect();
-        self.gh("lookup.json", &format!(r#"{{"data":{{{}}}}}"#, aliases.join(",")));
+        self.answer(&search_answer(&nodes), &format!(r#"{{"data":{{{}}}}}"#, aliases.join(",")));
     }
 
-    fn poll(&self) -> Value {
-        self.env.cpd(&["pr", "poll"]).ok()
+    pub(crate) fn poll(&self) -> Value {
+        self.cpd(&["pr", "poll"]).ok()
     }
 
-    fn pr(&self, key: &str) -> &Pr {
+    pub(crate) fn pr(&self, key: &str) -> &Pr {
         self.prs.iter().find(|p| p.key == key).unwrap()
     }
 
-    fn branch_exists(&self, branch: &str) -> bool {
+    pub(crate) fn branch_exists(&self, branch: &str) -> bool {
         !self.git(&self.repo, &["branch", "--list", branch]).is_empty()
     }
 
     /// Whether the PR's worktrees and local branches are all gone: `(attempt, lead)`.
-    fn gone(&self, key: &str) -> (bool, bool) {
+    pub(crate) fn gone(&self, key: &str) -> (bool, bool) {
         let pr = self.pr(key);
         (
             !pr.attempt.exists() && !self.branch_exists(&pr.attempt_branch),
@@ -238,7 +253,7 @@ impl Fx {
     }
 
     /// The `data` of the Plan's `error` Events, in order.
-    fn errors(&self) -> Vec<Value> {
+    pub(crate) fn errors(&self) -> Vec<Value> {
         self.store()
             .read(|c| {
                 let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'error' ORDER BY id")?;
@@ -248,6 +263,18 @@ impl Fx {
                 Ok(rows)
             })
             .unwrap()
+    }
+
+    /// A process the `FakeSpawn` started: running, with the pid it gave.
+    fn started(&self) -> u32 {
+        self.fakes.spawn.spawn(&Launch { program: "cpd".to_owned(), ..Launch::default() }).unwrap().0
+    }
+
+    /// The pid of a process the `FakeSpawn` started and ended.
+    fn ended_pid(&self) -> u32 {
+        let pid = self.started();
+        self.fakes.spawn.exit(Pid(pid), 0);
+        pid
     }
 }
 
@@ -319,7 +346,7 @@ fn a_lead_worktree_with_a_commit_not_on_origin_is_kept() {
 impl Fx {
     /// What `gh pr view --json headRefOid` prints: GitHub keeps the pull request's head commit after the merge.
     fn recorded_head(&self, oid: &str) {
-        self.gh("view.json", &json!({"headRefOid": oid}).to_string());
+        self.gh.0.lock().unwrap().view = Some(format!("{}\n", json!({"headRefOid": oid})));
     }
 
     /// The head branch is gone from `origin`, as after a squash merge with "Automatically delete head branches" and a
@@ -396,7 +423,9 @@ fn a_squash_merged_pr_whose_lead_worktree_holds_only_a_rule_s_merge_after_the_re
     fx.git(&fx.repo, &["-c", "user.name=t", "-c", "user.email=t@cpd.invalid", "commit", "-q", "--allow-empty", "-m", "base moves"]);
     fx.git(&fx.repo, &["push", "-q", "origin", "main"]);
     fx.git(&api.lead, &["merge", "-q", "--no-ff", "-m", "Merge remote-tracking branch 'origin/main'", "origin/main"]);
-    assert_eq!(fx.git(&api.lead, &["rev-list", "--min-parents=2", "--count", "HEAD", "--not", "--remotes=origin"]), "1");
+    // One local commit and it is a merge: the same two counts as `--min-parents=2` (the fake git has no such flag).
+    assert_eq!(fx.git(&api.lead, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]), "1");
+    assert_eq!(fx.git(&api.lead, &["rev-list", "--no-merges", "--count", "HEAD", "--not", "--remotes=origin"]), "0");
     fx.delete_remote_branch("api");
     fx.github(&[], &["api"]);
 
@@ -410,7 +439,7 @@ fn a_squash_merged_pr_whose_lead_worktree_holds_only_a_rule_s_merge_after_the_re
 fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
     let fx = fx(&["api"]);
     let api = fx.pr("api");
-    fx.git(&fx.repo, &["worktree", "lock", api.attempt.to_str().unwrap()]);
+    fx.universe.lock().unwrap().lock_worktree(&api.attempt, "");
     fx.github(&[], &["api"]);
 
     fx.poll();
@@ -427,7 +456,7 @@ fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
     assert!(api.attempt.exists(), "still locked");
     assert_eq!(fx.errors().len(), 1, "a retry appends no Event");
 
-    fx.git(&fx.repo, &["worktree", "unlock", api.attempt.to_str().unwrap()]);
+    fx.universe.lock().unwrap().unlock_worktree(&api.attempt);
     fx.poll();
 
     assert_eq!(fx.gone("api"), (true, true));
@@ -502,8 +531,8 @@ fn a_held_driver_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
 #[test]
 fn a_gate_worktree_whose_pid_is_dead_is_removed_and_one_whose_pid_lives_is_kept() {
     let fx = fx(&["api"]);
-    let dead = fx.gate_worktree("api", dead_pid());
-    let live = fx.gate_worktree("api", std::process::id());
+    let dead = fx.gate_worktree("api", fx.ended_pid());
+    let live = fx.gate_worktree("api", fx.started());
     fx.github(&[], &["api"]);
 
     fx.poll();
@@ -528,7 +557,7 @@ fn a_dead_gate_worktree_of_a_pr_cleaned_up_earlier_is_swept_by_a_later_poll() {
     assert_eq!(fx.gone("api"), (true, true));
 
     // A Gate that was running at the merge was killed since.
-    let dead = fx.gate_worktree("api", dead_pid());
+    let dead = fx.gate_worktree("api", fx.ended_pid());
     fx.poll();
 
     assert!(!dead.exists() && !fx.worktrees().contains(&dead));
@@ -557,84 +586,124 @@ fn a_lead_worktree_a_merge_left_stale_is_brought_up_to_date_and_removed() {
     assert_eq!(fx.errors(), Vec::<Value>::new());
 }
 
-#[test]
-fn a_pr_merged_during_its_gate_loses_its_lead_worktree_but_not_the_gate_worktree() {
-    // hs-n124: the clean-up once removed the Lead worktree under a running Gate. The Gate now runs
-    // in a gate worktree of its own, which the clean-up leaves alone while its pid lives.
-    let fx = fx(&["api"]);
-    // The Gate runs only under `pr.gate = "local"` (contract §8.3).
-    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-    let api = fx.pr("api");
-    fx.hooks("api", &paused_gate(fx.env.root()));
-    let before = fx.remote_sha(&api.lead_branch);
+/// The `Spawn` of the Gate test: the `FakeSpawn`, and this test process's own pid alive (`pr push` runs in this
+/// process, so its gate worktree is named for the test's pid, which no `FakeSpawn` started).
+struct OwnPidAlive(Arc<dyn Spawn>);
 
-    let child = Child(Some(
-        fx.env.command(CPD).args(["pr", "push", "--plan", "pay", "--pr", "api"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap(),
-    ));
-    let gate = gate_worktree_path(&fx.repo, &plan(), &PrKey::parse("api").unwrap(), child.0.as_ref().unwrap().id()).unwrap();
-    await_gate(fx.env.root());
-    fx.github(&[], &["api"]);
-
-    let out = fx.poll();
-
-    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]));
-    assert_eq!(fx.gone("api"), (true, true), "the Lead worktree goes: no Gate runs there");
-    assert!(gate.exists(), "the running Gate's worktree stays");
-    assert_eq!(fx.errors(), Vec::<Value>::new());
-
-    release_gate(fx.env.root());
-    let out = child.finish();
-
-    assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
-    assert_eq!(fx.remote_sha(&api.lead_branch), before, "nothing pushed");
-    assert!(!gate.exists(), "pr push removes its own gate worktree");
-}
-
-/// A pid that is not alive: that of a child that has exited and been reaped.
-fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
-
-/// A child process, killed when dropped: a test that panics leaves none behind.
-struct Child(Option<std::process::Child>);
-
-impl Child {
-    /// Its stdout as JSON, once it has exited.
-    fn finish(mut self) -> Value {
-        let out = self.0.take().unwrap().wait_with_output().unwrap();
-        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+impl Spawn for OwnPidAlive {
+    fn spawn(&self, l: &Launch) -> std::io::Result<Pid> {
+        self.0.spawn(l)
+    }
+    fn try_wait(&self, p: Pid) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.0.try_wait(p)
+    }
+    fn signal(&self, p: Pid, s: Signal) -> std::io::Result<()> {
+        self.0.signal(p, s)
+    }
+    fn alive(&self, p: Pid) -> bool {
+        p.0 == std::process::id() || self.0.alive(p)
+    }
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        self.0.exe_of(p)
+    }
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        self.0.cmdline(p)
+    }
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        self.0.with_env(key, value)
+    }
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        self.0.ppid(p)
+    }
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        self.0.env_of(p, key)
+    }
+    fn exec(&self, l: &Launch) -> std::io::Error {
+        self.0.exec(l)
+    }
+    fn stream(&self, l: &Launch) -> std::io::Result<(Pid, Box<dyn std::io::BufRead + Send>)> {
+        self.0.stream(l)
+    }
+    fn self_exe(&self) -> Result<PathBuf, cpd_core::error::CpdError> {
+        self.0.self_exe()
     }
 }
 
-impl Drop for Child {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+/// The `pre-merge` hook, paused mid-run: `sh -c paused-gate` reaches `started`, then waits at `go`: two barriers, no sleep.
+struct PausedGate {
+    started: Barrier,
+    go: Barrier,
+}
+
+impl Handler for PausedGate {
+    fn handle(&self, call: &Call) -> Reply {
+        assert_eq!(call.args[1], "paused-gate", "the only hook of the test");
+        self.started.wait();
+        self.go.wait();
+        Reply::ok("")
+    }
+}
+
+/// Lets a paused Gate go when it drops, so a failed assertion does not leave the `pr push` thread blocked for ever.
+struct Release<'a>(Option<&'a PausedGate>);
+
+impl Release<'_> {
+    fn release(&mut self) {
+        if let Some(gate) = self.0.take() {
+            gate.go.wait();
         }
     }
 }
 
-/// A `pre-merge` paused mid-run: it creates `<root>/gate-started`, then waits for
-/// `<root>/gate-go` (at most 60 s).
-fn paused_gate(root: &Path) -> String {
-    let (started, go) = (root.join("gate-started"), root.join("gate-go"));
-    format!(
-        "pre-merge = \"touch {}; i=0; while [ ! -e {} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\"\n",
-        started.display(),
-        go.display()
-    )
+impl Drop for Release<'_> {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
-/// Waits until the [`paused_gate`] has started.
-fn await_gate(root: &Path) {
-    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
-}
+#[test]
+fn a_pr_merged_during_its_gate_loses_its_lead_worktree_but_not_the_gate_worktree() {
+    // hs-n124: the clean-up once removed the Lead worktree under a running Gate. The Gate now runs
+    // in a gate worktree of its own, which the clean-up leaves alone while its pid lives.
+    let mut fx = fx(&["api"]);
+    // `pr push` runs in this process: its pid is the test's, alive for the sweep.
+    fx.kit.fakes.ports.spawn = Arc::new(OwnPidAlive(fx.kit.fakes.ports.spawn.clone()));
+    // The Gate runs only under `pr.gate = "local"` (contract §8.3).
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    let api = fx.pr("api");
+    fx.hooks("api", "pre-merge = \"paused-gate\"\n");
+    let before = fx.remote_sha(&api.lead_branch);
+    let gate = Arc::new(PausedGate { started: Barrier::new(2), go: Barrier::new(2) });
+    let _ = (*fx.fakes.runner).clone().route("sh", gate.clone());
+    let gate_path = gate_worktree_path(&fx.repo, &plan(), &PrKey::parse("api").unwrap(), std::process::id()).unwrap();
+    let ports = fx.fakes.ports.clone();
 
-/// Lets the [`paused_gate`] finish.
-fn release_gate(root: &Path) {
-    fs::write(root.join("gate-go"), "").unwrap();
+    let push = std::thread::scope(|s| {
+        let push = s.spawn(move || {
+            let argv = ["cpd", "pr", "push", "--plan", "pay", "--pr", "api"].map(std::ffi::OsString::from);
+            let mut stdout = Vec::new();
+            cpd::run_with(&ports, argv, &mut stdout);
+            String::from_utf8(stdout).unwrap()
+        });
+        let mut release = Release(Some(&gate));
+        gate.started.wait();
+        fx.github(&[], &["api"]);
+
+        let out = fx.poll();
+
+        let during = (out["merged"].clone(), fx.gone("api"), gate_path.exists(), fx.errors());
+        release.release();
+        (push.join().unwrap(), during)
+    });
+    let (stdout, (merged, gone, gate_kept, errors)) = push;
+
+    assert_eq!(merged, json!([{"plan": "pay", "pr": "api"}]));
+    assert_eq!(gone, (true, true), "the Lead worktree goes: no Gate runs there");
+    assert!(gate_kept, "the running Gate's worktree stays");
+    assert_eq!(errors, Vec::<Value>::new());
+
+    let out: Value = serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stdout}"));
+    assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
+    assert_eq!(fx.remote_sha(&api.lead_branch), before, "nothing pushed");
+    assert!(!gate_path.exists(), "pr push removes its own gate worktree");
 }
