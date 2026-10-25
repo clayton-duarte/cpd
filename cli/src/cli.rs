@@ -160,7 +160,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Incident(c) => incident::run(c),
-        Command::Inbox(c) => inbox::cmd::run(c),
+        Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run(a, version(), run_command, RESTART),
         Command::Doctor(a) => doctor::run(a),
