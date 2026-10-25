@@ -99,19 +99,19 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
     run_with(&Ports::real(), argv)
 }
 
-/// [`run`] on `ports`. The areas do not read `ports` yet: each opens its `Env` with `Env::open`, the real ports, until
-/// the Jobs that convert them to `Env::open_with` land.
-pub fn run_with(_ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    run_on(argv, cpd_tui::on_a_terminal())
+/// [`run`] on `ports`. Only `pr view` reads `ports` yet: the other areas open their `Env` with `Env::open`, the real
+/// ports, until the Jobs that convert them to `Env::open_with` land.
+pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_on(ports, argv, cpd_tui::on_a_terminal())
 }
 
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_on(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(Cli { command: Some(command) }) => dispatch(command),
+        Ok(Cli { command: Some(command) }) => dispatch(ports, command),
         Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
@@ -128,7 +128,7 @@ fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Ou
     }
 }
 
-fn dispatch(command: Command) -> Result<Output, CpdError> {
+fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Context(c) => context::run(c),
         Command::Plan(c) => plan::run(c),
@@ -137,7 +137,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Board(c) => board::run(c),
-        Command::Pr(c) => pr::run(c),
+        Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
@@ -260,7 +260,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run_on(argv(words), false).expect_err("expected a failure")
+        run_on(&Ports::real(), argv(words), false).expect_err("expected a failure")
     }
 
     #[test]
