@@ -16,11 +16,11 @@ fn the_incident_pill_is_red_italic_and_left_of_the_version_pill() {
     let f: &str = &STATUS_FORMAT;
     assert_eq!(f.matches("Incident Mode").count(), 1, "one incident pill: {f}");
     let label = f.find("Incident Mode").expect("the incident pill's label");
-    // The branch of the pill: the nearest `@cpd_incident` before the label.
-    let guard = f[..label].rfind("@cpd_incident").expect("the pill is guarded by @cpd_incident");
-    assert!(f[guard..label].contains("#{?"), "the label sits in the @cpd_incident branch: {}", &f[guard..label]);
+    // The branch of the pill: the plain `#{?@cpd_incident` conditional that opens it.
+    let guard = f[..label].rfind("#{?@cpd_incident").expect("the pill is guarded by @cpd_incident");
+    assert!(f[guard..label].contains("#{?@cpd_incident"), "the label sits in the @cpd_incident branch: {}", &f[guard..label]);
     // The whole pill: the guard, the join, the caps and the text.
-    let close = label + f[label..].find('\u{e0b4}').expect("the pill's right cap") + 1;
+    let close = label + f[label..].find('\u{e0b4}').expect("the pill's right cap") + '\u{e0b4}'.len_utf8();
     let pill = &f[guard..close];
     assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
     assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");

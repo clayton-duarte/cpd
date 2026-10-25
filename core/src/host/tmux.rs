@@ -207,7 +207,8 @@ pub const LOGS_GLYPH: &str = logs_glyph!();
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
 // Whether the long workers form fits: the right group's long width (the engine's, whose one space is the join),
-// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), and the preview.
+// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), the preview, the version pill and
+// the incident pill.
 macro_rules! long_fits {
     () => {
         concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
@@ -284,10 +285,10 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
 /// While `@cpd_incident` is set (incident mode is on, hs-d634), the incident pill, the literal
-/// `Incident Mode` in colour 9 with reverse video and the `italics` attribute, stands between the
-/// workers pill and the version pill, joined by a single `\u{2500}`; the fill and the long-form
-/// test are shorter by its width (a join, two caps and the 13-cell label, 16 cells) and it has no
-/// click range.
+/// ` Incident Mode` (a leading space and the label) in colour 9 with reverse video and the `italics`
+/// attribute, stands between the workers pill and the version pill, joined by a single `\u{2500}`; the
+/// fill and the long-form test are shorter by its width (a join, two caps and the 13-cell label, 16
+/// cells) and it has no click range.
 ///
 /// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
@@ -299,9 +300,9 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     // The incident pill is red on a red block even though it is not clickable: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
-    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode"));
+    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", " Incident Mode"));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_incident}},#[fg=colour8]\u{2500}{incident},}}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?@cpd_incident,#[fg=colour8]\u{2500}{incident},}}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!()),
         legend = button("legend", legend_glyph!()),
