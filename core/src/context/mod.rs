@@ -9,6 +9,9 @@
 //! [`Contexts::write`]. [`legacy`] reads the git stores of earlier versions,
 //! for the store's migration 0007 only.
 
+#[cfg(test)]
+mod distill_runner_tests;
+
 mod archive;
 mod delete;
 mod contexts;

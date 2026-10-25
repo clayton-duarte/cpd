@@ -97,6 +97,8 @@ pub use plan::draw_first_frame;
 mod popup;
 pub mod read;
 mod runner;
+#[cfg(test)]
+mod runner_tests;
 mod scroll;
 #[cfg(test)]
 mod scroll_width_tests;

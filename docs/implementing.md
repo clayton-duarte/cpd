@@ -194,7 +194,9 @@ impl FakeRunner {
 pub trait Handler: Send + Sync { fn handle(&self, call: &Call) -> Reply; }
 pub struct Call { pub tool: String, pub program: String, pub args: Vec<String>,
     pub envs: Vec<(String, Option<String>)> /* Command::get_envs: None = removed */,
-    pub cwd: Option<PathBuf>, pub deadline: Duration }
+    pub cwd: Option<PathBuf>, pub deadline: Duration,
+    pub stdin: Option<Vec<u8>> /* bytes a writer thread writes to the child's stdin, as secret/op.rs does */,
+    pub stderr_to: Option<PathBuf> /* the child's stderr goes to this file, as distill does for pi */ }
 pub enum Reply { Exit { code: i32, stdout: Vec<u8>, stderr: Vec<u8>, takes: Duration }, Io(std::io::ErrorKind) }
 impl Reply { pub fn ok(stdout: &str) -> Reply; pub fn exit(code: i32, stdout: &str, stderr: &str) -> Reply;
              pub fn io(kind: ErrorKind) -> Reply; pub fn takes(self, d: Duration) -> Reply; }
@@ -204,7 +206,9 @@ Semantics:
 - `on` and `once` rules are tried in order; the first match answers. `program` is compared with the program's file name (`/x/bin/tmux` is `tmux`). A `once` rule is used up after one answer, then the next matching rule answers.
 - A call no rule matches is answered by the `route` of its program (a `Handler`, whose `Reply` is treated like a scripted one); else it is `Failed::Io(ErrorKind::NotFound)` (a program that does not exist) and `unscripted()` lists it. A call answered by a rule or a route is not unscripted.
 - A reply that `takes` d: if `d >= deadline` the fake does `clock.sleep(deadline)` and returns `Failed::Timeout(e)`, where `e` is built by the same function `deadline::output` uses (`deadline::timeout`): the same `tool_timeout` code, `details.tool`, `details.argv`, `details.deadline_seconds`; else it does `clock.sleep(d)` and returns the `Output` (`ExitStatus::from_raw(code << 8)`).
-- The fake never reads `CPD_TEST_DEADLINE_*`, never starts a process and never reads the stdin the caller set (`Stdio` cannot be read back): a caller that feeds stdin is tested at the layer above it.
+- The fake never reads `CPD_TEST_DEADLINE_*` and never starts a process. `Call.stdin` and `Call.stderr_to` carry what a caller feeds the child and where its stderr goes: `FakeRunner` records both in `calls()` and a `Handler` can read them (it may write the `stderr_to` file itself). A hung tool is `Reply::takes(d)` with `d` over the deadline: no sleep.
+- Callers that go through the `Runner` (`stdin` and `stderr_to` included): `pr/gh.rs run_timed` (29 callers), `context/distill.rs` (`pi` with `stderr_to`, and `git grep`), `session/retitle.rs`, `host/exe.rs asks_to_open_store`, `plan/lock.rs ensure_watch`, `inbox/cmd.rs local_offset`, `git/hooks/exec.rs`, tui `tree/actions.rs`, tui `widgets/host.rs`, tui `widgets/mod.rs hostname`, and engine `watch/restart.rs rebuild_cockpit`.
+- Hooks (`git/hooks/exec.rs`): one `Runner` call per hook (`sh -c <hook>`, the context on `stdin`); the hooks of a block still run in parallel, one thread each; the output of a hook reaches the caller when the hook ends, not line by line (a change from before).
 
 Threading: each caller keeps its public signature and has a `_with(runner: &dyn Runner, ..)` form (`git::run::run_with`, `inbox::team`, `secret::op`, `config::catalog`, `doctor::tools`, `watch::pr`, `watch::team`), the old one calling it with `&SystemRunner`. `Tmux` has a field `runner: Arc<dyn Runner>`, `SystemRunner` by default, and `Tmux::with_runner(self, Arc<dyn Runner>) -> Tmux`. No global, thread-local or env var picks a runner. Behaviour with `SystemRunner` is identical.
 

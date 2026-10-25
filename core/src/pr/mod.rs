@@ -15,6 +15,8 @@
 //! one PR of the Plan, `poll` on every open one.
 
 #[cfg(test)]
+mod gh_runner_tests;
+#[cfg(test)]
 mod incident_tests;
 
 mod add;

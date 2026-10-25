@@ -3,11 +3,9 @@
 //! Every failure is `gh_failed` with `argv`, `exit` and the last 60 lines of stderr.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,6 +14,8 @@ use crate::error::{CpdError, ErrorCode};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
+use crate::host::deadline::Failed;
+use crate::host::runner::{Runner, SystemRunner};
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -121,21 +121,21 @@ fn failed(argv: &[&str], message: String, exit: Option<i32>, stderr: &str) -> Cp
 }
 
 /// What a finished `gh` call printed; `exit` is `None` when a signal ended it.
-struct Output {
-    stdout: String,
-    stderr: String,
-    exit: Option<i32>,
+pub(super) struct Output {
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+    pub(super) exit: Option<i32>,
 }
 
 /// `gh` ran past its timeout and was killed; `stderr` is what it had printed.
-struct Killed {
-    stderr: String,
+pub(super) struct Killed {
+    pub(super) stderr: String,
 }
 
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
 /// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
 fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
-    run_timed(cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
+    run_raw_with(&SystemRunner, cwd, args, timeout)
 }
 
 /// The `gh_failed` of a call killed after `timeout`.
@@ -143,51 +143,29 @@ fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
     failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
 }
 
+/// [`run_raw`] on `runner`.
+pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
+    run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
+}
+
 /// [`run_raw`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
 fn run_timed(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
-    let mut child = Command::new("gh")
-        .args(args)
-        .current_dir(cwd)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| failed(args, format!("Cannot run gh: {e}."), None, &e.to_string()))?;
-    // Both pipes are drained while the child runs, or a full pipe would block it.
-    let mut out = child.stdout.take().expect("stdout is piped");
-    let mut err = child.stderr.take().expect("stderr is piped");
-    let stdout = thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = out.read_to_end(&mut text);
-        text
-    });
-    let stderr = thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = err.read_to_end(&mut text);
-        text
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() >= deadline => {
-                // The pipes close when the child dies, which ends the readers.
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(e) => return Err(failed(args, format!("Cannot wait for gh: {e}."), None, &e.to_string())),
-        }
-    };
-    let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-    let Some(status) = status else {
-        return Ok(Err(Killed { stderr }));
-    };
-    Ok(Ok(Output { stdout, stderr, exit: status.code() }))
+    run_timed_with(&SystemRunner, cwd, args, timeout)
+}
+
+/// [`run_timed`] on `runner`: one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
+pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
+    let mut command = Command::new("gh");
+    command.args(args).current_dir(cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());
+    match runner.output(&mut command, "gh", timeout) {
+        Ok(out) => Ok(Ok(Output {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit: out.status.code(),
+        })),
+        Err(Failed::Timeout(_)) => Ok(Err(Killed { stderr: String::new() })),
+        Err(Failed::Io(e)) => Err(failed(args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+    }
 }
 
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal

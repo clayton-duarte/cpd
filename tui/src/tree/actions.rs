@@ -22,6 +22,8 @@ use serde_json::Value;
 use cpd_core::config::Config;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::deadline::Failed as RunFailed;
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner as ProcessRunner, SystemRunner};
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
@@ -468,14 +470,26 @@ impl Failure {
 
 /// Runs the command of `action`: its reply, or why it failed.
 pub fn call(action: &Action) -> Result<Value, Failure> {
-    let output = Command::new(PROGRAM)
-        .args(action.argv())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {e}")))?;
+    call_with(&SystemRunner, action)
+}
+
+/// [`call`] on `runner`.
+pub fn call_with(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, Failure> {
+    let argv = action.argv();
+    let call = Call {
+        tool: PROGRAM.to_owned(),
+        program: PROGRAM.to_owned(),
+        args: argv.clone(),
+        envs: Vec::new(),
+        cwd: None,
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    let output = runner.run(&call).map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {}", failed_reason(e))))?;
     let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim()))
+        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", argv.join(" "), output.status.code().map_or_else(|| output.status.to_string(), |c| format!("exit code: {c}")), stderr.trim()))
     })?;
     if reply["ok"] == true {
         Ok(reply)
@@ -485,6 +499,13 @@ pub fn call(action: &Action) -> Result<Value, Failure> {
             code: error["code"].as_str().unwrap_or("error").to_owned(),
             message: error["message"].as_str().unwrap_or("failed").to_owned(),
         })
+    }
+}
+
+fn failed_reason(failed: RunFailed) -> String {
+    match failed {
+        RunFailed::Io(e) => e.to_string(),
+        RunFailed::Timeout(e) => e.message().to_owned(),
     }
 }
 
