@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use super::check::{Check, Severity};
 use cpd_core::config::catalog::node;
 use cpd_core::host::deadline::Failed;
-use cpd_core::host::runner::Runner;
+use cpd_core::host::runner::{Runner, SystemRunner};
 
 /// A tool with its minimum, and the first version it is not allowed to be.
 struct Tool {
@@ -27,7 +27,12 @@ const TOOLS: [Tool; 4] = [
     Tool { name: "gh", args: &["--version"], parts: 3, min: [2, 45, 0], below: None, expected: ">= 2.45.0" },
 ];
 
-/// The checks `git`, `tmux`, `pi`, `gh`, in that order, probed through `runner`.
+/// The checks `git`, `tmux`, `pi`, `gh`, in that order.
+pub fn tools() -> Vec<Check> {
+    tools_with(&SystemRunner)
+}
+
+/// [`tools`] on `runner`.
 pub fn tools_with(runner: &dyn Runner) -> Vec<Check> {
     TOOLS.iter().map(|tool| check(runner, tool)).collect()
 }
@@ -90,7 +95,12 @@ fn check(runner: &dyn Runner, tool: &Tool) -> Check {
     if ok { check } else { check.message(format!("{} is outside the versions cpd 2 was verified with.", tool.name)) }
 }
 
-/// `gh auth status` exits 0 (warn: only the `pr` commands need it), asked through `runner`.
+/// `gh auth status` exits 0 (warn: only the `pr` commands need it).
+pub fn gh_auth() -> Check {
+    gh_auth_with(&SystemRunner)
+}
+
+/// [`gh_auth`] on `runner`.
 pub fn gh_auth_with(runner: &dyn Runner) -> Check {
     match run_tool(runner, OsStr::new("gh"), &["auth", "status"]) {
         Ok(_) => Check::pass("gh_auth", Severity::Warn),
@@ -98,7 +108,12 @@ pub fn gh_auth_with(runner: &dyn Runner) -> Check {
     }
 }
 
-/// pi's Node (contract §9) runs `--version`, asked through `runner`.
+/// pi's Node (contract §9) runs `--version`.
+pub fn pi_node() -> Check {
+    pi_node_with(&SystemRunner)
+}
+
+/// [`pi_node`] on `runner`.
 pub fn pi_node_with(runner: &dyn Runner) -> Check {
     let node = node();
     match run_tool(runner, node.as_os_str(), &["--version"]) {
