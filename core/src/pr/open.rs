@@ -23,15 +23,26 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr open";
 
+/// Whether the caller is an agent (hs-d643): `CPD_SESSION` set and non-empty.
+pub(super) fn agent() -> bool {
+    std::env::var_os("CPD_SESSION").is_some_and(|v| !v.is_empty())
+}
+
 /// `incident_hold` (exit 3, contract §7.6, commands.md §9.1/§9.3/§9.9, hs-d643): `plan` is held
 /// by incident mode and the caller is an agent. `pr` names the PR the caller resolved, for
-/// `details.pr`.
-///
-/// STUB (Job inc-v2-guard-tests): panics so the red tests fail; Job inc-v2-guard replaces this
-/// with the refusal.
+/// `details.pr`; `details.incident` is the incident as `cpd incident status` prints it.
 pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrKey, agent: bool) -> Result<(), CpdError> {
-    let _ = (conn, plan, pr, agent);
-    unimplemented!("the incident hold guard (Job inc-v2-guard)")
+    if !agent || !crate::incident::is_held(conn, plan) {
+        return Ok(());
+    }
+    let incident = crate::incident::row(conn)?.unwrap_or(serde_json::Value::Null);
+    Err(CpdError::new(
+        ErrorCode::IncidentHold,
+        format!("Plan {plan} is held by incident mode: an agent cannot open, push or rebase PR {pr}. The Manager ends the incident (cpd incident end) to release it."),
+    )
+    .with("pr", pr.as_str())
+    .with("plan", plan.as_str())
+    .with("incident", incident))
 }
 
 pub(super) fn open(args: Args) -> Result<Output, CpdError> {
@@ -43,6 +54,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Already(done) => return Ok(done),
         Step::Go(key) => key,
     };
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     require_no_open_job_live(&mut env, &id, &key)?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let list = require_jobs_done(&mut env, &plan, &key)?;

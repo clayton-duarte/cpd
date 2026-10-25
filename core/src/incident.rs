@@ -74,8 +74,9 @@ fn require_manager<'a>(conn: &Connection, caller: Option<&'a SessionId>) -> Resu
     }
 }
 
-/// The current `incident` row as the output's `incident` value, if any.
-fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
+/// The current `incident` row as the output's `incident` value, if any. `pub(crate)` so the
+/// `incident_hold` refusal (`pr open`/`push`/`rebase`) carries the same value as `incident status`.
+pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
     let stored = conn
         .query_row(
             "SELECT started_at, started_by, reason, until_pr FROM incident WHERE id = 1",
