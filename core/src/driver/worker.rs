@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::clock::Clock;
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
@@ -20,6 +21,7 @@ use crate::host::{PaneId, Tmux, WindowId};
 use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
+use crate::ports::Ports;
 use crate::session::run::{quiet_since, turn_finished};
 use crate::spec::{self, Answer, Cause, Input, JobKind, Previous};
 use crate::store::Store;
@@ -293,6 +295,18 @@ pub fn wait_for_lead(
     }
 }
 
+/// [`wait_for_lead`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the Lead's file is read on its `utc()`.
+pub fn wait_for_lead_with(
+    _ports: &Ports,
+    _store: &mut Store,
+    _config: &Config,
+    _dirs: &PiDirs,
+    _target: &Target,
+    _log: &dyn Fn(&str),
+) -> Result<Option<Fork>, CpdError> {
+    todo!("wait_for_lead on ports.clock")
+}
+
 /// The Plan's Lead Session: its id, state and recorded session file.
 fn lead_session(conn: &Connection, plan: &PlanId) -> Result<(SessionId, String, Option<String>), CpdError> {
     let (id, state, file): (String, String, Option<String>) = conn.query_row(
@@ -371,6 +385,28 @@ fn retry_kill(
             Err(_) => std::thread::sleep(pause),
         }
     }
+}
+
+/// [`retry_kill`] whose `pause` is a nap on `clock`, never after the last try.
+pub(super) fn retry_kill_with(
+    _clock: &dyn Clock,
+    _tries: u32,
+    _pause: Duration,
+    _kill: impl FnMut() -> Result<(), CpdError>,
+    _gone: impl FnMut() -> bool,
+) -> Result<(), CpdError> {
+    todo!("retry_kill on a clock")
+}
+
+/// [`kill_attempt_window`] on `ports`: the pause between two tries of `kill-window` naps on `ports.clock`.
+pub fn kill_attempt_window_with(
+    _ports: &Ports,
+    _config: &Config,
+    _tmux: &Tmux,
+    _plan: &PlanId,
+    _id: &AttemptId,
+) -> Result<(), CpdError> {
+    todo!("kill_attempt_window on ports.clock")
 }
 
 /// A9: kills the Attempt's window in the work session, if any is left. A

@@ -20,6 +20,8 @@ mod first_message;
 mod fork_wait;
 mod history;
 mod moves;
+#[cfg(test)]
+mod ports_tests;
 mod reload;
 mod resolve;
 mod resume;

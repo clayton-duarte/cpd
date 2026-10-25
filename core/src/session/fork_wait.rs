@@ -11,10 +11,12 @@ use serde_json::Value;
 use super::row::{self, State};
 use super::run::{existing_file, patiently};
 use super::Env;
+use crate::clock::Clock;
 use crate::error::CpdError;
 use crate::host::limit::limit;
 use crate::host::pi::PiDirs;
 use crate::ids::SessionId;
+use crate::ports::Ports;
 
 /// How often the fork waits for its source to be idle (§6.7 step 1; tests: `CPD_TEST_SOURCE_POLL`, [`limit`]).
 const SOURCE_POLL: Duration = Duration::from_secs(2);
@@ -56,6 +58,23 @@ pub(super) fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, 
         }
         std::thread::sleep(limit("SOURCE_POLL", SOURCE_POLL));
     }
+}
+
+/// [`wait_for_source`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the source's file is read on its
+/// `utc()`, and a transient store error is waited out on `ports.clock` (`patiently_with`).
+pub(super) fn wait_for_source_with(
+    _ports: &Ports,
+    _env: &mut Env,
+    _dirs: &PiDirs,
+    _source: &SessionId,
+    _name: &str,
+) -> Result<Option<PathBuf>, CpdError> {
+    todo!("wait_for_source on ports.clock")
+}
+
+/// [`quiet_since`] on `clock`: the file's modification time against `clock.utc()`.
+pub(crate) fn quiet_since_with(_clock: &dyn Clock, _file: &Path, _quiet: Duration) -> bool {
+    todo!("quiet_since on a clock")
 }
 
 /// The file has not been modified for `quiet`.

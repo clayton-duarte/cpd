@@ -102,7 +102,7 @@ impl Exe {
         Exe::at(path)
     }
 
-    fn at(path: PathBuf) -> Result<Exe, CpdError> {
+    pub(crate) fn at(path: PathBuf) -> Result<Exe, CpdError> {
         let identity = Identity::of(&path).map_err(|e| {
             CpdError::new(ErrorCode::SpawnFailed, format!("Cannot stat cpd's own executable {}: {e}.", path.display()))
                 .with("path", path.display().to_string())
@@ -138,6 +138,16 @@ impl Exe {
             self.refused.set(Some(now));
             Refusal::New(reason)
         })
+    }
+
+    /// [`Exe::exec`] through `spawn`: `Spawn::exec` of a `Launch` whose program is the path and whose arguments are `args`.
+    /// Returns only on failure, as `spawn_failed`.
+    pub fn exec_with<I, S>(&self, _spawn: &dyn super::spawn::Spawn, _args: I) -> CpdError
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        todo!("exec on spawn")
     }
 
     /// Replaces this process with the executable at the same path, `args` as its

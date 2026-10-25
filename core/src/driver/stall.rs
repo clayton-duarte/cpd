@@ -115,6 +115,22 @@ impl Watch {
     }
 }
 
+impl Watch {
+    /// [`Watch::check`] on `ports`: the quiet of `file` is its modification time against `ports.clock.utc()`, the signals
+    /// and the waits of `terminate` go to `ports.spawn` and naps of `ports.clock`, the command lines come from
+    /// `ports.spawn.cmdline`, and `descendants` names pi's live descendants (the `/proc` or `libproc` walk, in production).
+    pub(super) fn check_with(
+        &mut self,
+        _ports: &crate::ports::Ports,
+        _descendants: &dyn Fn(u32) -> Vec<u32>,
+        _file: &Path,
+        _pi: u32,
+        _span_open: bool,
+    ) -> Option<String> {
+        todo!("check on ports")
+    }
+}
+
 /// `pid`'s parent and state ('Z' for a zombie) from `libproc`'s BSD info.
 #[cfg(target_os = "macos")]
 fn stat(pid: u32) -> Option<(u32, char)> {

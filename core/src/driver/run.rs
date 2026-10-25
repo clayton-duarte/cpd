@@ -31,6 +31,7 @@ use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
+use crate::ports::Ports;
 use crate::plan::locked_fingerprint;
 use crate::store::{Persist, Store};
 
@@ -41,7 +42,8 @@ const SOURCE: &str = "attempt run";
 const POLL: Duration = Duration::from_millis(500);
 
 /// What A4 knows of the Worker's pane at a poll.
-enum Look {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Look {
     /// Alive, with its process's pid when tmux gave one (hs-n102).
     Alive(Option<u32>),
     /// Dead or missing: the `crashed` detail.
@@ -56,12 +58,23 @@ enum Look {
 /// the pane ended. A failed `list-panes` is retried at the next poll, once,
 /// before the pane is judged (contract §6.3 liveness, engine-W8).
 #[derive(Default)]
-struct PaneWatch {
+pub(super) struct PaneWatch {
     pid: Option<u32>,
     failed: bool,
 }
 
+/// One A4 poll on `ports`: the nap of `DRIVER_POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
+/// (`PaneWatch::look_with` on `ports.spawn`).
+pub(super) fn poll_with(_ports: &Ports, _watch: &mut PaneWatch, _tmux: &Tmux, _pane: &PaneId) -> Result<Look, CpdError> {
+    todo!("poll on ports.clock")
+}
+
 impl PaneWatch {
+    /// [`PaneWatch::look`] whose pid test (`alive`) asks `spawn`.
+    pub(super) fn look_with(&mut self, _spawn: &dyn Spawn, _tmux: &Tmux, _pane: &PaneId) -> Result<Look, CpdError> {
+        todo!("look on spawn")
+    }
+
     fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
         if let Some(pid) = self.pid.filter(|&pid| ProcessSpawn.alive(SpawnPid(pid))) {
             return Ok(Look::Alive(Some(pid)));

@@ -25,6 +25,8 @@ use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
 use crate::host::limit::limit;
 use crate::host::git_guard;
+use crate::clock::Clock;
+use crate::host::spawn::{Signal as SpawnSignal, Spawn};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::SessionId;
@@ -205,8 +207,19 @@ pub(super) struct PiProc {
 impl PiProc {
     /// The child `pid` of this process. Not checked here: a pid that is not a
     /// child fails at the first [`PiProc::try_wait`].
-    fn adopt(pid: Pid) -> PiProc {
+    pub(super) fn adopt(pid: Pid) -> PiProc {
         PiProc { pid, status: None }
+    }
+
+    /// [`PiProc::try_wait`] asking `spawn` (`Spawn::try_wait`): how pi exited, or `None` while it runs; a pid `spawn`
+    /// does not know is an error.
+    pub(super) fn try_wait_with(&mut self, _spawn: &dyn Spawn) -> std::io::Result<Option<ExitStatus>> {
+        todo!("try_wait on spawn")
+    }
+
+    /// [`PiProc::signal`] through `spawn` (`Spawn::signal`), and only while pi was not waited for.
+    pub(super) fn signal_with(&self, _spawn: &dyn Spawn, _signal: SpawnSignal) {
+        todo!("signal on spawn")
     }
 
     pub(super) fn id(&self) -> i32 {
@@ -256,6 +269,15 @@ impl Logged {
             }
         }
     }
+}
+
+/// [`patiently`] whose waits (0.5 s, doubling to 5 s) are naps on `clock`.
+pub(super) fn patiently_with<T>(
+    _clock: &dyn Clock,
+    _what: &str,
+    _access: impl FnMut() -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
+    todo!("patiently on a clock")
 }
 
 /// Runs a store access of the wrapper's start or end (before pi runs, after it

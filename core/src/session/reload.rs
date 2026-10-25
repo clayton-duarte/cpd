@@ -20,6 +20,7 @@ use crate::host::exe::{Exe, Refusal};
 use crate::host::limit::limit;
 use crate::host::pi::PiDirs;
 use crate::ids::SessionId;
+use crate::ports::Ports;
 
 /// How often a reload looks whether pi exited after `SIGTERM`.
 const STOP_POLL: Duration = Duration::from_millis(50);
@@ -63,6 +64,27 @@ pub(super) fn stop_pi(pi: &mut PiProc, grace: Duration) {
     while matches!(pi.try_wait(), Ok(None)) {
         std::thread::sleep(STOP_POLL);
     }
+}
+
+/// [`stop_pi`] on `ports`: `SIGTERM` and `SIGKILL` go to `ports.spawn`, the 50 ms polls and the grace are naps and time
+/// of `ports.clock`.
+pub(super) fn stop_pi_with(_ports: &Ports, _pi: &mut PiProc, _grace: Duration) {
+    todo!("stop_pi on ports")
+}
+
+/// [`adapter_missing`] with `now` read from `ports.clock.utc()`.
+pub(super) fn adapter_missing_with(_ports: &Ports, _env: &mut Env, _id: &SessionId, _running: Duration) -> Result<bool, CpdError> {
+    todo!("adapter_missing on ports.clock")
+}
+
+/// [`reload`] whose `exec` goes to `ports.spawn` (`Exe::exec_with`).
+pub(super) fn reload_with(_ports: &Ports, _exe: &Exe, _id: &SessionId, _adopt: Option<(&PiProc, bool)>) -> CpdError {
+    todo!("reload on ports.spawn")
+}
+
+/// [`reload_due`] with the idle time and the quiet of the file read on `ports.clock`.
+pub(super) fn reload_due_with(_ports: &Ports, _env: &mut Env, _dirs: &PiDirs, _id: &SessionId) -> Result<bool, CpdError> {
+    todo!("reload_due on ports.clock")
 }
 
 /// The adapter watchdog (contract §6.7 "Adapter watchdog"): whether the

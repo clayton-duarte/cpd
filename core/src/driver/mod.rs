@@ -8,6 +8,8 @@
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
 pub mod lock;
+#[cfg(test)]
+mod ports_tests;
 mod run;
 mod stall;
 mod start;
