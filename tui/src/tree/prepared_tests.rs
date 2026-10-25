@@ -29,6 +29,7 @@ const WORKING: &str = SPINNER[0];
 const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline).
 const DOWN: &str = "\u{F0B26}";
+const UP: &str = "\u{F0B2C}";
 
 /// The closing row of a block that folds, folded, after the pane's margin.
 fn expand() -> String {
@@ -384,15 +385,15 @@ fn the_tree_of_a_prepared_store() {
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
     let mut expected = vec![
         String::new(),
-        format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
-        row(&format!("├─{IDLE} sketch"), "2"),
-        format!(" ├─{IDLE} ship·f-id"),
-        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
-        String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "1"),
         format!(" ╰─{STOPPED} old"),
+        String::new(),
+        format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        row(&format!("├─{IDLE} sketch"), "2"),
+        format!(" ╰─{IDLE} ship·f-id"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
         " ╰\u{F0B2A}".to_owned(),
@@ -402,7 +403,83 @@ fn the_tree_of_a_prepared_store() {
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
+        "the Contexts by dot tier then last activity (beta's magenta Manager, then alpha's shiro Manager with an Event, then gamma with no Manager); alpha's live Plans and forks as one list by tier then last activity (the red fork `ship·f-bl`, the red loader of `ship` in shiro, then `sketch` and the fork `ship·f-id` tied on shiro and creation order); the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
+    );
+}
+
+/// The tree reorders by dot-urgency tier first and last activity second (hs-d686): a magenta Context still leads a shiro
+/// one, whatever its activity; within one tier the row the newer Event names comes first (`context` for a Context,
+/// `plan` for a Plan row).
+#[test]
+fn the_tree_orders_live_rows_by_dot_tier_then_last_activity() {
+    let mut env = Env::new();
+    populate(&mut env);
+    // a newer Event names the Plan `sketch` (and the Context `alpha`), and a newer one still the Context `gamma`, whose
+    // own Event outranks alpha's Manager's.
+    env.sql(
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-09T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-09T00:00:01.000Z', 'context-created', 'gamma', NULL, NULL, 'fixture', '{}');",
+    );
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        format!(" ╭{NEEDS_YOU} beta"),
+        row(&format!("├─{NEEDS_YOU} rel"), "1"),
+        format!(" ╰─{STOPPED} old"),
+        String::new(),
+        format!(" ╭{STOPPED} gamma"),
+        " ╰\u{F0B2A}".to_owned(),
+        String::new(),
+        format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
+        row(&format!("├─{IDLE} sketch"), "2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        format!(" ╰─{IDLE} ship·f-id"),
+    ];
+    expected.extend(inbox_section(46));
+    let screen = screen(&draw(&mut env.view(), 46, 20));
+    assert_eq!(
+        screen,
+        expected,
+        "beta's magenta Context stays first though `gamma`'s newer Event outranks it; within shiro `gamma`'s Event puts it above `alpha`, and within alpha the newer `sketch` Event puts it above `ship` (the red fork `ship·f-bl` keeps tier 0)"
+    );
+}
+
+/// An archived Plan and an archived fork stay after every live row, whatever their dot (hs-d686): `sketch` and the fork
+/// `ship·f-id`, both shiro, follow the live red fork `ship·f-bl` and the live `ship`.
+#[test]
+fn an_archived_row_is_last_after_the_live_rows() {
+    let mut env = Env::new();
+    populate(&mut env);
+    env.sql(
+        "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'sketch';
+         UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-idle';",
+    );
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        format!(" ╭{NEEDS_YOU} beta"),
+        row(&format!("├─{NEEDS_YOU} rel"), "1"),
+        format!(" ╰─{STOPPED} old"),
+        String::new(),
+        format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        row(&format!("├─{IDLE} sketch"), "2"),
+        format!(" ├─{IDLE} ship·f-id"),
+        format!(" ╰{UP} collapse"),
+        String::new(),
+        format!(" ╭{STOPPED} gamma"),
+        " ╰\u{F0B2A}".to_owned(),
+    ];
+    expected.extend(inbox_section(46));
+    let screen = screen(&draw(&mut env.view(), 46, 21));
+    assert_eq!(
+        screen,
+        expected,
+        "the archived Plan `sketch` and the archived fork `ship·f-id` are after the live rows though shiro; the Context's toggle is expanded, so it closes with `╰󰬬 collapse`"
     );
 }
 
