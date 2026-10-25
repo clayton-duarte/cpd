@@ -284,6 +284,14 @@ impl Ui {
         pulse::draw(f.buffer_mut(), self.body, pulse, &mut self.pulse_scroll);
     }
 
+    /// Draws what `snap` holds: Pulse, or the chart of the Plan in the chat slot.
+    fn draw_snapshot(&mut self, f: &mut Frame, snap: &Snapshot) {
+        match snap.pulse.as_ref() {
+            Some(pulse) => self.draw_pulse(f, pulse),
+            None => self.draw(f, snap.centre.as_ref()),
+        }
+    }
+
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
         let body = f.area();
         let mut window = body; // the chart's own margin keeps it off the pane's edges at scroll (0, 0)
@@ -378,6 +386,14 @@ fn arrow(selected: &mut Selection, boxes: &Boxes, dir: Dir) {
 fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
     let job = centre.plan.jobs.iter().find(|j| j.key.as_str() == key)?;
     job.current_attempt().map(|a| a.id.clone())
+}
+
+/// The view's first frame for `store` at `now_ms` (Unix ms), drawn on `f` as `run` draws it: one snapshot, at the corner of its
+/// chart, with nothing selected. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_first_frame(store: &mut Store, f: &mut Frame, now_ms: i64) -> Result<(), CpdError> {
+    let snap = snapshot(store, f.area().width, now_ms)?;
+    Ui::default().draw_snapshot(f, &snap);
+    Ok(())
 }
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
@@ -529,12 +545,7 @@ fn show(
         }
         if redraw {
             let (drawn, written) = trace.draw(epoch, &log, frame, || {
-                terminal
-                    .draw(|f| match snap.pulse.as_ref() {
-                        Some(pulse) => ui.draw_pulse(f, pulse),
-                        None => ui.draw(f, snap.centre.as_ref()),
-                    })
-                    .map(drop)
+                terminal.draw(|f| ui.draw_snapshot(f, snap)).map(drop)
             });
             drawn?;
             if let Err(why) = written {
