@@ -3,10 +3,9 @@
 use crate::common;
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::TestEnv;
 use common::fx::Fx;
@@ -246,34 +245,90 @@ fn branch_config(env: &TestEnv, repo: &Path) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// Scripts the next `n` calls of git that `is` accepts: each exits 128 with `stderr`.
+fn fail_git(fx: &Fx, n: usize, is: fn(&Call) -> bool, stderr: &str) {
+    let mut runner = (*fx.fakes.runner).clone();
+    for _ in 0..n {
+        runner = runner.once("git", is, Reply::exit(128, "", stderr));
+    }
+}
+
+fn is_fetch(call: &Call) -> bool {
+    call.args.iter().any(|a| a == "fetch")
+}
+
+fn is_worktree_add(call: &Call) -> bool {
+    call.args.windows(2).any(|w| w == ["worktree", "add"])
+}
+
+fn is_worktree_list(call: &Call) -> bool {
+    call.args.windows(2).any(|w| w == ["worktree", "list"])
+}
+
+/// The calls of git `is` accepts, in order.
+fn git_calls(fx: &Fx, is: fn(&Call) -> bool) -> Vec<Call> {
+    fx.calls("git").into_iter().filter(is).collect()
+}
+
+/// Every nap of `fx`'s clock is one retry round's pause: 100-500 ms (contract §7).
+fn assert_retry_naps(fx: &Fx, rounds: usize) {
+    let naps = fx.fakes.clock.naps();
+    assert_eq!(naps.len(), rounds, "{naps:?}");
+    assert!(naps.iter().all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)), "{naps:?}");
+}
+
 #[test]
 fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let origin = with_origin(&env, &repo);
-    env.git(&repo, &["fetch", "-q", "origin"]);
-    // The remote moves; another git process holds the lock of the repo's tracking ref.
-    let other = env.root().join("other");
-    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
-    commit_file(&env, &other, "new.txt", "new\n");
-    env.git(&other, &["push", "-q", "origin", "main"]);
-    let moved = env.git(&other, &["rev-parse", "HEAD"]);
-    let lock = repo.join(".git/refs/remotes/origin/main.lock");
-    fs::write(&lock, "").unwrap();
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    // Another git process holds the lock of the repo's tracking ref: git waits it out inside the one call (the wait
+    // is git's, bounded by the `core.filesRefLockTimeout` that every call of ours carries), so the call takes a second.
+    let _ = (*fx.fakes.runner).clone().once("git", is_fetch, Reply::ok("").takes(Duration::from_secs(1)));
 
-    let started = Instant::now();
-    let fetched = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: git waits out a ref lock held for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_file(&lock).unwrap();
-        });
-        cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"])
-    });
+    let fetched = fx.scoped(|| cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"]));
 
     fetched.unwrap();
-    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
-    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), moved);
+    assert!(fx.fakes.clock.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    // One call: a held lock is not a race to retry, and the call is allowed the ten seconds of the lock timeouts.
+    let fetches = git_calls(&fx, is_fetch);
+    assert_eq!(fetches.len(), 1);
+    assert_eq!(fetches[0].args, ["-C", repo.to_str().unwrap(), "fetch", "origin", "main"]);
+    assert_eq!(fx.fakes.clock.naps(), [Duration::from_secs(1)], "the one wait is git's own, no retry pause");
+    let has = |k: &str, v: &str| fetches[0].envs.contains(&(k.to_owned(), Some(v.to_owned())));
+    assert!(has("GIT_CONFIG_COUNT", "2"));
+    assert!(has("GIT_CONFIG_KEY_0", "core.filesRefLockTimeout") && has("GIT_CONFIG_VALUE_0", "10000"));
+    assert!(has("GIT_CONFIG_KEY_1", "core.packedRefsTimeout") && has("GIT_CONFIG_VALUE_1", "10000"));
+}
+
+#[test]
+fn a_fetch_outlasts_a_worktree_add_in_progress() {
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    let origin = fx.env.root().join("origins").join("pay.git");
+    fs::create_dir_all(&origin).unwrap();
+    fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    fx.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    let other = fx.env.root().join("other");
+    fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    fx.commit_file(&other, "new.txt", "new\n", "edit new.txt");
+    fx.git(&other, &["push", "-q", "origin", "main"]);
+    // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder, on which the
+    // fetch's connectivity check dies, until the entry is whole.
+    fail_git(&fx, 3, is_fetch, "fatal: bad object worktrees/adding/HEAD\nerror: https://example.invalid did not send all necessary objects\n");
+
+    let fetched = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "main"]));
+
+    fetched.unwrap();
+    assert_eq!(git_calls(&fx, is_fetch).len(), 4, "three rounds on the race, the fourth fetched");
+    assert_retry_naps(&fx, 3);
+    assert_eq!(fx.git(&repo, &["rev-parse", "origin/main"]), fx.git(&other, &["rev-parse", "HEAD"]));
+    // Any other failure is not retried.
+    let before = (git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps());
+    let err = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"])).unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    // time-claim replaced: a failure that is not the race returns at once, with no nap (20 retries would nap 19 times).
+    assert_eq!((git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps()), (before.0 + 1, before.1));
 }
 
 #[test]
@@ -1185,43 +1240,29 @@ fn strerror_zero() -> &'static str {
     if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" }
 }
 
-/// [`gated`] on real git and a [`TestEnv`], for the one test below that still runs real git (the retries' Job migrates it).
-fn gated_on_disk(env: &TestEnv) -> (PathBuf, String) {
-    let repo = env.git_repo("pay");
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(env, "lead.log")).unwrap();
-    commit_file(env, &lead.path, ".config/wt.toml", "pre-start = \"exit 9\"\npre-merge = \"exit 9\"\n");
-    let g = env.git(&lead.path, &["rev-parse", "HEAD"]);
-    (repo, g)
-}
-
 #[test]
 fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
-    let env = TestEnv::new();
-    let (repo, g) = gated_on_disk(&env);
+    let fx = Fx::with_ports();
+    let (repo, _lead, g) = gated(&fx);
+    let setup_adds = git_calls(&fx, is_worktree_add).len();
     // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
-    let adding = repo.join(".git/worktrees/adding");
-    fs::create_dir_all(&adding).unwrap();
-    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
-    fs::write(adding.join("commondir"), "").unwrap();
-    let path = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
-    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", "--detach", path.to_str().unwrap(), &g])).unwrap();
-    assert!(String::from_utf8_lossy(&broken.stderr).contains(&format!("worktrees/adding/commondir: {}", strerror_zero())), "{broken:?}");
+    fail_git(&fx, 3, is_worktree_add, &format!("fatal: failed to read .git/worktrees/adding/commondir: {}\n", strerror_zero()));
 
-    let added = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: the add outlasts an entry that stays half-created for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_dir_all(&adding).unwrap();
-        });
-        GateWorktree::add(&repo, &plan(), &key(), &g)
-    });
+    let added = fx.scoped(|| GateWorktree::add(&repo, &plan(), &key(), &g));
 
     let gate = added.unwrap();
     assert!(gate.path().exists());
-    gate.remove().unwrap();
+    assert_eq!(git_calls(&fx, is_worktree_add).len() - setup_adds, 4, "three rounds on the race, the fourth added");
+    assert_retry_naps(&fx, 3);
+    // A partial worktree a failed round left is removed before the next round.
+    let removals = fx.calls("git").iter().filter(|c| c.args.windows(2).any(|w| w == ["worktree", "remove"])).count();
+    assert_eq!(removals, 3);
+    fx.scoped(|| gate.remove()).unwrap();
     // Any other failure is not retried.
-    let err = GateWorktree::add(&repo, &plan(), &key(), "no-such-commit").unwrap_err();
+    let err = fx.scoped(|| GateWorktree::add(&repo, &plan(), &key(), "no-such-commit")).unwrap_err();
     assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
+    assert_eq!(git_calls(&fx, is_worktree_add).len() - setup_adds, 5, "one more add, not retried");
+    assert_retry_naps(&fx, 3);
 }
 
 /// A process the `FakeSpawn` started: running, with the pid it gave.
@@ -1296,86 +1337,66 @@ fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
 // `git worktree list --porcelain` reads `.git/worktrees/<id>/commondir` of every linked worktree. Another cpd operation
 // in the same repo adding a worktree (git creates `commondir` empty, then writes it) or removing one (git deletes its
 // files one after another) leaves an admin dir half-written for a moment, and git dies on it: exit 128, `fatal: failed
-// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below holds that file as a
-// FIFO (`common::answer_reads`): the read of it is observed, answered with an empty file, and the dir is completed or
-// removed before the read ends, so what the second read finds does not depend on timing.
+// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below scripts that
+// answer to the first `worktree list` call(s) of the route, so the rounds of `worktree::list` and the pauses between
+// them are ours and on the virtual clock.
 
-/// A repo with one linked worktree, `held` on branch `held`: returns the repo, the worktree and its admin dir.
-fn repo_with_a_linked_worktree(env: &TestEnv) -> (PathBuf, PathBuf, PathBuf) {
-    let repo = env.git_repo("pay");
-    let worktree = env.root().join("pay.held");
-    env.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
-    let admin = repo.join(".git/worktrees/pay.held");
-    assert!(admin.join("commondir").is_file(), "git writes commondir in {}", admin.display());
-    (repo, worktree, admin)
+/// A repo with one linked worktree, `held` on branch `held`: returns the repo and the worktree.
+fn repo_with_a_linked_worktree(fx: &Fx) -> (PathBuf, PathBuf) {
+    let repo = fx.git_repo("pay");
+    let worktree = fx.env.root().join("pay.held");
+    fx.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
+    (repo, worktree)
 }
 
 /// The paths `worktree::list` found, symlinks resolved.
-fn listed(repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
-    Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect())
+fn listed(fx: &Fx, repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
+    fx.scoped(|| Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect()))
 }
 
 #[test]
 fn list_reads_again_when_the_admin_dir_it_read_half_written_is_completed() {
-    let env = TestEnv::new();
-    let (repo, worktree, admin) = repo_with_a_linked_worktree(&env);
-    let commondir = admin.join("commondir");
-    let whole = admin.join("commondir.whole");
-    fs::copy(&commondir, &whole).unwrap();
+    let fx = Fx::with_ports();
+    let (repo, worktree) = repo_with_a_linked_worktree(&fx);
+    // The first read got an empty `commondir`; the writer has finished before the second.
+    fail_git(&fx, 1, is_worktree_list, &format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero()));
 
-    let (found, reads) = common::answer_reads(
-        &commondir,
-        4,
-        |_, _| {
-            // The first read got an empty `commondir`; the writer has finished before the read ends.
-            fs::rename(&whole, &commondir).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "the first read of commondir");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is complete at the second read");
-    assert_eq!(found, [repo.canonicalize().unwrap(), worktree.canonicalize().unwrap()]);
+    assert_eq!(found, [repo.canonicalize().unwrap_or(repo), worktree.canonicalize().unwrap_or(worktree)]);
 }
 
 #[test]
 fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
-    let env = TestEnv::new();
-    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+    let fx = Fx::with_ports();
+    let (repo, worktree) = repo_with_a_linked_worktree(&fx);
+    // `git worktree remove` deleted the dir while the first read was in it: the second read lists the main one only.
+    fail_git(&fx, 1, is_worktree_list, "fatal: failed to read .git/worktrees/pay.held/commondir: No such file or directory\n");
+    fx.git(&repo, &["worktree", "remove", "--force", worktree.to_str().unwrap()]);
 
-    let (found, reads) = common::answer_reads(
-        &admin.join("commondir"),
-        4,
-        |_, _| {
-            // `git worktree remove` deleted the dir while the first read was in it.
-            fs::remove_dir_all(&admin).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "the first read of commondir");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is gone at the second read");
-    assert_eq!(found, [repo.canonicalize().unwrap()]);
+    assert_eq!(found, [repo.canonicalize().unwrap_or(repo)]);
 }
 
 #[test]
 fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
-    let env = TestEnv::new();
-    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+    let fx = Fx::with_ports();
+    let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
+    let stderr = format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero());
+    let _ = (*fx.fakes.runner).clone().on("git", is_worktree_list, Reply::exit(128, "", &stderr));
 
-    let (found, reads) = common::answer_reads(&admin.join("commondir"), 40, |_, _| common::Next::Hold, || listed(&repo));
+    let found = listed(&fx, &repo);
 
-    // The bound is the one of `worktree add` (§7): 20 rounds; the 20th failure is the error. The runs are not counted
-    // (that needed GIT_TRACE in the process environment, which a test must not set): each run reads the half-written
-    // commondir, so the reads count the runs. On Linux that is once per run. Apple's git sometimes opens it twice in
-    // one run, so there the reads are only at least 20.
-    if cfg!(target_os = "linux") {
-        assert_eq!(reads, 20, "each run read the half-written commondir");
-    } else {
-        assert!(reads >= 20, "each run read the half-written commondir: {reads} reads");
-    }
+    // The bound is the one of `worktree add` (§7): 20 rounds, 19 pauses between them; the 20th failure is the error.
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 20, "each round ran git once");
+    assert_retry_naps(&fx, 19);
     let error = found.unwrap_err();
     assert_eq!(error.code(), ErrorCode::GitFailed);
     let details = error.details();
@@ -1390,26 +1411,16 @@ fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
 
 #[test]
 fn any_other_worktree_list_failure_is_git_failed_at_once() {
-    let env = TestEnv::new();
-    let (repo, _worktree, _admin) = repo_with_a_linked_worktree(&env);
-    let config = repo.join(".git/config");
-    let whole = repo.join(".git/config.whole");
-    fs::copy(&config, &whole).unwrap();
+    let fx = Fx::with_ports();
+    let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
+    // The first read of the config finds a line git cannot parse: not the half-written admin dir. The next read
+    // would succeed (the script is used up), so a retry would show.
+    fail_git(&fx, 1, is_worktree_list, "fatal: bad config line 1 in file .git/config\n");
 
-    let (found, reads) = common::answer_reads(
-        &config,
-        4,
-        |_, file| {
-            // The first read of the config finds a line git cannot parse: not the half-written admin dir. Then the
-            // config is whole again, so a read after it would succeed.
-            file.write_all(b"[broken\n").unwrap();
-            fs::rename(&whole, &config).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "git read the config once");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 1, "no second read");
+    assert!(fx.fakes.clock.naps().is_empty());
     let error = found.expect_err("no second read: the failure is not the half-written admin dir");
     assert_eq!(error.code(), ErrorCode::GitFailed);
     assert_eq!(error.details()["exit"], 128);
