@@ -23,9 +23,10 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
-use crate::host::runner::{Call, Runner, SystemRunner};
+use crate::host::runner::{Call, Runner};
 use crate::ids::SessionId;
 use crate::output::Output;
+use crate::ports::Ports;
 
 /// The turns and characters of the conversation pi reads (step 2).
 const TURNS: usize = 2;
@@ -230,7 +231,7 @@ fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, 
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
     let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
-    run_pi_with(&SystemRunner, id, &model, &dir, text, limit, &environ)
+    run_pi_with(&*Ports::current().runner, id, &model, &dir, text, limit, &environ)
 }
 
 pub(crate) use crate::host::runner::NO_DEADLINE;

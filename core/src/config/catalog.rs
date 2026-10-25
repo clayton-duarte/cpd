@@ -18,7 +18,8 @@ use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
@@ -147,7 +148,7 @@ fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catal
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
 pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    read_with(&SystemRunner, pi, config, deadline)
+    read_with(&*Ports::current().runner, pi, config, deadline)
 }
 
 /// [`read`] on `runner`.

@@ -28,7 +28,7 @@ pub mod legend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
-use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::host::runner::Runner;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -460,7 +460,7 @@ const UNKNOWN: &str = "?";
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
 fn hostname() -> String {
-    hostname_with(&SystemRunner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+    hostname_with(&*Ports::current().runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.

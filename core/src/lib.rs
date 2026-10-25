@@ -55,6 +55,8 @@ pub mod version_sync;
 pub mod fakes;
 
 #[cfg(test)]
+mod ambient_ports_tests;
+#[cfg(test)]
 mod clock_tests;
 #[cfg(test)]
 mod incident_tests;

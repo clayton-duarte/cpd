@@ -29,7 +29,8 @@ use crate::clock::{Clock, SystemClock};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
+use crate::host::spawn::Pid as SpawnPid;
+use crate::ports::Ports;
 
 use lock::{MIGRATION_SETTLE_MS, SetupLock, setup_lock};
 pub use lock::MIGRATION_WAIT_CEILING;
@@ -898,7 +899,7 @@ impl Holder {
             .filter_map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).ok()?).ok())
             .filter_map(|v| {
                 let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
-                let alive = ProcessSpawn.alive(SpawnPid(pid));
+                let alive = Ports::current().spawn.alive(SpawnPid(pid));
                 let since = v["since_unix_ms"].as_u64()?;
                 let text = |k: &str| v[k].as_str().map(str::to_owned);
                 let command = text("command")?;

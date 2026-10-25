@@ -603,9 +603,33 @@ fn ls_tree(c: &mut Ctx, args: &[String]) -> Run {
     ))
 }
 
+/// `git log [-1] --format=%s [<rev>]`: the subject of each commit reachable from the rev (`HEAD` by default), newest first.
+fn log_subjects(c: &mut Ctx, toks: &[Tok]) -> Run {
+    let flags = flags(toks);
+    if flags.iter().find_map(|f| f.strip_prefix("--format=")) != Some("%s") {
+        return Err("log (arguments)".to_owned());
+    }
+    let spec = match positionals(toks)[..] {
+        [] => "HEAD",
+        [spec] => spec,
+        _ => return Err("log (arguments)".to_owned()),
+    };
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    let Ok(tip) = c.parse(&format!("{spec}^{{commit}}")) else { return Ok(ambiguous(spec)) };
+    let mut commits = c.u.rev_list(repo, &Selection { include: vec![tip], exclude: vec![] }, false);
+    if flags.contains(&"-1") {
+        commits.truncate(1);
+    }
+    let subjects = commits.iter().filter_map(|oid| c.u.commit_data(oid)).map(|commit| format!("{}\n", commit.message.lines().next().unwrap_or("")));
+    Ok(Out::ok(subjects.collect::<String>()))
+}
+
 fn log(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("log", args, &["-g"], &["--format="])?;
+    let toks = scan("log", args, &["-g", "-1"], &["--format="])?;
     let flags = flags(&toks);
+    if !flags.contains(&"-g") {
+        return log_subjects(c, &toks);
+    }
     if let Some(format) = flags.iter().find_map(|f| f.strip_prefix("--format=")) {
         if format != "%T" {
             return Err(format!("log --format={format}"));

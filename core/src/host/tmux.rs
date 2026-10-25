@@ -29,10 +29,11 @@ use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
+use crate::ports::Ports;
 
 use super::deadline::Failed;
-use super::runner::{Runner, SystemRunner};
-use super::spawn::{Pid as ProcessId, ProcessSpawn, Spawn as ProcessPort};
+use super::runner::Runner;
+use super::spawn::{Pid as ProcessId, Spawn as ProcessPort};
 use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
@@ -503,7 +504,7 @@ struct Procs(Arc<dyn ProcessPort>);
 
 impl Default for Procs {
     fn default() -> Procs {
-        Procs(Arc::new(ProcessSpawn))
+        Procs(Ports::current().spawn)
     }
 }
 
@@ -551,7 +552,7 @@ struct Handle(Arc<dyn Runner>);
 
 impl Default for Handle {
     fn default() -> Handle {
-        Handle(Arc::new(SystemRunner))
+        Handle(Ports::current().runner)
     }
 }
 
@@ -790,7 +791,7 @@ impl Tmux {
     /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
     /// unlinked executable: unverified).
     pub fn pid_exe(pid: u32) -> Option<PathBuf> {
-        Tmux::pid_exe_with(&ProcessSpawn, pid)
+        Tmux::pid_exe_with(&*Ports::current().spawn, pid)
     }
 
     /// [`Tmux::pid_exe`] asking `spawn` (`Spawn::exe_of`) whether the process exists and what it runs. On Linux the real
@@ -1059,7 +1060,7 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
-    installed_version_with(&SystemRunner)
+    installed_version_with(&*Ports::current().runner)
 }
 
 /// [`installed_version`], the call run by `runner`.
