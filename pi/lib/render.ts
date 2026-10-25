@@ -50,7 +50,7 @@ function oneLine(text: string): string {
   return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : line;
 }
 
-/** `HH:MM` in the process's local time for a Unix-ms `timestamp`, or `undefined` when there is none (hs-d637). */
+/** `HH:MM` in the process's local time for a Unix-ms `timestamp`, or `undefined` when there is none. */
 function timeOf(timestamp: number | undefined): string | undefined {
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? localTime(new Date(timestamp).toISOString()) : undefined;
 }
