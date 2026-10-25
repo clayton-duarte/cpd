@@ -18,6 +18,8 @@
 //! `G` follows the end again (the view starts there); `q` or Esc closes its pane.
 
 pub(crate) mod render;
+#[cfg(test)]
+mod screen_tests;
 mod view;
 
 use std::path::PathBuf;
