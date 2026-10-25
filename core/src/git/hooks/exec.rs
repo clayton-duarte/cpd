@@ -15,6 +15,8 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use serde_json::{Map, Value};
 
+use crate::host::runner::Runner;
+
 /// A command ready to run: rendered, with its stdin.
 pub struct Rendered {
     pub name: Option<String>,
@@ -204,6 +206,21 @@ fn wait(running: &mut [Running], deadline: Instant) {
             let _ = done.recv_timeout(GRACE);
         }
     }
+}
+
+/// Like [`execute`], over a [`Runner`]: one `Runner::run` per hook, on a thread each, `sh -c <hook>` with the context
+/// as stdin; a hook's output reaches the log and the tail when it ends. Stub: not implemented.
+pub fn run_with(
+    runner: &dyn Runner,
+    blocks: &[Vec<Rendered>],
+    cwd: &Path,
+    timeout: Duration,
+    env: &[(&str, &str)],
+    log: File,
+    tail_lines: usize,
+) -> Executed {
+    let _ = (runner, blocks, cwd, timeout, env, log, tail_lines);
+    todo!("exec::run_with")
 }
 
 /// The hook's template variables as the JSON text of a command's stdin.

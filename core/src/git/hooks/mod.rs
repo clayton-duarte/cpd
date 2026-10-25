@@ -7,6 +7,8 @@
 
 mod def;
 mod exec;
+#[cfg(test)]
+mod exec_runner_tests;
 mod template;
 
 use std::fmt;
