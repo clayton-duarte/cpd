@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
@@ -27,6 +28,8 @@ impl<T: Send + 'static> Reads<T> {
         let queue = Arc::new((Mutex::new(Queue { waiting: None, closed: false }), Condvar::new()));
         let (send, results): (Sender<T>, Receiver<T>) = mpsc::channel();
         let shared = Arc::clone(&queue);
+        // The jobs read `Ports::current()`: this thread's scope is not the reader thread's.
+        let ports = Ports::current();
         std::thread::Builder::new()
             .name("cpd-reads".into())
             .spawn(move || {
@@ -44,7 +47,7 @@ impl<T: Send + 'static> Reads<T> {
                             q = wake.wait(q).unwrap_or_else(|e| e.into_inner());
                         }
                     };
-                    if send.send(job()).is_err() {
+                    if send.send(Ports::scope(&ports, job)).is_err() {
                         return;
                     }
                     waker.read_done();

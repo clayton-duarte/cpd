@@ -106,8 +106,17 @@ impl Spawn for Stubborn {
     fn exe_of(&self, p: Pid) -> Option<PathBuf> {
         self.inner.exe_of(p)
     }
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        self.inner.with_env(key, value)
+    }
     fn cmdline(&self, p: Pid) -> Option<String> {
         self.inner.cmdline(p)
+    }
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        self.inner.ppid(p)
+    }
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        self.inner.env_of(p, key)
     }
     fn exec(&self, l: &Launch) -> io::Error {
         self.inner.exec(l)

@@ -13,7 +13,7 @@ pub mod worktree;
 #[cfg(test)]
 mod runner_tests;
 
-pub use hooks::{HookError, HookOutcome, HookResult, Log, Operation, Pipeline, run_hook, run_hook_as};
+pub use hooks::{HookError, HookOutcome, HookResult, Log, Operation, Pipeline, run_hook, run_hook_as, run_hook_with};
 pub use lead::{Synced, sync_lead};
 pub use snapshot::{GateHooks, GateWorktree, Refused, gate, gate_worktree_path, sweep as sweep_gate_worktrees};
 pub use tamper::{check as tamper_check, touched_protected};

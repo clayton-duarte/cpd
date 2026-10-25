@@ -979,6 +979,22 @@ fn log_g_of_a_ref_that_does_not_exist_is_exit_128() {
     assert_eq!(first_line(&out.stderr), "fatal: ambiguous argument 'refs/heads/nope': unknown revision or path not in the working tree.");
 }
 
+#[test]
+fn log_format_s_prints_the_subjects_newest_first_and_dash_1_only_the_newest() {
+    let mut w = world();
+    let repo = w.empty();
+    repo.write("a.txt", "a\n");
+    repo.commit("one");
+    repo.write("a.txt", "b\n");
+    repo.commit("two");
+    // git's own semantics: `git log --format=%s` is one subject per line, newest first; `-1` stops after the first.
+    let all = w.git(repo.dir(), &["log", "--format=%s"]);
+    assert_eq!((all.code, all.stdout.as_str()), (0, "two\none\n"));
+    let newest = w.git(repo.dir(), &["log", "-1", "--format=%s"]);
+    assert_eq!((newest.code, newest.stdout.as_str()), (0, "two\n"));
+    assert!(w.route.unsupported().is_empty());
+}
+
 // ---- status --porcelain ------------------------------------------------------------------------------
 
 #[test]

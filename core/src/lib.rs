@@ -25,11 +25,13 @@ pub mod config;
 pub mod context;
 pub mod driver;
 pub mod events;
+pub mod gate;
 pub mod git;
 pub mod host;
 pub mod host_repair;
 pub mod host_repair_approval;
 pub mod inbox;
+pub mod install;
 pub mod incident;
 pub mod job;
 pub mod merge;
@@ -46,11 +48,14 @@ pub mod session;
 pub mod spec;
 pub mod store;
 pub mod tag;
+pub mod testsel;
 pub mod version_sync;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
 
+#[cfg(test)]
+mod ambient_ports_tests;
 #[cfg(test)]
 mod clock_tests;
 #[cfg(test)]

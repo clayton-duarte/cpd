@@ -23,14 +23,19 @@
 use std::cell::Cell;
 use std::ffi::OsString;
 use std::fs::File;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::process::{ExitCode, Output};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::Duration;
 
+use nix::unistd::{dup, dup2_stdin, dup2_stdout};
+
+use cpd_core::fakes::git::{GitRoute, Repo, Universe};
+use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::host::spawn::Launch;
+use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::Fakes;
 
 use super::{Run, TestEnv};
@@ -57,12 +62,32 @@ impl Drop for HandOver {
 /// Held by every [`Fx`] from its creation to its drop.
 static LOCK: Mutex<()> = Mutex::new(());
 
+/// One pane of the fake server: what `list-panes -a` prints with the `@cpd_*` options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneRow {
+    pub pane: String,
+    pub window: String,
+    pub window_name: String,
+    /// `@cpd_session`, empty when unset.
+    pub session: String,
+    /// `@cpd_view`, empty when unset.
+    pub view: String,
+    /// `@cpd_history`, empty when unset.
+    pub history: String,
+}
+
 pub struct Fx {
     /// The env: the fixtures (`env.sql(..)`, `env.write_config(..)`, `env.git_repo(..)`) are its.
     pub env: TestEnv,
     /// The fake ports of [`Fx::with_ports`]: the `ManualClock`, the `FakeRunner` and the `FakeSpawn`, and the `Ports`
     /// over them. [`Fx::new`] builds them too, but its commands run on the real ports.
     pub fakes: Fakes,
+    /// The `Universe` of the git route of `fakes.runner`: the repos, refs and config of every `git` call.
+    pub universe: Arc<Mutex<Universe>>,
+    /// The git route of `fakes.runner`.
+    pub git_route: Arc<GitRoute>,
+    /// The tmux route of `fakes.runner`: `tmux_route.fake()` is the `FakeTmux` (`set_screen`, `on_popup`, `add_client`...).
+    pub tmux_route: Arc<TmuxRoute>,
     /// Whether `cpd` runs on `fakes.ports` ([`Fx::with_ports`]) or on the real ports ([`Fx::new`]).
     on_fake_ports: bool,
     allow_unscripted: Cell<bool>,
@@ -84,9 +109,19 @@ impl Fx {
     /// process is started and nothing external is run. Its drop fails the test when a program was called that no
     /// `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
     pub fn with_ports() -> Fx {
-        let mut fx = Fx::new();
+        let mut env = bare_with_store();
+        // The fake tmux has no socket: its directory is the env's own, never the shared `/tmp` a long root would give.
+        env.tmux_in_root = true;
+        let mut fx = Fx::with(env);
         fx.on_fake_ports = true;
         fx
+    }
+
+    /// Sets `key` in the process's environment until this `Fx` drops, which puts the environment back: for a test
+    /// that reads what the product does with a variable it inherits (the hooks withhold `TMUX`, `PI_*`, `CPD_*`).
+    pub fn export(&self, key: &str, value: &str) {
+        // SAFETY: under this `Fx`'s lock, as `enter`.
+        unsafe { std::env::set_var(key, value) };
     }
 
     /// Scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
@@ -201,7 +236,18 @@ impl Fx {
         let (remove, set) = env.isolation();
         let saved_vars: Vec<_> = std::env::vars_os().collect();
         let saved_cwd = std::env::current_dir().expect("the current directory");
-        let fx = Fx { env, fakes: Fakes::new(), on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
+        let fakes = Fakes::new();
+        // The test kit's global git config (`TestEnv`'s `.gitconfig`), in the Universe: no file is read.
+        let mut universe = Universe::new(fakes.clock.clone());
+        universe.set_global("user.name", "cpd test");
+        universe.set_global("user.email", "test@cpd.invalid");
+        universe.set_global("init.defaultBranch", "main");
+        let universe = Arc::new(Mutex::new(universe));
+        let git_route = Arc::new(GitRoute::new(universe.clone()));
+        // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
+        let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
+        let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
+        let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
@@ -217,9 +263,153 @@ impl Fx {
         fx
     }
 
+    // ---- the git fixtures (the names of `TestEnv`'s), over the git route of the `FakeRunner`
+
+    /// `git` with `dir` as the cwd, through the route; panics unless it exits 0; returns trimmed stdout.
+    pub fn git(&self, dir: &Path, args: &[&str]) -> String {
+        let out = self.run_tool("git", Some(dir), &[], args);
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} exited {:?}: {}",
+            dir.display(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).expect("git's stdout is UTF-8").trim_end().to_owned()
+    }
+
+    /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
+    pub fn git_repo(&self, name: &str) -> PathBuf {
+        self.repo_of_universe(name);
+        self.env.root().join("repos").join(name)
+    }
+
+    /// [`Fx::git_repo`] whose `origin` is `https://github.com/acme/<name>.git`, with `refs/remotes/origin/main`.
+    pub fn keyed_repo(&self, name: &str) -> PathBuf {
+        let repo = self.repo_of_universe(name);
+        repo.keyed(name);
+        // As `TestEnv::keyed_repo`: the repo `acme/<name>` is configured, unless a test wrote its policy already.
+        let policy = self.env.cpd_home().join(format!("policy/repos/acme/{name}.toml"));
+        if !policy.exists() {
+            self.env.repo_policy("acme", name, "");
+        }
+        self.env.root().join("repos").join(name)
+    }
+
+    /// `url.<bare>.insteadOf = <the repo's GitHub URL>`: the GitHub URL resolves to the bare repo `bare`.
+    pub fn local_origin(&self, repo: &Path, bare: &Path) {
+        let url = self.git(repo, &["config", "--get", "remote.origin.url"]);
+        self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
+    /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
+    pub fn commit_file(&self, dir: &Path, path: &str, text: &str, message: &str) {
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().expect("a file has a parent")).expect("create the file's directory");
+        std::fs::write(&file, text).expect("write the file");
+        self.git(dir, &["add", "-A"]);
+        self.git(dir, &["commit", "-q", "-m", message]);
+    }
+
+    /// `<root>/repos/<name>` made in the `Universe` through its handle: `main`, `README.md`, one commit `initial`.
+    fn repo_of_universe(&self, name: &str) -> Repo {
+        let repo = Repo::init(&self.universe, &self.env.root().join("repos").join(name));
+        repo.write("README.md", &format!("# {name}\n"));
+        repo.commit("initial");
+        repo
+    }
+
+    // ---- the tmux fixtures, over the tmux route of the `FakeRunner`
+
+    /// `tmux -L <the env's private socket> <args>` through the route.
+    pub fn tmux(&self, args: &[&str]) -> Output {
+        let tmpdir = self.env.tmux_tmpdir().display().to_string();
+        let envs = [("TMUX_TMPDIR".to_owned(), Some(tmpdir))];
+        self.run_tool("tmux", None, &envs, &[&["-L", self.env.tmux_socket()], args].concat())
+    }
+
+    /// The fake server's state of the env's socket; `None` while no server exists.
+    pub fn tmux_state(&self) -> Option<cpd::fakes::tmux::State> {
+        // Asks the route's fake directly, not through the runner: it is no call of the product's to record.
+        let probe = Invocation {
+            argv: ["-L", self.env.tmux_socket(), "list-sessions"].map(str::to_owned).to_vec(),
+            tmux_tmpdir: self.env.tmux_tmpdir(),
+            cwd: self.env.root().to_path_buf(),
+            env: Vec::new(),
+        };
+        (self.tmux_route.fake().run(&probe).code == 0).then(|| self.tmux_route.fake().state(self.env.tmux_socket()))
+    }
+
+    /// Starts the cockpit in the fake server: session `cpd`, window `main` with three panes (`tree`, `plan`, `chat`),
+    /// on a server with cpd's `SERVER_OPTIONS`. Only records: no pane program runs.
+    pub fn cockpit(&self) {
+        let ok = |args: &[&str]| {
+            let out = self.tmux(args);
+            assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).expect("tmux's stdout is UTF-8").trim().to_owned()
+        };
+        let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().map(String::as_str).chain([";"])).collect();
+        args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", "cpd tui view tree"]);
+        let tree = ok(&args);
+        ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
+        for view in ["plan", "chat"] {
+            let pane = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("cpd tui view {view}")]);
+            ok(&["set", "-p", "-t", &pane, "@cpd_view", view]);
+        }
+    }
+
+    /// Every pane of the fake server, in pane order, read from [`Fx::tmux_state`].
+    pub fn panes(&self) -> Vec<PaneRow> {
+        let Some(state) = self.tmux_state() else { return Vec::new() };
+        let windows = state.windows();
+        let option = |options: &[(String, String)], key: &str| options.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default();
+        state
+            .panes()
+            .into_iter()
+            .map(|pane| PaneRow {
+                window_name: windows.iter().find(|w| w.id == pane.window).map(|w| w.name.clone()).unwrap_or_default(),
+                session: option(&pane.options, "@cpd_session"),
+                view: option(&pane.options, "@cpd_view"),
+                history: option(&pane.options, "@cpd_history"),
+                pane: pane.id,
+                window: pane.window,
+            })
+            .collect()
+    }
+
+    /// A `cpd` reply for `tui view chat` and `tui view history` that exits at once.
+    pub fn fake_cpd_views(&self) {
+        let _ = (*self.fakes.runner)
+            .clone()
+            .on("cpd", |call| matches!(call.args.as_slice(), [tui, view, name, ..] if tui == "tui" && view == "view" && (name == "chat" || name == "history")), Reply::ok(""));
+    }
+
+    /// One call of `program` through the `FakeRunner`; panics when it could not be run.
+    fn run_tool(&self, program: &str, cwd: Option<&Path>, envs: &[(String, Option<String>)], args: &[&str]) -> Output {
+        let call = Call {
+            tool: program.to_owned(),
+            program: program.to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            envs: envs.to_vec(),
+            cwd: cwd.map(Path::to_path_buf),
+            deadline: Duration::from_secs(60),
+            stdin: None,
+            stderr_to: None,
+        };
+        self.fakes.ports.runner.run(&call).unwrap_or_else(|e| panic!("{program} {args:?} could not run: {e:?}"))
+    }
+
     /// Runs `cpd <args>` from this env's root.
     pub fn cpd(&self, args: &[&str]) -> Run {
         self.cpd_in(self.env.root(), args)
+    }
+
+    /// Runs `cpd <args>` from this env's root with stdin and stdout pointing at `/dev/null` for the call, so the product's
+    /// `on_a_terminal` is false whatever the test process's own stdin and stdout are (a run in a terminal): the refusal
+    /// `not_a_terminal` of a command that owns its terminal. The two descriptors are put back after, also on a panic.
+    pub fn cpd_without_a_terminal(&self, args: &[&str]) -> Run {
+        let _detached = NoTerminal::enter();
+        self.cpd(args)
     }
 
     /// Runs `cpd <args>` from `cwd`.
@@ -266,6 +456,10 @@ impl Drop for Fx {
         // The directory may be gone when a test removed it; a panic in a drop during unwinding would abort.
         let _ = std::env::set_current_dir(&self.saved_cwd);
         // Last, and not while unwinding (a second panic aborts): the environment is already put back.
+        if self.on_fake_ports && !std::thread::panicking() {
+            // exit 1 is also a real answer to git: a call the route does not model must fail the test.
+            self.git_route.assert_supported();
+        }
         if self.on_fake_ports && !self.allow_unscripted.get() && !std::thread::panicking() {
             let unscripted = self.fakes.runner.unscripted();
             assert!(
@@ -291,6 +485,31 @@ fn bare_with_store() -> TestEnv {
 /// The number of `code`, which `ExitCode` does not give.
 fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
+}
+
+/// Stdin and stdout of the process pointing at `/dev/null`, put back on drop.
+struct NoTerminal {
+    stdin: OwnedFd,
+    stdout: OwnedFd,
+}
+
+impl NoTerminal {
+    fn enter() -> NoTerminal {
+        let null = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null").expect("open /dev/null");
+        let stdin = dup(std::io::stdin()).expect("dup stdin");
+        let stdout = dup(std::io::stdout()).expect("dup stdout");
+        let saved = NoTerminal { stdin, stdout };
+        dup2_stdin(&null).expect("point stdin at /dev/null");
+        dup2_stdout(&null).expect("point stdout at /dev/null");
+        saved
+    }
+}
+
+impl Drop for NoTerminal {
+    fn drop(&mut self) {
+        let _ = dup2_stdin(&self.stdin);
+        let _ = dup2_stdout(&self.stdout);
+    }
 }
 
 /// The extra variables and the directory of one call, restored when it ends or unwinds.

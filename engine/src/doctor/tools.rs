@@ -7,7 +7,8 @@ use std::process::{Command, Stdio};
 use super::check::{Check, Severity};
 use cpd_core::config::catalog::node;
 use cpd_core::host::deadline::Failed;
-use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::host::runner::Runner;
+use cpd_core::ports::Ports;
 
 /// A tool with its minimum, and the first version it is not allowed to be.
 struct Tool {
@@ -29,7 +30,7 @@ const TOOLS: [Tool; 4] = [
 
 /// The checks `git`, `tmux`, `pi`, `gh`, in that order.
 pub fn tools() -> Vec<Check> {
-    tools_with(&SystemRunner)
+    tools_with(&*Ports::current().runner)
 }
 
 /// [`tools`] on `runner`.
@@ -97,7 +98,7 @@ fn check(runner: &dyn Runner, tool: &Tool) -> Check {
 
 /// `gh auth status` exits 0 (warn: only the `pr` commands need it).
 pub fn gh_auth() -> Check {
-    gh_auth_with(&SystemRunner)
+    gh_auth_with(&*Ports::current().runner)
 }
 
 /// [`gh_auth`] on `runner`.
@@ -110,7 +111,7 @@ pub fn gh_auth_with(runner: &dyn Runner) -> Check {
 
 /// pi's Node (contract §9) runs `--version`.
 pub fn pi_node() -> Check {
-    pi_node_with(&SystemRunner)
+    pi_node_with(&*Ports::current().runner)
 }
 
 /// [`pi_node`] on `runner`.

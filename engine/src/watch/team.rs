@@ -27,8 +27,9 @@ use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::Failed;
-use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::host::runner::Runner;
 use cpd_core::config::PiInstall;
+use cpd_core::ports::Ports;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -93,7 +94,7 @@ pub(super) fn run(engine: &mut Engine) {
 /// Starts the helper on its own thread; returns where its answer will arrive.
 fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let pi = locate_pi().map_err(|e| Failure::from(&e))?;
-    start_with(Arc::new(SystemRunner), engine, &pi, &node())
+    start_with(Ports::current().runner, engine, &pi, &node())
 }
 
 /// [`start`] on `runner`, with pi located as `pi` and pi's Node `node`.

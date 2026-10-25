@@ -54,6 +54,14 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     chat::run()
 }
 
+/// The view's first frame for the Session `name` over the text of its file, drawn on `f` as `run` draws it (the view starts at
+/// the end). Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_history(name: &str, archived: bool, text: &str, f: &mut ratatui::Frame) {
+    let mut view = View::new(name, archived);
+    view.set_lines(render(text));
+    view.draw(f);
+}
+
 fn load(store: &mut Store, id: &SessionId) -> Result<History, CpdError> {
     let (name, file, archived): (String, Option<String>, bool) = store
         .read(|conn| {

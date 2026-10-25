@@ -18,9 +18,10 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::Failed;
-use crate::host::runner::{NO_DEADLINE, Runner, SystemRunner};
+use crate::host::runner::{NO_DEADLINE, Runner};
 use crate::ids::PlanId;
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::pr::start::{self, By, Pushed};
 use crate::session::PROGRAM;
 
@@ -174,7 +175,7 @@ fn cas_lost(id: &PlanId) -> CpdError {
 /// If it fails, the Plan stays locked and the result is `watch_start_failed`
 /// with the ensure's error in `details.error` (commands.md §4.8).
 fn ensure_watch(env: &Env, plan: &PlanId) -> Result<Value, CpdError> {
-    ensure_watch_with(&SystemRunner, env.home.root(), plan)
+    ensure_watch_with(&*Ports::current().runner, env.home.root(), plan)
 }
 
 /// [`ensure_watch`] on `runner`: one call of `cpd watch --ensure` with `CPD_HOME=<root>` and `root` as its cwd.

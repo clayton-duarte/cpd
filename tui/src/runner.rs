@@ -60,7 +60,7 @@ pub fn run_view<P>(
     prepare: impl FnOnce() -> Result<P, CpdError>,
     body: impl FnOnce(&mut DefaultTerminal, P) -> Result<(), ViewError>,
 ) -> Result<Output, CpdError> {
-    run_view_on(&Ports::real(), name, capture, prepare, |ctx, prepared| body(&mut ctx.terminal, prepared))
+    run_view_on(&Ports::current(), name, capture, prepare, |ctx, prepared| body(&mut ctx.terminal, prepared))
 }
 
 /// [`run_view`] on this process's terminal and input, with `body` on a [`Ctx`] over `ports`: what the views whose loops

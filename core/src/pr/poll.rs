@@ -77,8 +77,8 @@ struct Outcome {
     done: Vec<PlanId>,
 }
 
-pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
+pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_with(ports)?;
     let selected = args.plan.plan;
     if let Some(id) = &selected {
         env.plan(id)?;
@@ -86,7 +86,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let _lock = take_lock_with(&env.ports, &env.home.pr_poll_lock())?;
     let root = env.home.root().to_owned();
 
-    let search = gh::search_open(&root)?;
+    let search = gh::search_open(&*env.ports.runner, &root)?;
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
@@ -112,7 +112,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         })
         .collect();
     let keys: Vec<(String, i64)> = candidates.iter().map(|row| (row.repo.clone(), row.number)).collect();
-    let read = gh::read_absent(&root, &keys)?;
+    let read = gh::read_absent(&*env.ports.runner, &root, &keys)?;
     let mut seen: Vec<Listed> = search.prs.iter().filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number))).cloned().collect();
     for (row, read) in candidates.iter().zip(read) {
         let found = listed_in(row);
