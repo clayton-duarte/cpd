@@ -9,9 +9,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{CPD, TestEnv, WATCH_OK, refused, wait_some};
+use common::fx::Fx;
+use common::{CPD, TestEnv, WATCH_OK, refused};
+use cpd_core::attempt::ledger;
+use cpd_core::driver::worker::render_spec;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
-use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ids::{AttemptId, HostName, PlanId};
 use serde_json::json;
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
@@ -327,66 +330,40 @@ impl Core {
 
 #[test]
 fn the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file() {
-    let fx = core("dispatch");
-    // `job dispatch` renders the Spec of a queued Job: this env's own fixtures are the driver's (see flow/driver.rs).
+    // `render_spec` is what `job dispatch`'s driver calls for a Job's Attempt: it reads the store and the policy files
+    // under `$CPD_HOME` and writes the Spec. No git, tmux, pi or driver is involved, so none is started.
+    let fx = Fx::new();
     fx.env.repo_policy("acme", "pay", "[hooks.pre-commit]\nlint = \"make lint-from-the-repo-file\"\nbuild = \"make build-from-the-repo-file\"\n");
-    fx.env.fake_pi("exit 0");
-    fs::write(
-        fx.env.cpd_home().join("config.toml"),
-        format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
-            fx.env.tmux_socket()
-        ),
-    )
-    .unwrap();
-    fs::create_dir_all(fx.env.root().join("install")).unwrap();
-    fs::write(fx.env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = fx.env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
-    for package in ["pi-coding-agent", "pi-ai"] {
-        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
-        fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
-    }
-    // The fake tmux starts no process for a pane: the test ends the Worker's pane itself, below.
-    fx.env.fake_tmux();
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
-    let catalog: String = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")]
-        .iter()
-        .map(|(l, m, e)| format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{l}', '{m}', '{e}', 't');"))
-        .collect();
-    fx.env.sql(&catalog);
-    // A queued Job `spec` of the PR, with the fingerprint the Lock gives it.
-    fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-         VALUES ('pay', 'repo', 'spec', 'Title', 'S2', 'Do it.', 'Because.', '[\"spec.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');",
-    );
-    let plan_id = plan();
+    let worktree = fx.env.root().join("worktrees/spec-a1");
+    fx.env.sql(&format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay the bills', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '/repos/pay', 'pay', 'main', 'dispatch', 'cpd/pay', '/worktrees/lead', cpd_txn(), 't', 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', 'repo', 'spec', 'Title', 'S2', 'Do it.', 'Because.', '[\"spec.txt\"]', '[\"it works\"]', '[]', 'running', 0, '{}', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+           VALUES ('pay', 'spec-a1', 'spec', 1, 'S2', 'ladder', 'running', 'cpd/pay--spec-a1', '{}', '{}', 't');",
+        "e".repeat(64),
+        worktree.display(),
+        "0".repeat(40),
+    ));
     let home = cpd_core::home::CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
-    let all = store.read(|conn| cpd_core::plan::jobs::load(conn, &plan_id)).unwrap();
-    let job = all.iter().find(|j| j.key == "spec").unwrap();
-    fx.env.sql(&format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'spec';", cpd_core::plan::locked_fingerprint(job)));
-
-    let mut cmd = fx.env.command(CPD);
-    cmd.envs([("CPD_TEST_DRIVER_POLL", "0.05"), ("CPD_TEST_KILL_PAUSE", "0.05")]).args(["job", "dispatch", "spec", "--plan", "pay"]).current_dir(fx.env.root());
-    let out = common::output(&mut cmd).expect("run cpd");
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
-
-    let spec_path = fx.env.cpd_home().join("run/pay/specs/spec-a1.md");
-    let spec = wait_some("the Worker Spec", Duration::from_secs(60), || fs::read_to_string(&spec_path).map_err(|e| e.to_string()));
+    let host = HostName::parse("m1").unwrap();
+    let path = store
+        .read(|conn| {
+            let target = ledger::load(conn, &plan(), &AttemptId::parse("spec-a1").unwrap())?;
+            let jobs = cpd_core::plan::jobs::load(conn, &plan())?;
+            let job = jobs.iter().find(|j| j.key == "spec").expect("the Job `spec`");
+            render_spec(conn, &home, &host, &target, job)
+        })
+        .unwrap();
+    assert_eq!(path, fx.env.cpd_home().join("run/pay/specs/spec-a1.md"));
+    let spec = fs::read_to_string(&path).unwrap();
     assert!(spec.contains("make lint-from-the-repo-file"), "{spec}");
     assert!(spec.contains("make build-from-the-repo-file"), "{spec}");
-
-    // End the Worker's pane (the one that is not the `watch` window's), then wait for the driver to exit: nothing leaks.
-    let pane = wait_some("the Worker's pane", Duration::from_secs(60), || {
-        let state = fx.env.tmux_state().ok_or("no server")?;
-        state.panes().into_iter().find(|p| p.argv.first().is_some_and(|a| a != "sleep")).map(|p| p.id).ok_or_else(|| "no pane".to_owned())
-    });
-    assert!(fx.env.tmux(&["__ctl", "pane-exit", &pane, "--status", "0"]).status.success());
-    let driver: serde_json::Value = serde_json::from_slice(&out.stdout).expect("dispatch prints JSON");
-    let pid = nix::unistd::Pid::from_raw(driver["pid"].as_i64().expect("the driver's pid") as i32);
-    wait_some("the driver to exit", Duration::from_secs(60), || {
-        if nix::sys::signal::kill(pid, None).is_ok() { Err("alive".to_owned()) } else { Ok(()) }
-    });
 }
