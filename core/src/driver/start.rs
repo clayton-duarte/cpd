@@ -324,6 +324,7 @@ fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock
         stdout_to: Some(log_path),
         hand_over: Some(lock.fd()),
         idle: true,
+        foreground: false,
     };
     // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
     let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;

@@ -41,6 +41,10 @@ pub struct Launch {
     pub stdout_to: Option<PathBuf>,
     pub hand_over: Option<RawFd>,
     pub idle: bool,
+    /// The child keeps this process's stdin, stdout and stderr (a Lead's pi owns the pane's terminal) and is not
+    /// reaped by `Spawn`: its parent waits for it, by pid (`session run`'s `PiProc`). `setsid`, `stdout_to` and
+    /// `hand_over` are not combined with it.
+    pub foreground: bool,
 }
 
 pub trait Spawn: Send + Sync {
@@ -168,6 +172,10 @@ fn raw(p: Pid) -> Option<NixPid> {
 impl Spawn for ProcessSpawn {
     fn spawn(&self, l: &Launch) -> io::Result<Pid> {
         let mut command = command(l);
+        if l.foreground {
+            command.stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+            return Ok(Pid(command.spawn()?.id()));
+        }
         match &l.stdout_to {
             Some(path) => {
                 let log = std::fs::OpenOptions::new().create(true).append(true).open(path)?;

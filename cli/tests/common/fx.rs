@@ -439,6 +439,13 @@ impl Fx {
         }
     }
 
+    /// Sets the modification time of `path` to `by` before the virtual clock's now: a file that has been quiet for `by`
+    /// by what the product reads (`ManualClock::utc`), not by the wall clock the file system stamped it with.
+    pub fn backdate(&self, path: &Path, by: Duration) {
+        let file = std::fs::OpenOptions::new().write(true).open(path).expect("open the file to backdate");
+        file.set_modified(std::time::SystemTime::from(self.fakes.clock.utc()) - by).expect("set the modification time");
+    }
+
     /// The pid of a process the `FakeSpawn` runs: it is alive until [`Fx::ended_pid`] or an `exit` of the test.
     pub fn live_pid(&self) -> u32 {
         let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };

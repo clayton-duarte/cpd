@@ -63,6 +63,7 @@ fn launches_records_every_field_of_a_launch() {
         stdout_to: Some(PathBuf::from("/log/a1.log")),
         hand_over: Some(3),
         idle: true,
+        foreground: true,
     };
     spawn.spawn(&l).unwrap();
     assert_eq!(spawn.launches(), vec![l]);

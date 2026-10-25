@@ -54,6 +54,7 @@ pub mod pi;
 pub mod screen;
 pub mod session;
 pub mod tree;
+pub mod wrapper;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
