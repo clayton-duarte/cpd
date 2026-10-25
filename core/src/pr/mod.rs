@@ -53,6 +53,8 @@ use row::PlanPrs;
 
 pub use gh::close_pr;
 pub use open::{Pulled, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+#[cfg(test)]
+pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {

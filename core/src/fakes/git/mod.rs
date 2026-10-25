@@ -7,6 +7,12 @@ mod rev;
 mod route;
 mod sha1;
 mod universe;
+#[cfg(test)]
+mod merge_tests;
+#[cfg(test)]
+mod rebase_tests;
+#[cfg(test)]
+mod scenario;
 
 pub use repo::Repo;
 pub use rev::{RevError, Selection, parse, range};

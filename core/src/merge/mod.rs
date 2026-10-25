@@ -337,6 +337,12 @@ fn contains(worktree: &std::path::Path, commit: &str) -> Result<bool, CpdError> 
     }
 }
 
+/// [`rebase`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+#[allow(dead_code)]
+pub(crate) fn rebase_with(_runner: &dyn crate::host::runner::Runner, _worktree: &std::path::Path, _onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+    todo!("rebase_with")
+}
+
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict (after
 /// `git rebase --abort`); `None` when it rebased.
 fn rebase(worktree: &std::path::Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {

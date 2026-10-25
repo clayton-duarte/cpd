@@ -22,6 +22,7 @@ pub use worktree::{
     create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with, prepare_pr_lead_worktree, discard_worktree, lead_branch, lead_worktree_path, merge_conflicts, pr_lead_worktree_path, prepare_lead_worktree,
     push_commit, push_commit_with, push_lead_branch, remove_merged_attempt, remove_merged_lead,
 };
+pub use worktree::merge_conflicts_with;
 
 /// The last `lines` lines of `text`, joined with `\n` (contract §7.3: results
 /// carry the last 60 lines of a log).

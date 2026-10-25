@@ -450,6 +450,24 @@ pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: 
     Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
 }
 
+/// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+#[allow(dead_code)]
+pub(crate) fn rebase_onto_with(_runner: &dyn Runner, _worktree: &Path, _onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+    todo!("rebase_onto_with")
+}
+
+/// [`unresolved`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+#[allow(dead_code)]
+pub(crate) fn unresolved_with(_runner: &dyn Runner, _lead: &Path) -> Result<Vec<String>, CpdError> {
+    todo!("unresolved_with")
+}
+
+/// [`in_progress`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+#[allow(dead_code)]
+pub(crate) fn in_progress_with(_runner: &dyn Runner, _lead: &Path) -> Result<bool, CpdError> {
+    todo!("in_progress_with")
+}
+
 /// `error`, after removing the gate worktree; the removal's own failure is
 /// dropped (the leftover is swept once this process has ended), so that the
 /// error the Lead acts on is the one that stopped the command.

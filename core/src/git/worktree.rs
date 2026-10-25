@@ -292,6 +292,11 @@ pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<
     }
 }
 
+/// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+pub fn merge_conflicts_with(_runner: &dyn Runner, _repo: &Path, _onto: &str, _sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+    todo!("merge_conflicts_with")
+}
+
 /// Fetches `origin/<branch>` and refuses `branch_exists` when it conflicts with `origin/<base>` (hs-d490: a base that
 /// merely moved ahead of the branch is no conflict); `details.files` are the conflicted paths.
 fn require_no_conflict(repo: &Path, branch: &str, base: &str) -> Result<(), CpdError> {

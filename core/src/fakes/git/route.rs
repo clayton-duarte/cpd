@@ -14,6 +14,8 @@ use super::universe::{Head, Oid, RepoId, Universe, is_oid, norm_key};
 
 mod remote;
 use remote::{fetch, ls_remote, push};
+mod merge;
+use merge::{merge_tree, rebase};
 
 const ZEROS: &str = "0000000000000000000000000000000000000000";
 use crate::host::runner::{Call, Handler, Reply};
@@ -182,6 +184,8 @@ impl GitRoute {
             "remote" => remote(&mut ctx, rest),
             "cat-file" => cat_file(&mut ctx, rest),
             "merge-base" => merge_base(&mut ctx, rest),
+            "merge-tree" => merge_tree(&mut ctx, rest),
+            "rebase" => rebase(&mut ctx, rest),
             "rev-list" => rev_list(&mut ctx, rest),
             "ls-tree" => ls_tree(&mut ctx, rest),
             "log" => log(&mut ctx, rest),
