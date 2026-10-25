@@ -78,6 +78,7 @@ import { ToolRuntime } from "./compact-tools-runtime.ts";
 import { SilentModeController } from "./compact-tools-silent.ts";
 import { attemptUI, createTranscriptRenderer, type UIFailure } from "./compact-tools-transcript.ts";
 import { ThinkingCycleController } from "./compact-tools-thinking.ts";
+import { CompactionFoldController } from "./compact-tools-compaction.ts";
 import { ViewportKeeper } from "./compact-tools-viewport.ts";
 import {
 	SUPPORTED_TOOL_SET,
@@ -823,6 +824,8 @@ export default function compactTools(pi: ExtensionAPI): void {
 	publicBases = new WeakMap();
 	const thinkingCycle = new ThinkingCycleController(pi, () => runtime.config.style !== "off",
 		() => foldToggles() ? runtime.config.toggle : undefined);
+	const compaction = new CompactionFoldController(pi, () => runtime.config.style !== "off",
+		() => foldToggles() ? runtime.config.toggle : undefined);
 	const progress = new ProgressController(pi);
 	const viewport = new ViewportKeeper();
 	const silent = new SilentModeController(pi);
@@ -862,6 +865,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		attemptUI(failures, "viewport bind", () => viewport.bind(ctx));
 		attemptUI(failures, "progress bind", () => progress.bind(ctx, resume));
 		attemptUI(failures, "thinking bind", () => thinkingCycle.bind(ctx));
+		attemptUI(failures, "compaction bind", () => compaction.bind(ctx));
 		attemptUI(failures, "silent bind", () => silent.bind(ctx, runtime.config.mode, reload, resume));
 		attemptUI(failures, "groups bind", () => groups.bind(ctx));
 		transcript.bind(ctx, failures);
@@ -870,6 +874,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	// Each action is independent: a host failure must not skip later cleanup steps.
 	const detachUI = (options: { preservePhase?: boolean; restoreNative?: boolean; clearTimings?: boolean }, failures: UIFailure[]) => {
 		attemptUI(failures, "thinking cleanup", () => thinkingCycle.dispose(options.restoreNative));
+		attemptUI(failures, "compaction cleanup", () => compaction.dispose());
 		attemptUI(failures, "progress cleanup", () => progress.dispose(options.preservePhase));
 		attemptUI(failures, "silent cleanup", () => silent.dispose());
 		attemptUI(failures, "editor box cleanup", () => editorBox.dispose(sessionContext));
