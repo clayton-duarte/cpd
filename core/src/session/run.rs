@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use nix::errno::Errno;
@@ -28,7 +28,7 @@ use crate::host::limit::limit;
 use crate::host::git_guard;
 use crate::clock::Clock;
 use crate::ports::Ports;
-use crate::host::spawn::{Pid as SpawnPid, Signal as SpawnSignal, Spawn};
+use crate::host::spawn::{Launch, Pid as SpawnPid, Signal as SpawnSignal, Spawn};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::SessionId;
@@ -59,7 +59,9 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&ports, &env.tmux(), &row.id)?;
-    let exe = Exe::current()?;
+    // The path `spawn` recorded at start (the real one: `current_exe` at process start, which an install does not
+    // change under it).
+    let exe = Exe::at(ports.spawn.self_exe()?)?;
     let dirs = PiDirs::from_env()?;
     // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
     let pi_stop = Duration::from_secs(u64::from(env.config.timeouts.pi_stop_seconds));
@@ -186,18 +188,29 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
         start,
     });
     let pi_install = dirs.watch_install();
-    let mut pi = Command::new(&launch.argv[0]);
-    pi.args(&launch.argv[1..]);
-    // A Context's Manager has no plannotator variable but the one cpd sets (§6.5), whatever its caller holds.
-    if row.plan.is_none() {
-        for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("PLANNOTATOR_")) {
-            pi.env_remove(key);
-        }
-    }
-    let child = pi.envs(&launch.env).current_dir(&row.cwd).spawn().map_err(|e| {
+    // pi owns the pane's terminal (`foreground`) and is this process's child, which the loop waits for by pid.
+    // Inherited `PLANNOTATOR_*` variables go, but a Context's Manager has no plannotator variable but the ones cpd sets
+    // (§6.5), whatever its caller holds.
+    let env_remove = match row.plan {
+        Some(_) => Vec::new(),
+        None => std::env::vars_os()
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .filter(|key| key.starts_with("PLANNOTATOR_") && !launch.env.contains_key(key))
+            .collect(),
+    };
+    let spawn = Launch {
+        program: launch.argv[0].clone(),
+        args: launch.argv[1..].to_vec(),
+        env_set: launch.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+        env_remove,
+        cwd: Some(PathBuf::from(&row.cwd)),
+        foreground: true,
+        ..Launch::default()
+    };
+    let pid = env.ports.spawn.spawn(&spawn).map_err(|e| {
         CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start pi: {e}.")).with("argv", launch.argv.clone())
     })?;
-    Ok(Some((PiProc::adopt(Pid::from_raw(child.id() as i32)), pi_install)))
+    Ok(Some((PiProc::adopt(Pid::from_raw(pid.0 as i32)), pi_install)))
 }
 
 /// pi, a child of this process: started by it, or adopted from the wrapper
@@ -418,6 +431,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
     use std::time::Instant;
 
     use super::*;
