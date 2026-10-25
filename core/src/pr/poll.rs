@@ -4,7 +4,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -28,6 +28,7 @@ use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
 use crate::lock;
+use crate::ports::Ports;
 use crate::output::Output;
 use crate::policy::Checks;
 use crate::store::WriteTxn;
@@ -82,7 +83,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     if let Some(id) = &selected {
         env.plan(id)?;
     }
-    let _lock = take_lock(&env.home.pr_poll_lock())?;
+    let _lock = take_lock_with(&env.ports, &env.home.pr_poll_lock())?;
     let root = env.home.root().to_owned();
 
     let search = gh::search_open(&root)?;
@@ -180,9 +181,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
+/// `flock` on `path`, waiting at most [`LOCK_WAIT`] on `ports.clock`: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
+pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
@@ -190,12 +191,12 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
-    let deadline = Instant::now() + LOCK_WAIT;
+    let deadline = ports.clock.now() + LOCK_WAIT;
     loop {
         if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
             return Ok(file);
         }
-        if Instant::now() >= deadline {
+        if ports.clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::LockTimeout,
                 format!("Another pr poll held {} for longer than {}s.", path.display(), LOCK_WAIT.as_secs()),
@@ -203,7 +204,7 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
             .with("lock", path.display().to_string())
             .with("waited_seconds", LOCK_WAIT.as_secs()));
         }
-        std::thread::sleep(RETRY);
+        ports.clock.sleep(RETRY);
     }
 }
 

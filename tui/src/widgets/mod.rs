@@ -29,21 +29,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
 use cpd_core::host::runner::{Runner, SystemRunner};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
 use super::pace::{self, Reads};
-use super::palette;
 use super::popup;
 use super::pump::{self, Pump, Schedule, Signal};
 use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
 use super::runner::{ViewError, kept};
-use super::{Capture, RunCommand, run_view};
+use super::view_ports::{frame_now, wall_ms};
+use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::Kind;
@@ -53,6 +53,7 @@ use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pan
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 pub use column::{Drawn, Hit, Machine, MergeIcon, PrItem, PrRow, draw, draw_error};
@@ -63,8 +64,9 @@ pub(crate) use column::{Window, max_scroll, window};
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
-pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    run_view(
+pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdError> {
+    run_view_on(
+        ports,
         "widgets",
         Capture::Mouse,
         || {
@@ -72,7 +74,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let mut sampler = Sampler::default();
-            let machine = Machine { name: hostname(), usage: sampler.sample() };
+            let machine = Machine { name: hostname(), usage: sampler.sample_with(ports) };
             let (mut prs, cursor) = read::open_prs(&mut store)?;
             // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
             let open = read::open_pulls(&mut store)?;
@@ -82,11 +84,11 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
             Ok((reader, home, config, prs, machine, sampler))
         },
-        |terminal, (reader, home, config, prs, machine, sampler)| {
+        |ctx, (reader, home, config, prs, machine, sampler)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
             let log = ViewLog::of(&home, "widgets");
             let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
-            show(terminal, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
+            show(ctx.ports, &mut ctx.terminal, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
         },
     )
 }
@@ -168,6 +170,7 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 /// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
 fn show(
+    ports: &Ports,
     terminal: &mut ratatui::DefaultTerminal,
     reader: &Arc<Mutex<pace::Owned<read::Follow>>>,
     mut prs: Vec<OpenPr>,
@@ -186,8 +189,8 @@ fn show(
             Some(format!("no commit watcher: {}; polling every {poll_ms} ms", e.message())),
         ),
     };
-    let mut schedule = Schedule::new(Instant::now(), every);
-    let mut sampled_at = Instant::now();
+    let mut schedule = Schedule::new(ports.clock.now(), every);
+    let mut sampled_at = ports.clock.now();
     let mut last = None::<Drawn>;
     let mut error = None::<String>;
     let mut redraw = true;
@@ -198,7 +201,7 @@ fn show(
     let mut scroll = 0usize;
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
-        let frame = palette::frame(SystemTime::now());
+        let frame = frame_now(ports);
         if redraw || (spins(&prs) && Some(frame) != drawn_frame) {
             terminal.draw(|f| {
                 pane = f.area();
@@ -214,8 +217,8 @@ fn show(
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
-        let now = Instant::now();
-        let wall_ms = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.as_millis() as u64);
+        let now = ports.clock.now();
+        let wall_ms = wall_ms(ports);
         let until = pump::wake(now, wall_ms, &needs(&prs, sampled_at), schedule.deadline(now));
         match pump.wait(until) {
             Signal::Input(event) => {
@@ -287,10 +290,10 @@ fn show(
             Signal::InputFailed(e) => return Err(e.into()),
             Signal::Due => {}
         }
-        let now = Instant::now();
+        let now = ports.clock.now();
         // The CPU share is over the time since the last sample, so it is taken on its own timer, not at each Event.
         if now >= sampled_at + SAMPLE_EVERY {
-            let usage = sampler.sample();
+            let usage = sampler.sample_with(ports);
             sampled_at = now;
             if usage != machine.usage {
                 machine.usage = usage;

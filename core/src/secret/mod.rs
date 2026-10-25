@@ -7,7 +7,7 @@
 //!
 //! No command writes the store, and no value is in an error, a log or a file.
 
-mod grants;
+pub(crate) mod grants;
 pub mod op;
 pub mod rules;
 
@@ -21,7 +21,6 @@ use std::str::FromStr;
 use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 
 use self::grants::{Allowed, Approval};
 use self::rules::{Action, Grant, Op};
@@ -300,7 +299,7 @@ fn operate(op: Op, vault: &SecretName, item: Option<&SecretName>, field: Option<
                 field: field.map(|f| f.as_str().to_owned()),
                 at: String::new(),
             };
-            if !grants::take_approval(&env.home, &want, OffsetDateTime::now_utc())? {
+            if !grants::take_approval_on(&env.ports, &env.home, &want)? {
                 return Err(grant_required("approval", op, vault, item, field));
             }
         }
@@ -370,16 +369,15 @@ fn approve(a: ApproveArgs) -> Result<Output, CpdError> {
     }
     let (env, who) = identify()?;
     rules::check(who.role, Action::Approve, a.vault.as_str()).map_err(|c| refusal(c, &who, Action::Approve, &a.vault))?;
-    let at = OffsetDateTime::now_utc();
     let approval = Approval {
         session: who.session.to_string(),
         action: name.to_owned(),
         vault: a.vault.as_str().to_owned(),
         item: a.item.as_ref().map(|i| i.as_str().to_owned()),
         field: a.field.as_ref().map(|f| f.as_str().to_owned()),
-        at: crate::clock::timestamp(at),
+        at: String::new(),
     };
-    let expires = grants::approve(&env.home, &approval)?;
+    let expires = grants::approve_on(&env.ports, &env.home, &approval)?;
     Ok(Output::success(json!({
         "action": name,
         "vault": a.vault.as_str(),

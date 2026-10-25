@@ -21,9 +21,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
@@ -32,6 +29,7 @@ use crate::clock::{Clock, SystemClock};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
 
 use lock::{MIGRATION_SETTLE_MS, SetupLock, setup_lock};
 pub use lock::MIGRATION_WAIT_CEILING;
@@ -63,6 +61,8 @@ pub struct Store {
     schema: Option<SchemaMismatch>,
     /// Set by [`Store::persist`]: wait out a transient busy instead of failing.
     persist: Option<Persist>,
+    /// The clock the busy back-off of [`Store::read`] and [`Store::write`] sleeps on: the system's until [`Store::use_clock`].
+    clock: Arc<dyn Clock>,
 }
 
 /// How a long-lived process (an Attempt driver, the engine) meets a transient
@@ -249,14 +249,27 @@ impl Store {
     /// transient error while opening is waited out, and the store it returns
     /// persists too.
     pub fn open_persistent(home: &CpdHome, busy_ms: u64, persist: Persist) -> Result<Store, CpdError> {
+        Store::open_persistent_with(Arc::new(SystemClock), home, busy_ms, persist)
+    }
+
+    /// [`Store::open_persistent`] on `clock`: its waits, and those of the store it returns, sleep on it.
+    pub fn open_persistent_with(clock: Arc<dyn Clock>, home: &CpdHome, busy_ms: u64, persist: Persist) -> Result<Store, CpdError> {
         let mut wait = Wait::new();
         let mut persist = Some(persist);
         loop {
-            if let Some(mut store) = settle(&SystemClock, Duration::from_millis(50), &mut persist, &mut wait, Store::open(home, busy_ms))? {
+            let opened = Store::open_with(&*clock, home, busy_ms, None);
+            if let Some(mut store) = settle(&*clock, Duration::from_millis(50), &mut persist, &mut wait, opened)? {
                 store.persist = persist;
+                store.clock = clock;
                 return Ok(store);
             }
         }
+    }
+
+    /// From now on the busy back-off of [`Store::read`] and [`Store::write`] reads and sleeps on `clock`
+    /// (the engine's `Ports.clock`; a test's virtual time).
+    pub fn use_clock(&mut self, clock: Arc<dyn Clock>) {
+        self.clock = clock;
     }
 
     /// From now on, every [`Store::read`] and [`Store::write`] of this store
@@ -304,7 +317,7 @@ impl Store {
                 .with("journal_mode", mode));
             }
         }
-        Ok(Store { conn, path: path.to_owned(), busy_ms, txn, schema: None, persist: None })
+        Ok(Store { conn, path: path.to_owned(), busy_ms, txn, schema: None, persist: None, clock: Arc::new(SystemClock) })
     }
 
     /// §4.5: runs what [`plan`] says, in one `BEGIN IMMEDIATE` transaction.
@@ -484,6 +497,7 @@ impl Store {
     /// readonly database` (store-G3), triggers or not.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> Result<T, CpdError>) -> Result<T, CpdError> {
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
+        let clock = Arc::clone(&self.clock);
         let mut wait = Wait::new();
         let result = (|| {
             self.conn.pragma_update(None, "query_only", true)?;
@@ -499,7 +513,7 @@ impl Store {
                         }
                         Ok(tx)
                     });
-                    if let Some(tx) = settle(&SystemClock, Duration::from_millis(50), &mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
+                    if let Some(tx) = settle(&*clock, Duration::from_millis(50), &mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
                         break tx;
                     }
                 };
@@ -548,6 +562,7 @@ impl Store {
         }
         let caller = Caller::current();
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
+        let clock = Arc::clone(&self.clock);
         let _guard = TxnGuard(&self.txn);
         let mut wait = Wait::new();
         // Declared before the transaction: dropped, so the record removed, after its commit or rollback.
@@ -557,7 +572,7 @@ impl Store {
             let tx = loop {
                 let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
                     .map_err(|e| enrich(CpdError::from(e), &path, busy_ms));
-                if let Some(tx) = settle(&SystemClock, Duration::from_millis(50), &mut self.persist, &mut wait, begun)? {
+                if let Some(tx) = settle(&*clock, Duration::from_millis(50), &mut self.persist, &mut wait, begun)? {
                     break tx;
                 }
             };
@@ -883,10 +898,7 @@ impl Holder {
             .filter_map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).ok()?).ok())
             .filter_map(|v| {
                 let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
-                let alive = match kill(Pid::from_raw(i32::try_from(pid).ok()?), None) {
-                    Ok(()) | Err(Errno::EPERM) => true,
-                    Err(_) => false,
-                };
+                let alive = ProcessSpawn.alive(SpawnPid(pid));
                 let since = v["since_unix_ms"].as_u64()?;
                 let text = |k: &str| v[k].as_str().map(str::to_owned);
                 let command = text("command")?;

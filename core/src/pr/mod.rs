@@ -26,10 +26,10 @@ mod feedback;
 mod gh;
 mod merge;
 mod open;
-mod poll;
+pub(crate) mod poll;
 pub mod pulls;
 mod push;
-mod rebase;
+pub(crate) mod rebase;
 #[cfg(test)]
 pub(crate) use rebase::remote_contains_with;
 mod row;

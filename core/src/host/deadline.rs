@@ -178,17 +178,12 @@ fn kill_group(child: &mut Child, grace: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn alive(pid: i32) -> bool {
-        // A zombie is dead: read its state.
-        std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .is_ok_and(|s| s.rsplit(") ").next().is_some_and(|rest| !rest.starts_with('Z')))
-    }
+    use crate::host::spawn::{Pid as SpawnPid, ProcessSpawn, Spawn};
 
     fn wait_gone(pid: i32) -> bool {
         let until = Instant::now() + Duration::from_secs(5);
         while Instant::now() < until {
-            if !alive(pid) {
+            if !ProcessSpawn.alive(SpawnPid(pid.unsigned_abs())) {
                 return true;
             }
             thread::sleep(POLL);

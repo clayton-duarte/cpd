@@ -236,6 +236,56 @@ What stays real: the tests of `core/src/host/deadline.rs`, which are the contrac
   - **Measure paired.** hs is shared, and the same suite's sum moves 10-75 % with the load (the load average is in the report: say it). Compare two builds in the same conditions, interleaved (A, B, A, B, ...), never one run before and one after at different hours; for one test, run it alone 5-7 times per build (`scripts/cargo.sh nextest run -p cpd --test flow <name>`) and compare medians. Keep both builds as commits or a patch file (`git diff > /tmp/x.patch`, `git apply -R`), never `git stash`. No synthetic load, at most 2 test runs at once.
   - **The per-test limit** is `slow-timeout` in `.config/nextest.toml` (the default profile): a test over it fails the run. The numbers it comes from and the reason are beside the setting; raise it only with a measurement. The `priority` override there lists the tests that wait for a real limit, so they start first; `=name` drops out silently when a test is renamed, so check it with `scripts/cargo.sh nextest list --workspace -E '<the filter>'`.
 
+### Ports, Spawn and run_with
+
+Decided API (PR ports2), in `core/src/ports.rs` (cpd-core, always compiled; `Fakes` behind the cargo feature `fakes`). Present tense for what PR ports2 creates; where the merged code differs from this text, the merged code wins.
+```rust
+#[derive(Clone)]
+pub struct Ports { pub clock: Arc<dyn Clock>, pub runner: Arc<dyn Runner>, pub spawn: Arc<dyn Spawn> }
+impl Ports { pub fn real() -> Ports }   // SystemClock, SystemRunner, ProcessSpawn
+pub struct Fakes { pub ports: Ports, pub clock: Arc<ManualClock>, pub runner: Arc<FakeRunner>, pub spawn: Arc<FakeSpawn> }  // Fakes::new()
+pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>, out: &mut dyn Write) -> ExitCode
+pub fn main_with(argv: impl IntoIterator<Item = OsString>, out: &mut dyn Write) -> ExitCode  // run_with(&Ports::real(), ..)
+```
+`Ports` holds the three seams a test fakes: time (`Clock`), short processes with an output (`Runner`: tmux, git, gh, pi, node, the secret tool) and long-lived or replacing processes (`Spawn`). It carries no environment (below). `Fakes::new()` builds a `ManualClock`, a `FakeRunner` on that clock and a `FakeSpawn`, and `fakes.ports` is the `Ports` over them; the test keeps the typed handles to script and to read the record.
+
+**`Spawn`** (`core/src/host/spawn.rs`) is what `Runner` is not: a child that outlives the call, is waited for later, is signalled, or replaces the process.
+```rust
+pub trait Spawn: Send + Sync {
+    fn spawn(&self, l: &Launch) -> io::Result<Pid>;               // a detached process or a child; the real one reaps it
+    fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>>;
+    fn signal(&self, p: Pid, s: Signal) -> io::Result<()>;
+    fn alive(&self, p: Pid) -> bool;                              // zombie-aware
+    fn exe_of(&self, p: Pid) -> Option<PathBuf>;
+    fn cmdline(&self, p: Pid) -> Option<String>;
+    fn exec(&self, l: &Launch) -> io::Error;                      // returns only on failure
+    fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)>;
+    fn self_exe(&self) -> Result<PathBuf, CpdError>;              // the path of cpd's own executable
+}
+pub struct Launch { program, args, env_set, env_remove, cwd, setsid: bool, stdout_to: Option<PathBuf>, hand_over: Option<RawFd>, idle: bool }
+```
+`ProcessSpawn` is the real one (`Command`, `setsid`, `kill(2)`, `/proc` or `libproc`, `exec`). `FakeSpawn` starts nothing:
+- `spawn` and `stream` hand out pids from a counter and record the `Launch` in a table; `launches()` lists them in order; `signals()` lists every `(pid, signal)`; a TERM or KILL marks the pid exited by that signal.
+- `exit(pid, code)` marks a pid exited: `try_wait` then returns the status and `alive` is false. Until then a pid is running, so a held-open driver or wrapper is a pid that has not exited, with no sleep.
+- `alive`, `try_wait`, `exe_of` and `cmdline` read the table; `inherited` (the driver's fd 3 hand-over) is recorded in the `Launch`.
+- `exec` is recorded and returns `io::Error::other("faked exec")`; the process is not replaced.
+- `self_exe` returns the path the test configured.
+
+**A launched `cpd` child is recorded and run by the test** (decided, pro-d35). When the product launches `cpd` (a driver, a poll, `session run`), `FakeSpawn` only records the `Launch`; it never starts it and never routes it to `run_with`, so no second thread puts virtual time under another clock reader. The test reads `launches()` and, when it wants the child's effect, calls `run_with(&ports, argv, out)` itself on its own thread with the argv of the `Launch`, then `exit(pid, code)`. There is no `cpd-fake` binary and no fake binary or script of any kind.
+
+**`_with` convention.** Every existing public signature stays. A function that needs a port gains `<name>_with(&Ports, ..)` (or `(&dyn Clock, ..)`, `(&dyn Runner, ..)` where it needs one) beside it, and the old name calls it with `Ports::real()`. `Env` is the exception: it gains the field `ports` because its sites cannot all change. The `_with` form holds the logic; the old name is one line.
+
+**`Clock::utc()`.** `Clock` also reports the UTC wall time. `SystemClock::utc()` is the system time; `ManualClock::utc()` is a fixed epoch plus the time elapsed on the clock (`advance` and `sleep` move it), so a stamp the product writes (an Event's `at`, a `started_at`) is deterministic and moves with virtual time.
+
+**Why the mains stay three lines.** `cli/src/main.rs` is `host::exe::record_start()`, `catch_signals` (only for `watch`, as today) and `cpd::main_with(args_os, &mut stdout.lock())`. Everything a test can reach is in `run_with`, so the binary has nothing of its own to test; the exec smoke tests (`--help`, `--version`, an unknown command) run the real `cpd` and need no external program.
+
+**The environment is set once, by `Fx`.** `HOME`, `PATH`, `CPD_HOME` and the cwd are read from the process by the product (`env::var`, clap `env =`, `current_dir()`), and `Ports` does not carry them. `Fx` sets them once at the start of a test, behind a process-wide lock (decided, option 1 of the ports research); nextest runs each test in a process of its own, so nothing leaks between tests. A test never calls `set_var` itself.
+
+**Virtual-time loops.** A loop that waits on the clock (`watch`, `events follow`, `ask`, a driver's poll) calls `clock.sleep`, so a test drives it with `ManualClock::advance` and never waits:
+- `watch::run(&ports, until)` runs the engine's ticks until `until` says stop, on the test's thread; the test steps it with `ManualClock::advance`, or calls one `Engine::tick`.
+- `events follow` and `ask` run through `run_with` on a thread; the test advances the `ManualClock` once per poll and joins the thread. The thread reads only the shared clock, so nothing is a race.
+- A held-open `attempt run`, `session run`, `context distill` or `pr rebase` is a `FakeRunner` reply that `takes` longer, or a `FakeSpawn` pid that has not exited.
+
 ### The fake tmux
 
 The fake tmux is an in-process route of the `FakeRunner`, not a binary: no test reaches it through `PATH` or the environment, and none starts a process for it. The adapter (`core/src/host/tmux.rs`) runs `tmux -u -L <socket> -f /dev/null <args>` with `TMUX_TMPDIR` through its `Runner`; a test gives it a `FakeRunner` that has the route. The `fake-tmux` binary (`cli/src/bin/fake-tmux.rs`) stays until mig-final, which deletes it.

@@ -5,7 +5,7 @@
 //! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
@@ -19,6 +19,7 @@ use crate::home::CpdHome;
 use crate::host::addr::review_host;
 use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
+use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
 
@@ -41,13 +42,19 @@ static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    conditions_on(&Ports::real(), store, home)
+}
+
+/// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and
+/// `ports.runner` runs `gh`.
+pub fn conditions_on(ports: &Ports, store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
     let mut github = |refs: &[(String, u64)]| {
         let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
-        held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
+        held.get_or_insert_with(Memo::default).get(refs, ports.clock.now(), |refs| team::github_lookup_with(&*ports.runner, home, refs))
     };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
-    conditions_with(store, home, OffsetDateTime::now_utc(), config.loop_guard_turns, config.context_curation_min_records, team)
+    conditions_with(store, home, ports.clock.utc(), config.loop_guard_turns, config.context_curation_min_records, team)
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.

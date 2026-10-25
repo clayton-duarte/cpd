@@ -5,14 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
+use cpd_core::host::spawn::{Pid, ProcessSpawn, Spawn};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::store::Store;
@@ -335,14 +333,6 @@ fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     Ok(Slots { limit, held })
 }
 
-/// Whether process `pid` exists: `kill(pid, 0)` sends nothing.
-fn alive(pid: u32) -> bool {
-    match i32::try_from(pid).map(Pid::from_raw).map(|p| kill(p, None)) {
-        Ok(Ok(())) | Ok(Err(Errno::EPERM)) => true,
-        _ => false,
-    }
-}
-
 fn engine(conn: &Connection) -> Result<Engine, CpdError> {
     let latest: Option<(String, String, String)> = conn
         .query_row(
@@ -360,7 +350,7 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|d| d["pid"].as_u64())
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
-    Ok(if alive(pid) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
+    Ok(if ProcessSpawn.alive(Pid(pid)) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {

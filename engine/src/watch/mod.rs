@@ -61,13 +61,16 @@ mod poll_run_tests;
 mod incident_option_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod ports_tests;
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
-use std::process::Child;
+use std::path::{Path, PathBuf};
 
 use cpd_core::error::CpdError;
+use cpd_core::home::CpdHome;
+use cpd_core::host::spawn::{Launch, Pid};
 use cpd_core::output::Output;
 
 /// The `txns.command` of the engine's transactions and the `source` of its
@@ -109,54 +112,78 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
     }
 }
 
-/// Records `child`, a detached child the engine started (`setsid`, so it is in no process group of
-/// the engine's), by writing its pid and a newline to `pid_file`: the record of a process that is
-/// nowhere else (contract §1.4). Reaps it on a thread of its own while this process lives, then
-/// removes the file. An engine that dies first leaves the file behind, with a pid that may since
-/// have been reused. Returns the pid; a file that cannot be written is an error, and the child is
-/// still reaped.
-fn record_detached(mut child: Child, pid_file: PathBuf) -> io::Result<u32> {
-    let pid = child.id();
-    let written = (|| {
-        let dir = pid_file.parent().expect("a pid file lives in a directory");
-        fs::create_dir_all(dir)?;
-        // Renamed into place, so a reader never sees half a pid.
-        let tmp = pid_file.with_extension(format!("pid.{pid}.tmp"));
-        fs::write(&tmp, format!("{pid}\n"))?;
-        fs::rename(&tmp, &pid_file)
-    })();
-    std::thread::spawn(move || {
-        let _ = child.wait();
-        let _ = fs::remove_file(&pid_file);
+/// `cpd watch` on `ports` in `CPD_HOME`: the engine runs its ticks, waiting through `ports.clock`, until `until` is set.
+pub fn run_with(ports: &cpd_core::ports::Ports, until: &std::sync::atomic::AtomicBool) -> Result<Output, CpdError> {
+    engine::run_with(ports, &CpdHome::from_env()?, until)
+}
+
+/// What the engine starts detached (`setsid`, so the child is in no process group of the engine's; stdin from
+/// `/dev/null`): `program` with `args`, in the home, `CPD_HOME` set and the caller's own identity removed, its stdout
+/// and stderr appended to `log`.
+fn detached_launch(program: &Path, args: &[&str], home: &CpdHome, log: PathBuf) -> Launch {
+    Launch {
+        program: program.to_string_lossy().into_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        env_set: vec![("CPD_HOME".to_owned(), home.root().to_string_lossy().into_owned())],
+        env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
+        cwd: Some(home.root().to_owned()),
+        setsid: true,
+        stdout_to: Some(log),
+        ..Launch::default()
+    }
+}
+
+/// Records `pid`, a detached child the engine started, by writing its pid and a newline to `pid_file`: the record of a
+/// process that is nowhere else (contract §1.4). The engine removes the file when it sees the child end
+/// ([`sweep_detached`]); an engine that dies first leaves it, with a pid that may since have been reused. Returns the
+/// pid; a file that cannot be written is an error, and the child is still tracked.
+fn record_detached(engine: &mut engine::Engine, pid: Pid, pid_file: PathBuf) -> io::Result<u32> {
+    engine.detached.push((pid, pid_file.clone()));
+    let dir = pid_file.parent().expect("a pid file lives in a directory");
+    fs::create_dir_all(dir)?;
+    // Renamed into place, so a reader never sees half a pid.
+    let tmp = pid_file.with_extension(format!("pid.{}.tmp", pid.0));
+    fs::write(&tmp, format!("{}\n", pid.0))?;
+    fs::rename(&tmp, &pid_file)?;
+    Ok(pid.0)
+}
+
+/// Removes the pid file of each detached child that has ended (`Spawn::try_wait`).
+fn sweep_detached(engine: &mut engine::Engine) {
+    let spawn = engine.ports.spawn.clone();
+    engine.detached.retain(|(pid, file)| {
+        let running = matches!(spawn.try_wait(*pid), Ok(None));
+        if !running {
+            let _ = fs::remove_file(file);
+        }
+        running
     });
-    written.map(|()| pid)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-    use std::time::{Duration, Instant};
+    use cpd_core::host::spawn::{FakeSpawn, Spawn};
 
     use super::*;
-
-    fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !ready() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
+    use super::testkit::Fx;
 
     #[test]
-    fn a_detached_childs_pid_is_in_its_file_until_it_is_reaped() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("run/x/child.pid");
-        let child = Command::new("sleep").arg("30").spawn().unwrap();
-        let pid = record_detached(child, file.clone()).unwrap();
-        assert_eq!(fs::read_to_string(&file).unwrap(), format!("{pid}\n"));
+    fn a_detached_childs_pid_is_in_its_file_until_the_engine_sees_it_end() {
+        let mut fx = Fx::new("");
+        let spawn = std::sync::Arc::new(FakeSpawn::new());
+        fx.engine.ports.spawn = spawn.clone();
+        let file = fx.engine.home.root().join("run/x/child.pid");
+        let pid = spawn.spawn(&Launch::default()).unwrap();
+
+        assert_eq!(record_detached(&mut fx.engine, pid, file.clone()).unwrap(), pid.0);
+        assert_eq!(fs::read_to_string(&file).unwrap(), format!("{}\n", pid.0));
         assert_eq!(fs::read_dir(file.parent().unwrap()).unwrap().count(), 1, "no temporary file is left");
-        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
-        wait_until("the file to be removed", || !file.exists());
+        sweep_detached(&mut fx.engine);
+        assert!(file.exists(), "it runs");
+
+        spawn.exit(pid, 0);
+        sweep_detached(&mut fx.engine);
+        assert!(!file.exists(), "it ended");
     }
 }
 #[cfg(test)]

@@ -37,6 +37,7 @@ pub mod metrics;
 pub mod plan;
 pub mod policy;
 pub mod pill;
+pub mod ports;
 pub mod pr;
 pub mod review;
 pub mod secret;
@@ -51,6 +52,10 @@ pub mod fakes;
 mod clock_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod loops_ports_tests;
 
 #[cfg(test)]
 mod pill_tests;
+#[cfg(test)]
+mod ports_tests;

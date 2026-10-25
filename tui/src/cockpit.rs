@@ -29,23 +29,25 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
 use super::widgets::legend;
+use super::view_ports::RunFn;
 use super::{Restart, RestartOutcome, RunCommand, logs, merge, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
 use cpd_core::host::exe::started_as;
 use cpd_core::host::layout::{LEGACY_STATUSBAR, MAIN_WINDOW, chat_slot, view_pane};
-use cpd_core::host::tmux::{client, installed_version, older_version};
+use cpd_core::host::spawn::Launch;
+use cpd_core::host::tmux::{client, installed_version, installed_version_with, older_version};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
@@ -64,7 +66,7 @@ pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCo
     let cockpit = config.tmux.cockpit_session.as_str();
 
     let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, version, run_command)?;
-    let watch = command(run_command, &["watch", "--ensure"])?;
+    let watch = command(&run_command, &["watch", "--ensure"])?;
     if respawn {
         if let Some(preview) = tmux.preview()? {
             eprintln!(
@@ -486,7 +488,12 @@ fn last_chat_lead(conn: &rusqlite::Connection) -> Result<Option<SessionId>, CpdE
 /// Lead `session open` refuses stays where it is and the placeholder keeps
 /// the slot: the cockpit is built either way (Escalation `tui-cockpit-a1-q3`).
 fn open_lead(run_command: RunCommand, lead: &SessionId) -> Result<(), CpdError> {
-    match command(run_command, &["session", "open", lead.as_str()]) {
+    open_lead_with(&run_command, lead)
+}
+
+/// [`open_lead`] with the command run by `run`.
+pub(crate) fn open_lead_with(run: RunFn, lead: &SessionId) -> Result<(), CpdError> {
+    match command(run, &["session", "open", lead.as_str()]) {
         Ok(_) => Ok(()),
         Err(e) if e.exit() == Exit::Refused => {
             eprintln!("cpd tui: Lead {lead} stays out of the chat slot: {}", e.message());
@@ -499,9 +506,9 @@ fn open_lead(run_command: RunCommand, lead: &SessionId) -> Result<(), CpdError> 
 /// Runs another area's command (`cpd <words>`) in this process, through the
 /// command tree, and returns its success fields: its arguments and its effects
 /// stay that area's own, as with a subprocess.
-fn command(run_command: RunCommand, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
+fn command(run: RunFn, words: &[&str]) -> Result<Map<String, Value>, CpdError> {
     let argv = std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect();
-    match run_command(argv)? {
+    match run(argv)? {
         Output::Success(fields) => Ok(fields),
         Output::Owned => unreachable!("cpd {words:?} prints one JSON value"),
     }
@@ -510,11 +517,24 @@ fn command(run_command: RunCommand, words: &[&str]) -> Result<Map<String, Value>
 /// Replaces this process with `tmux -L <socket> attach -t <cockpit>`, run by
 /// `program` (default: `tmux` on `PATH`); returns only when that fails.
 fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
+    exec_attach_with(&Ports::real(), tmux, cockpit, program)
+}
+
+/// [`exec_attach`] through `ports.spawn.exec`.
+pub(crate) fn exec_attach_with(ports: &Ports, tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
     let argv = tmux.argv(&["attach".to_owned(), "-t".to_owned(), cockpit.to_owned()]);
     let program = program.map_or_else(|| PathBuf::from(&argv[0]), Path::to_path_buf);
-    // `client` puts `-u` first (hs-d463); `argv` is the same line, for the error.
-    // The attach is interactive: it keeps this process's terminal as its stdin.
-    let error = client(program).args(&argv[2..]).stdin(std::process::Stdio::inherit()).exec();
+    // `client` puts `-u` first and removes the variables of the cockpit (hs-d463); `argv` is the same line, for the error.
+    // The attach is interactive: `exec` keeps this process's terminal as its stdin.
+    let mut tmux_client = client(&program);
+    tmux_client.args(&argv[2..]);
+    let launch = Launch {
+        program: program.to_string_lossy().into_owned(),
+        args: tmux_client.get_args().map(|a| a.to_string_lossy().into_owned()).collect(),
+        env_remove: tmux_client.get_envs().filter(|(_, value)| value.is_none()).map(|(key, _)| key.to_string_lossy().into_owned()).collect(),
+        ..Launch::default()
+    };
+    let error = ports.spawn.exec(&launch);
     CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux attach: {error}."))
         .with("argv", argv)
         .with("exit", Value::Null)
@@ -534,7 +554,7 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
     let inside = std::env::var("TMUX").is_ok_and(|v| names_socket(&v, tmux.socket()));
 
     // 1. The engine.
-    if let Err(e) = command(run_command, &["watch", "--ensure"]) {
+    if let Err(e) = command(&run_command, &["watch", "--ensure"]) {
         eprintln!("cpd: the engine did not start: {}", e.message());
     }
     // 2. The cockpit.
@@ -572,7 +592,12 @@ pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> 
 /// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
 /// still to come; a failure is one line on stderr.
 fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
-    let (server, installed) = match (tmux.server_version(), installed_version()) {
+    tmux_version_with(&Ports::real(), home, config, store, tmux, restart)
+}
+
+/// [`tmux_version`] with the installed tmux asked of `ports.runner`.
+pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
+    let (server, installed) = match (tmux.server_version(), installed_version_with(&*ports.runner)) {
         (Ok(server), Ok(installed)) => (server, installed),
         // `server_tmux` says why it cannot compare.
         _ => return String::new(),

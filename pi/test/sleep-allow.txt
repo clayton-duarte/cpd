@@ -32,14 +32,11 @@ core/src/driver/worker.rs 1  # m-units: sleep or wall-clock wait
 core/src/git/gate.rs 2  # m-units: sleep or wall-clock wait
 core/src/host/deadline.rs 4  # m-units: sleep or wall-clock wait
 core/src/host/exe.rs 1  # m-units: sleep or wall-clock wait
-core/src/host/tmux.rs 1  # m-units: sleep or wall-clock wait
 core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait
 core/src/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/session/run.rs 4  # m-units: sleep or wall-clock wait
 core/src/store/lock.rs 1  # m-units: sleep or wall-clock wait
 core/src/store/mod.rs 5  # m-units: sleep or wall-clock wait
-engine/src/watch/engine.rs 3  # m-units: sleep or wall-clock wait
-engine/src/watch/mod.rs 3  # m-units: sleep or wall-clock wait
 pi/test/askguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/chat-pad.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait
@@ -67,12 +64,9 @@ pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
 pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait
 pi/test/testguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/updates.test.ts 1  # m-pi: sleep or wall-clock wait
-tui/src/lib.rs 1  # m-units: sleep or wall-clock wait
 tui/src/menu.rs 1  # m-units: sleep or wall-clock wait
-tui/src/plan/mod.rs 15  # m-units: one-time raise (+5) after PRs #315/#316: the scan counts production code after the first #[cfg(test)]; lower it when the scan is limited to test modules
+tui/src/plan/mod.rs 2  # m-units: sleep or wall-clock wait
 tui/src/tree/folds.rs 1  # m-units: sleep or wall-clock wait
-tui/src/tree/mod.rs 11  # m-units: sleep or wall-clock wait
 tui/src/tree/view.rs 8  # m-units: sleep or wall-clock wait
-tui/src/widgets/mod.rs 5  # m-units: sleep or wall-clock wait
 pi/test/secret-approve.test.ts 3  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact
 pi/test/secretguard.test.ts 1  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact

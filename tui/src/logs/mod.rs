@@ -19,19 +19,22 @@ mod view;
 
 use std::time::Duration;
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
 pub use self::view::{Log, draw};
 use super::popup;
 use super::read;
 use super::runner::{ViewError, kept};
 use super::widgets::legend;
-use super::{Capture, run_view};
+use super::view_ports::Ctx;
+use super::{Capture, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::events::Selection;
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
@@ -71,8 +74,9 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
     })
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    run_view(
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    run_view_on(
+        ports,
         "logs",
         Capture::Mouse,
         || {
@@ -88,7 +92,7 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
             let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
             Ok((store, poll, follow, log))
         },
-        |terminal, (mut store, poll, follow, log)| show(terminal, &mut store, poll, follow, log),
+        |ctx, (mut store, poll, follow, log)| show_with(ctx, &mut store, poll, follow, log),
     )
 }
 
@@ -98,9 +102,9 @@ fn closes(code: KeyCode) -> bool {
 }
 
 /// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
-/// until a read succeeds ([`kept`]).
-fn show(
-    terminal: &mut ratatui::DefaultTerminal,
+/// until a read succeeds ([`kept`]). Input, the wait and frames are the [`Ctx`]'s.
+pub(crate) fn show_with<B: Backend>(
+    ctx: &mut Ctx<B>,
     store: &mut Store,
     poll: Duration,
     mut follow: read::Follow,
@@ -109,15 +113,15 @@ fn show(
     let mut redraw = true; // the pane is written to only when something changed: Events, an error, input, a resize
     loop {
         if redraw {
-            terminal.draw(|f| {
+            ctx.draw(|f| {
                 log.fit(f.area().height);
                 draw(f, f.area(), &log);
             })?;
             redraw = false;
         }
-        if event::poll(poll)? {
+        if ctx.input.poll(poll)? {
             redraw = true;
-            match event::read()? {
+            match ctx.input.read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
                 Event::Key(key) => drop(log.key(key)),
                 Event::Mouse(mouse) => drop(log.mouse(mouse)),

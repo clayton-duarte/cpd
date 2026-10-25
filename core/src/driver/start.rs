@@ -3,10 +3,8 @@
 //! `starting` Attempt with its Tier (§9), and spawns the driver `cpd attempt
 //! run` detached, handing it the lock as fd 3.
 
-use std::fs::OpenOptions;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -20,6 +18,8 @@ use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
+use crate::host::spawn::Launch;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// What the starter needs from its caller.
@@ -83,6 +83,12 @@ struct Next {
 /// changed meanwhile), `no_slot`. When the spawn fails the Attempt is ended
 /// `failed` / `crashed` and the result is `spawn_failed`.
 pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
+    start_with(&Ports::real(), store, ctx, plan, key)
+}
+
+/// [`start`] on `ports`: the driver is started through `ports.spawn` (`Spawn::spawn`, which a `FakeSpawn` only records),
+/// from `ports.spawn.self_exe()`.
+pub fn start_with(ports: &Ports, store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
     let next = store.read(|conn| decide(conn, ctx.catalog, plan, key))?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
@@ -109,7 +115,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
     })?;
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
-    let spawned = spawn(ctx.home, plan, &next.attempt, &lock);
+    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock);
     let pid = match spawned {
         Ok(pid) => pid,
         Err(e) => {
@@ -294,46 +300,32 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 
 /// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
-/// `run/<plan>/logs/attempt-<attempt>.log`. Returns its pid.
-fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
+/// `run/<plan>/logs/attempt-<attempt>.log`, through `ports.spawn`. Returns its pid.
+fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
     // The path recorded at process start: the live path of the file is `(deleted)` after an install.
-    let exe = crate::host::exe::started_as().map_err(|e| e.to_string())?;
+    let exe = ports.spawn.self_exe().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
     let dir = log_path.parent().expect("a log lives in a directory");
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
-    let stdout = log.try_clone().map_err(|e| format!("cannot use {}: {e}", log_path.display()))?;
 
     // `nice` would start with a missing binary and die with 127: a driver that cannot start is a spawn failure.
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
-    // hs-d528: nice and ionice exec, so the recorded pid is the driver's.
-    let prefix = crate::host::priority::idle_prefix();
-    let mut command = Command::new(prefix[0]);
-    command
-        .args(&prefix[1..])
-        .arg(&exe)
-        .args(["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()])
-        .current_dir(home.root())
-        .env("CPD_HOME", home.root())
+    // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
+    let launch = Launch {
+        program: exe.display().to_string(),
+        args: ["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()].map(str::to_owned).to_vec(),
+        env_set: vec![("CPD_HOME".to_owned(), home.root().display().to_string())],
         // The caller's own identity is not the driver's.
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log);
-    lock.hand_over(&mut command);
-    let mut child = command.spawn().map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
-    let pid = child.id();
-    // Reaps it if this process outlives it (the engine); detached otherwise.
-    std::thread::spawn(move || child.wait());
-    Ok(pid)
+        env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
+        cwd: Some(home.root().to_path_buf()),
+        setsid: true,
+        stdout_to: Some(log_path),
+        hand_over: Some(lock.fd()),
+        idle: true,
+    };
+    // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
+    let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    Ok(pid.0)
 }

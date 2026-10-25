@@ -7,9 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -17,11 +15,12 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::engine::{Engine, incident_holds, stopping};
+use super::detached_launch;
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::chat_slot;
-use cpd_core::host::limit::limit;
+use cpd_core::host::spawn::Pid;
 use cpd_core::ids::SessionId;
 
 /// A title is rewritten at most this often per Session.
@@ -31,7 +30,7 @@ const THROTTLE: time::Duration = time::Duration::minutes(10);
 const AT_ONCE: usize = 2;
 
 /// A Session's titling is reported (an `error` Event) only once it has failed this long in a row, no success in
-/// between (hs-d356; tests: `CPD_TEST_TITLE_FAILING`, [`limit`]). Until then a failed run is logged and retried.
+/// between (hs-d356). Until then a failed run is logged and retried.
 const FAILING: Duration = Duration::from_secs(10 * 60);
 
 /// How many lines of a failed run's output the `error` Event carries.
@@ -39,7 +38,7 @@ const TAIL_LINES: usize = 20;
 
 /// A retitle run the engine started.
 struct Run {
-    child: Child,
+    pid: Pid,
     /// The length of its log when it started: what it wrote is what follows.
     offset: u64,
 }
@@ -91,7 +90,7 @@ pub(super) fn run(engine: &mut Engine) {
         return;
     }
     reap(engine);
-    let now = OffsetDateTime::now_utc();
+    let now = engine.ports.clock.utc();
     let idle = engine.store.read(|conn| {
         let mut stmt = conn.prepare(IDLE)?;
         let rows = stmt
@@ -140,7 +139,7 @@ pub(super) fn run(engine: &mut Engine) {
         }
         match spawn(engine, &session, width) {
             Ok(run) => {
-                engine.log.line(&format!("E10: started the retitle of Session {session} (pid {})", run.child.id()));
+                engine.log.line(&format!("E10: started the retitle of Session {session} (pid {})", run.pid.0));
                 engine.titles.running.insert(session, run);
                 free -= 1;
             }
@@ -198,7 +197,8 @@ fn reap(engine: &mut Engine) {
     let sessions: Vec<SessionId> = engine.titles.running.keys().cloned().collect();
     for session in sessions {
         let about = About::TitleRun(session.clone());
-        let status = engine.titles.running.get_mut(&session).map(|r| r.child.try_wait());
+        let spawned = engine.ports.spawn.clone();
+        let status = engine.titles.running.get(&session).map(|r| spawned.try_wait(r.pid));
         let status = match status {
             Some(Ok(Some(status))) => status,
             Some(Ok(None)) | None => continue,
@@ -221,10 +221,10 @@ fn reap(engine: &mut Engine) {
             // Another run held the Session's lock: that run is the one that counts (commands.md §10.14).
             engine.log.line(&format!("E10: the retitle of Session {session} found another run of it"));
         } else {
-            let since = *engine.titles.failing_since.entry(session.clone()).or_insert_with(Instant::now);
+            let since = *engine.titles.failing_since.entry(session.clone()).or_insert_with(|| engine.ports.clock.now());
             let exit = status.code().map_or("a signal".to_owned(), |c| format!("exit {c}"));
             engine.log.line(&format!("E10: the retitle of Session {session} failed ({exit})"));
-            if since.elapsed() < limit("TITLE_FAILING", FAILING) {
+            if engine.ports.clock.now().saturating_duration_since(since) < FAILING {
                 continue;
             }
             let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>().into_iter().rev().collect();
@@ -255,39 +255,21 @@ fn lost_the_lock(output: &str) -> bool {
     })
 }
 
-/// Spawns `cpd session retitle <session> --width <width>` detached (`setsid`), stdin from `/dev/null`, stdout and stderr appended
-/// to the Session's `run/titles/<session>.log`.
+/// Spawns `cpd session retitle <session> --width <width>` through `engine.ports.spawn`, detached (`setsid`), stdin from
+/// `/dev/null`, stdout and stderr appended to the Session's `run/titles/<session>.log`.
 fn spawn(engine: &Engine, session: &SessionId, width: u32) -> Result<Run, CpdError> {
     let failed = |why: String| {
         CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the retitle run of Session {session}: {why}.")).with("session", session.as_str())
     };
-    let exe = cpd_core::host::exe::started_as()?;
+    let exe = engine.ports.spawn.self_exe()?;
     let log_path = log_path(&engine.home, session);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
     let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| failed(format!("cannot open {}: {e}", log_path.display())))?;
     let offset = log.metadata().map_err(|e| failed(format!("cannot read {}: {e}", log_path.display())))?.len();
-    let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
-    let mut command = Command::new(exe);
-    command
-        .args(["session", "retitle", session.as_str(), "--width", &width.to_string()])
-        .current_dir(engine.home.root())
-        .env("CPD_HOME", engine.home.root())
-        // The caller's own identity is not the run's.
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log);
-    // SAFETY: the closure runs in the forked child before exec and only makes an async-signal-safe system call.
-    unsafe {
-        command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
-    }
-    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
-    Ok(Run { child, offset })
+    let launch = detached_launch(&exe, &["session", "retitle", session.as_str(), "--width", &width.to_string()], &engine.home, log_path);
+    let pid = engine.ports.spawn.spawn(&launch).map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    Ok(Run { pid, offset })
 }
 
 #[cfg(test)]

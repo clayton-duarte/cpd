@@ -4,9 +4,6 @@
 
 use std::path::{Path, PathBuf};
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 
 use super::gate::{self, Slots};
 use crate::slot::SLOT_VARIABLE;
@@ -15,6 +12,7 @@ use super::run::{ok, worktree_add};
 use super::worktree::{Setup, list};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
+use crate::host::spawn::{Pid, ProcessSpawn, Spawn};
 use crate::ids::{PlanId, PrKey};
 
 /// `<repo-parent>/<repo-name>.<plan>.<key>.gate-` (contract §7.1); a gate
@@ -38,14 +36,19 @@ pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, pid: u32) -> 
 /// fails with `ESRCH`): the leftovers of killed runs (contract §7.6 step 1,
 /// §7.2). One whose pid lives is left alone. Returns the removed paths.
 pub fn sweep(repo: &Path, plan: &PlanId, key: &PrKey) -> Result<Vec<PathBuf>, CpdError> {
+    sweep_with(&ProcessSpawn, repo, plan, key)
+}
+
+/// [`sweep`] asking `spawn` whether a pid is alive.
+pub fn sweep_with(spawn: &dyn Spawn, repo: &Path, plan: &PlanId, key: &PrKey) -> Result<Vec<PathBuf>, CpdError> {
     let (parent, leaf) = prefix(repo, plan, key)?;
     let parent = parent.canonicalize().unwrap_or(parent);
     let mut removed = Vec::new();
     for worktree in list(repo)? {
         let (Some(dir), Some(name)) = (worktree.path.parent(), worktree.path.file_name()) else { continue };
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(&leaf)).and_then(|p| p.parse::<i32>().ok()) else { continue };
-        if dir != parent || pid <= 0 || kill(Pid::from_raw(pid), None) != Err(Errno::ESRCH) {
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(&leaf)).and_then(|p| p.parse::<u32>().ok()) else { continue };
+        if dir != parent || pid == 0 || spawn.alive(Pid(pid)) {
             continue;
         }
         force_remove(repo, &worktree.path)?;

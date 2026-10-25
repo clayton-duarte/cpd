@@ -7,17 +7,18 @@ use std::io::{BufRead, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use nix::errno::Errno;
+#[cfg(test)]
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use super::archive::archive_on_quit;
-use super::fork_wait::wait_for_source;
+use super::fork_wait::wait_for_source_with;
 use super::moves::first_message;
-use super::reload::{adapter_missing, may_exec, reload, reload_due, stop_pi};
+use super::reload::{adapter_missing_with, may_exec, reload_due_with, reload_with, stop_pi_with};
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, not_a_lead, state};
 use crate::error::{CpdError, ErrorCode};
@@ -25,6 +26,9 @@ use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
 use crate::host::limit::limit;
 use crate::host::git_guard;
+use crate::clock::{Clock, SystemClock};
+use crate::ports::Ports;
+use crate::host::spawn::{Pid as SpawnPid, Signal as SpawnSignal, Spawn};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::SessionId;
@@ -32,7 +36,7 @@ use crate::output::Output;
 use crate::store;
 
 // Shared with the review Worker's fork wait (`driver::worker`), which reads them here.
-pub(crate) use super::fork_wait::{quiet_since, turn_finished};
+pub(crate) use super::fork_wait::{quiet_since_with, turn_finished};
 
 /// How often it looks for pi's session file while pi runs (tests: `CPD_TEST_FILE_POLL`, [`limit`]).
 const FILE_POLL: Duration = Duration::from_millis(500);
@@ -48,11 +52,13 @@ const RETRY_MAX: Duration = Duration::from_secs(5);
 
 pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let mut env = patiently("opening the store", Env::open)?;
-    let row = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
+    let ports = env.ports.clone();
+    let clock = ports.clock.clone();
+    let row = patiently_with(&*clock, "reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
     if row.role == Role::Worker {
         return Err(not_a_lead(&row.id, row.role));
     }
-    check_pane(&env.tmux(), &row.id)?;
+    check_pane(&ports, &env.tmux(), &row.id)?;
     let exe = Exe::current()?;
     let dirs = PiDirs::from_env()?;
     // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
@@ -64,7 +70,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let mut logged = Logged::default();
     // From here on this process owns the terminal (commands.md §1.2).
     'run: loop {
-        let row = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
+        let row = patiently_with(&*clock, "reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?;
         let (mut pi, pi_install, mut pi_stale) = match adopted.take() {
             // Steps 1–3 are not run and no pi is started. What the loop needs of the old process is restored here:
             // `recorded` is read from the row below, as at any start; `pi_install` is read now, which would hide a
@@ -78,19 +84,19 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             },
         };
         let mut recorded = row.file.is_some();
-        let started = Instant::now();
+        let started = clock.now();
         let mut watched = started;
         let status = loop {
-            let exited = pi.try_wait().map_err(|e| {
+            let exited = pi.try_wait_with(&*ports.spawn).map_err(|e| {
                 CpdError::new(ErrorCode::SpawnFailed, format!("Cannot wait for pi: {e}.")).with("pid", pi.id())
             })?;
             if let Some(status) = exited {
                 // A new install: restart before any store write (§6.7 "Reload on install").
                 if exe.replaced() && may_exec(&exe) {
-                    return Err(reload(&exe, &row.id, None));
+                    return Err(reload_with(&ports, &exe, &row.id, None));
                 }
                 if !recorded {
-                    patiently("recording the session file", || record_file(&mut env, &dirs, &row.id))?;
+                    patiently_with(&*clock, "recording the session file", || record_file(&mut env, &dirs, &row.id))?;
                 }
                 break status;
             }
@@ -99,7 +105,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             // `may_exec` asks the new cpd, so it comes after the cheaper test.
             if exe.replaced() && may_exec(&exe) {
                 // Returns only when the `exec` failed; pi still runs, so the wrapper carries on.
-                logged.once::<()>(Err(reload(&exe, &row.id, Some((&pi, pi_stale)))), "cannot reload");
+                logged.once::<()>(Err(reload_with(&ports, &exe, &row.id, Some((&pi, pi_stale)))), "cannot reload");
             }
             if !recorded {
                 recorded = logged.once(record_file(&mut env, &dirs, &row.id), "cannot record the session file").unwrap_or(false);
@@ -107,29 +113,32 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             // A new pi restarts pi, at the Lead's idle. `may_exec` is true unless a cpd that cannot open the store
             // replaced this one, and then pi stays.
             if pi_stale
-                && logged.once(reload_due(&mut env, &dirs, &row.id), "cannot decide on restarting pi").unwrap_or(false)
+                && logged.once(reload_due_with(&ports, &mut env, &dirs, &row.id), "cannot decide on restarting pi").unwrap_or(false)
                 && may_exec(&exe)
             {
                 print!("  new pi installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
-                stop_pi(&mut pi, pi_stop);
-                return Err(reload(&exe, &row.id, None));
+                stop_pi_with(&ports, &mut pi, pi_stop);
+                return Err(reload_with(&ports, &exe, &row.id, None));
             }
-            if watched.elapsed() >= watchdog_poll {
-                watched = Instant::now();
-                let missing = logged.once(adapter_missing(&mut env, &row.id, started.elapsed()), "cannot read the adapter's state");
+            if clock.now().duration_since(watched) >= watchdog_poll {
+                watched = clock.now();
+                let missing = logged.once(
+                    adapter_missing_with(&ports, &mut env, &row.id, clock.now().duration_since(started)),
+                    "cannot read the adapter's state",
+                );
                 if missing.unwrap_or(false) {
                     print!("  adapter missing: restarting pi for {}…\n", row.name);
                     let _ = std::io::stdout().flush();
-                    stop_pi(&mut pi, pi_stop);
+                    stop_pi_with(&ports, &mut pi, pi_stop);
                     continue 'run;
                 }
             }
-            std::thread::sleep(file_poll);
+            clock.sleep(file_poll);
         };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
-        if let Err(e) = patiently("reporting the Session stopped", || {
+        if let Err(e) = patiently_with(&*clock, "reporting the Session stopped", || {
             state::set(&mut env.store, "session run", &row.id, State::Stopped, None)
         }) {
             eprintln!("cpd: cannot report Session {} stopped: {}: {}", row.id, e.code(), e.message());
@@ -142,7 +151,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 Err(e) => print!("\n  {}: {}\n", e.code(), e.message()),
             }
         }
-        let name = patiently("reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?.name;
+        let name = patiently_with(&*clock, "reading the Session", || env.store.read(|conn| row::load(conn, &args.id)))?.name;
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
         let _ = std::io::stdout().flush();
         let mut line = String::new();
@@ -151,7 +160,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             Ok(_) => {}
         }
         if exe.replaced() && may_exec(&exe) {
-            return Err(reload(&exe, &row.id, None));
+            return Err(reload_with(&ports, &exe, &row.id, None));
         }
     }
 }
@@ -205,8 +214,31 @@ pub(super) struct PiProc {
 impl PiProc {
     /// The child `pid` of this process. Not checked here: a pid that is not a
     /// child fails at the first [`PiProc::try_wait`].
-    fn adopt(pid: Pid) -> PiProc {
+    pub(super) fn adopt(pid: Pid) -> PiProc {
         PiProc { pid, status: None }
+    }
+
+    /// [`PiProc::try_wait`] asking `spawn` (`Spawn::try_wait`): how pi exited, or `None` while it runs; a pid `spawn`
+    /// does not know is an error.
+    pub(super) fn try_wait_with(&mut self, spawn: &dyn Spawn) -> std::io::Result<Option<ExitStatus>> {
+        if self.status.is_some() {
+            return Ok(self.status);
+        }
+        // Real pi is started here with `Command` (it owns the terminal) or adopted across an `exec`: neither is a child
+        // `ProcessSpawn` started, so `waitpid` waits for it, as it always did.
+        if spawn.kind() == "ProcessSpawn" {
+            return self.try_wait();
+        }
+        let status = spawn.try_wait(SpawnPid(self.pid.as_raw().unsigned_abs()))?;
+        self.status = status;
+        Ok(status)
+    }
+
+    /// [`PiProc::signal`] through `spawn` (`Spawn::signal`), and only while pi was not waited for.
+    pub(super) fn signal_with(&self, spawn: &dyn Spawn, signal: SpawnSignal) {
+        if self.status.is_none() {
+            let _ = spawn.signal(SpawnPid(self.pid.as_raw().unsigned_abs()), signal);
+        }
     }
 
     pub(super) fn id(&self) -> i32 {
@@ -230,6 +262,7 @@ impl PiProc {
     }
 
     /// Sends `signal` to pi if it was not waited for yet.
+    #[cfg(test)]
     pub(super) fn signal(&self, signal: Signal) {
         if self.status.is_none() {
             let _ = kill(self.pid, signal);
@@ -258,12 +291,12 @@ impl Logged {
     }
 }
 
-/// Runs a store access of the wrapper's start or end (before pi runs, after it
-/// exited), again and again while it meets a transient error ([`store::is_transient`], and `lock_timeout`,
-/// the wait for the store's setup lock in `Env::open`): waits 0.5 s,
-/// doubling to 5 s. The pane says once what it waits for and why; the wrapper
-/// never ends for it. Any other result, error or not, is returned as it is.
-pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
+/// [`patiently`] whose waits (0.5 s, doubling to 5 s) are naps on `clock`.
+pub(super) fn patiently_with<T>(
+    clock: &dyn Clock,
+    what: &str,
+    mut access: impl FnMut() -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
     let mut wait = RETRY_FIRST;
     let mut said = false;
     loop {
@@ -274,7 +307,7 @@ pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, Cpd
                     let _ = std::io::stdout().flush();
                     said = true;
                 }
-                std::thread::sleep(wait);
+                clock.sleep(wait);
                 wait = (wait * 2).min(RETRY_MAX);
             }
             other => return other,
@@ -282,10 +315,19 @@ pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, Cpd
     }
 }
 
+/// Runs a store access of the wrapper's start or end (before pi runs, after it
+/// exited), again and again while it meets a transient error ([`store::is_transient`], and `lock_timeout`,
+/// the wait for the store's setup lock in `Env::open`): waits 0.5 s,
+/// doubling to 5 s. The pane says once what it waits for and why; the wrapper
+/// never ends for it. Any other result, error or not, is returned as it is.
+pub(super) fn patiently<T>(what: &str, access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
+    patiently_with(&SystemClock, what, access)
+}
+
 /// `wrong_pane` unless this process runs in a pane of cpd's tmux server whose
 /// `@cpd_session` is `id`. The command that created the pane sets the option
 /// just after `new-window`, so an unset option is waited for, briefly.
-fn check_pane(tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
+fn check_pane(ports: &Ports, tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
     let wrong = |why: String| {
         CpdError::new(ErrorCode::WrongPane, format!("cpd session run {id} must run in the pane cpd started for it: {why}."))
             .with("session", id.as_str())
@@ -300,7 +342,7 @@ fn check_pane(tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
         .ok()
         .and_then(|p| PaneId::parse(&p))
         .ok_or_else(|| wrong("TMUX_PANE is not set".into()))?;
-    let deadline = SystemTime::now() + PANE_WAIT;
+    let deadline = ports.clock.now() + PANE_WAIT;
     loop {
         let panes = tmux.list_panes()?;
         let found = panes.into_iter().find(|p| p.pane == pane).ok_or_else(|| wrong(format!("pane {pane} is gone")))?;
@@ -309,10 +351,10 @@ fn check_pane(tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
             Some(other) => {
                 return Err(wrong(format!("pane {pane} runs Session {other}")).with("pane", pane.as_str()).with("found", other.as_str()));
             }
-            None if SystemTime::now() >= deadline => {
+            None if ports.clock.now() >= deadline => {
                 return Err(wrong(format!("pane {pane} has no @cpd_session")).with("pane", pane.as_str()));
             }
-            None => std::thread::sleep(Duration::from_millis(100)),
+            None => ports.clock.sleep(Duration::from_millis(100)),
         }
     }
 }
@@ -342,9 +384,10 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
     // The row's current Tier, also on a resume (hs-d506): pi uses `--model` instead of the model its file recorded.
     let (model, level) = row::model_and_level(&env.config, &row.id, &row.tier)?;
     let model = format!("{model}:{level}");
+    let ports = env.ports.clone();
     if let Some(file) = existing_file(dirs, row) {
         if row.file.as_deref() != Some(&file.display().to_string()) {
-            patiently("recording the session file", || record_file(env, dirs, &row.id))?;
+            patiently_with(&*ports.clock, "recording the session file", || record_file(env, dirs, &row.id))?;
         }
         return Ok(Some(LeadStart::Resume { model, file }));
     }
@@ -354,7 +397,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
     let message = first_message(&env.home, row)?;
     match &row.forked_from {
         Some(source) => {
-            let Some(source_file) = wait_for_source(env, dirs, source, &row.name)? else { return Ok(None) };
+            let Some(source_file) = wait_for_source_with(&ports, env, dirs, source, &row.name)? else { return Ok(None) };
             Ok(Some(LeadStart::Fork { model, name: row.name.clone(), source_file, first_message: message }))
         }
         None => {
@@ -375,6 +418,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::ExitStatusExt;
+    use std::time::Instant;
 
     use super::*;
 

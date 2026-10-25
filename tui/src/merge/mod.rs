@@ -15,8 +15,9 @@ use std::ffi::OsString;
 use std::fmt;
 
 use ratatui::Frame;
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
@@ -27,12 +28,14 @@ use crate::dialog::{Dialog, Mode};
 
 use super::popup;
 use super::viewlog::ViewLog;
-use super::{Capture, RunCommand, dialog, run_view};
+use super::view_ports::{Ctx, RunFn};
+use super::{Capture, RunCommand, dialog, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
@@ -48,8 +51,8 @@ const LOG: &str = "merge";
 /// `pr merge` is the authority on the rest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
-    repo: String,
-    number: i64,
+    pub(crate) repo: String,
+    pub(crate) number: i64,
 }
 
 impl Pull {
@@ -88,7 +91,7 @@ pub struct Args {
 
 /// What the User's key or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
+pub(crate) enum Action {
     Merge,
     Cancel,
 }
@@ -201,10 +204,11 @@ pub fn draw_dialog(store: &mut Store, f: &mut Frame, arg: &str) -> Result<(), Cp
     Ok(())
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    // `run_view` refuses `not_a_terminal` first, then `prepare` reads the store; the same order as before.
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    // `run_view_on` refuses `not_a_terminal` first, then `prepare` reads the store; the same order as before.
     let mut ending: Option<(Action, String)> = None;
-    run_view(
+    run_view_on(
+        ports,
         "merge",
         Capture::Mouse,
         || {
@@ -214,8 +218,8 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
             let title = stored_title(&mut store, &args.pull)?;
             Ok((config.tmux.socket, title))
         },
-        |terminal, (socket, title)| {
-            let action = show(terminal, &args.pull, title.as_deref())?;
+        |ctx, (socket, title)| {
+            let action = show(ctx, &args.pull, title.as_deref())?;
             ending = Some((action, socket));
             Ok(())
         },
@@ -230,14 +234,19 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
 }
 
 /// Draws and takes input until the User confirms or cancels.
-fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+fn show<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+    show_with(ctx, pull, title)
+}
+
+/// [`show`] on a [`Ctx`]: input and frames are the context's.
+pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
     loop {
         let mut area = Rect::default();
-        terminal.draw(|f| {
+        ctx.draw(|f| {
             area = f.area();
             draw(f, area, pull, title);
         })?;
-        let action = match event::read()? {
+        let action = match ctx.input.read()? {
             Event::Key(key) => on_key(key),
             Event::Mouse(mouse) => on_mouse(area, mouse),
             _ => None,
@@ -259,33 +268,38 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
 /// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
 /// exists, the action does nothing but log `merge already running`.
 pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
+    action_with(&Ports::real(), home, tmux, pull, client, &run_command)
+}
+
+/// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
+pub(crate) fn action_with(ports: &Ports, home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run: RunFn) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
     let config = Config::load(home)?;
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
     let open = open_pulls(&mut store)?;
     // The only clean-up of a marker left behind: a merged one whose row is no longer open.
     marker::remove_settled(home, &open);
-    if marker::live(home, &open).contains(&pull.to_string()) {
+    if marker::live_with(ports, home, &open).contains(&pull.to_string()) {
         // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
-        let _ = log.append(&format!("merge already running {pull}"));
+        let _ = log.append_with(ports, &format!("merge already running {pull}"));
         return Ok(());
     }
-    marker::write(home, pull)?;
+    marker::write_on(ports, home, pull)?;
     let mut marked = Marked { home, pull, keep: false };
-    let cpd = |words: &[&str]| run_command(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
+    let cpd = |words: &[&str]| run(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
     let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
         Ok(_) => {
             // The merge happened: the marker stays, marked merged, until a read stores it (hs-d550).
-            marker::write_merged(home, pull)?;
+            marker::write_merged_on(ports, home, pull)?;
             if let Err(e) = cpd(&["pr", "poll"]) {
                 // Nothing else to show it with: the next periodic poll refreshes the column.
-                let _ = log.append(&format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
+                let _ = log.append_with(ports, &format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
             }
             match open_pulls(&mut store) {
                 Ok(open) => marked.keep = open.contains(&pull.to_string()),
                 Err(e) => {
                     marked.keep = true;
-                    let _ = log.append(&format!("read after merge {pull}: {}: {}", e.code(), e.message()));
+                    let _ = log.append_with(ports, &format!("read after merge {pull}: {}: {}", e.code(), e.message()));
                 }
             }
             return Ok(());
@@ -295,7 +309,7 @@ pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run
     // The request has ended: the spinner goes before the dialog opens.
     drop(marked);
     let mut text = format!("merge {pull}: {}: {}", failed.code(), failed.message());
-    if let Err(unwritten) = log.append(&text) {
+    if let Err(unwritten) = log.append_with(ports, &text) {
         text = format!("{text}\n{unwritten}");
     }
     dialog::show_error_on(tmux, client, &format!("merge {pull}"), &text)

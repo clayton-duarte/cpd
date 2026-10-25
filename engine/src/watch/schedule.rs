@@ -11,6 +11,7 @@ use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use cpd_core::clock::Clock;
 use cpd_core::driver::{self, StartCtx};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::limit::limit;
@@ -60,6 +61,12 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
     Ok(now < ended + wait)
 }
 
+/// [`backing_off`] at the time `clock` reads (`Clock::utc`). The unit is [`BACKOFF_UNIT`] unless `CPD_TEST_BACKOFF_UNIT`
+/// says otherwise (cli/tests/engine/watch.rs still reads it).
+pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, clock: &dyn Clock) -> Result<bool, CpdError> {
+    backing_off(conn, plan, key, clock.utc())
+}
+
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
 /// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),
@@ -89,13 +96,13 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(false) => {}
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     }
+    let clock = engine.ports.clock.clone();
     let ready = engine.store.read(|conn| {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let active: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
-        let now = OffsetDateTime::now_utc();
         let mut ready = Vec::new();
         for (p, k, urgent) in rows {
             let plan = PlanId::parse(&p)?;
@@ -105,7 +112,7 @@ pub(super) fn run(engine: &mut Engine) {
             }
             let key = JobKey::parse(&k)?;
             // Its driver could not be started the last times: wait before the next try.
-            if !backing_off(conn, &plan, &key, now)? {
+            if !backing_off_with(conn, &plan, &key, &*clock)? {
                 ready.push((plan, key, urgent));
             }
         }
