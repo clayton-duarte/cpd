@@ -2540,7 +2540,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Pane title pill, unfocused (the `━` before it, caps, block) | no | block 7 inverted, caps 7, the `━` 7 | `pane-border-format` |
 | Pane title pill, focused | no | block 4 inverted, caps 4, the `━` 4 | `pane-border-format` |
 | **Dialogs, popups and menus** | | | |
-| Popup frame of the legend, `logs` and `merge` popups (the single-line frame and its ` title `) | yes (drag) | fg 7 | `popup-border-style` |
+| Popup frame of the legend and `logs` popups (the single-line frame and its ` title `) | yes (drag) | fg 7 | `popup-border-style` |
 | Dialog frame (`╭ ─ ╮ │ ╰ ╯`, the top row's `─` included; hs-d578) | no | fg 8 | drawn by the view |
 | Dialog title pill, Logs title pill | no | block 7 inverted, caps 7 | `palette::pill_static()` |
 | Dialog button: the accepting one (hs-d578) | yes | block 12 inverted, caps 12 | `palette::selected()` colours, as a pill |
@@ -2553,7 +2553,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Button: the first (the default action) | yes | block: 4 inverted | `palette::selected()` |
 | Button: the others, as text / drawn as a pill | yes | fg 15 / block 15 inverted, caps 15 | palette: clickable text, `palette::pill_interactive()` |
 | Dialog position `1-5/12`, scroll cues | no | fg 8 | palette: muted |
-| Merge popup: `<owner>/<repo>#12`, title line, ` method: … ` | no | fg 7 | palette: read-only text |
+| Merge popup: frame, title pill, rows `<owner>/<repo>#n` (bold), title, `method: squash` | no | frame 8, title pill 7 inverted, text 7, buttons 12 / 15 inverted | dialog kit confirm (hs-d621, commands.md §13.2) |
 | Logs dialog: event time `12:03:41` | no | fg 8 | palette: muted |
 | Logs dialog: event text | no | fg 7 | palette: read-only text |
 | Logs dialog: `error` Event addressed to a Lead | no | fg 6 | palette: meaning |
