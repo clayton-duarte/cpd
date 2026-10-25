@@ -158,9 +158,6 @@ impl Spawn for PaneSpawn {
     fn ppid(&self, p: Pid) -> Option<Pid> {
         self.inner.ppid(p)
     }
-    fn descendants(&self, root: Pid) -> Vec<Pid> {
-        self.inner.descendants(root)
-    }
     fn env_of(&self, p: Pid, key: &str) -> Option<String> {
         self.inner.env_of(p, key)
     }
