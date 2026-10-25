@@ -95,12 +95,12 @@ pub enum Command {
 
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    run_with(argv, cpd_tui::on_a_terminal())
+    run_on(argv, cpd_tui::on_a_terminal())
 }
 
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
-fn run_with(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+fn run_on(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
@@ -253,7 +253,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run_with(argv(words), false).expect_err("expected a failure")
+        run_on(argv(words), false).expect_err("expected a failure")
     }
 
     #[test]

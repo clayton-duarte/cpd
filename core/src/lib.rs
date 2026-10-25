@@ -37,6 +37,7 @@ pub mod metrics;
 pub mod plan;
 pub mod policy;
 pub mod pill;
+pub mod ports;
 pub mod pr;
 pub mod review;
 pub mod secret;
@@ -54,3 +55,5 @@ mod incident_tests;
 
 #[cfg(test)]
 mod pill_tests;
+#[cfg(test)]
+mod ports_tests;

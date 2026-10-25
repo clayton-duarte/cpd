@@ -16,3 +16,10 @@ use std::process::ExitCode;
 pub fn main_with(argv: impl IntoIterator<Item = OsString>, stdout: &mut impl Write) -> ExitCode {
     cpd_core::output::emit(cli::run(argv), stdout)
 }
+
+/// Runs `argv` on `ports` and writes its result to `out`; returns the exit code. The thin mains call it.
+///
+/// STUB of PR ports2's red Job: Job ports-3 implements it (`main_with` then calls it with `Ports::real()`).
+pub fn run_with(_ports: &cpd_core::ports::Ports, _argv: impl IntoIterator<Item = OsString>, _out: &mut dyn Write) -> ExitCode {
+    todo!("run_with (Job ports-3)")
+}

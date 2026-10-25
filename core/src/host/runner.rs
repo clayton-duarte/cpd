@@ -31,6 +31,11 @@ pub trait Runner: Send + Sync {
     /// Runs what `call` describes: like [`Runner::output`], and also writes `call.stdin` to the child's stdin
     /// (then closes it) and sends the child's stderr to the file `call.stderr_to`, appending.
     fn run(&self, call: &Call) -> Result<Output, Failed>;
+
+    /// Which implementation this is, by name, for a test of `Ports` (`"SystemRunner"` for the real one).
+    fn kind(&self) -> &'static str {
+        "other"
+    }
 }
 
 /// The `Command` that `call` describes: its program, arguments, environment (a `None` value removes the variable)
@@ -54,6 +59,9 @@ pub fn command(call: &Call) -> Command {
 pub struct SystemRunner;
 
 impl Runner for SystemRunner {
+    fn kind(&self) -> &'static str {
+        "SystemRunner"
+    }
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         deadline::output(cmd, tool, deadline)
     }

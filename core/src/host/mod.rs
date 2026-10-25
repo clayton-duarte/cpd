@@ -23,6 +23,7 @@ pub mod limit;
 pub mod pi;
 pub mod priority;
 pub mod runner;
+pub mod spawn;
 pub mod tmux;
 
 #[cfg(test)]
@@ -31,6 +32,8 @@ mod exe_runner_tests;
 mod runner_stdin_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod spawn_tests;
 #[cfg(test)]
 mod tmux_adapter_tests;
 #[cfg(test)]

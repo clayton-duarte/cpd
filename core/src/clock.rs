@@ -22,17 +22,29 @@ pub fn now() -> String {
 pub trait Clock: Send + Sync {
     fn now(&self) -> Instant;
     fn sleep(&self, d: Duration);
+    /// The UTC wall time: the system's for [`SystemClock`], a fixed epoch plus the elapsed time for [`ManualClock`].
+    fn utc(&self) -> OffsetDateTime;
+    /// Which implementation this is, by name, for a test of `Ports` (`"SystemClock"` for the real one).
+    fn kind(&self) -> &'static str {
+        "other"
+    }
 }
 
 /// The real time: `Instant::now` and `thread::sleep`.
 pub struct SystemClock;
 
 impl Clock for SystemClock {
+    fn kind(&self) -> &'static str {
+        "SystemClock"
+    }
     fn now(&self) -> Instant {
         Instant::now()
     }
     fn sleep(&self, d: Duration) {
         std::thread::sleep(d);
+    }
+    fn utc(&self) -> OffsetDateTime {
+        todo!("Clock::utc of SystemClock (PR ports2)")
     }
 }
 
@@ -84,6 +96,9 @@ impl Clock for ManualClock {
         let mut state = self.state();
         state.naps.push(d);
         state.elapsed += d;
+    }
+    fn utc(&self) -> OffsetDateTime {
+        todo!("Clock::utc of ManualClock (PR ports2)")
     }
 }
 
