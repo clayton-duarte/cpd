@@ -74,8 +74,6 @@ struct Fx {
     origin: PathBuf,
     lead: PathBuf,
     merged_sha: String,
-    /// What the lock pushed to `cpd/pay` on origin (R35, §7.2): the base.
-    lock_pushed: String,
     /// The Lead Branch of PR `repo`: `cpd/pay`, or `cpd/pay/repo` where a second PR of the Plan exists (`fx_stacked`).
     branch: String,
 }
@@ -154,14 +152,13 @@ fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
     env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let (lead, lock_pushed) = if branch == "cpd/pay" {
-        let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
-        (created.path, created.base_sha)
+    let lead = if branch == "cpd/pay" {
+        create_lead_worktree(&repo, &plan(), "main", &setup).unwrap().path
     } else {
         let path = repo.parent().unwrap().join("pay.pay.repo");
         let prepared = cpd_core::git::worktree::prepare_lead_worktree(&repo, &plan(), &path, branch, "main", &setup).map_err(|f| f.error).unwrap();
         prepared.push().unwrap();
-        (prepared.path, prepared.base_sha)
+        prepared.path
     };
     env.git(&lead, &["config", "user.name", "cpd test"]);
     env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
@@ -187,7 +184,7 @@ fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
     }
     env.fake_gh(GH);
 
-    let fx = Fx { env, home, repo, origin, lead, merged_sha, lock_pushed, branch: branch.to_owned() };
+    let fx = Fx { env, home, repo, origin, lead, merged_sha, branch: branch.to_owned() };
     if phase == "deploy" {
         fx.git(&fx.lead, &["push", "-q", "-u", "origin", branch]);
     }
@@ -757,8 +754,6 @@ fn git_in_hook(ports: &cpd_core::ports::Ports, dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-const MERGED_LIST_STATE: &str = "MERGED";
-
 #[test]
 fn open_gates_pushes_creates_the_pr_and_records_it() {
     let fx = poll_fx("dispatch");
@@ -839,7 +834,7 @@ fn open_adopts_a_pr_an_earlier_run_created() {
 #[test]
 fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
     let (fx, marker) = poll_fx_with_marked_hook();
-    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.gh.list.set(list_of("MERGED"));
     fx.lookup(&[Some(pay("MERGED", None, None))]);
     let remote_before = fx.remote_branch("cpd/pay");
     let (attempt, _, tip) = fx.submitted_opener();
@@ -879,7 +874,7 @@ fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
 #[test]
 fn open_adopting_a_merged_pull_request_supersedes_the_pending_reviews() {
     let (fx, marker) = poll_fx_with_marked_hook();
-    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.gh.list.set(list_of("MERGED"));
     fx.lookup(&[Some(pay("MERGED", None, None))]);
     insert_pending_reviews(&fx.env, "pay");
     let (attempt, _, tip) = fx.submitted_opener();
@@ -895,7 +890,7 @@ fn open_adopting_a_merged_pull_request_supersedes_the_pending_reviews() {
 fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_pr_is_not_open() {
     let fx = poll_fx("dispatch");
     fx.add_waiting_web();
-    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.gh.list.set(list_of("MERGED"));
     fx.lookup(&[Some(pay("MERGED", None, None))]);
     let (attempt, _, tip) = fx.submitted_opener();
 
@@ -920,7 +915,7 @@ fn open_adopting_a_merged_pull_request_updates_the_row_the_poll_stored_open() {
             Ok(())
         })
         .unwrap();
-    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.gh.list.set(list_of("MERGED"));
     fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
     let (attempt, _, _) = fx.submitted_opener();
 
@@ -988,8 +983,7 @@ fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_n
         gh.list.set(list_of("OPEN"));
         Reply::ok("")
     });
-    let before = fx.remote_branch("cpd/pay");
-    assert_eq!(before, Some(fx.lock_pushed.clone()));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()));
 
     let end = fx.merge(&attempt);
 
@@ -1642,17 +1636,6 @@ impl Poll {
             rest = &rest[line.len() + 1..];
         }
         rest.to_owned()
-    }
-
-    /// `(status, outcome, cause)` of the Attempt `open-repo-a1`, and the status of its Job.
-    fn opener_row(&self) -> ((String, Option<String>, Option<String>), String) {
-        self.store()
-            .read(|c| {
-                let attempt = c.query_row("SELECT status, outcome, cause FROM attempts WHERE plan = 'pay' AND id = ?1", [OPENER_ATTEMPT], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-                let job = c.query_row("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| r.get(0))?;
-                Ok((attempt, job))
-            })
-            .unwrap()
     }
 }
 
@@ -3986,7 +3969,7 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     assert!(f.needs_of("fix").is_empty());
 }
 
-// ------------------------------------------------------------ the test slots
+// ------------------------------------------------------------ plan reviews
 
 /// Inserts pending reviews r1 and r2 of `plan` (fingerprints all `a` and all `b`).
 fn insert_pending_reviews(env: &TestEnv, plan: &str) {
