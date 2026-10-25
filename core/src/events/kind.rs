@@ -209,8 +209,8 @@ impl Kind {
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
             ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
             ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
-            IncidentStarted => spec([N, N, N, N, N], &["by", "reason", "started_at"], &[]),
-            IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at"], &[]),
+            IncidentStarted => spec([N, N, N, N, N], &["by", "reason", "started_at", "plans"], &["until_pr"]),
+            IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
     }

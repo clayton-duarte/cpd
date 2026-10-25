@@ -19,7 +19,7 @@ mod tests {
         why: &'static str,
     }
 
-    const EXEMPT: [Exempt; 8] = [
+    const EXEMPT: [Exempt; 6] = [
         Exempt {
             file: "cockpit.rs",
             line: "",
@@ -44,16 +44,6 @@ mod tests {
             file: "runner.rs",
             line: "execute!(stdout(), Disable",
             why: "terminal teardown: mouse and focus reporting off, in `Restore::drop`",
-        },
-        Exempt {
-            file: "merge/mod.rs",
-            line: "execute!(std::io::stdout(), ",
-            why: "terminal setup and teardown of the popup's mouse capture, around its frames",
-        },
-        Exempt {
-            file: "dialog/mod.rs",
-            line: "execute!(std::io::stdout(), ",
-            why: "terminal setup and teardown of the popup's mouse capture, around its frames",
         },
         Exempt {
             file: "terminal_writes.rs",

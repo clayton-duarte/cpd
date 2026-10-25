@@ -1,11 +1,11 @@
-//! `cpd tui action reset` sizes the cockpit 25 % / 50 % / 25 % (docs/commands.md §13.2), against a recording fake `tmux`.
+//! `cpd tui action reset` sizes the cockpit 20 % / 50 % / 30 % columns and 30 % / 70 % rows (docs/commands.md §13.2), against a recording fake `tmux`.
 
 use std::fs;
 
 use crate::common::TestEnv;
 
 #[test]
-fn tui_action_reset_resizes_tree_widgets_and_plan_to_25_percent_and_worker_to_30() {
+fn tui_action_reset_resizes_the_cockpit_20_50_30_columns_and_30_70_rows() {
     let env = TestEnv::new();
     fs::write(
         env.cpd_home().join("config.toml"),
@@ -29,9 +29,9 @@ fn tui_action_reset_resizes_tree_widgets_and_plan_to_25_percent_and_worker_to_30
         .filter_map(|c| c.iter().position(|a| a == "resize-pane").map(|i| c[i..].to_vec()))
         .collect();
     let want: Vec<Vec<String>> = [
-        ["resize-pane", "-t", "%0", "-x", "25%"],
-        ["resize-pane", "-t", "%2", "-x", "25%"],
-        ["resize-pane", "-t", "%3", "-y", "25%"],
+        ["resize-pane", "-t", "%0", "-x", "20%"],
+        ["resize-pane", "-t", "%2", "-x", "30%"],
+        ["resize-pane", "-t", "%3", "-y", "30%"],
         ["resize-pane", "-t", "%4", "-x", "30%"],
     ]
     .iter()

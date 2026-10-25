@@ -1,9 +1,9 @@
-//! `cpd incident start | end | status` (commands.md §25, hs-d634): machine-wide incident mode.
-//! When on (one row in the `incident` table), the engine pauses most scheduling and every running
-//! Attempt is requeued when it ends (contract §2.2 "Incident", §3.7). `start` and `end` are
-//! Manager-only; `status` is for any caller.
+//! `cpd incident start | end | status` (commands.md §25, hs-d643): Plan-scoped incident mode.
+//! When on (one row in the `incident` table plus one row per Plan in `incident_plans`), the
+//! engine holds scheduling for every Plan not in the incident (`is_held`, contract §2.2
+//! "Incident", §3.7). `start` and `end` are Manager-only; `status` is for any caller.
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::args::Text;
@@ -11,9 +11,9 @@ use crate::clock;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::ids::SessionId;
+use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
-use crate::store::Store;
+use crate::store::{Store, WriteTxn};
 
 /// The `incident` commands.
 #[derive(clap::Subcommand, Debug)]
@@ -28,9 +28,15 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct StartArgs {
+    /// The Plans in the incident (at least one)
+    #[arg(long = "plan", value_name = "id", required = true)]
+    pub plan: Vec<PlanId>,
     /// The explanation of the incident (1 or more characters)
     #[arg(long, value_name = "text")]
     pub reason: Text,
+    /// The `<plan>/<key>` PR that ends the incident when it merges
+    #[arg(long, value_name = "<plan>/<key>")]
+    pub until_pr: Option<String>,
 }
 
 /// Runs one `incident` command. The caller's Session is `$CPD_SESSION` (commands.md §25).
@@ -41,7 +47,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         None => None,
     };
     match command {
-        Command::Start(args) => start(&mut store, caller.as_ref(), args.reason.as_str()),
+        Command::Start(args) => start(&mut store, caller.as_ref(), &args.plan, args.reason.as_str(), args.until_pr.as_deref()),
         Command::End => end(&mut store, caller.as_ref()),
         Command::Status => status(&mut store),
     }
@@ -68,15 +74,26 @@ fn require_manager<'a>(conn: &Connection, caller: Option<&'a SessionId>) -> Resu
     }
 }
 
-/// The current `incident` row as the output's `incident` value, if any.
-fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
-    Ok(conn
+/// The current `incident` row as the output's `incident` value, if any. `pub(crate)` so the
+/// `incident_hold` refusal (`pr open`/`push`/`rebase`) carries the same value as `incident status`.
+pub(crate) fn row(conn: &Connection) -> Result<Option<Value>, CpdError> {
+    let stored = conn
         .query_row(
-            "SELECT started_at, started_by, reason FROM incident WHERE id = 1",
+            "SELECT started_at, started_by, reason, until_pr FROM incident WHERE id = 1",
             [],
-            |r| Ok(json!({"started_at": r.get::<_, String>(0)?, "by": r.get::<_, String>(1)?, "reason": r.get::<_, String>(2)?})),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            },
         )
-        .optional()?)
+        .optional()?;
+    let Some((started_at, by, reason, until_pr)) = stored else { return Ok(None) };
+    let plans: Vec<String> = plans(conn)?.into_iter().map(|p| p.as_str().to_owned()).collect();
+    Ok(Some(json!({"started_at": started_at, "by": by, "reason": reason, "plans": plans, "until_pr": until_pr})))
 }
 
 /// Whether incident mode is on (contract §2.2): one row in `incident`.
@@ -84,58 +101,171 @@ pub fn is_on(conn: &Connection) -> bool {
     conn.query_row("SELECT EXISTS(SELECT 1 FROM incident)", [], |r| r.get::<_, bool>(0)).unwrap_or(false)
 }
 
-/// `cpd incident start` (commands.md §25.1): one transaction that inserts the row, requests the
-/// stop of every `starting` or `running` Attempt with no `stop_request` and appends one
-/// `incident-started` Event. `caller` is the Manager's Session.
-pub fn start(store: &mut Store, caller: Option<&SessionId>, reason: &str) -> Result<Output, CpdError> {
+/// Whether `plan` is held by incident mode (contract §2.2): the incident is on and `plan` is not
+/// in `incident_plans`.
+pub fn is_held(conn: &Connection, plan: &PlanId) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM incident) AND NOT EXISTS(SELECT 1 FROM incident_plans WHERE plan = ?1)",
+        [plan.as_str()],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
+/// The set of Plans in the incident, `incident_plans` (contract §2.2).
+pub fn plans(conn: &Connection) -> Result<Vec<PlanId>, CpdError> {
+    let mut stmt = conn.prepare("SELECT plan FROM incident_plans ORDER BY plan")?;
+    let plans = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .map(|r| PlanId::parse(&r?).map_err(|e| CpdError::bad_row(format!("incident_plans.plan: {e}"))))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(plans)
+}
+
+/// The `<plan>/<key>` auto-end value split into its Plan and key. `usage` for anything else.
+fn parse_until_pr(value: &str) -> Result<(PlanId, String), CpdError> {
+    let usage = || {
+        CpdError::new(ErrorCode::Usage, "An --until-pr is `<plan>/<key>` with a non-empty Plan and key.")
+            .with("until_pr", value)
+    };
+    let (plan, key) = value.split_once('/').ok_or_else(usage)?;
+    if plan.is_empty() || key.is_empty() || key.contains('/') {
+        return Err(usage());
+    }
+    let plan = PlanId::parse(plan).map_err(|_| usage())?;
+    Ok((plan, key.to_owned()))
+}
+
+/// `cpd incident start` (commands.md §25.1): one transaction that inserts the `incident` row and
+/// one `incident_plans` row per named Plan, requests the stop of every `starting` or `running`
+/// Attempt with no `stop_request`, and appends one `incident-started` Event. `until_pr` is the
+/// optional `<plan>/<key>` auto-end PR.
+pub fn start(
+    store: &mut Store,
+    caller: Option<&SessionId>,
+    plans: &[PlanId],
+    reason: &str,
+    until_pr: Option<&str>,
+) -> Result<Output, CpdError> {
+    if plans.is_empty() {
+        return Err(CpdError::new(ErrorCode::Usage, "Incident mode needs at least one --plan."));
+    }
     if reason.is_empty() {
         return Err(CpdError::new(ErrorCode::Usage, "The incident needs a reason of at least 1 character."));
     }
+    let until = until_pr.map(parse_until_pr).transpose()?;
     store.write("incident start", |tx| {
         let caller = require_manager(tx, caller)?;
         if let Some(existing) = row(tx)? {
             return Ok(Output::success(json!({"changed": false, "incident": existing})));
         }
+        for plan in plans {
+            let known: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
+            if !known {
+                return Err(CpdError::plan_not_found(plan));
+            }
+        }
+        if let Some((until_plan, key)) = &until {
+            if !plans.contains(until_plan) {
+                return Err(CpdError::new(
+                    ErrorCode::UntilPrNotIncident,
+                    format!("The --until-pr Plan {until_plan} is not one of the incident's Plans."),
+                )
+                .with("plan", until_plan.as_str())
+                .with("until_pr", until_pr.unwrap_or_default()));
+            }
+            let known: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2)",
+                params![until_plan.as_str(), key],
+                |r| r.get(0),
+            )?;
+            if !known {
+                return Err(CpdError::new(
+                    ErrorCode::PrNotFound,
+                    format!("No PR {until_plan}/{key}."),
+                )
+                .with("plan", until_plan.as_str())
+                .with("pr", key.as_str()));
+            }
+        }
         let started_at = clock::now();
         tx.execute(
-            "INSERT INTO incident (id, started_at, started_by, reason, started_txn) VALUES (1, ?1, ?2, ?3, ?4)",
-            rusqlite::params![started_at, caller.as_str(), reason, tx.id()],
+            "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                started_at,
+                caller.as_str(),
+                reason,
+                tx.id(),
+                until.as_ref().map(|(plan, _)| plan.as_str()),
+                until_pr,
+            ],
         )?;
+        for plan in plans {
+            tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES (?1, ?2)", params![plan.as_str(), tx.id()])?;
+        }
         tx.execute(
             "UPDATE attempts SET stop_request = 'cancelled'
              WHERE status IN ('starting', 'running') AND stop_request IS NULL",
             [],
         )?;
-        append(
-            tx,
-            NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at),
-        )?;
-        Ok(Output::success(json!({
-            "changed": true,
-            "incident": {"started_at": started_at, "by": caller.as_str(), "reason": reason},
-        })))
+        let named: Vec<&str> = plans.iter().map(|p| p.as_str()).collect();
+        append(tx, NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at, &named, until_pr))?;
+        let incident = row(tx)?.expect("the row just inserted");
+        Ok(Output::success(json!({"changed": true, "incident": incident})))
     })
 }
 
-/// `cpd incident end` (commands.md §25.2): one transaction that deletes the row and appends one
-/// `incident-ended` Event. `caller` is the Manager's Session.
+/// `cpd incident end` (commands.md §25.2): one transaction that deletes the row and every
+/// `incident_plans` row and appends one `incident-ended` Event with `cause` `"manual"`.
 pub fn end(store: &mut Store, caller: Option<&SessionId>) -> Result<Output, CpdError> {
     store.write("incident end", |tx| {
         let caller = require_manager(tx, caller)?;
         if row(tx)?.is_none() {
             return Ok(Output::success(json!({"changed": false, "incident": null})));
         }
+        tx.execute("DELETE FROM incident_plans", [])?;
         tx.execute("DELETE FROM incident WHERE id = 1", [])?;
         let ended_at = clock::now();
-        append(tx, NewEvent::incident_ended("Incident mode off.", caller.as_str(), &ended_at))?;
+        append(tx, NewEvent::incident_ended("Incident mode off.", caller.as_str(), &ended_at, "manual"))?;
         Ok(Output::success(json!({"changed": true, "incident": null})))
     })
 }
 
-/// `cpd incident status` (commands.md §25.3): a read of the row, for any caller.
+/// `cpd incident status` (commands.md §25.3): a read of the row and its Plan set, for any caller.
 pub fn status(store: &mut Store) -> Result<Output, CpdError> {
     let incident = store.read(row)?;
     Ok(Output::success(json!({"on": incident.is_some(), "incident": incident})))
+}
+
+/// The auto-end (contract §2.2, hs-d643): called in a write transaction right after a merge is
+/// recorded. When the stored `until_pr` PR is merged, deletes the `incident` row and every
+/// `incident_plans` row and appends one `incident-ended` Event (`cause` `"until-pr"`, `by`
+/// `"engine"`), returning true; false when incident mode is off, no `until_pr` is stored, or the
+/// PR is not merged.
+pub fn end_if_until_pr_merged(tx: &WriteTxn<'_>) -> Result<bool, CpdError> {
+    let stored = tx
+        .query_row(
+            "SELECT until_plan, until_pr FROM incident WHERE id = 1",
+            [],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?;
+    let Some((Some(until_plan), Some(until_pr))) = stored else { return Ok(false) };
+    let key = until_pr.split_once('/').map_or(until_pr.as_str(), |(_, key)| key);
+    let merged: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'merged')",
+        params![until_plan, key],
+        |r| r.get(0),
+    )?;
+    if !merged {
+        return Ok(false);
+    }
+    tx.execute("DELETE FROM incident_plans", [])?;
+    tx.execute("DELETE FROM incident WHERE id = 1", [])?;
+    let ended_at = clock::now();
+    append(tx, NewEvent::incident_ended("Incident mode off.", "engine", &ended_at, "until-pr"))?;
+    Ok(true)
 }
 
 /// The coarse human duration from the incident row's `started_at` to `now` (hs-d640, contract

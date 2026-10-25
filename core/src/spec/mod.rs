@@ -277,8 +277,8 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
     })
 }
 
-/// Renders the Spec to `run/<plan>/specs/<attempt>.md` (whole, through a
-/// temporary file, so a reader never sees half of it; rerunning rewrites it) and
+/// Renders the Spec to `run/<plan>/specs/<attempt>.md` (whole, through
+/// [`crate::atomic::write_atomic`], so a reader never sees half of it; rerunning rewrites it) and
 /// returns the path, which the driver records as `spec_path`.
 pub fn write(home: &CpdHome, input: &Input<'_>) -> Result<PathBuf, CpdError> {
     let text = render(input)?;
@@ -287,13 +287,6 @@ pub fn write(home: &CpdHome, input: &Input<'_>) -> Result<PathBuf, CpdError> {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
             .with("path", path.display().to_string())
     };
-    let dir = path.parent().expect("a Spec lives in a directory");
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    let tmp = dir.join(format!(".{}.{}.tmp", input.attempt, std::process::id()));
-    std::fs::write(&tmp, text).map_err(failed)?;
-    std::fs::rename(&tmp, &path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        failed(e)
-    })?;
+    crate::atomic::write_atomic(&path, text).map_err(failed)?;
     Ok(path)
 }

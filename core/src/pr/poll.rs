@@ -241,6 +241,7 @@ fn apply(
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
+                crate::incident::end_if_until_pr_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
             } else if let Some(checks) = checks_of(checks, plan, key) {
                 if tell(tx, plan, key, checks, &change)? {

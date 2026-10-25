@@ -110,14 +110,10 @@ impl FoldsFile {
         Ok(())
     }
 
-    /// Replaces the file: a temporary file beside it, then a rename.
+    /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, folds: &Folds) -> io::Result<()> {
         let text = serde_json::to_vec(folds).map_err(io::Error::other)?;
-        fs::create_dir_all(self.path.parent().unwrap_or(std::path::Path::new(".")))?;
-        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
-        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        cpd_core::atomic::write_atomic(&self.path, text)
     }
 }
 

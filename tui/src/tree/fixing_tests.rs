@@ -46,7 +46,7 @@ fn dot_cell(t: &Tree, frame: usize) -> (String, Color) {
 fn a_leads_red_loader_turns_with_the_frame_on_its_row() {
     for frame in 0..58 {
         assert_eq!(dot_cell(&with_dot(Dot::Fixing), frame), (MOONS[frame % 28].to_owned(), C9), "frame {frame}");
-        assert_eq!(dot_cell(&with_dot(Dot::Working), frame), (MOONS[frame % 28].to_owned(), C14), "working, frame {frame}");
+        assert_eq!(dot_cell(&with_dot(Dot::Working(None)), frame), (MOONS[frame % 28].to_owned(), C14), "working, frame {frame}");
     }
 }
 
@@ -63,7 +63,7 @@ fn the_legend_lists_the_red_loader_after_the_working_one() {
     let sections = crate::widgets::legend::sections();
     let dots = sections.iter().find(|s| s.title == "Session Dots").expect("the Session Dots section");
     let first = |row: &Vec<ratatui::text::Line<'static>>| row.first().map(|l| l.spans.clone()).unwrap_or_default();
-    let cyan: Vec<_> = (0..28).map(|f| dot_span(Dot::Working, f, false)).collect();
+    let cyan: Vec<_> = (0..28).map(|f| dot_span(Dot::Working(None), f, false)).collect();
     let at = dots.rows.iter().position(|r| first(r) == cyan).expect("the row of the 28 cyan frames");
     let row = dots.rows.get(at + 1).expect("a row after the working one");
     let red: Vec<_> = (0..28).map(|f| dot_span(Dot::Fixing, f, false)).collect();

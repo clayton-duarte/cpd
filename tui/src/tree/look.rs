@@ -18,6 +18,7 @@ use super::fixture::{archived, sample};
 use super::inbox::item;
 use super::view::{Effect, View};
 use crate::palette::{self, IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED};
+use crate::test_text::rows;
 use cpd_core::inbox::model::{Item, Kind, Urgency};
 
 /// U+F0B26 md-arrow_down_drop_circle_outline: the folded block's arrow.
@@ -41,12 +42,6 @@ fn draw(view: &mut View, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
     terminal.backend().buffer().clone()
-}
-
-fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
-        .collect()
 }
 
 fn pointer(view: &mut View, kind: MouseEventKind, column: u16, row: u16) -> Effect {

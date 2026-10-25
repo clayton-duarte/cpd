@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::Pull;
+use cpd_core::atomic;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use nix::errno::Errno;
@@ -42,19 +43,13 @@ fn write_with(home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError>
         CpdError::new(ErrorCode::Internal, format!("Cannot write the merge marker {}: {e}.", target.display()))
             .with("path", target.display().to_string())
     };
-    let dir = target.parent().expect("a marker is in a directory");
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    // The temporary name does not end in `.json`, so no reader takes it for a marker; the pid keeps two writers apart.
-    let temporary = dir.join(format!(".{pid}.tmp"));
     let mut json = serde_json::json!({ "pid": pid, "at": at });
     if merged {
         json["merged"] = true.into();
     }
     let text = json.to_string();
-    std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target)).map_err(|e| {
-        let _ = std::fs::remove_file(&temporary);
-        failed(e)
-    })
+    // The temporary name ends in `.tmp`, never `.json`, so no reader takes it for a marker.
+    atomic::write_atomic(&target, text).map_err(failed)
 }
 
 /// Removes the marker of `pull`; none there is no error.
