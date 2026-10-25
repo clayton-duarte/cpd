@@ -3253,8 +3253,8 @@ The hooks come from the PR's resolved policy (§8.3), its `[hooks]` domain: the 
 | Hook | Used for | When |
 |---|---|---|
 | `pre-start` | setup | after a Lead or Attempt worktree is created (§7.2), and in a gate worktree before its Gate (§7.6); blocking |
-| `pre-commit` | the **quick check** | at `attempt submit`, in the Attempt worktree. When the policy has no `pre-commit` hook, there is no quick check: it passes, and `pre-merge` does **not** run instead (R20; this replaces outline §6's fallback). This is cpd's own use: worktrunk runs `pre-commit` before the commits it makes, which cpd does not make |
-| `pre-merge` | **the Gate** | only when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (§8.3, hs-d292): at `pr open` and `pr push`, before they push, at an `open` or `update` Job's submit (§7.7), and at `pr rebase`, after the rebase and before it pushes: in a gate worktree of its own, detached at the gated commit, after that worktree's `pre-start` (§7.6, hs-d243). Never in the Lead worktree, and never per Job (R19). With `ci` (cpd's default) none of them runs it, and the repo's CI is the check |
+| `pre-commit` | the **quick check** (historical; removed by hs-d679) | formerly at `attempt submit`, in the Attempt worktree. When the policy has no `pre-commit` hook, it passed; this is cpd's own use, not worktrunk's, which runs `pre-commit` before the commits it makes |
+| `pre-merge` | **the Gate** | at every merge (an Attempt, a Lead at `pr open`/`pr push`/`pr rebase` repairs) when the PR's `gate.merge` is `local` (for non-review Jobs) or `gate.pr` is `local` (for `open` or `update` Jobs), in the Attempt worktree at HEAD or in a gate worktree of its own (§7.4, §7.6). With `ci` (cpd's default) none runs, and the repo's CI is the check |
 
 Every other table (`post-*`, `pre-switch`, `pre-remove`, aliases, `[list]` and so on) is ignored. A hook the policy does not set means no commands, and the hook passes (wt prints "No pre-merge hooks configured" and exits 0; verified).
 
@@ -3277,23 +3277,22 @@ The hook's result is the first failing command's exit code in file order, or 0. 
 
 **What each result means:**
 
-| Result | `pre-start` | quick check at submit | Gate at `pr rebase` and `pr push`, and at an `open` or `update` Job's submit (its `pre-start` included) |
-|---|---|---|---|
-| exit 0 (or no commands) | setup done | submit continues | the command continues to its push |
-| exit non-zero | `setup_failed` | refused `check_failed` (exit 3) with the tail; the Worker fixes and submits again | refused `gate_failed` (exit 3) with the tail; nothing is pushed; the Lead appends fix Jobs. A gate worktree's `pre-start` that exits non-zero is refused `gate_error` (exit 1) instead, with its own tail and log (§7.6) |
-| killed at the timeout, killed by a signal, `sh` not startable, or `hook_invalid` | `setup_failed` | refused `check_error` (exit 1) | refused `gate_error` (exit 1) with the tail; nothing is pushed; the Lead decides |
+| Result | `pre-start` | Gate at merge |
+|---|---|---|
+| exit 0 (or no commands) | setup done | the merge continues to its push |
+| exit non-zero | `setup_failed` | the Attempt ends `failed` / `gate_failed` (exit 3) with the tail; nothing is pushed; the Lead appends fix Jobs. A gate worktree's `pre-start` that exits non-zero is refused `gate_error` (exit 1) instead |
+| killed at the timeout, killed by a signal, `sh` not startable, or `hook_invalid` | `setup_failed` | the Attempt ends `failed` / `gate_error` (exit 1) with the tail; nothing is pushed; the Lead decides |
 
 Change from cpd 1: exit code 64 is no longer special. cpd 1 needed `verify = "./verify.sh || exit 64"` to tell a Gate failure from worktrunk's own errors; cpd 2 runs the commands itself, so any non-zero exit is a failed check. Repos that keep `|| exit 64` still work.
 
-**`attempt submit` preconditions**, in order, each refused with exit 3 and a code the Worker can act on (cpd 1 §11, kept except the check; R20 keeps exactly these at submit):
+**`attempt submit` preconditions** (hs-d679), in order, each refused with exit 3 and a code the Worker can act on (cpd 1 §11, kept except the check and Gate; R20):
 1. the caller's cwd is inside the Attempt worktree, which is on the Attempt branch (`wrong_worktree`);
 2. clean tree, untracked files included (`dirty_tree`);
-3. at least one commit ahead of `base_sha` (`no_commits`); **for an `open` or `update` Job (hs-d340) none is required** (the base may not have moved, §3.4); **for a review Job (B2) instead: no commit ahead of `base_sha` (`review_commits`) and a non-empty `run/<plan>/reviews/<k>.md` (`review_missing`)**, and precondition 5 is skipped for it (§3.4);
+3. at least one commit ahead of `base_sha` (`no_commits`); **for an `open` or `update` Job (hs-d340) none is required** (the base may not have moved, §3.4); **for a review Job (B2) instead: no commit ahead of `base_sha` (`review_commits`) and a non-empty `run/<plan>/reviews/<k>.md` (`review_missing`)**, and precondition 4 is skipped for it (§3.4);
 4. the tamper check passes (`gate_tampered`, §7.5; for an `impl` Job also the red-test guard, `tests_tampered`, §7.7);
-5. the quick check passes (`check_failed`, or `check_error` exit 1); with no `pre-commit` table it passes without running anything, and `check_tail` stays null;
-6. **the kind's check** (hs-d340, hs-d341; §7.7), for the kinds that have one: a `test` Job's red run (`test_files_missing`, `tests_unconfigured`, `tests_build_failed`, `tests_not_red`, `tests_error`), an `impl` Job's green run (`tests_unconfigured`, `tests_build_failed`, `tests_failed`, `tests_error`), an `open` or `update` Job's base check and Gate (`pr_title_required`, `pr_closed`, `lead_branch_moved`, `base_not_found`, `base_conflict`, the policy refusals, `gate_failed`, `gate_error`).
+5. **the kind's check** (hs-d340, hs-d341; §7.7), for the kinds that have one: a `test` Job's red run (`test_files_missing`, `tests_unconfigured`, `tests_build_failed`, `tests_not_red`, `tests_error`), an `impl` Job's green run (`tests_unconfigured`, `tests_build_failed`, `tests_failed`, `tests_error`), an `open` or `update` Job's base check (`pr_title_required`, `pr_closed`, `lead_branch_moved`, `base_not_found`, `base_conflict`, the policy refusals); the Gate runs at the merge (§7.4).
 
-Preconditions 1–3 run before the check span (§7.7); checks 4–6, in order, run inside the one span `checks`. On success the Attempt becomes `merging` with `submitted_sha` and `check_tail`, and the output tells the Worker to stop.
+Preconditions 1–3 run before the check span (§7.7); checks 4–5, in order, run inside the one span `checks`. On success the Attempt becomes `merging` with `submitted_sha` and `check_tail`, and the output tells the Worker to stop.
 
 ### 7.4 The merge (driver step A8)
 
