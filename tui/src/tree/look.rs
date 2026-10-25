@@ -102,10 +102,10 @@ fn an_expanded_context_shows_its_live_rows_then_its_archived_rows_and_closes_wit
     let buf = draw(&mut view, 44, 24);
     let got = rows(&buf);
     let want = [alpha_live(), alpha_archived()].concat();
-    assert_prefixes(&got, 1, &want);
-    assert_eq!(got[1 + want.len()], format!(" ╰{UP} collapse"), "one closing row, the arrow and the word: {got:#?}");
-    assert_eq!(got[2 + want.len()], "", "one empty row between two Contexts: {got:#?}");
-    assert!(got[3 + want.len()].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "the next Context follows: {got:#?}");
+    assert_prefixes(&got, 4, &want);
+    assert_eq!(got[4 + want.len()], format!(" ╰{UP} collapse"), "one closing row, the arrow and the word: {got:#?}");
+    assert_eq!(got[5 + want.len()], "", "one empty row between two Contexts: {got:#?}");
+    assert!(got[6 + want.len()].starts_with(&format!(" ╭{STOPPED} gamma")), "the next Context follows: {got:#?}");
 }
 
 #[test]
@@ -132,14 +132,14 @@ fn folding_a_context_hides_only_its_archived_rows_and_the_live_ones_stay_above_t
     let toggle = find(&got, "collapse") as u16;
     assert_eq!(click(&mut view, 3, toggle), Effect::None, "a view-state change, no command");
     let got = rows(&draw(&mut view, 44, 24));
-    assert_prefixes(&got, 1, &alpha_live());
-    assert_eq!(got[5], format!(" ╰{DOWN} expand"), "the live rows, then the toggle: {got:#?}");
+    assert_prefixes(&got, 4, &alpha_live());
+    assert_eq!(got[8], format!(" ╰{DOWN} expand"), "the live rows, then the toggle: {got:#?}");
     assert!(!got.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "the archived rows are hidden: {got:#?}");
-    assert_eq!(got[6], "", "{got:#?}");
-    assert!(got[7].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{got:#?}");
+    assert_eq!(got[9], "", "{got:#?}");
+    assert!(got[10].starts_with(&format!(" ╭{STOPPED} gamma")), "{got:#?}");
     // and the same click unfolds it
-    assert_eq!(click(&mut view, 3, 5), Effect::None);
-    assert_prefixes(&rows(&draw(&mut view, 44, 24)), 1, &[alpha_live(), alpha_archived()].concat());
+    assert_eq!(click(&mut view, 3, 8), Effect::None);
+    assert_prefixes(&rows(&draw(&mut view, 44, 24)), 4, &[alpha_live(), alpha_archived()].concat());
 }
 
 #[test]
@@ -148,11 +148,11 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
     let got = rows(&draw(&mut view, 44, 24));
     click(&mut view, 3, find(&got, "collapse") as u16);
     let buf = draw(&mut view, 44, 24);
-    is_muted_line(&buf, 5, 1, 12);
-    assert_eq!(buf[(2, 5)].symbol(), DOWN);
+    is_muted_line(&buf, 8, 1, 12);
+    assert_eq!(buf[(2, 8)].symbol(), DOWN);
     // the title row and a live row keep their own actions and fold nothing
-    click(&mut view, 3, 3);
-    assert_eq!(rows(&draw(&mut view, 44, 24))[5], format!(" ╰{DOWN} expand"), "still folded after a click on a live row");
+    click(&mut view, 3, 4);
+    assert_eq!(rows(&draw(&mut view, 44, 24))[8], format!(" ╰{DOWN} expand"), "still folded after a click on a live row");
 }
 
 #[test]
@@ -175,11 +175,11 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     let buf = draw(&mut view, 44, 24);
     let got = rows(&buf);
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
-    assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
-    assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
+    assert!(got[9].starts_with(&format!(" ╰─{IDLE} ship·f-id")), "alpha's last row ends the block: {got:#?}");
+    assert!(got[2].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
     assert_eq!(got[12], " ╰󰬪", "gamma, with no row at all, ends with the terminator: {got:#?}");
     assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
-    for y in [6, 9] {
+    for y in [9, 2] {
         is_muted_line(&buf, y, 1, 3);
     }
     is_muted_line(&buf, 12, 1, 4);
