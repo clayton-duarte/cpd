@@ -20,16 +20,18 @@
 pub(crate) mod render;
 mod view;
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
+use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::Event;
 use ratatui::text::Line;
 
 use super::read::{self, JobStatus, Target, Worker};
 use super::runner::kept;
-use super::view_ports::Ctx;
+use super::view_ports::{Ctx, Input, Tty, run_view_with};
 use super::{Capture, run_view_on};
 use cpd_core::args::PlanArg;
 use cpd_core::config::Config;
@@ -61,8 +63,19 @@ pub struct Args {
     plan: PlanArg,
 }
 
-pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
-    let plan = args.plan.require()?;
+/// What `cpd tui view worker` reads before it draws: a refusal (`plan_required`, `plan_not_found`, `attempt_not_found`,
+/// `job_not_found`) is returned here, with the screen untouched.
+struct Opened {
+    config: Config,
+    store: Store,
+    plan: PlanId,
+    target: Target,
+    snapshot: Worker,
+    follow: read::Follow,
+}
+
+fn open(args: Args) -> Result<Opened, CpdError> {
+    let plan = args.plan.require()?.clone();
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
@@ -71,15 +84,46 @@ pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
         (None, Some(job)) => Target::Job(job),
         _ => unreachable!("clap's group `target` takes exactly one"),
     };
-    // `plan_not_found`, `attempt_not_found` and `job_not_found` refuse before anything is drawn.
-    let snapshot = read::worker(&mut store, plan, &target)?;
+    let snapshot = read::worker(&mut store, &plan, &target)?;
     let follow = read::Follow::new(&mut store, &[], snapshot.events_cursor)?;
+    Ok(Opened { config, store, plan, target, snapshot, follow })
+}
+
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    let Opened { config, mut store, plan, target, snapshot, follow } = open(args)?;
     let output = run_view_on(
         ports,
         "worker",
         Capture::Mouse,
         || Ok(snapshot),
-        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, plan, &target, snapshot)?),
+        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, &plan, &target, snapshot)?),
+    )?;
+    close_pane(&config)?;
+    Ok(output)
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn, then the view on
+/// [`run_view_with`].
+pub fn run_on<B: Backend, W: Write>(
+    ports: &Ports,
+    args: Args,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    let Opened { config, mut store, plan, target, snapshot, follow } = open(args)?;
+    let output = run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "worker",
+        Capture::Mouse,
+        || Ok(snapshot),
+        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, &plan, &target, snapshot)?),
     )?;
     close_pane(&config)?;
     Ok(output)
