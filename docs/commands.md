@@ -36,8 +36,9 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
-26. [`prune`](#26-prune)
-27. [`tag` and `version`](#27-tag-and-version)
+26. [`gate`](#26-gate)
+27. [`prune`](#27-prune)
+28. [`tag` and `version`](#28-tag-and-version)
 
 ## 1. Conventions
 
@@ -60,6 +61,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Fiv
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd gate finish` (§26) | the run's report on stderr, and its exit status | like `slot`: it prints no JSON of its own; the status is the command's, or 64 when the run left something behind |
 | `cpd slot` (§23) | what the command it runs prints, and its exit status | it runs a command inside a test slot and is transparent to it; only its own refusals print the envelope, on stderr |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding and the `merge` popup's confirm (`cpd tui action merge <owner>/<repo>#<n> --client <client>`, hs-d473) run it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>`, and a failed merge with the cockpit's one failure dialog, a `text` dialog (§13.2, §17 "No notes") |
@@ -203,6 +205,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd host repair` (§9.17) | Manager | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd gate finish` (§26) | none | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
@@ -4798,7 +4801,24 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-## 26. `prune`
+## 26. `gate`
+
+The Gate's leak check (hs-d519, docs/research/hygiene.md "The Gate leak check", Plan tests-mock pro-d35). Area `core/src/gate/` and `cli/`.
+
+### 26.1 `gate finish`
+
+```
+cpd gate finish --run <id> --status <n>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--run <id>` | the run id (`GATE_RUN`, 6 characters). Required |
+| `--status <n>` | the exit status of the run's command. Required |
+
+Run by `scripts/gate-run.sh` after its command, with `TMPDIR` the run's directory. It lists what the run left: the processes that have `GATE_RUN=<id>` in their environment (`Spawn::with_env`), the tmux sockets named with the id (`/tmp/tmux-<uid>` and `$TMUX_TMPDIR/tmux-<uid>`), the paths under `$TMPDIR`, and the lines of `$TMPDIR/tripwire.log`. A clean run prints nothing, removes the empty directory and exits with `--status`. Otherwise it prints `gate-run: FAIL: …` on stderr, `SIGKILL`s only the listed pids, removes only the listed sockets and the run's directory, and exits with `--status` when that is not 0, else 64. Another run's id never matches. Like `slot`, it prints no JSON of its own; a usage error is the envelope on stderr. Idempotent: yes.
+
+## 27. `prune`
 
 ```
 cpd prune [--apply] [--drop <lead-branch>]... <repo>...
@@ -4837,12 +4857,11 @@ Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `rem
 Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
 
 Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
-
-## 27. `tag` and `version`
+## 28. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
 
-### 27.1 `cpd tag`
+### 28.1 `cpd tag`
 
 `cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
 
@@ -4867,7 +4886,7 @@ Output (stderr, one line each; the stream the script used):
 
 Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
 
-### 27.2 `cpd version sync [--print]`
+### 28.2 `cpd version sync [--print]`
 
 cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
 

@@ -25,6 +25,7 @@ pub mod config;
 pub mod context;
 pub mod driver;
 pub mod events;
+pub mod gate;
 pub mod git;
 pub mod host;
 pub mod host_repair;

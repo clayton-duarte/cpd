@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, slot, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -89,6 +89,9 @@ pub enum Command {
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
+    /// The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26)
+    #[command(subcommand)]
+    Gate(gate::Command),
     /// Repair the cpd checkout after a skipped install (commands.md §9.11)
     #[command(subcommand)]
     Host(host::Command),
@@ -172,6 +175,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Slot(a) => transparent_exit(slot::run(a)),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
+        Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
         Command::Test(c) => transparent_exit(testsel::exec(ports, c)),
         Command::Prune(a) => prune::command(a),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),
@@ -194,6 +198,20 @@ fn transparent_exit(result: Result<u8, CpdError>) -> ! {
 /// The repository the release commands work in: the current directory.
 fn repo_root() -> Result<std::path::PathBuf, CpdError> {
     std::env::current_dir().map_err(|e| CpdError::new(ErrorCode::Internal, format!("cannot read the current directory: {e}")))
+}
+
+/// `cpd gate finish` ends the process with the run's status, its report on stderr (as `cpd slot`). It never returns.
+fn gate_exit(result: Result<gate::Finished, CpdError>) -> ! {
+    match result {
+        Ok(done) => {
+            eprint!("{}", done.report);
+            std::process::exit(done.status)
+        }
+        Err(err) => {
+            eprint!("{}", cpd_core::output::to_line(&err));
+            std::process::exit(i32::from(err.exit().code()))
+        }
+    }
 }
 
 /// `cpd tag` and `cpd version sync` print one plain line, not JSON (commands.md §26), and end the process: the line on
