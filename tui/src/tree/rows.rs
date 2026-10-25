@@ -632,8 +632,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Position;
     use ratatui::style::{Color, Modifier};
 
+    use crate::buffer::copy_cells;
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
     use cpd_core::plan::Phase;
@@ -670,11 +672,7 @@ mod tests {
         terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
         let full = terminal.backend().buffer();
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        for y in 0..height {
-            for x in 0..width {
-                buf[(x, y)] = full[(x, y)].clone();
-            }
-        }
+        copy_cells(full, Rect::new(0, 0, width, height), &mut buf, Position::new(0, 0));
         buf
     }
 

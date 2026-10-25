@@ -14,7 +14,7 @@ use std::collections::HashSet;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::{Margin, Position, Rect},
     style::Modifier,
     text::{Line, Span},
     widgets::Widget,
@@ -23,6 +23,7 @@ use ratatui::{
 use cpd_core::plan::Phase;
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
@@ -43,12 +44,7 @@ impl Widget for ChartBody<'_> {
         if self.chart.pills.is_empty() {
             Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(area, buf);
         }
-        let src = &self.chart.buf;
-        for y in 0..src.area.height.min(area.height) {
-            for x in 0..src.area.width.min(area.width) {
-                buf[(area.x + x, area.y + y)] = src[(x, y)].clone();
-            }
-        }
+        copy_cells(&self.chart.buf, Rect::new(0, 0, area.width, area.height), buf, Position::new(area.x, area.y));
     }
 }
 
