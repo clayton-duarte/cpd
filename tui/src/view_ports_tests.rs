@@ -509,8 +509,8 @@ fn a_view_that_ended_well_does_not_wait() {
 #[test]
 fn a_pump_with_nothing_signalled_naps_to_its_deadline_on_the_clock_and_is_due() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
-    let signal = pump.wait_with(&*fakes.clock, Some(fakes.clock.now() + ms(500)));
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
+    let signal = pump.wait(Some(fakes.clock.now() + ms(500)));
     assert!(matches!(signal, Signal::Due));
     assert_eq!(fakes.clock.naps(), [ms(500)]);
 }
@@ -518,50 +518,50 @@ fn a_pump_with_nothing_signalled_naps_to_its_deadline_on_the_clock_and_is_due() 
 #[test]
 fn a_pump_naps_only_what_is_left_of_the_interval() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let until = fakes.clock.now() + ms(500);
     fakes.clock.advance(ms(200));
-    pump.wait_with(&*fakes.clock, Some(until));
+    pump.wait(Some(until));
     assert_eq!(fakes.clock.naps(), [ms(300)]);
 }
 
 #[test]
 fn a_pump_whose_deadline_has_passed_does_not_nap() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let until = fakes.clock.now() + ms(100);
     fakes.clock.advance(ms(150));
-    assert!(matches!(pump.wait_with(&*fakes.clock, Some(until)), Signal::Due));
+    assert!(matches!(pump.wait(Some(until)), Signal::Due));
     assert_eq!(fakes.clock.naps(), Vec::<Duration>::new());
 }
 
 #[test]
 fn a_signalled_pump_returns_its_signals_in_order_without_a_nap() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(vec![Signal::Commit, Signal::Read]);
+    let pump = Pump::scripted(fakes.ports.clock.clone(), vec![Signal::Commit, Signal::Read]);
     let until = Some(fakes.clock.now() + ms(500));
-    assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Commit));
-    assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Read));
+    assert!(matches!(pump.wait(until), Signal::Commit));
+    assert!(matches!(pump.wait(until), Signal::Read));
     assert_eq!(fakes.clock.naps(), Vec::<Duration>::new());
 }
 
 #[test]
 fn a_failed_input_reaches_the_loop_as_a_signal() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(vec![Signal::InputFailed(io::Error::other("gone"))]);
-    let Signal::InputFailed(e) = pump.wait_with(&*fakes.clock, None) else { panic!("the failure") };
+    let pump = Pump::scripted(fakes.ports.clock.clone(), vec![Signal::InputFailed(io::Error::other("gone"))]);
+    let Signal::InputFailed(e) = pump.wait(None) else { panic!("the failure") };
     assert_eq!(e.to_string(), "gone");
 }
 
 #[test]
 fn an_idle_pump_reads_once_per_safety_interval_of_virtual_time() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let mut schedule = Schedule::new(fakes.clock.now(), crate::pump::SAFETY);
     let mut reads = 0;
     for _ in 0..3 {
         let until = schedule.deadline(fakes.clock.now());
-        assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Due));
+        assert!(matches!(pump.wait(until), Signal::Due));
         if schedule.take(fakes.clock.now()).is_some() {
             reads += 1;
             schedule.done();

@@ -79,7 +79,7 @@ mod trace_tests;
 mod icons_tests;
 pub mod merge;
 pub mod pace;
-mod pump;
+pub mod pump;
 #[cfg(test)]
 mod pump_tests;
 #[cfg(test)]
@@ -92,7 +92,7 @@ mod pill_tests;
 mod updating_label;
 #[cfg(test)]
 mod pill_colours;
-mod plan;
+pub mod plan;
 pub use plan::draw_first_frame;
 pub use history::{draw_history, show_with as show_history_with};
 mod popup;
