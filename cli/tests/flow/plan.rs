@@ -759,10 +759,21 @@ fn render_shows_the_planned_opener_and_no_placeholder() {
     // A template PR: `pr add` lays out its opener stub beside the shape's stubs; its other Job is merged away.
     env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     env.cpd(&["job", "cancel", "pay-config", "--reason", "not needed", "--plan", "pay"]).ok();
-    // An older PR, one whose Plan holds no open Job: the template's opener is gone.
+    // An older PR, one whose Plan holds no open Job: it predates the template's opener stub, so its row is written
+    // directly (the store is append-only: a Job row is never deleted).
     let old = env.keyed_repo("old");
-    env.cpd(&["pr", "add", "old", "--repo", old.to_str().unwrap(), "--title", "Old change", "--shape", "docs", "--plan", "pay"]).ok();
-    store(&env).write("fixture", |tx| exec(tx, "DELETE FROM jobs WHERE plan = 'pay' AND key = 'open-old';")).unwrap();
+    store(&env)
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
+                     VALUES ('pay', 'old', '{}', 'old', 'main', 'Old change', 'docs', 'waiting', 'cpd/pay/old', cpd_txn(), 't');",
+                    old.display()
+                ),
+            )
+        })
+        .unwrap();
     env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
 
     let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
@@ -991,15 +1002,14 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 }
 
 /// A `draft` `open` Job of PR `pr` as engine E4 inserts it while a draft of the PR remains (hs-d573 B1): `appended`, no fingerprint.
-/// The template lays one out (`open-pay`), cancelled by `new_plan`: this replaces it with the draft E4 would insert.
+/// The template lays one out (`open-pay`), cancelled by `new_plan`: this adds the draft E4 would insert under the next free key.
 fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
     store(env)
         .write("fixture", |tx| {
             exec(
                 tx,
                 &format!(
-                    "DELETE FROM jobs WHERE plan = '{plan}' AND key = '{key}';
-                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, created_txn, created_at)
                      VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Open the pull request', 'S2', 'Open it.', 'Because.', '[\"{key}.txt\"]',
                              '[\"it opens\"]', '[]', 'draft', 1, 'open', {id}, 't');",
@@ -1025,7 +1035,7 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     assert_eq!(out["review"]["fingerprint"], fingerprint);
     let review = out["review"]["id"].as_str().unwrap().to_owned();
 
-    add_draft_open(&env, "pay", "open-pay");
+    add_draft_open(&env, "pay", "open-pay-2");
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"], fingerprint, "the open Job is not in the fingerprint");
     assert_eq!(show(&env, "pay")["review"]["current"], true);
 
@@ -1033,12 +1043,12 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     assert_eq!((&out["review"]["status"], &out["current"]), (&json!("approved"), &json!(true)));
     let mut queued: Vec<String> = out["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     queued.sort();
-    assert_eq!(queued, ["c", "open-pay"]);
+    assert_eq!(queued, ["c", "open-pay-2"]);
     let decided = events(&env, "plan-review").last().unwrap().clone();
     let mut listed: Vec<String> = decided["data"]["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     listed.sort();
-    assert_eq!(listed, ["c", "open-pay"]);
-    for key in ["c", "open-pay"] {
+    assert_eq!(listed, ["c", "open-pay-2"]);
+    for key in ["c", "open-pay-2"] {
         assert_eq!(job_status(&env, key), "queued", "{key}");
         assert_eq!(env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
     }
@@ -1053,7 +1063,7 @@ fn a_draft_open_job_is_no_job_under_review() {
     env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // The only draft is the open Job: nothing to review.
-    add_draft_open(&env, "pay", "open-pay");
+    add_draft_open(&env, "pay", "open-pay-2");
     refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 0);
 
@@ -1062,7 +1072,7 @@ fn a_draft_open_job_is_no_job_under_review() {
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
     let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
-    let row = text.lines().find(|l| l.starts_with("| `open-pay` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
+    let row = text.lines().find(|l| l.starts_with("| `open-pay-2` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
     assert!(!row.contains("**under review**"), "{row}");
     assert!(text.lines().any(|l| l.starts_with("| `c` |") && l.contains("**under review**")), "{text}");
 }

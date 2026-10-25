@@ -304,7 +304,7 @@ fn a_waiting_pr_with_no_jobs_shows_the_open_job_placeholder_in_no_fingerprint() 
     let (out, text) = fx.render();
     assert!(!text.contains("No Jobs yet."), "{text}");
     assert!(text.contains("\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: none\n\n### Jobs\n\n| Key | Title | Kind | Tier | Status | Needs | Touches |\n"), "{text}");
-    assert!(text.contains("| `open-web` | Open the pull request: web | open | S1 | — | every other Job of the PR | — |"), "{text}");
+    assert!(text.contains("| `open-web` | Open the pull request: web | open | H3 | — | every other Job of the PR | — |"), "{text}");
     assert!(text.contains("\n### `open-web`: Open the pull request: web\n"), "{text}");
     // `open_tier` is the config key; the placeholder is no row, so the fingerprint is that of a PR with no Job.
     fx.env.write_config("version = 1\nmachine = \"t\"\nopen_tier = \"S3\"\n");
