@@ -127,6 +127,8 @@ struct WtData {
     path: PathBuf,
     id: Option<String>,
     head: Head,
+    /// `Some(reason)` while locked (`worktree add --lock`); an empty reason is a lock without one.
+    locked: Option<String>,
     /// `None` until something is staged; then every entry, sorted by path then stage.
     index: Option<Vec<(String, Oid, u8)>>,
 }
@@ -281,7 +283,7 @@ impl Universe {
         let git_dir_of = |dir: &Path| if bare { dir.to_owned() } else { dir.join(".git") };
         std::fs::create_dir_all(git_dir_of(dir)).expect("the repo's directory can be made");
         let dir = dir.canonicalize().expect("the repo's directory exists");
-        let main = WtData { path: dir.clone(), id: None, head: Head::Branch("main".to_owned()), index: None };
+        let main = WtData { path: dir.clone(), id: None, head: Head::Branch("main".to_owned()), locked: None, index: None };
         self.repos.push(RepoData {
             git_dir: git_dir_of(&dir),
             bare,
@@ -361,7 +363,7 @@ impl Universe {
         let admin = data.git_dir.join("worktrees").join(&id);
         std::fs::create_dir_all(&admin).expect("the admin directory can be made");
         std::fs::write(path.join(".git"), format!("gitdir: {}\n", admin.display())).expect("the .git file can be written");
-        data.wts.push(WtData { path: path.clone(), id: Some(id.clone()), head, index: None });
+        data.wts.push(WtData { path: path.clone(), id: Some(id.clone()), head, locked: None, index: None });
         Worktree { path, id: Some(id) }
     }
     /// The git dir of a worktree: the common one for the main worktree, `<git dir>/worktrees/<id>` for a
@@ -373,6 +375,26 @@ impl Universe {
             None => data.git_dir.clone(),
             Some(id) => data.git_dir.join("worktrees").join(id),
         }
+    }
+
+    /// Locks the worktree at `wt` with `reason` (empty: no reason).
+    pub fn lock_worktree(&mut self, wt: &Path, reason: &str) {
+        let (r, w) = self.place(wt);
+        self.repos[r].wts[w].locked = Some(reason.to_owned());
+    }
+    /// `Some(reason)` while the worktree at `wt` is locked (empty: no reason given).
+    pub fn lock_reason(&self, wt: &Path) -> Option<String> {
+        let (r, w) = self.place(wt);
+        self.repos[r].wts[w].locked.clone()
+    }
+    /// Forgets the linked worktree at `wt` and deletes its admin directory; its directory and the branch
+    /// stay. Panics when `wt` is not a linked worktree path.
+    pub fn forget_worktree(&mut self, wt: &Path) {
+        let (r, w) = self.place(wt);
+        let data = &mut self.repos[r];
+        let id = data.wts[w].id.clone().expect("only a linked worktree is forgotten");
+        data.wts.remove(w);
+        let _ = std::fs::remove_dir_all(data.git_dir.join("worktrees").join(id));
     }
 
     // ---- refs, HEAD, reflogs ----
@@ -391,6 +413,22 @@ impl Universe {
         let data = self.repo_mut(repo);
         data.refs.remove(name);
         data.reflogs.remove(name);
+    }
+    /// Renames the branch `old` to `new` (short names), with its reflog, and moves the `HEAD` of every
+    /// worktree that has it checked out. Panics when `old` does not exist.
+    pub fn rename_branch(&mut self, repo: RepoId, old: &str, new: &str) {
+        let data = self.repo_mut(repo);
+        let (from, to) = (format!("refs/heads/{old}"), format!("refs/heads/{new}"));
+        let oid = data.refs.remove(&from).expect("the branch to rename exists");
+        data.refs.insert(to.clone(), oid);
+        if let Some(log) = data.reflogs.remove(&from) {
+            data.reflogs.insert(to, log);
+        }
+        for wt in &mut data.wts {
+            if wt.head == Head::Branch(old.to_owned()) {
+                wt.head = Head::Branch(new.to_owned());
+            }
+        }
     }
     /// The direct refs whose full name starts with `prefix`, sorted by name.
     pub fn refs(&self, repo: RepoId, prefix: &str) -> Vec<(String, Oid)> {

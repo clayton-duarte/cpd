@@ -6,11 +6,11 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::run::{Out, run};
-use crate::clock::Clock;
-use crate::host::runner::Runner;
+use super::run::{Out, run_with};
 use super::{TAIL_LINES, tail};
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
+use crate::host::runner::{Runner, SystemRunner};
 
 /// How many rounds rule S runs before it gives up (contract §7.4).
 pub const SYNC_ROUNDS: u32 = 20;
@@ -46,29 +46,29 @@ enum Round {
 /// `index.lock` was absent and the index file unchanged around it, so that a
 /// concurrent rule S's half-written tree is never taken for local changes.
 pub fn sync_lead(lead: &Path, branch: &str) -> Result<Synced, CpdError> {
-    let index = git_path(lead, "index")?;
+    sync_lead_with(&SystemRunner, &SystemClock, lead, branch)
+}
+
+/// [`sync_lead`] on `runner`, napping on `clock` (a test passes a `FakeRunner` and a `ManualClock`).
+pub fn sync_lead_with(runner: &dyn Runner, clock: &dyn Clock, lead: &Path, branch: &str) -> Result<Synced, CpdError> {
+    let index = git_path(runner, lead, "index")?;
     for _ in 0..SYNC_ROUNDS {
-        match round(lead, branch, &index)? {
+        match round(runner, lead, branch, &index)? {
             Round::Done => return Ok(Synced::Done),
             Round::Moved => {}
-            Round::Busy => pause(),
+            Round::Busy => pause(clock),
         }
     }
     Ok(Synced::Busy)
 }
 
-/// [`sync_lead`] on `runner`, napping on `clock` (a test passes a `FakeRunner` and a `ManualClock`).
-/// Stub: the seam is not made yet.
-pub fn sync_lead_with(_runner: &dyn Runner, _clock: &dyn Clock, _lead: &Path, _branch: &str) -> Result<Synced, CpdError> {
-    todo!("sync_lead_with")
-}
-
-fn round(lead: &Path, branch: &str, index: &Path) -> Result<Round, CpdError> {
+fn round(runner: &dyn Runner, lead: &Path, branch: &str, index: &Path) -> Result<Round, CpdError> {
+    let run = |lead: &Path, args: &[&str]| run_with(runner, lead, args);
     let before = Probe::read(index);
     if before.locked {
         return Ok(Round::Busy);
     }
-    let Some(head) = checked(lead, &["rev-parse", "--verify", "HEAD"], status_fix(lead))? else { return Ok(Round::Busy) };
+    let Some(head) = checked(runner, lead, &["rev-parse", "--verify", "HEAD"], status_fix(lead))? else { return Ok(Round::Busy) };
     let head = head.trim().to_owned();
 
     // `--no-optional-locks`: the check writes no refreshed index, so it neither
@@ -85,9 +85,9 @@ fn round(lead: &Path, branch: &str, index: &Path) -> Result<Round, CpdError> {
         _ => return Err(stale(lead, &diff.stderr, local_changes_fix(lead))),
     }
 
-    let Some(tree) = checked(lead, &["write-tree"], status_fix(lead))? else { return Ok(Round::Busy) };
+    let Some(tree) = checked(runner, lead, &["write-tree"], status_fix(lead))? else { return Ok(Round::Busy) };
     let tree = tree.trim().to_owned();
-    let Some(head_tree) = checked(lead, &["rev-parse", "--verify", &format!("{head}^{{tree}}")], status_fix(lead))? else {
+    let Some(head_tree) = checked(runner, lead, &["rev-parse", "--verify", &format!("{head}^{{tree}}")], status_fix(lead))? else {
         return Ok(Round::Busy);
     };
     if tree == head_tree.trim() {
@@ -100,14 +100,14 @@ fn round(lead: &Path, branch: &str, index: &Path) -> Result<Round, CpdError> {
     }
 
     let fix = format!("Move away the files in the way, then run: git -C {} read-tree -m -u {tree} {head}", lead.display());
-    let Some(_) = checked(lead, &["read-tree", "-m", "-u", &tree, &head], fix)? else { return Ok(Round::Busy) };
+    let Some(_) = checked(runner, lead, &["read-tree", "-m", "-u", &tree, &head], fix)? else { return Ok(Round::Busy) };
     Ok(Round::Moved)
 }
 
 /// `git -C <lead> <args>`: `Some(stdout)` on exit 0, `None` when it failed on a
 /// held `index.lock`, else `lead_worktree_stale` with git's stderr and `fix`.
-fn checked(lead: &Path, args: &[&str], fix: String) -> Result<Option<String>, CpdError> {
-    let out: Out = run(lead, args).map_err(|e| from_error(lead, &e))?;
+fn checked(runner: &dyn Runner, lead: &Path, args: &[&str], fix: String) -> Result<Option<String>, CpdError> {
+    let out: Out = run_with(runner, lead, args).map_err(|e| from_error(lead, &e))?;
     if out.code == 0 {
         return Ok(Some(out.stdout));
     }
@@ -119,8 +119,8 @@ fn checked(lead: &Path, args: &[&str], fix: String) -> Result<Option<String>, Cp
 
 /// The absolute path of `name` in the worktree's git dir (`index` lives in
 /// `.git/worktrees/<id>/` for a linked worktree).
-fn git_path(lead: &Path, name: &str) -> Result<PathBuf, CpdError> {
-    let out = run(lead, &["rev-parse", "--path-format=absolute", "--git-path", name]).map_err(|e| from_error(lead, &e))?;
+fn git_path(runner: &dyn Runner, lead: &Path, name: &str) -> Result<PathBuf, CpdError> {
+    let out = run_with(runner, lead, &["rev-parse", "--path-format=absolute", "--git-path", name]).map_err(|e| from_error(lead, &e))?;
     if out.code != 0 {
         return Err(stale(lead, &out.stderr, status_fix(lead)));
     }
@@ -145,9 +145,9 @@ impl Probe {
 }
 
 /// A random 100–500 ms (contract §7.4 step 6).
-fn pause() {
+fn pause(clock: &dyn Clock) {
     let jitter = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() % 401);
-    std::thread::sleep(Duration::from_millis(100 + u64::from(jitter)));
+    clock.sleep(Duration::from_millis(100 + u64::from(jitter)));
 }
 
 fn local_changes_fix(lead: &Path) -> String {

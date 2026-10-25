@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use super::repo::{file_blob, work_files};
 use super::rev::{self, RevError, Selection, dwim_ref};
 use super::universe::{Head, Oid, RepoId, Universe, is_oid, norm_key};
+
+const ZEROS: &str = "0000000000000000000000000000000000000000";
 use crate::host::runner::{Call, Handler, Reply};
 
 pub struct GitRoute {
@@ -779,24 +781,387 @@ fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
     Ok(Out::ok(shown.iter().map(|(n, o)| format!("{o}\t{n}\n")).collect::<String>()))
 }
 
-// ---- update-ref, branch, worktree, write-tree, read-tree (stubs: PR port-git's Job git-worktree) -------
+// ---- update-ref, branch, worktree, write-tree, read-tree -------------------------------------------
 
-fn update_ref(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("update-ref")
+fn update_ref(c: &mut Ctx, args: &[String]) -> Run {
+    let mut message = "";
+    let mut pos: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "-m" {
+            message = it.next().ok_or("update-ref -m")?;
+        } else if arg.starts_with('-') {
+            return Err(format!("update-ref {arg}"));
+        } else {
+            pos.push(arg);
+        }
+    }
+    let (name, new, old) = match pos[..] {
+        [name, new] => (name, new, None),
+        [name, new, old] => (name, new, Some(old)),
+        _ => return Err("update-ref (arguments)".to_owned()),
+    };
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    if !name.starts_with("refs/") || new == ZEROS {
+        return Err(format!("update-ref {name} {new}"));
+    }
+    let refused = |why: String| Ok(Out::fail(128, format!("fatal: update_ref failed for ref '{name}': {why}\n")));
+    let Ok(new_oid) = c.parse(new) else {
+        return refused(format!("cannot update ref '{name}': trying to write ref '{name}' with nonexistent object {new}"));
+    };
+    let current = c.u.ref_oid(repo, name);
+    if let Some(old) = old {
+        let lock = |why: String| refused(format!("cannot lock ref '{name}': {why}"));
+        if old == ZEROS {
+            if current.is_some() {
+                return lock("reference already exists".to_owned());
+            }
+        } else {
+            let Ok(expected) = c.parse(old) else { return Ok(Out::fail(128, format!("fatal: {old}: not a valid SHA1\n"))) };
+            match &current {
+                None => return lock(format!("unable to resolve reference '{name}'")),
+                Some(at) if *at != expected => return lock(format!("is at {at} but expected {expected}")),
+                Some(_) => {}
+            }
+        }
+    }
+    c.u.set_ref(repo, name, &new_oid, message);
+    Ok(Out::ok(""))
 }
 
-fn branch(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("branch")
+fn branch(c: &mut Ctx, args: &[String]) -> Run {
+    let (mut rename, mut delete, mut force) = (false, false, false);
+    let mut pos: Vec<&str> = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "-m" => rename = true,
+            "-d" => delete = true,
+            "-D" => (delete, force) = (true, true),
+            flag if flag.starts_with('-') => return Err(format!("branch {flag}")),
+            name => pos.push(name),
+        }
+    }
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    match (rename, delete, &pos[..]) {
+        (true, false, [old, new]) => {
+            if c.u.ref_oid(repo, &format!("refs/heads/{old}")).is_none() {
+                return Ok(Out::fail(128, format!("fatal: no branch named '{old}'\n")));
+            }
+            if c.u.ref_oid(repo, &format!("refs/heads/{new}")).is_some() {
+                return Ok(Out::fail(128, format!("fatal: a branch named '{new}' already exists\n")));
+            }
+            c.u.rename_branch(repo, old, new);
+            Ok(Out::ok(""))
+        }
+        (false, true, names) if !names.is_empty() => {
+            let (mut stdout, mut stderr, mut code) = (String::new(), String::new(), 0);
+            for name in names {
+                match delete_branch(c, repo, name, force) {
+                    Ok(done) => stdout.push_str(&done),
+                    Err(why) => (stderr, code) = (stderr + &why, 1),
+                }
+            }
+            Ok(Out { code, stdout, stderr })
+        }
+        _ => Err("branch (arguments)".to_owned()),
+    }
 }
 
-fn worktree(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("worktree")
+/// `branch -d` / `-D` of one branch: what git prints, or its `error:` line.
+fn delete_branch(c: &mut Ctx, repo: RepoId, name: &str, force: bool) -> Result<String, String> {
+    let full = format!("refs/heads/{name}");
+    let Some(tip) = c.u.ref_oid(repo, &full) else { return Err(format!("error: branch '{name}' not found.\n")) };
+    let wts = c.u.worktrees(repo);
+    if let Some(wt) = wts.iter().find(|w| c.u.head(&w.path) == Head::Branch(name.to_owned())) {
+        return Err(format!("error: Cannot delete branch '{name}' checked out at '{}'\n", wt.path.display()));
+    }
+    if !force {
+        let head = c.parse("HEAD").ok();
+        if !head.is_some_and(|h| c.u.is_ancestor(repo, &tip, &h).unwrap_or(false)) {
+            return Err(format!(
+                "error: the branch '{name}' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D {name}'.\n"
+            ));
+        }
+    }
+    c.u.delete_ref(repo, &full);
+    Ok(format!("Deleted branch {name} (was {}).\n", &tip.as_str()[..7]))
 }
 
-fn write_tree(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("write-tree")
+fn worktree(c: &mut Ctx, args: &[String]) -> Run {
+    let Some((sub, rest)) = args.split_first() else { return Err("worktree".to_owned()) };
+    match sub.as_str() {
+        "add" => worktree_add(c, rest),
+        "list" => worktree_list(c, rest),
+        "remove" => worktree_remove(c, rest),
+        "prune" => {
+            scan("worktree prune", rest, &[], &[])?;
+            worktree_prune(c)
+        }
+        other => Err(format!("worktree {other}")),
+    }
 }
 
-fn read_tree(_c: &mut Ctx, _args: &[String]) -> Run {
-    todo!("read-tree")
+/// `path` as the call gave it, made absolute against the call's directory.
+fn given(c: &Ctx, path: &str) -> PathBuf {
+    c.cwd.join(path)
+}
+
+fn worktree_add(c: &mut Ctx, args: &[String]) -> Run {
+    let (mut branch, mut reason): (Option<&str>, Option<&str>) = (None, None);
+    let (mut detach, mut lock) = (false, false);
+    let mut pos: Vec<&str> = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--no-track" => {}
+            "--detach" => detach = true,
+            "--lock" => lock = true,
+            "-b" => branch = Some(it.next().ok_or("worktree add -b")?),
+            "--reason" => reason = Some(it.next().ok_or("worktree add --reason")?),
+            flag if flag.starts_with('-') => return Err(format!("worktree add {flag}")),
+            other => pos.push(other),
+        }
+    }
+    if branch.is_some() == detach {
+        return Err("worktree add (without exactly one of -b and --detach)".to_owned());
+    }
+    let (path, start) = match pos[..] {
+        [path] => (path, "HEAD"),
+        [path, start] => (path, start),
+        _ => return Err("worktree add (arguments)".to_owned()),
+    };
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    let dir = given(c, path);
+    if std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some()) || dir.is_file() {
+        return Ok(Out::fail(128, format!("fatal: '{}' already exists\n", dir.display())));
+    }
+    if let Some(name) = branch {
+        if c.u.ref_oid(repo, &format!("refs/heads/{name}")).is_some() {
+            return Ok(Out::fail(128, format!("fatal: a branch named '{name}' already exists\n")));
+        }
+    }
+    let Ok(commit) = c.parse(&format!("{start}^{{commit}}")) else {
+        return Ok(Out::fail(128, format!("fatal: invalid reference: {start}\n")));
+    };
+    let data = c.u.commit_data(&commit).expect("a parsed commit has data");
+    let entries = c.u.tree_entries(&data.tree).unwrap_or_default();
+    let head = match branch {
+        Some(name) => {
+            c.u.set_ref(repo, &format!("refs/heads/{name}"), &commit, &format!("branch: Created from {start}"));
+            Head::Branch(name.to_owned())
+        }
+        None => Head::Detached(commit.clone()),
+    };
+    let wt = c.u.add_worktree(repo, &dir, head);
+    write_files(c.u, &wt.path, &entries);
+    c.u.set_index(&wt.path, entries.into_iter().map(|(p, o)| (p, o, 0)).collect());
+    if lock {
+        c.u.lock_worktree(&wt.path, reason.unwrap_or(""));
+    }
+    let what = match branch {
+        Some(name) => format!("new branch '{name}'"),
+        None => format!("detached HEAD {}", &commit.as_str()[..7]),
+    };
+    let first = data.message.lines().next().unwrap_or("");
+    Ok(Out { code: 0, stdout: String::new(), stderr: format!("Preparing worktree ({what})\nHEAD is now at {} {first}\n", &commit.as_str()[..7]) })
+}
+
+/// Writes the blobs of `entries` as files under `root` (parents made).
+fn write_files(u: &Universe, root: &Path, entries: &[(String, Oid)]) {
+    for (path, blob) in entries {
+        write_blob(u, root, path, blob);
+    }
+}
+
+fn write_blob(u: &Universe, root: &Path, path: &str, blob: &Oid) {
+    let file = root.join(path);
+    std::fs::create_dir_all(file.parent().expect("a file has a parent")).expect("the parents can be made");
+    std::fs::write(file, u.blob_bytes(blob).unwrap_or_default()).expect("the file can be written");
+}
+
+fn worktree_list(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("worktree list", args, &["--porcelain"], &[])?;
+    if !flags(&toks).contains(&"--porcelain") || !positionals(&toks).is_empty() {
+        return Err("worktree list (arguments)".to_owned());
+    }
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    if c.u.is_bare(repo) {
+        return Ok(Out::ok(format!("worktree {}\nbare\n\n", c.u.git_dir(repo).display())));
+    }
+    let mut out = String::new();
+    for wt in c.u.worktrees(repo) {
+        let head = c.u.head(&wt.path);
+        let oid = match &head {
+            Head::Branch(b) => c.u.ref_oid(repo, &format!("refs/heads/{b}")),
+            Head::Detached(oid) => Some(oid.clone()),
+        };
+        out.push_str(&format!("worktree {}\nHEAD {}\n", wt.path.display(), oid.map_or_else(|| ZEROS.to_owned(), |o| o.to_string())));
+        match head {
+            Head::Branch(b) => out.push_str(&format!("branch refs/heads/{b}\n")),
+            Head::Detached(_) => out.push_str("detached\n"),
+        }
+        match c.u.lock_reason(&wt.path) {
+            Some(reason) if reason.is_empty() => out.push_str("locked\n"),
+            Some(reason) => out.push_str(&format!("locked {reason}\n")),
+            None => {}
+        }
+        out.push('\n');
+    }
+    Ok(Out::ok(out))
+}
+
+fn worktree_remove(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("worktree remove", args, &["--force", "-f"], &[])?;
+    let force = flags(&toks).len();
+    let [path] = positionals(&toks)[..] else { return Err("worktree remove (arguments)".to_owned()) };
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    let dir = given(c, path);
+    let canonical = dir.canonicalize().ok();
+    let found = c.u.worktrees(repo).into_iter().find(|w| w.path == dir || Some(&w.path) == canonical.as_ref());
+    let Some(wt) = found else { return Ok(Out::fail(128, format!("fatal: '{path}' is not a working tree\n"))) };
+    if wt.id.is_none() {
+        return Ok(Out::fail(128, format!("fatal: '{path}' is a main working tree\n")));
+    }
+    if let Some(reason) = c.u.lock_reason(&wt.path).filter(|_| force < 2) {
+        let why = if reason.is_empty() { ";".to_owned() } else { format!(", lock reason: {reason}") };
+        return Ok(Out::fail(128, format!("fatal: cannot remove a locked working tree{why}\nuse 'remove -f -f' to override or unlock first\n")));
+    }
+    if force == 0 {
+        let mut inside = Ctx { u: &mut *c.u, cwd: wt.path.clone(), extra: Vec::new() };
+        let dirty = status(&mut inside, &["--porcelain".to_owned()])?;
+        if !dirty.stdout.is_empty() {
+            return Ok(Out::fail(128, format!("fatal: '{path}' contains modified or untracked files, use --force to delete it\n")));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&wt.path);
+    c.u.forget_worktree(&wt.path);
+    Ok(Out::ok(""))
+}
+
+/// Forgets the unlocked linked worktrees whose directory is gone.
+fn worktree_prune(c: &mut Ctx) -> Run {
+    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+    for wt in c.u.worktrees(repo) {
+        if wt.id.is_some() && !wt.path.exists() && c.u.lock_reason(&wt.path).is_none() {
+            c.u.forget_worktree(&wt.path);
+        }
+    }
+    Ok(Out::ok(""))
+}
+
+/// The refusal of a call that needs the index while `index.lock` exists.
+fn index_lock(u: &Universe, wt: &Path) -> Option<Out> {
+    let mut lock = u.index_path(wt).into_os_string();
+    lock.push(".lock");
+    Path::new(&lock).exists().then(|| {
+        Out::fail(
+            128,
+            format!(
+                "fatal: Unable to create '{}': File exists.\n\nAnother git process seems to be running in this repository, e.g.\nan editor opened by 'git commit'. Please make sure all processes\nare terminated then try again. If it still fails, a git process\nmay have crashed in this repository earlier:\nremove the file manually to continue.\n",
+                Path::new(&lock).display()
+            ),
+        )
+    })
+}
+
+fn write_tree(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("write-tree", args, &[], &[])?;
+    if !positionals(&toks).is_empty() {
+        return Err("write-tree (arguments)".to_owned());
+    }
+    let wt = match c.worktree() {
+        Ok(wt) => wt,
+        Err(out) => return Ok(out),
+    };
+    if let Some(busy) = index_lock(c.u, &wt) {
+        return Ok(busy);
+    }
+    let repo = c.repo().expect("a worktree has a repo");
+    let index = c.u.effective_index(&wt);
+    let conflicts = unmerged(&index);
+    if !conflicts.is_empty() {
+        let mut stderr = String::new();
+        for (path, oid, _) in index.iter().filter(|(_, _, s)| *s > 0) {
+            stderr.push_str(&format!("error: {path}: unmerged ({oid})\n"));
+        }
+        stderr.push_str("fatal: git-write-tree: error building trees\n");
+        return Ok(Out::fail(128, stderr));
+    }
+    let entries: Vec<(&str, &Oid)> = index.iter().map(|(p, o, _)| (p.as_str(), o)).collect();
+    Ok(Out::ok(format!("{}\n", c.u.tree(repo, &entries))))
+}
+
+/// `read-tree -m -u <from> <to>`: the two-way merge of git's `read-tree` documentation, then the index and
+/// the working tree; nothing is touched when a path cannot move.
+fn read_tree(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("read-tree", args, &["-m", "-u"], &[])?;
+    let flags = flags(&toks);
+    let ([from, to], true, true) = (&positionals(&toks)[..], flags.contains(&"-m"), flags.contains(&"-u")) else {
+        return Err("read-tree (arguments)".to_owned());
+    };
+    let wt = match c.worktree() {
+        Ok(wt) => wt,
+        Err(out) => return Ok(out),
+    };
+    if let Some(busy) = index_lock(c.u, &wt) {
+        return Ok(busy);
+    }
+    let mut trees = Vec::new();
+    for spec in [from, to] {
+        match c.tree_of(spec) {
+            Ok(tree) => trees.push(tree),
+            Err(_) => return Ok(Out::fail(128, format!("fatal: failed to unpack tree object {spec}\n"))),
+        }
+    }
+    let index = c.u.effective_index(&wt);
+    if index.iter().any(|(_, _, stage)| *stage > 0) {
+        return Ok(Out::fail(128, "error: you need to resolve your current index first\n"));
+    }
+    let current: BTreeMap<String, Oid> = index.into_iter().map(|(p, o, _)| (p, o)).collect();
+    let files = work_files(&wt);
+    let (head, merge) = (&trees[0], &trees[1]);
+    let paths: BTreeSet<&String> = head.keys().chain(merge.keys()).chain(current.keys()).collect();
+    let mut result: BTreeMap<String, Oid> = BTreeMap::new();
+    let mut moves: Vec<(&String, Option<&Oid>)> = Vec::new();
+    for path in paths {
+        let (h, m, i) = (head.get(path), merge.get(path), current.get(path));
+        let next = if i == h {
+            m
+        } else if h == m || i == m {
+            i
+        } else {
+            return Ok(Out::fail(128, format!("error: Entry '{path}' would be overwritten by merge. Cannot merge.\n")));
+        };
+        if next != i {
+            let on_disk = files.get(path.as_str()).map(|f| file_blob(f));
+            match (i, on_disk) {
+                (Some(i), Some(disk)) if disk.as_ref() != Some(i) => {
+                    return Ok(Out::fail(128, format!("error: Entry '{path}' not uptodate. Cannot merge.\n")));
+                }
+                (None, Some(_)) => {
+                    return Ok(Out::fail(128, format!("error: Untracked working tree file '{path}' would be overwritten by merge.\n")));
+                }
+                _ => {}
+            }
+            moves.push((path, next));
+        }
+        if let Some(next) = next {
+            result.insert(path.clone(), next.clone());
+        }
+    }
+    for (path, next) in moves {
+        match next {
+            Some(blob) => write_blob(c.u, &wt, path, blob),
+            None => remove_file(&wt, path),
+        }
+    }
+    c.u.set_index(&wt, result.into_iter().map(|(p, o)| (p, o, 0)).collect());
+    Ok(Out::ok(""))
+}
+
+/// Deletes the file and the directories it leaves empty, up to `root`.
+fn remove_file(root: &Path, path: &str) {
+    let mut file = root.join(path);
+    let _ = std::fs::remove_file(&file);
+    while file.pop() && file != root && std::fs::remove_dir(&file).is_ok() {}
 }
