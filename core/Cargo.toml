@@ -11,12 +11,14 @@ path = "src/lib.rs"
 
 [features]
 # The in-process fakes of tmux and git (`core/src/fakes`), for the tests of the crates above core.
-fakes = []
+fakes = ["dep:parking_lot"]
 
 [dependencies]
 clap.workspace = true
 minijinja.workspace = true
 nix.workspace = true
+# Only the fakes (feature `fakes`): a lock the same thread takes again, for a `run-shell` child that calls the fake tmux.
+parking_lot = { workspace = true, optional = true }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -3,7 +3,7 @@
 //! display-menu attach list-clients`. Rendering is not modelled (docs/implementing.md, "The fake tmux").
 
 use super::target::{resolve, Kind, Loc};
-use super::{hooks, ids, s, say, store_env, Cx, Opts, R};
+use super::{client_vars, hooks, ids, s, say, store_env, Cx, Opts, R};
 use rusqlite::Connection;
 
 fn fail(e: rusqlite::Error) -> String {
@@ -194,14 +194,13 @@ pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
 
 pub fn list_clients(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("list-clients", args, "F:f:t:")?;
-    let rows: Vec<(String, i64)> = {
-        let mut st = cx.db.prepare("SELECT name, session FROM clients ORDER BY seq").expect("prepare");
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("query").map(|r| r.expect("row")).collect()
-    };
-    for (name, session) in rows {
-        cx.vars.push(("client_name".into(), name));
+    let sessions = ids(cx.db, "SELECT session FROM clients ORDER BY seq", []);
+    let clients = client_vars(cx.db, "SELECT name, width, height, seq FROM clients ORDER BY seq", []);
+    for (session, vars) in sessions.into_iter().zip(clients) {
+        let kept = cx.vars.len();
+        cx.vars.extend(vars);
         say(cx, o.val('F').unwrap_or("#{client_name}"), Loc { session, window: None, pane: None });
-        cx.vars.pop();
+        cx.vars.truncate(kept);
     }
     Ok(())
 }

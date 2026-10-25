@@ -324,6 +324,7 @@ dependencies = [
  "libproc",
  "minijinja",
  "nix 0.31.3",
+ "parking_lot",
  "ratatui",
  "rusqlite",
  "serde",
