@@ -2,7 +2,8 @@
 //! input and a `TestBackend` and no terminal (docs/implementing.md, "Ports, Spawn and run_with"). STUBS: every body is
 //! `todo!()` or does nothing, until the implementation Job writes it; the red tests are `view_ports_tests`.
 //!
-//! The old names stay and call the `_with` forms with the real ports ([`Ports::real`], [`StdInput`], [`StdTty`]).
+//! The old names stay and call the `_with` forms with the real ports: [`Ports::real`], and the real [`Input`] (crossterm's
+//! `poll` and `read`) and [`Tty`] (stdin and stdout, `enable_raw_mode`) the implementation Job adds.
 
 use std::io::{self, Write};
 use std::time::Duration;
