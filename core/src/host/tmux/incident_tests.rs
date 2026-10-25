@@ -1,21 +1,23 @@
-//! Red tests of the incident status pill (contract §6.1/§6.1.1, hs-d634): one
-//! `Incident Mode` pill, guarded by `@cpd_incident`, red (colour 9) and italic,
-//! left of the version pill, whose width the fill and the long-form test subtract.
+//! Red tests of the incident status pill (contract §6.1/§6.1.1, hs-d634, hs-d640): one
+//! `Incident Mode: <elapsed>` pill, guarded by `@cpd_incident`, red (colour 9) and italic,
+//! first in the right group before the workers pill, whose width the fill and the long-form test
+//! subtract.
 
 use super::STATUS_FORMAT;
 
-/// The width `@cpd_incident` adds to the right group while set: one join, two caps
-/// and `Incident Mode` = 16 cells (contract §6.1, the right group).
-const INCIDENT_WIDTH: &str = "#{?@cpd_incident,16,0}";
+/// The width `@cpd_incident` adds to the right group while set: one join, two caps and
+/// ` Incident Mode: ` plus the value's cells (contract §6.1, the right group).
+const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
 
-/// The incident pill is guarded by `@cpd_incident`, reads `Incident Mode`, is
-/// colour 9 and its text is reversed and italic, and it stands left of the
-/// conditional version pill.
+/// The incident pill is guarded by `@cpd_incident`, reads ` Incident Mode: ` followed by the
+/// option's value, is colour 9 and its text is reversed and italic, and it stands first in the
+/// right group, before the workers pill.
 #[test]
-fn the_incident_pill_is_red_italic_and_left_of_the_version_pill() {
+fn the_incident_pill_is_red_italic_and_first_in_the_right_group() {
     let f: &str = &STATUS_FORMAT;
     assert_eq!(f.matches("Incident Mode").count(), 1, "one incident pill: {f}");
-    let label = f.find("Incident Mode").expect("the incident pill's label");
+    let label = f.find(" Incident Mode: ").expect("the incident pill's label");
+    assert!(f[label..].starts_with(" Incident Mode: #{@cpd_incident}"), "the label reads the option: {f}");
     // The branch of the pill: the plain `#{?@cpd_incident` conditional that opens it.
     let guard = f[..label].rfind("#{?@cpd_incident").expect("the pill is guarded by @cpd_incident");
     assert!(f[guard..label].contains("#{?@cpd_incident"), "the label sits in the @cpd_incident branch: {}", &f[guard..label]);
@@ -25,9 +27,9 @@ fn the_incident_pill_is_red_italic_and_left_of_the_version_pill() {
     assert!(pill.contains("colour9"), "the block and caps are colour 9: {pill}");
     assert!(pill.replace("noreverse", "").contains("reverse"), "the text is reversed: {pill}");
     assert!(pill.replace("noitalics", "").contains("italics"), "the text is italic: {pill}");
-    // The conditional version pill's text: the incident pill stands to its left.
-    let version = f.find("#[reverse]#{@cpd_version}#[noreverse]").expect("the version pill");
-    assert!(label < version, "the incident pill is left of the version pill: {f}");
+    // The incident pill is first in the right group, before the workers pill.
+    let workers = f.find("#{@cpd_workers}").expect("the workers pill");
+    assert!(guard < workers, "the incident branch comes before the workers pill: {f}");
 }
 
 /// The fill count and `long_fits!()` subtract the incident pill's width while

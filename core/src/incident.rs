@@ -137,3 +137,23 @@ pub fn status(store: &mut Store) -> Result<Output, CpdError> {
     let incident = store.read(row)?;
     Ok(Output::success(json!({"on": incident.is_some(), "incident": incident})))
 }
+
+/// The coarse human duration from the incident row's `started_at` to `now` (hs-d640, contract
+/// §6.1): under 60 s `{n}s`; under 1 h `{n}m`; under 1 d `{n}h {n}m`; otherwise `{n}d {n}h`;
+/// values truncated, a `started_at` in the future reads `0s`. `started_at` is RFC 3339, the format
+/// `clock::timestamp` writes; anything else is a loud `StoreFailed`.
+pub fn elapsed(started_at: &str, now: time::OffsetDateTime) -> Result<String, CpdError> {
+    let started = time::OffsetDateTime::parse(started_at, &time::format_description::well_known::Rfc3339).map_err(|e| {
+        CpdError::new(ErrorCode::StoreFailed, format!("The incident holds a started_at that is not RFC 3339: {started_at:?} ({e}).")).with("started_at", started_at)
+    })?;
+    let seconds = (now - started).whole_seconds().max(0);
+    Ok(if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h {}m", seconds / 3_600, (seconds % 3_600) / 60)
+    } else {
+        format!("{}d {}h", seconds / 86_400, (seconds % 86_400) / 3_600)
+    })
+}

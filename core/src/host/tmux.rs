@@ -216,8 +216,9 @@ macro_rules! long_fits {
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
 macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
-// The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and `Incident Mode` (13 cells).
-macro_rules! incident_width { () => { "#{?@cpd_incident,16,0}" }; }
+// The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and the 15-cell label
+// `Incident Mode: ` plus the value.
+macro_rules! incident_width { () => { "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}" }; }
 // The fill's first column, F0: the left group's 12 cells and the preview pill.
 macro_rules! fill_start { () => { concat!("#{e|+:12,", preview_width!(), "}") }; }
 // The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill, the incident
@@ -284,10 +285,10 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
-/// While `@cpd_incident` is set (incident mode is on, hs-d634), the incident pill, the literal
-/// ` Incident Mode` (a leading space and the label) in colour 9 with reverse video and the `italics`
-/// attribute, stands between the workers pill and the version pill, joined by a single `\u{2500}`; the
-/// fill and the long-form test are shorter by its width (a join, two caps and the 13-cell label, 16
+/// While `@cpd_incident` is set (incident mode is on, hs-d634, hs-d640), the incident pill, the literal
+/// ` Incident Mode: ` followed by the elapsed duration in colour 9 with reverse video and the `italics`
+/// attribute, opens the right group before the workers pill, joined to it by a single `\u{2500}`; the
+/// fill and the long-form test are shorter by its width (a join, two caps and the 15-cell label, 18
 /// cells) and it has no click range.
 ///
 /// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
@@ -300,9 +301,9 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
     // The incident pill is red on a red block even though it is not clickable: the contract (§6.1.1) gives it the
     // `Meaning::Failed` bright pair (index 9).
-    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", " Incident Mode"));
+    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", " Incident Mode: #{@cpd_incident}"));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?@cpd_incident,#[fg=colour8]\u{2500}{incident},}}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!()),
         legend = button("legend", legend_glyph!()),
