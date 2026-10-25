@@ -83,7 +83,7 @@ struct Next {
 /// changed meanwhile), `no_slot`. When the spawn fails the Attempt is ended
 /// `failed` / `crashed` and the result is `spawn_failed`.
 pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
-    start_with(&Ports::real(), store, ctx, plan, key)
+    start_with(&Ports::current(), store, ctx, plan, key)
 }
 
 /// [`start`] on `ports`: the driver is started through `ports.spawn` (`Spawn::spawn`, which a `FakeSpawn` only records),

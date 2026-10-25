@@ -116,8 +116,9 @@ pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError>
     run_with(&Ports::real(), argv)
 }
 
-/// [`run`] on `ports`. Only `pr view` reads `ports` yet: the other areas open their `Env` with `Env::open`, the real
-/// ports, until the Jobs that convert them to `Env::open_with` land.
+/// [`run`] on `ports`: the whole parse-and-dispatch runs inside [`Ports::scope`], so every area, also those that hand
+/// no ports on, reaches them through `Ports::current()` (docs/implementing.md, "Ports, Spawn and run_with"). A thread
+/// a command spawns captures `Ports::current()` and scopes it itself.
 pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
     run_on(ports, argv, cpd_tui::on_a_terminal())
 }
@@ -125,6 +126,10 @@ pub fn run_with(ports: &Ports, argv: impl IntoIterator<Item = OsString>) -> Resu
 /// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
 /// without a command open the cockpit; otherwise it is the usage error (A1).
 fn run_on(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
+    Ports::scope(ports, || run_scoped(ports, argv, terminal))
+}
+
+fn run_scoped(ports: &Ports, argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {

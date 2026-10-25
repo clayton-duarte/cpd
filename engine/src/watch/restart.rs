@@ -39,8 +39,9 @@ use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::{installed_version, older_version};
 use cpd_core::host::deadline::Failed as RunFailed;
-use cpd_core::host::runner::{Call, NO_DEADLINE, Runner, SystemRunner};
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner};
 use cpd_core::host::{Tmux, exe};
+use cpd_core::ports::Ports;
 use cpd_core::session;
 use cpd_core::store::Store;
 
@@ -267,7 +268,7 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
 
 /// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
 fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
-    rebuild_cockpit_with(&SystemRunner, &exe::started_as()?, home)
+    rebuild_cockpit_with(&*Ports::current().runner, &exe::started_as()?, home)
 }
 
 /// [`rebuild_cockpit`] on `runner`, with `exe` the recorded path of cpd's own executable.

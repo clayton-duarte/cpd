@@ -77,7 +77,7 @@ impl Slots {
     ///   then, every `still_waiting`, `<prefix>: still waiting for a slot (<s> s)`;
     /// - when taken, `<prefix>: slot <i> taken after <s> s` (also at once: `after 0 s`, with `waited` false).
     pub fn take(&self, prefix: &str, report: &mut dyn FnMut(&str, bool) -> Result<(), CpdError>) -> Result<Slot, CpdError> {
-        self.take_with(&Ports::real(), prefix, report)
+        self.take_with(&Ports::current(), prefix, report)
     }
 
     /// [`Slots::take`] with `ports.clock` for the elapsed time and the polls' naps.

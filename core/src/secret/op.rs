@@ -12,7 +12,8 @@ use serde_json::{Map, Value, json};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::Failed;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// The fields an op call adds to the command's output.
 pub type Fields = Map<String, Value>;
@@ -46,7 +47,7 @@ fn classify(exit: Option<i32>, stderr: &str) -> CpdError {
 
 /// Runs `op <args> --account my.1password.com`, with `stdin` (if any) written and closed. Returns stdout on success.
 fn run(args: &[&str], stdin: Option<&str>) -> Result<String, CpdError> {
-    run_with(&SystemRunner, args, stdin)
+    run_with(&*Ports::current().runner, args, stdin)
 }
 
 /// [`run`] on `runner`.
@@ -100,7 +101,7 @@ fn fields(pairs: [(&str, Value); 1]) -> Fields {
 
 /// `op item get <item> --vault <vault> --fields label=<field> --reveal`: `{value}`.
 pub fn get(vault: &str, item: &str, field: &str) -> Result<Fields, CpdError> {
-    get_with(&SystemRunner, vault, item, field)
+    get_with(&*Ports::current().runner, vault, item, field)
 }
 
 /// [`get`] on `runner`.
@@ -113,7 +114,7 @@ pub fn get_with(runner: &dyn Runner, vault: &str, item: &str, field: &str) -> Re
 
 /// `op item list --vault <vault> --format json`: `{items: [{id, title}]}`.
 pub fn list(vault: &str) -> Result<Fields, CpdError> {
-    list_with(&SystemRunner, vault)
+    list_with(&*Ports::current().runner, vault)
 }
 
 /// [`list`] on `runner`.

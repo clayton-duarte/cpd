@@ -23,9 +23,10 @@ use cpd_core::config::Config;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::deadline::Failed as RunFailed;
-use cpd_core::host::runner::{Call, NO_DEADLINE, Runner as ProcessRunner, SystemRunner};
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner as ProcessRunner};
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 use crate::merge::Pull;
@@ -470,7 +471,7 @@ impl Failure {
 
 /// Runs the command of `action`: its reply, or why it failed.
 pub fn call(action: &Action) -> Result<Value, Failure> {
-    call_with(&SystemRunner, action)
+    call_with(&*Ports::current().runner, action)
 }
 
 /// [`call`] on `runner`.
