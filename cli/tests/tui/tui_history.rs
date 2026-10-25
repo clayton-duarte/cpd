@@ -62,7 +62,6 @@ fn session_file(env: &TestEnv) -> PathBuf {
     path
 }
 
-const TOP: &str = "old lead (archived, read-only)";
 
 // ---------- tests ----------
 
@@ -90,13 +89,14 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
     assert_eq!(
         drawn(&fx, 40, 12),
         [
-            TOP,
-            "16:33:44 you",
-            "      Plan the API.",
-            "16:33:44 agent",
-            "      Here is the plan.",
-            "16:33:44 → bash cpd plan show",
-            "        󰘌 ok",
+            "",
+            " old lead (archived, read-only)",
+            " 16:33:44 you",
+            "       Plan the API.",
+            " 16:33:44 agent",
+            "       Here is the plan.",
+            " 16:33:44 → bash cpd plan show",
+            "         󰘌 ok",
         ]
     );
 }
@@ -108,7 +108,8 @@ fn a_session_that_is_not_archived_says_read_only_only() {
     let file = session_file(&fx.env);
     populate(&fx.env, Some(&file), false);
     let screen = drawn(&fx, 40, 12);
-    assert_eq!(screen[0], "old lead (read-only)");
+    assert_eq!(screen[0], "", "the pad's first row is blank");
+    assert_eq!(screen[1], " old lead (read-only)");
     assert!(screen.iter().any(|r| r.contains("󰘌 ok")), "{screen:?}");
 }
 
@@ -131,10 +132,9 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
         Step::ch('k'),
         Step::look(|s| {
             let rows = s.rows();
-            assert!(rows.get(1).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
-            // the pane's last row (row 4) stays empty: only rows 1..3 are pinned
-            assert_eq!(rows[..3], [TOP, "16:33:44 you", "      Plan the API."]);
-            assert_eq!(rows[3], "");
+            assert!(rows.get(2).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
+            // the uniform 1-cell pad: row 0 and row 3 blank, the title in row 1, the body in row 2
+            assert_eq!(rows, ["", " old lead (archived, read-only)", " 16:33:44 you", ""]);
         }),
         Step::ch('G'),
         Step::look(|s| assert!(s.contains("󰘌 ok"), "the end again: {:?}", s.rows())),
