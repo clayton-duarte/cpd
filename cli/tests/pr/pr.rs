@@ -1,4 +1,5 @@
-//! `pr open`, `pr poll` and `pr rebase` (commands.md §9, contract §7.6): the
+//! `pr open`, `pr poll` and `pr rebase` (commands.md §9, contract §7.6). `pr poll` runs in-process on `run_with` over the fake
+//! ports (the git route, a `gh` handler: [`Poll`]); `pr open` and `pr rebase` still drive the
 //! built binary against temporary repos with a bare `origin`, a fake `gh`, and
 //! a Plan written straight into the database. `pr open` and `pr rebase` take no
 //! lock (hs-d243): their Gate runs in a gate worktree of its own.
