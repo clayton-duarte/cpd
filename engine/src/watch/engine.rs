@@ -17,7 +17,7 @@ use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
-use cpd_core::clock;
+use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
@@ -26,6 +26,7 @@ use cpd_core::host::Tmux;
 use cpd_core::host::pi::{self, PiDirs};
 use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::pr::start::{self as start_pr, By, Failed};
 use cpd_core::store::{Persist, Store};
 
@@ -50,6 +51,8 @@ pub(super) struct Engine {
     pub store: Store,
     pub tmux: Tmux,
     pub log: Log,
+    /// The seams the steps read time and start processes through: `Ports::real()` for `cpd watch`.
+    pub ports: Ports,
     report: Report,
     /// pi's catalog, read at most once per tick and only when a step needs it.
     catalog: Option<Catalog>,
@@ -86,6 +89,7 @@ impl Engine {
             store,
             tmux,
             log,
+            ports: Ports::real(),
             report: Report::new(Duration::from_secs(60)),
             catalog: None,
             last_poll_end: None,
@@ -317,6 +321,12 @@ pub(super) fn mark_restart() -> Result<Output, CpdError> {
     Ok(Output::success(json!({"marked": true, "engine_pid": pid})))
 }
 
+/// [`consume_marker`] at the time `clock` reads (`Clock::utc`).
+pub(super) fn consume_marker_with(clock: &dyn Clock, home: &CpdHome, log: &mut Log) -> Option<i64> {
+    let _ = (clock, home, log);
+    todo!("ports2-eng: consume_marker on the clock")
+}
+
 /// Reads and deletes the marker; the pid of the engine it says is being retired when it is well formed and
 /// was written at `at <= now` and at most the max age ago. Nothing else is a marker; an unreadable file is logged once.
 fn consume_marker(home: &CpdHome, log: &mut Log, now: OffsetDateTime) -> Option<i64> {
@@ -344,19 +354,31 @@ fn consume_marker(home: &CpdHome, log: &mut Log, now: OffsetDateTime) -> Option<
 }
 
 /// How long the engine was down before this start (contract §3.7, hs-d328).
-struct Downtime {
+pub(super) struct Downtime {
     /// When the previous engine stopped: its `watch-stopped`, else the last time it was alive.
-    since: OffsetDateTime,
+    pub(super) since: OffsetDateTime,
     /// Whether the previous engine said it stopped (`watch-stopped`): otherwise it crashed or was killed.
     said: bool,
-    down: time::Duration,
+    pub(super) down: time::Duration,
     /// The previous engine's pid and the install's marker for it, when the stop was an install's planned restart.
-    planned: bool,
+    pub(super) planned: bool,
     /// The marker was valid but the engine stayed down past the quiet bound.
-    overdue: bool,
+    pub(super) overdue: bool,
 }
 
 impl Downtime {
+    /// [`Downtime::since_previous`] with the time `clock` reads (`Clock::utc`) as now.
+    pub(super) fn since_previous_with(
+        clock: &dyn Clock,
+        store: &mut Store,
+        lock: &WatchLock,
+        lock_existed: bool,
+        marker: Option<i64>,
+    ) -> Result<Option<Downtime>, CpdError> {
+        let _ = (clock, store, lock, lock_existed, marker);
+        todo!("ports2-eng: the downtime on the clock")
+    }
+
     /// None for the first engine this home has seen. The previous engine's last Event is `watch-stopped`
     /// (its `at` is when it stopped), or `watch-started` with no stop (a crash, SIGKILL): then it was last
     /// alive at the lock file's modification time (the engine marks it every tick), or at its start when
@@ -390,7 +412,7 @@ impl Downtime {
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
-    fn sentence(&self) -> String {
+    pub(super) fn sentence(&self) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
         let at = clock::timestamp(self.since);
         let secs = self.down.as_seconds_f64();
@@ -402,6 +424,13 @@ impl Downtime {
             format!("The engine was down for {secs:.1} s: {how} at {at}.")
         }
     }
+}
+
+/// [`run`] on `ports` and `home`: the ticks and the naps between them read `ports.clock`, the steps start nothing but
+/// through `ports`, and the loop ends when `until` is set (checked between ticks and between naps).
+pub(super) fn run_with(ports: &Ports, home: &CpdHome, until: &AtomicBool) -> Result<Output, CpdError> {
+    let _ = (ports, home, until);
+    todo!("ports2-eng: the engine's loop on Ports")
 }
 
 /// `cpd watch`: the engine in the foreground.
@@ -433,6 +462,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         store,
         tmux,
         log,
+        ports: Ports::real(),
         report,
         catalog: None,
         last_poll_end: None,

@@ -60,6 +60,12 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
     Ok(now < ended + wait)
 }
 
+/// [`backing_off`] at the time `clock` reads (`Clock::utc`), with the unit of one second: no environment variable.
+pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, clock: &dyn cpd_core::clock::Clock) -> Result<bool, CpdError> {
+    let _ = (conn, plan, key, clock);
+    todo!("ports2-eng: the back-off on the clock")
+}
+
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
 /// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),

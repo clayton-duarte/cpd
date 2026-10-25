@@ -61,6 +61,8 @@ mod poll_run_tests;
 mod incident_option_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod ports_tests;
 
 use std::fs;
 use std::io;

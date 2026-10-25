@@ -57,6 +57,12 @@ impl WatchLock {
         self.file.set_modified(SystemTime::now()).map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
     }
 
+    /// [`touch`](Self::touch) with the UTC time `clock` reads.
+    pub(super) fn touch_with(&self, clock: &dyn cpd_core::clock::Clock) -> Result<(), CpdError> {
+        let _ = clock;
+        todo!("ports2-eng: the alive mark on the clock")
+    }
+
     /// When the engine that held the lock last [`touch`](Self::touch)ed it.
     pub(super) fn last_alive(&self) -> Result<SystemTime, CpdError> {
         self.file.metadata().and_then(|m| m.modified()).map_err(|e| failed(&self.path, format!("cannot read when it was alive: {e}")))
