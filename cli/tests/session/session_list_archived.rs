@@ -1,7 +1,8 @@
 //! `cpd session list` and archived Sessions (commands.md §10.1, hs-d516): archived ones are left out unless
-//! `--archived` is given, which lists them too.
+//! `--archived` is given, which lists them too. The command tree runs in this process (`Fx`).
 
 use crate::common::TestEnv;
+use crate::common::fx::Fx;
 use crate::session::{home, setup};
 use cpd_core::store::Store;
 
@@ -25,10 +26,10 @@ fn archived_worker(env: &TestEnv) {
 
 #[test]
 fn list_leaves_archived_sessions_out() {
-    let env = TestEnv::new();
-    archived_worker(&env);
+    let fx = Fx::new();
+    archived_worker(&fx.env);
 
-    let listed = ids(&env.cpd(&["session", "list"]).ok());
+    let listed = ids(&fx.cpd(&["session", "list"]).ok());
 
     assert!(!listed.contains(&"worker1".to_owned()), "{listed:?}");
     for id in ["lead1", "manager1"] {
@@ -38,10 +39,10 @@ fn list_leaves_archived_sessions_out() {
 
 #[test]
 fn archived_flag_lists_them_too() {
-    let env = TestEnv::new();
-    archived_worker(&env);
+    let fx = Fx::new();
+    archived_worker(&fx.env);
 
-    let out = env.cpd(&["session", "list", "--archived"]).ok();
+    let out = fx.cpd(&["session", "list", "--archived"]).ok();
 
     let worker = out["sessions"].as_array().unwrap().iter().find(|s| s["id"] == "worker1").expect("worker1 is listed");
     assert_eq!(worker["archived_at"], "t9");
