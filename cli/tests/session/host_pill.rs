@@ -5,17 +5,17 @@
 
 use cpd_core::host::tmux::STATUS_FORMAT;
 
-/// One grey `\u{2500}` join, outside a click range (contract §6.1.1).
-const JOIN: &str = "#[fg=colour8]\u{2500}#[default]";
+/// One grey heavy `\u{2501}` join, outside a click range (contract §6.1.1, hs-d684).
+const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
 
 #[test]
 fn the_alert_draws_a_bright_red_clickable_version_pill_and_the_plain_pill_stays_as_it_was() {
     // The red branch: the bright red block (index 9) with its caps, the version text inverted, inside
     // the `user|host` click range a click on it runs.
-    let red = "#[fg=colour8]\u{2500}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange]";
+    let red = "#[fg=colour8]\u{2501}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange]";
     // The plain branch, exactly as before the alert: the grey block (index 8), only while
     // `@cpd_version` is set.
-    let plain = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}";
+    let plain = "#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}";
     let want = format!("#{{?#{{@cpd_host_alert}},{red},{plain}}}");
 
     let at = STATUS_FORMAT.rfind("#{?#{@cpd_host_alert},").expect("the host alert branch of the version pill");
