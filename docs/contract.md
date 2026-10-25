@@ -3274,7 +3274,7 @@ The hook's result is the first failing command's exit code in file order, or 0. 
 
 **What each result means:**
 
-| Result | `pre-start` | quick check at submit | Gate at `pr open`, `pr rebase` and `pr push` (its `pre-start` included) |
+| Result | `pre-start` | quick check at submit | Gate at `pr rebase` and `pr push`, and at an `open` or `update` Job's submit (its `pre-start` included) |
 |---|---|---|---|
 | exit 0 (or no commands) | setup done | submit continues | the command continues to its push |
 | exit non-zero | `setup_failed` | refused `check_failed` (exit 3) with the tail; the Worker fixes and submits again | refused `gate_failed` (exit 3) with the tail; nothing is pushed; the Lead appends fix Jobs. A gate worktree's `pre-start` that exits non-zero is refused `gate_error` (exit 1) instead, with its own tail and log (§7.6) |
@@ -3370,7 +3370,7 @@ Each command here works on **one PR** (R34, A14), selected by `--pr <key>` (§1.
 
 None of these commands takes a lock on the repo or waits for another PR (hs-d243, §7). Merges into the PR go on while they run; what keeps them apart is the PR's status in the database, the Lead Branch's compare-and-swap, rule P and rule S (§7.4), guard U (`pr rebase`) and the gate worktree below.
 
-**The Gate on a snapshot** (hs-d243). `pr open`, `pr push` and `pr rebase` run the Gate on one commit `G`, read once (for `pr rebase`, the rebased commit), in a **gate worktree** `W` of their own (§7.1), never in the Lead worktree:
+**The Gate on a snapshot** (hs-d243). `pr push` and `pr rebase` run the Gate on one commit `G`, read once (for `pr rebase`, the rebased commit), in a **gate worktree** `W` of their own (§7.1), never in the Lead worktree:
 1. Every gate worktree of the PR whose pid is not alive (`kill(pid, 0)` fails with `ESRCH`), the leftover of a run that was killed, is removed: `git -C <repo> worktree remove --force --force <path>`. pid reuse can keep a leftover until a later sweep (accepted).
 2. `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" W G`, `<pid>` this process's. Detached: no branch and no `.git/config` write. `--lock` is "the equivalent of git worktree lock after git worktree add, but without a race condition" (git-worktree(1)), so `git worktree prune` and a plain `git worktree remove` leave it alone.
 3. **The slot** (below), then `pre-start` in W (§7.3, `setup_minutes`), its output in `run/<plan>/logs/pr-<key>.pre-start.log`; then **the Gate** (R19), `pre-merge` in W (`gate_minutes`), its whole output in `run/<plan>/logs/pr-<key>.pre-merge.log`. Both come from the PR's policy (§7.3), which no tree changes: the hooks are the same for every commit under test and no Attempt can change them. A `pre-merge` failure is refused `gate_failed` (exit 3), an error `gate_error` (exit 1), both with the last 60 lines in `details.tail` and the log's path in `details.log`; a `pre-start` that fails, in any way, is refused `gate_error` (exit 1) with its own tail and log, and `pre-merge` does not run. Nothing is pushed on a refusal.
