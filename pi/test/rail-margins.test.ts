@@ -18,6 +18,7 @@ import { Rendering } from "../lib/render.ts";
 import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown, text } from "./compact-tools/indicator-harness.ts";
 
 initTheme("dark", false);
+process.env.TZ = "Asia/Kolkata";
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "rail-margins-agent-"));
 test.after(() => { restoreClocks(); rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }); });
 
@@ -40,7 +41,7 @@ function checkBody(rows: string[], width: number, where: string): void {
 test("a cpd message fold wraps its body at the content width of a box", () => {
 	for (const width of WIDTHS)
 		for (const customType of ["cpd", "cpd-plan-summary"]) {
-			const message = { role: "custom" as const, timestamp: 0, customType, content: long, display: true, details: { review: "r1" } };
+			const message = { role: "custom" as const, timestamp: Date.parse("2026-10-14T21:41:02.114Z"), customType, content: long, display: true, details: { review: "r1" } };
 			const component = new CustomMessageComponent(message, new Rendering().render, undefined, 1);
 			component.setExpanded(true);
 			const rows = component.render(width).filter((l: string) => l.trim() !== "");
