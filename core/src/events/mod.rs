@@ -281,6 +281,17 @@ mod tests {
         assert!(matches!(print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"), Err(Ok(()))));
     }
 
+    /// What the follower's `stdout` being a pipe whose reader went away comes to, with no process: a pipe of this
+    /// process (nothing is written to it, so no `SIGPIPE`), and a file, which has no reader to lose.
+    #[test]
+    fn a_pipe_whose_reader_is_gone_is_gone_and_a_file_is_not() {
+        let (reader, writer) = nix::unistd::pipe().unwrap();
+        assert!(!reader_gone(&writer), "the reader is still there");
+        drop(reader);
+        assert!(reader_gone(&writer));
+        assert!(!reader_gone(&tempfile::tempfile().unwrap()));
+    }
+
     fn restarted(args: &[&str], cursor: i64) -> Vec<String> {
         restart_args(args.iter().map(OsString::from), cursor).into_iter().map(|a| a.into_string().unwrap()).collect()
     }
