@@ -20,13 +20,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use crate::clock::Clock;
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
@@ -476,7 +475,33 @@ pub struct Tmux {
     program: Option<PathBuf>,
     /// What starts the processes: how a call runs, not which server it is, so it takes no part in equality.
     runner: Handle,
+    /// What `kill-server` reads and naps on: the time, not which server it is, so it takes no part in equality.
+    clock: Time,
 }
+
+/// The [`Clock`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Time(Arc<dyn Clock>);
+
+impl Default for Time {
+    fn default() -> Time {
+        Time(Arc::new(SystemClock))
+    }
+}
+
+impl fmt::Debug for Time {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+impl PartialEq for Time {
+    fn eq(&self, _: &Time) -> bool {
+        true
+    }
+}
+
+impl Eq for Time {}
 
 /// The [`Runner`] of a [`Tmux`]: always equal to another, printed by name.
 #[derive(Clone)]
@@ -505,13 +530,13 @@ impl Eq for Handle {}
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default() }
+        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default() }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default() }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default() }
     }
 
     /// This server, with every call run by `runner` instead of the real processes.
@@ -521,9 +546,9 @@ impl Tmux {
     }
 
     /// This server, whose `kill-server` waits on `clock` instead of the real time.
-    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Tmux {
-        let _ = clock;
-        todo!("Tmux::with_clock: kill_server naps and reads the deadline on the Clock")
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Tmux {
+        self.clock = Time(clock);
+        self
     }
 
     pub fn socket(&self) -> &str {
@@ -579,8 +604,8 @@ impl Tmux {
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
             Some(limit) => self.runner.0.output(&mut cmd, "tmux", limit),
-            // In its own process group, as every other call.
-            None => cmd.process_group(0).output().map_err(Failed::Io),
+            // No deadline; the runner starts it in its own process group, as every other call.
+            None => self.runner.0.output_unbounded(&mut cmd, "tmux").map_err(Failed::Io),
         };
         ran.map_err(|e| match e {
             Failed::Io(e) => CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
@@ -856,15 +881,16 @@ impl Tmux {
         if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
             return Err(self.failed(&args, &out));
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let clock = &self.clock.0;
+        let deadline = clock.now() + Duration::from_secs(10);
         loop {
             if self.program_gone() {
                 return Ok(());
             }
             match self.liveness()? {
                 Liveness::Gone => return Ok(()),
-                Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
+                Liveness::Answering | Liveness::Dying if clock.now() < deadline => {
+                    clock.sleep(Duration::from_millis(50));
                 }
                 // Its connection closed on us: the server is dead, only its cleanup is left.
                 Liveness::Dying => return Ok(()),
@@ -982,27 +1008,31 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
-    let argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-V".to_owned()];
-    let out = client(PROGRAM).arg("-V").output().map_err(|e| {
-        CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
-            .with("argv", argv.clone())
-            .with("exit", serde_json::Value::Null)
-            .with("stderr", e.to_string())
-    })?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    match (out.status.success(), text.trim().strip_prefix("tmux ")) {
-        (true, Some(version)) => Ok(version.to_owned()),
-        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
-            .with("argv", argv)
-            .with("exit", out.status.code())
-            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
-    }
+    installed_version_with(&SystemRunner)
 }
 
 /// [`installed_version`], the call run by `runner`.
 pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
-    let _ = runner;
-    todo!("installed_version_with: `tmux -u -V` through the Runner")
+    let argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-V".to_owned()];
+    let cannot = |e: std::io::Error| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
+            .with("argv", argv.clone())
+            .with("exit", serde_json::Value::Null)
+            .with("stderr", e.to_string())
+    };
+    let out = match runner.output(client(PROGRAM).arg("-V"), "tmux", DEADLINE) {
+        Ok(out) => out,
+        Err(Failed::Io(e)) => return Err(cannot(e)),
+        Err(Failed::Timeout(e)) => return Err(e),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    match (out.status.success(), text.trim().strip_prefix("tmux ")) {
+        (true, Some(version)) => Ok(version.to_owned()),
+        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
+            .with("argv", argv.clone())
+            .with("exit", out.status.code())
+            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
+    }
 }
 
 /// Whether a failed call's stderr is tmux saying that no server runs: its

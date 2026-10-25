@@ -176,12 +176,29 @@ pub fn show_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// `display-popup` and `display-menu`: record the argv, subcommand name first.
+/// `display-popup` and `display-menu`: record the argv, subcommand name first. A popup that [`FakeTmux::on_popup`]
+/// answers writes the outcome file its command's `--out=` names, as the command it runs would.
+///
+/// [`FakeTmux::on_popup`]: super::FakeTmux::on_popup
 pub fn record_call(cx: &mut Cx, argv: &[String]) -> R<()> {
     let kind = if argv[0] == "display-popup" { "popup" } else { "menu" };
     let json = serde_json::to_string(argv).expect("argv json");
     cx.db.execute("INSERT INTO calls (kind, argv) VALUES (?1, ?2)", (kind, json)).map_err(fail)?;
+    if let (true, Some(answer)) = (kind == "popup", cx.popup) {
+        if let (Some(text), Some(out)) = (answer(argv), out_path(argv)) {
+            std::fs::write(&out, text).map_err(|e| format!("display-popup: cannot write {out}: {e}"))?;
+        }
+    }
     Ok(())
+}
+
+/// The path of `--out=<path>` in a popup's command, `<path>` single-quoted (`sh_quote`) or a bare word.
+fn out_path(argv: &[String]) -> Option<String> {
+    let rest = argv.iter().find_map(|a| a.split_once("--out=").map(|(_, rest)| rest))?;
+    match rest.strip_prefix('\'') {
+        Some(quoted) => quoted.split('\'').next().map(str::to_owned),
+        None => rest.split_whitespace().next().map(str::to_owned),
+    }
 }
 
 pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {

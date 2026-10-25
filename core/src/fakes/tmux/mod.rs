@@ -53,11 +53,15 @@ pub enum Backing<'a> {
 pub struct FakeTmux {
     conns: Mutex<HashMap<(PathBuf, String), Shared>>,
     runner: Option<Arc<dyn Runner>>,
+    popup: Mutex<Option<Arc<Popup>>>,
 }
+
+/// What a popup answers: the outcome file's text for the popup's argv, if any.
+pub type Popup = dyn Fn(&[String]) -> Option<String> + Send + Sync;
 
 impl FakeTmux {
     pub fn new() -> FakeTmux {
-        FakeTmux { conns: Mutex::default(), runner: None }
+        FakeTmux { conns: Mutex::default(), runner: None, popup: Mutex::new(None) }
     }
     /// The `Runner` that `run-shell`, a hook or a binding calls with `/bin/sh -c <command>`.
     pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> FakeTmux {
@@ -100,8 +104,10 @@ impl FakeTmux {
     /// text of the outcome file the popup's command would write to the path its `--out=` names, or `None` for no
     /// file. The file is written before the call returns. Without it no popup writes a file (the real no-answer path).
     pub fn on_popup(&self, answer: impl Fn(&[String]) -> Option<String> + Send + Sync + 'static) {
-        let _ = answer;
-        todo!("FakeTmux::on_popup")
+        *self.popup.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(answer));
+    }
+    fn popup(&self) -> Option<Arc<Popup>> {
+        self.popup.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
     /// The text `capture-pane -p` prints for `pane` (`%n`).
     pub fn set_screen(&self, pane: &str, text: &str) {
@@ -150,6 +156,8 @@ struct Cx<'a> {
     uid: u32,
     /// What `run-shell` calls; `None` for a `FakeTmux` that was given none.
     runner: Option<&'a dyn Runner>,
+    /// What answers a `display-popup`; `None` for a popup that writes no file.
+    popup: Option<&'a Popup>,
     out: String,
     kill: bool,
     /// The target of the hook or binding being run (`hooks::run_string`), for commands that name none.
@@ -162,7 +170,7 @@ struct Cx<'a> {
 }
 
 /// The version `-V` prints and `#{version}` answers.
-const VERSION: &str = "3.6a";
+pub(crate) const VERSION: &str = "3.6a";
 
 fn run_commands(inv: &Invocation, backing: Backing) -> R<String> {
     let mut socket = "default".to_string();
@@ -208,7 +216,7 @@ fn run_commands(inv: &Invocation, backing: Backing) -> R<String> {
             if creating {
                 db.execute_batch(state::SCHEMA).map_err(|e| e.to_string())?;
             }
-            let result = call.transact(&db, Some(&SystemRunner));
+            let result = call.transact(&db, Some(&SystemRunner), None);
             drop(db);
             match result {
                 Ok((out, kill)) => {
@@ -242,7 +250,8 @@ fn run_commands(inv: &Invocation, backing: Backing) -> R<String> {
                 }
             };
             // The map's lock is not held from here: a nested call (`run-shell`) takes it again.
-            let result = call.transact(&conn.lock(), tmux.runner.as_deref());
+            let popup = tmux.popup();
+            let result = call.transact(&conn.lock(), tmux.runner.as_deref(), popup.as_deref());
             let gone = match &result {
                 Ok((_, kill)) => *kill,
                 Err(_) => creating,
@@ -268,7 +277,7 @@ struct Call<'a> {
 
 impl Call<'_> {
     /// Runs the chain in one transaction; the output and whether `kill-server` ran.
-    fn transact(&self, db: &Connection, runner: Option<&dyn Runner>) -> R<(String, bool)> {
+    fn transact(&self, db: &Connection, runner: Option<&dyn Runner>, popup: Option<&Popup>) -> R<(String, bool)> {
         let fail = |e: rusqlite::Error| e.to_string();
         db.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
         let mut cx = Cx {
@@ -277,6 +286,7 @@ impl Call<'_> {
             socket: self.socket,
             uid: self.uid,
             runner,
+            popup,
             out: String::new(),
             kill: false,
             loc: None,

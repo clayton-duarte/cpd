@@ -2,7 +2,7 @@
 //! It maps a [`Call`] to an [`Invocation`](super::Invocation), tries a scripted reply (what a shell `tmux` wrapper
 //! did) before the fake, and answers `-u -V` itself. STUB: the red tests of `route_tests` pin the behaviour.
 
-use super::FakeTmux;
+use super::{FakeTmux, Invocation, VERSION};
 use crate::clock::ManualClock;
 use crate::host::runner::{Call, FakeRunner, Handler, Reply, Runner};
 use std::sync::Arc;
@@ -44,9 +44,26 @@ impl Default for TmuxRoute {
     }
 }
 
+/// What the `tmux` client prints when the `TMUX_TMPDIR` it needs is not set.
+const NO_TMPDIR: &str = "error creating /tmp/tmux-<uid> (TMUX_TMPDIR is not set)\n";
+
 impl Handler for TmuxRoute {
-    fn handle(&self, _call: &Call) -> Reply {
-        todo!("TmuxRoute::handle: Call -> Invocation -> FakeTmux::run -> Reply")
+    fn handle(&self, call: &Call) -> Reply {
+        if let Some((_, reply)) = self.scripted.iter().find(|(matches, _)| matches(&call.args)) {
+            return reply.clone();
+        }
+        if call.args == ["-u", "-V"] {
+            return Reply::ok(&format!("tmux {VERSION}\n"));
+        }
+        let tmpdir = call.envs.iter().find_map(|(k, v)| (k == "TMUX_TMPDIR").then_some(v.as_deref()).flatten()).filter(|d| !d.is_empty());
+        let Some(tmux_tmpdir) = tmpdir else {
+            return Reply::exit(1, "", NO_TMPDIR);
+        };
+        // A command with no directory of its own runs in the process's.
+        let cwd = call.cwd.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+        let env = call.envs.iter().filter_map(|(k, v)| v.clone().map(|v| (k.clone(), v))).collect();
+        let out = self.fake.run(&Invocation { argv: call.args.clone(), tmux_tmpdir: tmux_tmpdir.into(), cwd, env });
+        Reply::exit(out.code, &out.stdout, &out.stderr)
     }
 }
 
@@ -54,7 +71,9 @@ impl FakeRunner {
     /// A runner with the `tmux` route on a fresh [`TmuxRoute`], on its own [`ManualClock`]; the route's
     /// `run-shell` calls come back to this runner.
     pub fn with_tmux() -> FakeRunner {
-        let _ = ManualClock::new();
-        todo!("FakeRunner::with_tmux")
+        let runner = FakeRunner::new(ManualClock::new());
+        // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
+        let route = TmuxRoute::new().with_runner(runner.weak());
+        runner.route("tmux", Arc::new(route))
     }
 }
