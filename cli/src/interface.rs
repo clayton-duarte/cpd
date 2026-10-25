@@ -117,6 +117,7 @@ pub const TABLE: &[Entry] = &[
     ("test run", &[Manager, Lead, Worker], false),
     ("test list", &[Manager, Lead, Worker], false),
     ("test build", &[Manager, Lead, Worker], false),
+    ("prune", &[], false),
     ("tag", &[Lead], false),
     ("version sync", &[Lead], false),
 ];
