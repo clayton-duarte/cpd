@@ -64,3 +64,7 @@ Load must not matter, so the primary metric is **CPU time**, `user + sys` from `
 4. Per run, keep: user+sys seconds, wall seconds, peak RSS (`maximum resident set size`), `uptime` at start and end, the 4 numbers of `sccache --show-stats` (`Compile requests`, `executed`, `Cache hits`, `Non-cacheable calls`) before and after, and `target/cargo-timings/cargo-timing.html`. The unit table of the HTML is the `UNIT_DATA` JSON array: sum duration per unit kind (workspace crates, third-party, build scripts, test binaries).
 5. Candidates, in this order (the cheap and likely ones first): `incremental = false` (`CARGO_INCREMENTAL=0`, no edit to try it); `CARGO_PROFILE_DEV_DEBUG=line-tables-only` as the control that reproduces the recorded 48-62 s against 33-40 s; merging two small test areas (a throwaway branch, nothing committed). Keep a candidate only at 10 % or more of CPU time, with a `Cargo.toml` comment that cites the number.
 6. Before any run: check `df -h` (the 21 Gi free is room for one 2.4 G target at a time, not for several), `top -l 1` (sys % well below 50) and memory pressure; do not start while the machine thrashes. Separately from the profile: raise or clear the sccache cache that is at its 10 GiB maximum (`SCCACHE_CACHE_SIZE`), after checking it is the cause.
+
+## 5. Shared warm CARGO_TARGET_DIR, sccache only, `.noindex` (Job gb-2)
+
+**Status: skeleton; measurements in progress.**
