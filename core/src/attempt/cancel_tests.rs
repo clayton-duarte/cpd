@@ -57,7 +57,7 @@ fn catalog() -> Catalog {
     }
 }
 
-fn job_row(store: &Store, plan: &str, key: &str, column: &str) -> Value {
+fn job_row(store: &mut Store, plan: &str, key: &str, column: &str) -> Value {
     store
         .read(|conn| {
             Ok(conn.query_row(
@@ -78,7 +78,7 @@ fn job_row(store: &Store, plan: &str, key: &str, column: &str) -> Value {
 
 #[test]
 fn a_cancelled_attempt_fails_the_dependents() {
-    let (_dir, store) = fixture();
+    let (_dir, mut store) = fixture();
     let attempt = store
         .read(|conn| ledger::load(conn, &PlanId::parse("pay").unwrap(), &AttemptId::parse("a-a1").unwrap()))
         .unwrap();
@@ -89,9 +89,9 @@ fn a_cancelled_attempt_fails_the_dependents() {
     store.write("test", |tx| ledger::end(tx, &attempt, &End::Cancelled, None, &ladder, Stage::Driver)).unwrap();
 
     // The transaction that makes `a` cancelled also fails its queued dependent `b` (hs-d647).
-    assert_eq!(job_row(&store, "pay", "a", "status"), "cancelled");
-    assert_eq!(job_row(&store, "pay", "b", "status"), "failed");
-    assert_eq!(job_row(&store, "pay", "b", "failed_cause"), "its need a was cancelled");
+    assert_eq!(job_row(&mut store, "pay", "a", "status"), "cancelled");
+    assert_eq!(job_row(&mut store, "pay", "b", "status"), "failed");
+    assert_eq!(job_row(&mut store, "pay", "b", "failed_cause"), "its need a was cancelled");
 
     // Exactly one `job-failed` Event, with Job `b`.
     let failed: Vec<(String, Value)> = store
