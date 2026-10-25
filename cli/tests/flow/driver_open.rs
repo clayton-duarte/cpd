@@ -43,15 +43,15 @@ impl Handler for Hooks {
 
 /// Plan `pay` as `pr start` leaves it, in this process: a repo `pay` whose `origin` is the bare repo `repos/origin.git` (a repo of the
 /// fake git, which holds `main` and the Lead Branch), its Lead worktree, the rows (Job `api` queued) and the work session of the fake tmux.
-struct Live {
-    fx: Fx,
-    repo: PathBuf,
-    lead: PathBuf,
+pub(super) struct Live {
+    pub(super) fx: Fx,
+    pub(super) repo: PathBuf,
+    pub(super) lead: PathBuf,
     origin: PathBuf,
     hooks: Arc<Hooks>,
 }
 
-fn live(config_extra: &str) -> Live {
+pub(super) fn live(config_extra: &str) -> Live {
     let fx = Fx::with_ports();
     let repo = fx.keyed_repo("pay");
     let origin = fx.env.root().join("repos/origin.git");
@@ -86,11 +86,11 @@ impl Live {
 
     /// One value of the store, read through a store opened and closed here: `env.query` keeps a connection, and with it a
     /// descriptor, open, which could be the fd 3 a driver is handed.
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+    pub(super) fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
         store(&self.fx.env).read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
-    fn job_status(&self, key: &str) -> String {
+    pub(super) fn job_status(&self, key: &str) -> String {
         self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
@@ -98,11 +98,11 @@ impl Live {
         self.query("SELECT phase FROM plans WHERE id = 'pay'")
     }
 
-    fn worktree(&self, id: &str) -> PathBuf {
+    pub(super) fn worktree(&self, id: &str) -> PathBuf {
         self.repo.parent().unwrap().join(format!("pay.pay--{id}"))
     }
 
-    fn lead_sha(&self) -> String {
+    pub(super) fn lead_sha(&self) -> String {
         self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
@@ -111,7 +111,7 @@ impl Live {
     }
 
     /// Commits `path` with `content` in `dir` and returns the commit.
-    fn commit(&self, dir: &Path, path: &str, content: &str, message: &str) -> String {
+    pub(super) fn commit(&self, dir: &Path, path: &str, content: &str, message: &str) -> String {
         fs::write(dir.join(path), content).unwrap();
         self.fx.git(dir, &["add", "-A"]);
         self.fx.git(dir, &["commit", "-q", "-m", message]);
@@ -171,12 +171,12 @@ impl Live {
             .unwrap()
     }
 
-    fn attempt(&self, id: &str) -> Value {
+    pub(super) fn attempt(&self, id: &str) -> Value {
         self.fx.cpd(&["attempt", "show", id, "--plan", PLAN]).ok()["attempt"].clone()
     }
 
     /// The Events about Attempt `id`, in order.
-    fn events(&self, id: &str) -> Vec<Value> {
+    pub(super) fn events(&self, id: &str) -> Vec<Value> {
         let all = self.fx.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
         all.into_iter().filter(|e| e["attempt"] == id).collect()
     }
@@ -202,7 +202,7 @@ impl Live {
 
     /// Dispatches Job `key` and runs its driver on this thread: `hook(self, id, n)` is called after the driver's `n`th nap (from 1),
     /// where the Worker's pi acts. Returns the id of the Attempt and what the driver printed.
-    fn drive(&self, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+    pub(super) fn drive(&self, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
         let out = self.dispatch(key).ok();
         let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
         let launch = self.fx.take_launch(self.fx.fakes.spawn.launches().len() - 1);
@@ -216,7 +216,7 @@ impl Live {
 
     /// [`Live::drive`] with a Worker that acts once, in the driver's first poll: returns the Attempt it ended and what `worker`
     /// returned. `worker` gets the id of the Attempt.
-    fn run_job<W>(&self, key: &str, worker: impl FnOnce(&Live, &str) -> W) -> (Value, W) {
+    pub(super) fn run_job<W>(&self, key: &str, worker: impl FnOnce(&Live, &str) -> W) -> (Value, W) {
         let (mut worker, mut did) = (Some(worker), None);
         let (id, _) = self.drive(key, |live, id, nap| {
             if nap == 1 {
@@ -227,14 +227,14 @@ impl Live {
     }
 
     /// The Worker's pi ends without submitting again: its window is gone from the fake server.
-    fn end_the_worker(&self) {
+    pub(super) fn end_the_worker(&self) {
         for pane in self.fx.panes().iter().filter(|p| p.window_name != "main") {
             assert!(self.fx.tmux(&["kill-window", "-t", &pane.window]).status.success());
         }
     }
 
     /// `job dispatch <key>`: the driver's `Launch` is recorded, nothing is started.
-    fn dispatch(&self, key: &str) -> common::Run {
+    pub(super) fn dispatch(&self, key: &str) -> common::Run {
         self.fx.cpd(&["job", "dispatch", key, "--plan", PLAN])
     }
 }
