@@ -78,3 +78,8 @@ export function primaryCheckoutMove(command: string, cwd: string, home: string):
   }
   return undefined;
 }
+
+/** commands.md §15.16: the stub of `primaryCheckoutWrite`; a later Worker implements the `edit` and `write` guard. */
+export function primaryCheckoutWrite(_toolName: string, _input: unknown, _cwd: string, _home: string): string | undefined {
+  return undefined;
+}
