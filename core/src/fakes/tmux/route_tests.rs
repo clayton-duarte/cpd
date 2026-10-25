@@ -313,3 +313,105 @@ fn without_on_popup_a_dialog_gets_no_outcome_file_the_real_no_answer_path() {
     assert!(!out.exists(), "a popup nobody answered left a file");
     assert_eq!(rig.route.fake().state("t").popups().len(), 1);
 }
+
+// ---- fault injections (the table of the `route` module docs) ---------------------------------------------------------
+
+fn names(args: &[&str]) -> impl Fn(&Call) -> bool + Send + Sync + 'static {
+    let args = strings(args);
+    move |call| args.iter().all(|a| call.args.contains(a))
+}
+
+fn kills(rig: &Rig) -> usize {
+    rig.runner.calls().iter().filter(|c| c.args.iter().any(|a| a == "kill-window")).count()
+}
+
+#[test]
+fn a_once_rule_makes_the_first_kill_window_fail_and_the_next_goes_to_the_fake() {
+    let rig = Rig::started();
+    rig.run(&["new-window", "-d", "-t", "s", "-n", "x"]);
+    let _ = rig.runner.clone().once("tmux", names(&["kill-window"]), exit(1, "", "boom\n"));
+    let window = crate::host::tmux::WindowId::parse("@1").unwrap();
+
+    let first = rig.tmux.kill_window(&window).unwrap_err();
+    assert!(first.message().contains("boom"), "{first:?}");
+    assert_eq!(rig.route.fake().state("t").windows().len(), 2, "the failed call changed nothing");
+
+    rig.tmux.kill_window(&window).unwrap();
+    assert_eq!(rig.route.fake().state("t").windows().len(), 1, "the second call reached the fake");
+    assert_eq!(kills(&rig), 2);
+}
+
+#[test]
+fn a_once_rule_makes_the_first_list_panes_fail_and_the_client_lists_again_while_the_server_runs() {
+    let rig = Rig::started();
+    let _ = rig.runner.clone().once("tmux", names(&["list-panes"]), exit(1, "", "server exited unexpectedly\n"));
+
+    let panes = rig.tmux.list_panes().unwrap();
+
+    assert_eq!(panes.len(), 1, "{panes:?}");
+    let lists = rig.runner.calls().iter().filter(|c| c.args.iter().any(|a| a == "list-panes")).count();
+    assert_eq!(lists, 2, "listed again once");
+}
+
+#[test]
+fn a_scripted_listing_with_tabs_printed_as_underscores_is_tmux_failed_unexpected_output() {
+    let rig = Rig::started();
+    let _ = rig.runner.clone().on("tmux", names(&["list-panes"]), Reply::ok("%1_cpd_main_0_1234_x\n"));
+
+    let error = rig.tmux.list_panes().unwrap_err();
+
+    assert_eq!(error.code(), crate::error::ErrorCode::TmuxFailed);
+    assert!(error.message().contains("unexpected output"), "{error:?}");
+}
+
+fn spawn() -> crate::host::tmux::Spawn {
+    crate::host::tmux::Spawn { cwd: None, env: Default::default(), argv: strings(&["cpd", "watch"]) }
+}
+
+#[test]
+fn new_panes_end_with_a_status_leaves_the_new_session_pane_dead_with_that_status() {
+    let rig = rig_of(TmuxRoute::new().new_panes_end(super::PaneEnd::Status(7)));
+    let (_, pane) = rig.tmux.create_session("work", "watch", &spawn()).unwrap().unwrap();
+
+    let found = rig.tmux.list_panes().unwrap().into_iter().find(|p| p.pane == pane).unwrap();
+
+    assert_eq!((found.dead, found.dead_status), (true, Some(7)));
+}
+
+#[test]
+fn new_panes_end_by_a_signal_leaves_the_pane_dead_with_no_status() {
+    let rig = rig_of(TmuxRoute::new().new_panes_end(super::PaneEnd::Signal));
+    rig.tmux.create_session("work", "watch", &spawn()).unwrap();
+    let (_, pane) = rig.tmux.new_window("work", "other", &spawn()).unwrap();
+
+    let found = rig.tmux.list_panes().unwrap().into_iter().find(|p| p.pane == pane).unwrap();
+
+    assert_eq!((found.dead, found.dead_status), (true, None), "dead, and tmux prints no status for it");
+}
+
+#[test]
+fn new_panes_end_also_ends_a_respawned_pane_and_only_the_new_pane_of_a_call() {
+    let rig = rig_of(TmuxRoute::new().new_panes_end(super::PaneEnd::Status(3)));
+    let (_, first) = rig.tmux.create_session("work", "watch", &spawn()).unwrap().unwrap();
+    let (_, second) = rig.tmux.new_window("work", "other", &spawn()).unwrap();
+    rig.tmux.respawn_pane(&first, &spawn()).unwrap();
+
+    let dead: Vec<_> = rig.tmux.list_panes().unwrap().into_iter().map(|p| (p.pane, p.dead_status)).collect();
+
+    assert_eq!(dead, [(first, Some(3)), (second, Some(3))]);
+}
+
+#[test]
+fn without_new_panes_end_a_new_pane_is_alive() {
+    let rig = rig();
+    let (_, pane) = rig.tmux.create_session("work", "watch", &spawn()).unwrap().unwrap();
+    assert!(rig.tmux.list_panes().unwrap().iter().all(|p| p.pane == pane && !p.dead));
+}
+
+#[test]
+fn ctl_pane_exit_signal_is_a_dead_pane_with_no_status() {
+    let rig = Rig::started();
+    rig.run(&["__ctl", "pane-exit", "%0", "--signal"]);
+    let pane = &rig.route.fake().state("t").panes()[0];
+    assert_eq!((pane.dead, pane.dead_status), (true, None));
+}

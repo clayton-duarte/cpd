@@ -33,7 +33,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
+use nix::fcntl::{Flock, FlockArg};
 use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
+use time::OffsetDateTime;
 
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::error::CpdError;
@@ -298,6 +300,10 @@ pub struct Fx {
     pub fakes: Fakes,
     /// The clock of `fakes.ports`: `fakes.clock`'s time, and the hook of [`Fx::run_launch_with`].
     nap: Arc<NapClock>,
+    /// The migration [`Fx::hold_store_migration`] simulates, while it runs; dropped (and the lock released) with the `Fx`.
+    migration: Option<Arc<Migration>>,
+    /// The clock of [`Fx::on_nap`], once installed.
+    hook: Option<Arc<HookClock>>,
     /// The `Universe` of the git route of `fakes.runner`: the repos, refs and config of every `git` call.
     pub universe: Arc<Mutex<Universe>>,
     /// The git route of `fakes.runner`.
@@ -327,11 +333,20 @@ impl Fx {
     /// process is started and nothing external is run. Its drop fails the test when a program was called that no
     /// `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
     pub fn with_ports() -> Fx {
-        Fx::with_ports_over(bare_with_store())
+        Fx::on_fakes(bare_with_store())
+    }
+
+    /// [`Fx::with_ports`] whose `$CPD_HOME` is empty: the first command creates and migrates the store.
+    pub fn with_ports_empty() -> Fx {
+        Fx::on_fakes(TestEnv::bare())
     }
 
     /// [`Fx::with_ports`] over `env`, a [`TestEnv::bare`] one (with a store) that the test seeded.
-    pub fn with_ports_over(mut env: TestEnv) -> Fx {
+    pub fn with_ports_over(env: TestEnv) -> Fx {
+        Fx::on_fakes(env)
+    }
+
+    fn on_fakes(mut env: TestEnv) -> Fx {
         // The fake tmux has no socket: its directory is the env's own, never the shared `/tmp` a long root would give.
         env.tmux_in_root = true;
         let mut fx = Fx::with(env);
@@ -349,6 +364,12 @@ impl Fx {
     /// Scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
     pub fn fake(&self, program: &str, reply: Reply) {
         let _ = (*self.fakes.runner).clone().on(program, |_| true, reply);
+    }
+
+    /// Scripts `reply` for the next call only of `program` on the `FakeRunner`: a later `fake_once` answers the one
+    /// after it, and a call no rule is left for is unscripted (the test fails at drop unless [`Fx::allow_unscripted`]).
+    pub fn fake_once(&self, program: &str, reply: Reply) {
+        let _ = (*self.fakes.runner).clone().once(program, |_| true, reply);
     }
 
     /// [`Fx::fake`] for `gh`.
@@ -495,13 +516,13 @@ impl Fx {
     pub fn on_nap(&mut self, hook: impl FnMut(&Nap) + Send + 'static) {
         assert!(self.on_fake_ports, "on_nap: on an Fx::with_ports");
         let hook: Hook = Box::new(hook);
-        match &self.nap {
+        match &self.hook {
             Some(clock) => *clock.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook),
             None => {
                 let nap = Nap { ports: self.fakes.ports.clone() };
-                let clock = Arc::new(NapClock { inner: self.fakes.ports.clock.clone(), nap, hook: Mutex::new(Some(hook)) });
+                let clock = Arc::new(HookClock { inner: self.fakes.ports.clock.clone(), nap, hook: Mutex::new(Some(hook)) });
                 self.fakes.ports.clock = clock.clone();
-                self.nap = Some(clock);
+                self.hook = Some(clock);
             }
         }
     }
@@ -623,7 +644,7 @@ impl Fx {
         // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
         let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
         let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
-        let fx = Fx { env, fakes, nap, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), op_route: OnceCell::new(), saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes, nap, migration: None, hook: None, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), op_route: OnceCell::new(), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
@@ -682,32 +703,6 @@ impl Fx {
     pub fn local_origin(&self, repo: &Path, bare: &Path) {
         let url = self.git(repo, &["config", "--get", "remote.origin.url"]);
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
-    }
-
-    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
-    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
-    pub fn drop_unreachable_origin(&self, repo: &Path) {
-        // Exit 1 and no output when nothing matches.
-        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
-        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
-            self.git(repo, &["remote", "remove", "origin"]);
-        }
-    }
-
-    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
-    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
-    pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
-        let mut done_when = serde_json::Map::new();
-        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
-            if job["status"] == "draft" {
-                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
-            }
-        }
-        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
-        let path = self.env.root().join(format!("outline-{plan}.json"));
-        std::fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
@@ -1038,6 +1033,85 @@ impl Drop for Fx {
     }
 }
 
+/// What a hook of [`Fx::on_nap`] runs `cpd` with: the ports of the `Fx` without the hook's clock.
+pub struct Nap {
+    ports: Ports,
+}
+
+impl Nap {
+    /// `cpd <args>` in this process, in the environment and the directory of the command that sleeps.
+    pub fn cpd(&self, args: &[&str]) -> Run {
+        let cwd = std::env::current_dir().expect("the current directory");
+        run_in_process(&self.ports, &cwd, args, &[], &[])
+    }
+}
+
+type Hook = Box<dyn FnMut(&Nap) + Send>;
+
+/// The clock of [`Fx::on_nap`]: `inner`, and the hook after every `sleep`.
+struct HookClock {
+    inner: Arc<dyn Clock>,
+    nap: Nap,
+    hook: Mutex<Option<Hook>>,
+}
+
+impl Clock for HookClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        // Out of the mutex while it runs, and put back after (unless the call put another there), so the hook never
+        // runs inside itself and a panic of it leaves none behind.
+        let taken = self.hook.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(mut hook) = taken {
+            hook(&self.nap);
+            let mut slot = self.hook.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.get_or_insert(hook);
+        }
+    }
+    fn utc(&self) -> OffsetDateTime {
+        self.inner.utc()
+    }
+}
+
+/// The fixture of [`Fx::hold_store_migration`]: the held `flock` and when it is released.
+struct Migration {
+    lock: Mutex<Option<Flock<File>>>,
+    release_at: Duration,
+    clock: Arc<ManualClock>,
+}
+
+impl Migration {
+    /// As the holder does at the end of its setup: empties the file (the marker goes first), then releases the `flock`.
+    fn release_when_due(&self) {
+        if self.clock.elapsed() < self.release_at {
+            return;
+        }
+        if let Some(lock) = self.lock.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            let _ = lock.set_len(0);
+            drop(lock);
+        }
+    }
+}
+
+/// The `ManualClock` of the `Fx`, as the `Ports`' clock while a migration is held: it ends the migration when its time is up.
+struct MigrationClock(Arc<Migration>);
+
+impl Clock for MigrationClock {
+    fn now(&self) -> Instant {
+        self.0.release_when_due();
+        self.0.clock.now()
+    }
+    fn sleep(&self, d: Duration) {
+        self.0.clock.sleep(d);
+        self.0.release_when_due();
+    }
+    fn utc(&self) -> OffsetDateTime {
+        self.0.clock.utc()
+    }
+}
+
 /// The clock of [`Fx::engine_tick`]: the `ManualClock`, whose first nap (the engine's wait between two ticks) ends the loop.
 struct StopAtFirstNap {
     inner: Arc<ManualClock>,
@@ -1104,11 +1178,7 @@ pub fn bare_with_store() -> TestEnv {
 }
 
 /// The number of `code`, which `ExitCode` does not give.
-<<<<<<< HEAD
-pub(super) fn exit_code(code: ExitCode) -> i32 {
-=======
 pub fn exit_code(code: ExitCode) -> i32 {
->>>>>>> origin/main
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 

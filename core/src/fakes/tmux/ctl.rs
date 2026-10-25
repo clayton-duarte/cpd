@@ -1,4 +1,5 @@
-//! `__ctl`, the test-only control command: `__ctl pane-exit %p --status n`, `__ctl screen %p text`,
+//! `__ctl`, the test-only control command: `__ctl pane-exit %p --status n` (or `--signal`: the program was killed, so
+//! `#{pane_dead_status}` is empty), `__ctl screen %p text`,
 //! `__ctl click status <range>`. `run` accepts it only as the first command of a call.
 
 use super::hooks::{current_loc, fire, run_string};
@@ -17,8 +18,10 @@ pub fn ctl(cx: &mut Cx, args: &[String]) -> R<()> {
         "pane-exit" => {
             let pane = pane_of(cx, rest)?;
             let status = match &rest[1..] {
-                [flag, n] if flag == "--status" => n.parse::<i64>().map_err(|_| format!("__ctl: bad status: {n}"))?,
-                _ => return Err("usage: __ctl pane-exit <pane> --status <n>".into()),
+                [flag, n] if flag == "--status" => Some(n.parse::<i64>().map_err(|_| format!("__ctl: bad status: {n}"))?),
+                // Killed by a signal: tmux has no exit status to print.
+                [flag] if flag == "--signal" => None,
+                _ => return Err("usage: __ctl pane-exit <pane> (--status <n> | --signal)".into()),
             };
             cx.db.execute("UPDATE panes SET dead = 1, dead_status = ?1 WHERE id = ?2", (status, pane)).map_err(fail)?;
             let loc = loc_of_pane(cx.db, pane);

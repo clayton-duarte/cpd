@@ -10,16 +10,26 @@ use std::sync::Arc;
 /// A matcher on the argv of a call (everything after `tmux`, `-u -L <socket> -f /dev/null` included).
 type Matcher = Box<dyn Fn(&[String]) -> bool + Send + Sync>;
 
+/// How the command of a new pane ends ([`TmuxRoute::new_panes_end`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneEnd {
+    /// It exits with this status.
+    Status(i32),
+    /// A signal killed it: tmux has no status for it.
+    Signal,
+}
+
 /// The `tmux` route: scripted replies first, then the in-memory fake.
 pub struct TmuxRoute {
     fake: FakeTmux,
     scripted: Vec<(Matcher, Reply)>,
+    new_panes_end: Option<PaneEnd>,
 }
 
 impl TmuxRoute {
     /// A route over a fresh [`FakeTmux`] with no scripted reply and no nested `Runner`.
     pub fn new() -> TmuxRoute {
-        TmuxRoute { fake: FakeTmux::new(), scripted: Vec::new() }
+        TmuxRoute { fake: FakeTmux::new(), scripted: Vec::new(), new_panes_end: None }
     }
     /// The `Runner` that `run-shell`, a hook or a binding calls with `/bin/sh -c <command>`.
     pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> TmuxRoute {
@@ -30,6 +40,12 @@ impl TmuxRoute {
     /// first match answers).
     pub fn script(mut self, matches: impl Fn(&[String]) -> bool + Send + Sync + 'static, reply: Reply) -> TmuxRoute {
         self.scripted.push((Box::new(matches), reply));
+        self
+    }
+    /// The command of every pane a later `new-session`, `new-window`, `split-window` or `respawn-pane` makes ends at once
+    /// as `end` says: the pane is dead, with the status (none for a signal), and the `pane-died` hook runs.
+    pub fn new_panes_end(mut self, end: PaneEnd) -> TmuxRoute {
+        self.new_panes_end = Some(end);
         self
     }
     /// The fake behind the route: its state, `set_screen`, `on_popup`.
@@ -69,8 +85,46 @@ impl Handler for TmuxRoute {
         // A command with no directory of its own runs in the process's.
         let cwd = call.cwd.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
         let env = call.envs.iter().filter_map(|(k, v)| v.clone().map(|v| (k.clone(), v))).collect();
-        let out = self.fake.run(&Invocation { argv: call.args.clone(), tmux_tmpdir: tmux_tmpdir.into(), cwd, env });
+        let inv = Invocation { argv: call.args.clone(), tmux_tmpdir: tmux_tmpdir.into(), cwd, env };
+        let out = self.fake.run(&inv);
+        if let (0, Some(end)) = (out.code, self.new_panes_end) {
+            self.end_new_pane(&inv, end);
+        }
         Reply::exit(out.code, &out.stdout, &out.stderr)
+    }
+}
+
+impl TmuxRoute {
+    /// Ends the pane `inv` made (`new_panes_end`): the newest pane of its server, or the one a `respawn-pane` names.
+    fn end_new_pane(&self, inv: &Invocation, end: PaneEnd) {
+        let args = &inv.argv;
+        let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1));
+        let Some(socket) = value("-L") else { return };
+        // The commands of a call are split on `;`: the last one that makes a pane is the call's.
+        let makes = |name: &str| args.iter().any(|a| a == name);
+        let pane = if makes("respawn-pane") {
+            match value("-t") {
+                Some(pane) => pane.clone(),
+                None => return,
+            }
+        } else if makes("new-session") || makes("new-window") || makes("split-window") {
+            let found = self.fake.on_socket(socket);
+            let [only] = &found[..] else { return };
+            match super::State::of(only.clone()).panes().last() {
+                Some(pane) => pane.id.clone(),
+                None => return,
+            }
+        } else {
+            return;
+        };
+        let how = match end {
+            PaneEnd::Status(n) => vec!["--status".to_owned(), n.to_string()],
+            PaneEnd::Signal => vec!["--signal".to_owned()],
+        };
+        let mut argv = vec!["-L".to_owned(), socket.clone(), "__ctl".to_owned(), "pane-exit".to_owned(), pane];
+        argv.extend(how);
+        let out = self.fake.run(&Invocation { argv, tmux_tmpdir: inv.tmux_tmpdir.clone(), cwd: inv.cwd.clone(), env: inv.env.clone() });
+        assert_eq!(out.code, 0, "the fake could not end the new pane: {}", out.stderr);
     }
 }
 
