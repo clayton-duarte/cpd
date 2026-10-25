@@ -548,6 +548,18 @@ Only `pr-ready` reads the `pull_requests` row the poll last wrote (§7.6): `url`
 
 **Snooze and dismiss.** `inbox snooze` hides an item until a time (15 minutes, 1 hour, or tomorrow 09:00 local time); `inbox dismiss` hides it for the rest of its life (commands.md §21).
 
+#### Incident
+
+Machine-wide incident mode (hs-d634): when on, the engine pauses most scheduling, and every running Attempt is requeued when it ends. One row in the machine store `incident` table when on, none when off.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | integer | PRIMARY KEY, always 1 to enforce one active row |
+| `started_at` | text | RFC 3339 UTC time when the incident mode began |
+| `started_by` | text | the Session id of the Manager who started it |
+| `reason` | text | explanation: 1 or more characters |
+| `started_txn` | integer | the transaction id of the insert (for history) |
+
 ### 2.3 Fingerprints
 
 - **Locked-Job fingerprint:** `sha256` of the canonical JSON (keys sorted, no whitespace) of `{goal, tier, context, touches, acceptance, out_of_scope, needs}` with `needs` sorted. Stored at `plan lock`, at append, and, for a draft added after the lock, when its Plan review is approved (§3.2). Every engine step that reads a Job recomputes it; a mismatch is `locked_job_tampered` (exit 3) and the Job is not scheduled (cpd 1 §8, kept).
@@ -1112,6 +1124,14 @@ CREATE TABLE contexts (
   archived_at   TEXT,                         -- see migration 0010 (§4.5) for the columns it dropped
   owner         TEXT CHECK (owner IS NULL OR length(owner) BETWEEN 1 AND 39),  -- GitHub login, the policy key (§8.3, hs-d288); NULL only for a Context created before the migration of the policy keys (§4.5), an ADD COLUMN
   deleted_at    TEXT                          -- migration `delete-tombstone` (hs-d527; an ADD COLUMN, so last): null, or the time the Context was deleted; the row is then a tombstone, never deleted (§2.2 "Deleted"); set once (`contexts_deleted_once`)
+) STRICT;
+
+CREATE TABLE incident (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),   -- enforce one active row
+  started_at    TEXT NOT NULL,
+  started_by    TEXT NOT NULL,                  -- the Manager's Session id
+  reason        TEXT NOT NULL CHECK (length(reason) >= 1),
+  started_txn   INTEGER NOT NULL REFERENCES txns(id)
 ) STRICT;
 
 CREATE TABLE context_records (               -- the only store of Context records (§4.6)
@@ -2156,6 +2176,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `inbox-closed` | E8 closes an Inbox item | context?, plan?, job?, session? | `{item, kind}` |
 | `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
 | `inbox-dismissed` | `inbox dismiss` | context?, plan?, job?, session? | `{item}` |
+| `incident-started` | `cpd incident start --reason <text>` (hs-d634, user decision hs-d634) | (none) | `{by, reason, started_at}` |
+| `incident-ended` | `cpd incident end` | (none) | `{by, ended_at}` |
 | `watch-started`, `watch-stopped` | the engine starts or stops | (none) | `{pid}` |
 | `error` | `watch` or a driver hit an unexpected failure; codes include `lead_worktree_stale`, `merge_check_failed`, `push_failed` (a failed push of a Lead Branch at a PR's start or at a merge, §7.2, §7.4; `details.pr` names the PR) `cleanup_failed` (`pr poll` kept a merged PR's Lead worktree, or a removal failed, §7.2; `details: {plan, pr, path, reason}`, `reason` `dirty`, `unpushed` or git's stderr tail) `pr_start_failed` (engine E7 could not start a PR, §3.8; `details: {pr, step, tail?, log?}`) and `adapter_missing` (the `session run` wrapper restarted a pi whose adapter reported `stopped` for more than 60 s, §6.7 "Adapter watchdog"; `details: {session, state_since, seconds}`) and `gh_rate_limited` (engine E5 skips polls while GitHub's rate limit is nearly used, §3.7; `details: {remaining, reset_at}`; no Plan, it concerns the User's account) and `slack_auth`, `slack_not_configured`, `slack_failed`, `slack_unparseable`, `slack_helper_failed` (engine E11's team review poll could not read the Slack channel, §3.7; `details` is the helper's; source `watch`; no Plan, it concerns the User's account) and `distill_invalid`, `distill_failed` (source `context distill`: a distill step's output failed its checks, or its pi run failed, §4.6; `details.context` names the Context, and the Event sets no `context`, so no Lead gets a turn) and `title_failed` (engine E10 reports a retitle of a Session that failed, §3.7; `details: {session, tail, log}`; the Event sets no `context`, `plan` or `session`, so no Lead gets a turn). When source is `adapter`, the code is from the adapter itself (hs-d573, §15.1): the adapter of a Lead ran `cpd session report` and the Manager got the error Event; `context` is the Lead's; **`plan` and `session` are null** so no Lead's follower receives it back (the Lead does not see its own adapter errors); `details` is `{source: "adapter", code, message, details}` with the given details plus `{what, session, plan}` (the reporting Session's id and Plan, null if none) | context?, plan?, ... | `{source, code, message, details}` |
 | `review-opened` | `cpd review open` (hs-d496, the adapter's `plannotator` session tracker) creates a `plannotator_reviews` row; additive Event kind (delivery `none`) | session | `{pn_id, kind, subject, port}` |
@@ -2164,7 +2186,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `docs-decided` | `cpd context docs` (commands.md §3.17; hs-d549, hs-d551): once, in the transaction that decides the pending doc candidates | context | `{context, sent: [id], dismissed: [id]}` |
 | `context-curated` | a distill step wrote its curations and proposals (the next PR, `distill`; added to `event_kinds` by migration `curation`, §4.5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated) | context | `{context, curated, rejected, retire, docs}`, the counts of records curated, lines rejected (none when all passed), retirements proposed and doc candidates flagged |
 
-**The protocol number** (hs-a4). `cpd --version` reports `protocol`, an integer that starts at **1** and is raised by one whenever an Event kind, a field of an Event's `data` that the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on. **Today it is 13** (1 until `session-message`, 2 until the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278: the adapter runs a command with a new flag, 4 until `session-titled`, hs-d257, 5 until `pr-base-changed`, hs-d324; the adapter shows that kind, section 5.3; 6 until `session state waiting`, hs-d303: the adapter reports a new state; 7 until `review-opened`/`review-closed` and the adapter's `cpd review` commands, hs-d496; 8 until `session-retiered`, hs-d506: the adapter acts on it and reads the new `model` and `thinking` of `session show`, commands.md §10.2; 9 until `plan-outlined`, hs-d502, with `plan review`'s new `summary` file the adapter reads, §15.5; 10 until `job-merged`'s new `data.turn` field and `session-message`'s new required `data.unblocks` field, hs-d514: the adapter reads both; 11 until `session-resumed`, hs-d552: the adapter acts on it; 12 until `session report`, hs-d573: the adapter runs a new command). So **adding a kind, or a `data` field the adapter reads, raises `protocol`**; so does removing or renaming one. An addition the adapter ignores (a kind its table in section 5.3 ignores, a `data` field it does not read) does not. When `PROTOCOL` is raised by hand in `core/src/events/kind.rs`, run `scripts/sync-version.sh` after to update Cargo.toml (docs/versioning.md). The adapter holds the number it was built for and checks it at start-up and at every restart of its follower (commands.md section 15.2); a mismatch is reported once per installed binary, with the code `protocol_mismatch` (section 1.2). The kind set is tied to the adapter by `pi/test/protocol.test.ts` and to `event_kinds` (section 4.4) by the events test (`the_kinds_are_exactly_those_of_5_2_and_of_event_kinds`); no hash of the kinds is pinned.
+**The protocol number** (hs-a4). `cpd --version` reports `protocol`, an integer that starts at **1** and is raised by one whenever an Event kind, a field of an Event's `data` that the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on. **Today it is 14** (1 until `session-message`, 2 until the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278: the adapter runs a command with a new flag, 4 until `session-titled`, hs-d257, 5 until `pr-base-changed`, hs-d324; the adapter shows that kind, section 5.3; 6 until `session state waiting`, hs-d303: the adapter reports a new state; 7 until `review-opened`/`review-closed` and the adapter's `cpd review` commands, hs-d496; 8 until `session-retiered`, hs-d506: the adapter acts on it and reads the new `model` and `thinking` of `session show`, commands.md §10.2; 9 until `plan-outlined`, hs-d502, with `plan review`'s new `summary` file the adapter reads, §15.5; 10 until `job-merged`'s new `data.turn` field and `session-message`'s new required `data.unblocks` field, hs-d514: the adapter reads both; 11 until `session-resumed`, hs-d552: the adapter acts on it; 12 until `session report`, hs-d573: the adapter runs a new command; 13 until `incident-started` and `incident-ended`, hs-d634). So **adding a kind, or a `data` field the adapter reads, raises `protocol`**; so does removing or renaming one. An addition the adapter ignores (a kind its table in section 5.3 ignores, a `data` field it does not read) does not. When `PROTOCOL` is raised by hand in `core/src/events/kind.rs`, run `scripts/sync-version.sh` after to update Cargo.toml (docs/versioning.md). The adapter holds the number it was built for and checks it at start-up and at every restart of its follower (commands.md section 15.2); a mismatch is reported once per installed binary, with the code `protocol_mismatch` (section 1.2). The kind set is tied to the adapter by `pi/test/protocol.test.ts` and to `event_kinds` (section 4.4) by the events test (`the_kinds_are_exactly_those_of_5_2_and_of_event_kinds`); no hash of the kinds is pinned.
 
 ### 5.3 Delivery by the pi adapter
 
