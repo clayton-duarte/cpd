@@ -4,6 +4,7 @@ use crate::common::fx::Fx;
 use crate::common::TestEnv;
 
 use nix::errno::Errno;
+use std::os::fd::AsFd;
 use nix::sys::wait::{WaitPidFlag, waitpid};
 use serde_json::json;
 
@@ -126,4 +127,33 @@ fn a_command_that_owns_its_stdout_is_refused_loudly_and_the_process_is_restored(
     assert!(owned.is_err(), "Fx::cpd has no stdout to return for it");
     assert_eq!(changed(&vars(), &before), Vec::<std::ffi::OsString>::new());
     assert_eq!(std::env::current_dir().unwrap(), cwd);
+}
+
+#[test]
+fn export_sets_the_variable_for_the_fx_and_dropping_it_puts_the_environment_back() {
+    let before = vars();
+    let fx = fx();
+    fx.export("FX_SET_VAR_TEST", "kept");
+    assert_eq!(std::env::var("FX_SET_VAR_TEST").as_deref(), Ok("kept"));
+    drop(fx);
+    assert_eq!(changed(&vars(), &before), Vec::<std::ffi::OsString>::new());
+}
+
+/// What stdin and stdout are: the device and inode each points at.
+fn std_files() -> [(u64, u64); 2] {
+    let id = |fd: std::os::fd::BorrowedFd| {
+        let stat = nix::sys::stat::fstat(fd).unwrap();
+        (stat.st_dev as u64, stat.st_ino as u64)
+    };
+    [id(std::io::stdin().as_fd()), id(std::io::stdout().as_fd())]
+}
+
+#[test]
+fn cpd_without_a_terminal_refuses_a_view_and_puts_stdin_and_stdout_back() {
+    let fx = fx();
+    let before = std_files();
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "legend"]);
+    assert_eq!(run.exit, 3, "{run:?}");
+    assert_eq!(run.error()["code"], "not_a_terminal");
+    assert_eq!(std_files(), before, "stdin and stdout point where they did");
 }

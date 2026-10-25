@@ -5,11 +5,15 @@ use crate::common;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
 use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::error::ErrorCode;
-use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook};
+use cpd_core::fakes::git::{GitRoute, Repo, Universe};
+use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook, run_hook_with};
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::git::{
     GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
     discard_worktree, push_commit, lead_branch, lead_worktree_path, tamper_check,
@@ -331,12 +335,90 @@ impl Hooks {
     }
 }
 
+// The hooks below run in this process: `run_hook_with` on the `Ports` of an `Fx`, the git calls that build the
+// variables answered by the fake git (a `Repo` of a `Universe`), the hooks' `sh -c` by a script on the `FakeRunner`.
+// No file a hook would write is written: what a test reads is the `Call`s of `sh` and what the script answered.
+
+/// What a script of `sh` answers, by the command (`sh -c <command>`).
+struct Sh(Box<dyn Fn(&str) -> Reply + Send + Sync>);
+
+impl Handler for Sh {
+    fn handle(&self, call: &Call) -> Reply {
+        (self.0)(&call.args[1])
+    }
+}
+
+struct Hooked {
+    fx: Fx,
+    repo: Repo,
+    route: Arc<GitRoute>,
+    log: PathBuf,
+    /// The hooks, written as a `.config/wt.toml` was and read as the `[hooks]` of a repo policy file.
+    wt: String,
+}
+
+/// A repo `pay` on `main` with one commit, in the fake git of an `Fx` on fake ports.
+fn hooked(wt: &str) -> Hooked {
+    let fx = Fx::with_ports();
+    let mut universe = Universe::new(fx.fakes.clock.clone());
+    universe.set_global("user.name", "cpd test");
+    universe.set_global("user.email", "test@cpd.invalid");
+    let universe = Arc::new(Mutex::new(universe));
+    let route = Arc::new(GitRoute::new(universe.clone()));
+    let _ = (*fx.fakes.runner).clone().with_git(&route);
+    let root = fx.env.root().canonicalize().unwrap();
+    let repo = Repo::init(&universe, &root.join("pay"));
+    repo.write("README.md", "pay\n");
+    repo.commit("init");
+    let log = root.join("logs").join("h.log");
+    Hooked { fx, repo, route, log, wt: wt.to_owned() }
+}
+
+impl Drop for Hooked {
+    fn drop(&mut self) {
+        self.route.assert_supported();
+    }
+}
+
+impl Hooked {
+    /// The hooks answer `reply`, whatever their command.
+    fn sh(&self, reply: Reply) {
+        self.fx.fake("sh", reply);
+    }
+
+    /// The hooks answer by their command: `script(command)`.
+    fn script(&self, script: impl Fn(&str) -> Reply + Send + Sync + 'static) {
+        let _ = (*self.fx.fakes.runner).clone().route("sh", Arc::new(Sh(Box::new(script))));
+    }
+
+    /// The commands the hooks were run with (`sh -c <command>`), in the order they were called.
+    fn commands(&self) -> Vec<String> {
+        self.fx.calls("sh").iter().map(|call| call.args[1].clone()).collect()
+    }
+
+    fn run(&self, hook: Hook) -> cpd_core::git::HookResult {
+        self.run_for(hook, Duration::from_secs(30))
+    }
+
+    fn run_for(&self, hook: Hook, timeout: Duration) -> cpd_core::git::HookResult {
+        self.run_table(&self.wt, hook, timeout)
+    }
+
+    /// The hook `hook` of the `[hooks]` text `wt`, in the repo.
+    fn run_table(&self, wt: &str, hook: Hook, timeout: Duration) -> cpd_core::git::HookResult {
+        let operation = Operation { branch: "main" };
+        let ports = &self.fx.fakes.ports;
+        run_hook_with(ports, hook, &pipeline(wt, hook), self.repo.dir(), Some(&operation), timeout, &self.log).unwrap()
+    }
+}
+
 #[test]
 fn no_file_and_no_table_mean_no_commands_and_the_hook_passes() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let log = env.root().join("h.log");
-    let run = |wt: &str| run_hook(Hook::PreCommit, &pipeline(wt, Hook::PreCommit), &repo, None, Duration::from_secs(5), &log).unwrap();
+    let h = hooked("");
+    let run = |wt: &str| {
+        let ports = &h.fx.fakes.ports;
+        run_hook_with(ports, Hook::PreCommit, &pipeline(wt, Hook::PreCommit), h.repo.dir(), None, Duration::from_secs(5), &h.log).unwrap()
+    };
 
     let result = run("");
     assert_eq!(result.outcome, HookOutcome::Passed);
@@ -346,21 +428,25 @@ fn no_file_and_no_table_mean_no_commands_and_the_hook_passes() {
     let result = run("[pre-merge]\ngate = \"exit 1\"\n");
     assert_eq!(result.outcome, HookOutcome::Passed);
     assert_eq!(result.tail, None);
-    assert!(!log.exists());
+    assert!(!h.log.exists());
+    assert!(h.fx.fakes.runner.calls().is_empty(), "nothing was run, not even a git call for the variables");
 }
 
 #[test]
 fn a_passing_hook_has_its_output_logged_and_returned() {
-    let h = hooks("pre-commit = \"echo out; echo err >&2\"\n");
+    let h = hooked("pre-commit = \"echo out; echo err >&2\"\n");
+    h.sh(Reply::exit(0, "out\n", "err\n"));
     let result = h.run(Hook::PreCommit);
     assert_eq!(result.outcome, HookOutcome::Passed);
     assert_eq!(result.tail.as_deref(), Some("out\nerr"));
     assert_eq!(fs::read_to_string(&h.log).unwrap(), "out\nerr\n");
+    assert_eq!(h.commands(), ["echo out; echo err >&2"]);
 }
 
 #[test]
 fn a_failing_hook_reports_its_exit_status_and_output() {
-    let h = hooks("pre-merge = \"echo broken; exit 7\"\n");
+    let h = hooked("pre-merge = \"echo broken; exit 7\"\n");
+    h.sh(Reply::exit(7, "broken\n", ""));
     let result = h.run(Hook::PreMerge);
     assert_eq!(result.outcome, HookOutcome::Failed { exit: 7 });
     assert_eq!(result.tail.as_deref(), Some("broken"));
@@ -368,7 +454,8 @@ fn a_failing_hook_reports_its_exit_status_and_output() {
 
 #[test]
 fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
-    let h = hooks("pre-merge = \"seq 1 100\"\n");
+    let h = hooked("pre-merge = \"seq 1 100\"\n");
+    h.sh(Reply::ok(&(1..=100).map(|n| format!("{n}\n")).collect::<String>()));
     let result = h.run(Hook::PreMerge);
     let tail = result.tail.unwrap();
     assert_eq!(tail.lines().count(), 60);
@@ -379,12 +466,27 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 
 #[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
-    // Keys are not in alphabetical order: file order decides, not the table's sort. `zeta`
-    // (first in the file) only fails once `slow` (last) has started, so the commands run
-    // together; `slow` ends after the others have failed, so it is waited for, not abandoned.
-    let h = hooks(
-        "[pre-merge]\nzeta = \"until [ -e slow.started ]; do sleep 0.05; done; touch zeta.failed; exit 5\"\nalpha = \"exit 3\"\nslow = \"touch slow.started; until [ -e zeta.failed ]; do sleep 0.05; done; sleep 0.3; echo slow-done\"\n",
-    );
+    // Keys are not in alphabetical order: file order decides, not the table's sort. `zeta` (first in the file) only
+    // fails once `slow` (last) has started, so the commands run together: run one after another, the first would wait
+    // for the second for ever. `slow` ends after the others have failed, so it is waited for, not abandoned.
+    let h = hooked("[pre-merge]\nzeta = \"zeta\"\nalpha = \"alpha\"\nslow = \"slow\"\n");
+    let (slow_started, zeta_failed) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+    h.script({
+        let (slow_started, zeta_failed) = (slow_started.clone(), zeta_failed.clone());
+        move |command| match command {
+            "zeta" => {
+                slow_started.wait();
+                zeta_failed.wait();
+                Reply::exit(5, "", "")
+            }
+            "alpha" => Reply::exit(3, "", ""),
+            _ => {
+                slow_started.wait();
+                zeta_failed.wait();
+                Reply::ok("slow-done\n")
+            }
+        }
+    });
     let result = h.run(Hook::PreMerge);
     assert_eq!(result.outcome, HookOutcome::Failed { exit: 5 });
     assert!(result.tail.unwrap().contains("slow │ slow-done"));
@@ -392,40 +494,112 @@ fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() 
 
 #[test]
 fn commands_of_a_table_run_concurrently() {
-    // Each command waits until all three have started: run one after another, the first
-    // never sees the others and the hook times out.
-    let rendezvous = |me: &str| {
-        format!(
-            "touch {me}.started; until [ -e a.started ] && [ -e b.started ] && [ -e c.started ]; do sleep 0.05; done"
-        )
-    };
-    let h = hooks(&format!(
-        "[pre-merge]\na = \"{}\"\nb = \"{}\"\nc = \"{}\"\n",
-        rendezvous("a"),
-        rendezvous("b"),
-        rendezvous("c")
-    ));
+    // Each command waits until all three have started: run one after another, the first never sees the others.
+    let h = hooked("[pre-merge]\na = \"a\"\nb = \"b\"\nc = \"c\"\n");
+    let started = Arc::new(Barrier::new(3));
+    h.script(move |_| {
+        started.wait();
+        Reply::ok("")
+    });
     assert_eq!(h.run_for(Hook::PreMerge, Duration::from_secs(20)).outcome, HookOutcome::Passed);
+    assert_eq!(h.fx.calls("sh").len(), 3);
 }
 
 #[test]
 fn a_pipeline_runs_its_blocks_in_order_and_a_failing_block_stops_it() {
-    let h = hooks(
+    let h = hooked(
         "[[pre-merge]]\none = \"echo one > one.txt\"\n\n[[pre-merge]]\ntwo = \"test -f one.txt && echo two > two.txt\"\nfail = \"exit 4\"\n\n[[pre-merge]]\nthree = \"echo three > three.txt\"\n",
     );
+    h.script(|command| if command == "exit 4" { Reply::exit(4, "", "") } else { Reply::ok("") });
     let result = h.run(Hook::PreMerge);
     assert_eq!(result.outcome, HookOutcome::Failed { exit: 4 });
-    assert_eq!(h.file("two.txt"), "two\n");
-    assert!(!h.repo.join("three.txt").exists());
+    let commands = h.commands();
+    // The second block started after the first ended (`two` reads the file `one` writes), and ran whole.
+    assert_eq!(commands[0], "echo one > one.txt");
+    let mut second = commands[1..].to_vec();
+    second.sort();
+    assert_eq!(second, ["exit 4", "test -f one.txt && echo two > two.txt"]);
+    assert_eq!(commands.len(), 3, "the third block did not run: {commands:?}");
 }
 
 #[test]
 fn output_of_concurrent_commands_is_prefixed_with_their_names() {
-    let h = hooks("[pre-merge]\nlint = \"echo lint-ok\"\ntest = \"echo test-ok\"\n");
+    let h = hooked("[pre-merge]\nlint = \"echo lint-ok\"\ntest = \"echo test-ok\"\n");
+    h.script(|command| Reply::ok(&format!("{}\n", command.trim_start_matches("echo "))));
     let tail = h.run(Hook::PreMerge).tail.unwrap();
     let mut lines: Vec<&str> = tail.lines().collect();
     lines.sort();
     assert_eq!(lines, vec!["lint │ lint-ok", "test │ test-ok"]);
+}
+
+#[test]
+fn an_undefined_variable_or_worktrunk_filter_fails_before_anything_runs() {
+    let h = hooked("");
+    for bad in ["{{ nope }}", "{{ branch | sanitize }}", "{{ vars.x }}", "{{ target_worktree_path_of('x') }}"] {
+        let wt = format!("[pre-merge]\nfirst = \"touch ran.txt\"\nsecond = \"echo {bad}\"\n");
+        let result = h.run_table(&wt, Hook::PreMerge, Duration::from_secs(30));
+        assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))), "{bad}: {result:?}");
+        assert_eq!(result.tail, None);
+        assert!(h.fx.calls("sh").is_empty(), "{bad}: a command ran");
+    }
+}
+
+#[test]
+fn a_malformed_hooks_table_is_policy_invalid() {
+    for text in ["pre-merge = [", "pre-merge = 3\n", "[pre-merge]\nx = 1\n"] {
+        let err = try_pipeline(text, Hook::PreMerge).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{text}");
+    }
+}
+
+#[test]
+fn a_wt_toml_in_the_tree_is_not_read() {
+    let h = hooked("pre-commit = \"echo from the policy\"\n");
+    h.repo.write(".config/wt.toml", "pre-commit = \"echo from the tree\"\n");
+    h.script(|command| Reply::ok(&format!("{}\n", command.trim_start_matches("echo "))));
+    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("from the policy"));
+    assert_eq!(h.commands(), ["echo from the policy"]);
+}
+
+#[test]
+fn a_command_killed_by_a_signal_is_an_error_not_a_failure() {
+    let h = hooked("pre-merge = \"echo started; kill -9 $$\"\n");
+    h.sh(Reply::signal(9, "started\n", ""));
+    let result = h.run(Hook::PreMerge);
+    assert_eq!(result.outcome, HookOutcome::Error(HookError::Signal(9)));
+    assert_eq!(result.tail.as_deref(), Some("started"));
+}
+
+#[test]
+fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
+    // The variables are in this process's environment, which `Fx` puts back; the hook's call removes each of them
+    // (`Call.envs`: `None`), and leaves the others to be inherited (`GITTEST_KEEP` is not named).
+    let h = hooked("pre-merge = \"env > env.txt\"\n");
+    for (key, value) in [("TMUX", "/tmp/fake,1,0"), ("TMUX_PANE", "%9"), ("PI_GITTEST", "x"), ("CPD_GITTEST", "x"), ("GITTEST_KEEP", "kept")] {
+        h.fx.export(key, value);
+    }
+    h.sh(Reply::ok(""));
+    assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
+    let envs = h.fx.calls("sh")[0].envs.clone();
+    for gone in ["TMUX", "TMUX_PANE", "PI_GITTEST", "CPD_GITTEST"] {
+        assert!(envs.contains(&(gone.to_owned(), None)), "{gone} leaked: {envs:?}");
+    }
+    assert!(envs.iter().all(|(key, _)| key != "GITTEST_KEEP"), "GITTEST_KEEP is the caller's to inherit: {envs:?}");
+}
+
+#[test]
+fn the_commands_of_a_hook_can_be_listed_in_file_order() {
+    let wt = "[[pre-commit]]\nz = \"first {{ branch }}\"\n\n[[pre-commit]]\nb = \"second\"\na = \"third\"\n";
+    let commands: Vec<_> =
+        pipeline(wt, Hook::PreCommit).commands().map(|c| (c.name.clone().unwrap(), c.template.clone())).collect();
+    assert_eq!(
+        commands,
+        vec![
+            ("z".to_owned(), "first {{ branch }}".to_owned()),
+            ("b".to_owned(), "second".to_owned()),
+            ("a".to_owned(), "third".to_owned())
+        ]
+    );
 }
 
 #[test]
@@ -473,22 +647,6 @@ fn target_worktree_path_is_undefined_when_no_worktree_has_the_target() {
     assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))));
 }
 
-#[test]
-fn a_malformed_hooks_table_is_policy_invalid() {
-    for text in ["pre-merge = [", "pre-merge = 3\n", "[pre-merge]\nx = 1\n"] {
-        let err = try_pipeline(text, Hook::PreMerge).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{text}");
-    }
-}
-
-#[test]
-fn a_wt_toml_in_the_tree_is_not_read() {
-    let h = hooks("pre-commit = \"echo from the policy\"\n");
-    fs::create_dir_all(h.repo.join(".config")).unwrap();
-    fs::write(h.repo.join(".config/wt.toml"), "pre-commit = \"echo from the tree\"\n").unwrap();
-    assert_eq!(h.run(Hook::PreCommit).tail.as_deref(), Some("from the policy"));
-}
-
 /// Dead means no such process or state Z. The hook's sh is gone, so a background child is
 /// an orphan: after SIGKILL it is a zombie (`kill -0` still succeeds) until init reaps it,
 /// and on a loaded runner that window is visible.
@@ -506,70 +664,6 @@ fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
     // The contract is that the child is dead, not that its pid is already free: wait a
     // bounded time for the kill to land.
     common::wait_until("the background child to die when the hook returns", || is_dead(&pid));
-}
-
-#[test]
-fn a_command_killed_by_a_signal_is_an_error_not_a_failure() {
-    let h = hooks("pre-merge = \"echo started; kill -9 $$\"\n");
-    let result = h.run(Hook::PreMerge);
-    assert_eq!(result.outcome, HookOutcome::Error(HookError::Signal(9)));
-    assert_eq!(result.tail.as_deref(), Some("started"));
-}
-
-/// Set (by the test below, on the child's `Command`) in the one process whose environment holds
-/// the cockpit's variables; the helper does nothing without it.
-const HOOK_ENV_GATE: &str = "CPD_GITTEST_HOOK_ENV_HELPER";
-
-/// Not a test of its own: the child process of the test below, whose environment is the cockpit's.
-#[test]
-fn hook_env_helper() {
-    if std::env::var_os(HOOK_ENV_GATE).is_none() {
-        return;
-    }
-    let h = hooks("pre-merge = \"env > env.txt\"\n");
-    assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
-    let env = h.file("env.txt");
-    for gone in ["TMUX=", "TMUX_PANE=", "PI_GITTEST=", "CPD_GITTEST="] {
-        assert!(!env.lines().any(|l| l.starts_with(gone)), "{gone} leaked");
-    }
-    assert!(env.lines().any(|l| l == "GITTEST_KEEP=kept"));
-}
-
-#[test]
-fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
-    // The variables are on a child's `Command`, never in this multi-threaded process's environment.
-    let out = common::output(
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "git::hook_env_helper", "--test-threads=1"])
-            .env(HOOK_ENV_GATE, "x")
-            .env("TMUX", "/tmp/fake,1,0")
-            .env("TMUX_PANE", "%9")
-            .env("PI_GITTEST", "x")
-            .env("CPD_GITTEST", "x")
-            .env("GITTEST_KEEP", "kept"),
-    )
-    .unwrap();
-    assert!(
-        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn the_commands_of_a_hook_can_be_listed_in_file_order() {
-    let h = hooks("[[pre-commit]]\nz = \"first {{ branch }}\"\n\n[[pre-commit]]\nb = \"second\"\na = \"third\"\n");
-    let commands: Vec<_> =
-        pipeline(&h.wt, Hook::PreCommit).commands().map(|c| (c.name.clone().unwrap(), c.template.clone())).collect();
-    assert_eq!(
-        commands,
-        vec![
-            ("z".to_owned(), "first {{ branch }}".to_owned()),
-            ("b".to_owned(), "second".to_owned()),
-            ("a".to_owned(), "third".to_owned())
-        ]
-    );
 }
 
 // --------------------------------------------------------------- tamper
