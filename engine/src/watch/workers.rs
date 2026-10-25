@@ -1,7 +1,7 @@
 //! The `@cpd_workers` step (contract §6.1; commands.md §12; User, hs-d149,
 //! hs-d198): the right side of the StatusBar, which tmux's status line cannot
-//! compute: the `workers N/M · W waiting · Q queued` text, its short form `N/M·W·Q`
-//! and the width of the long right side. Every tick, `N` is the Attempts not `ended` (the slots of the
+//! compute: the `workers N/M · W waiting · Q queued` text and its short form `N/M·W·Q`.
+//! Every tick, `N` is the Attempts not `ended` (the slots of the
 //! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
@@ -18,15 +18,9 @@ use super::restart;
 use super::schedule::READY;
 use cpd_core::error::CpdError;
 
-/// The options the status line draws: the long form, the short form, and the width in cells of
-/// the workers' pill, with its two caps, in the long form and in the short form.
+/// The options the status line draws: the long form and the short form.
 const LONG: &str = "@cpd_workers";
 const SHORT: &str = "@cpd_workers_short";
-const WIDTH: &str = "@cpd_workers_width";
-const SHORT_WIDTH: &str = "@cpd_workers_short_width";
-
-/// The cells of a pill's two caps, which the status line's format draws around each text.
-const CAPS: usize = 2;
 
 /// The Attempts holding a slot (§3.4): the same query as the `widgets` view's slots.
 const HELD: &str = "SELECT count(*) FROM attempts WHERE status <> 'ended'";
@@ -63,16 +57,6 @@ impl Counts {
     pub(super) fn short(self) -> String {
         format!("{}/{}·{}·{}", self.running, self.limit, self.waiting, self.queued)
     }
-
-    /// The long form's visible width in cells (every character is one cell).
-    fn width(self) -> usize {
-        format!("workers {}/{} · {} waiting · {} queued", self.running, self.limit, self.waiting, self.queued).chars().count()
-    }
-
-    /// The short form's visible width in cells.
-    fn short_width(self) -> usize {
-        format!("{}/{}·{}·{}", self.running, self.limit, self.waiting, self.queued).chars().count()
-    }
 }
 
 pub(super) fn run(engine: &mut Engine) {
@@ -83,11 +67,8 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
     let (long, short) = (counts.long(), counts.short());
-    // The status line draws each text in a pill.
-    let right = |workers: usize| (workers + CAPS).to_string();
-    let (width, short_width) = (right(counts.width()), right(counts.short_width()));
-    // What was last set: the four values, one string (no value holds a newline).
-    let state = format!("{long}\n{short}\n{width}\n{short_width}");
+    // What was last set: the two values, one string (no value holds a newline).
+    let state = format!("{long}\n{short}");
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
@@ -100,9 +81,8 @@ pub(super) fn run(engine: &mut Engine) {
         }
         Err(e) => return failed(engine, &e),
     }
-    // One call, so a status line never draws a width that belongs to another text.
-    let args = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
-        .map(str::to_owned);
+    // One call, so a status line never draws a text that belongs to another.
+    let args = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short].map(str::to_owned);
     let set: Result<String, CpdError> = engine.tmux.run(&args);
     match set {
         Ok(_) => {
@@ -141,20 +121,6 @@ mod tests {
         let c = counts(6, 6, 4, 9);
         assert_eq!(c.long(), "workers 6/6 · 4 waiting · 9 queued");
         assert_eq!(c.short(), "6/6·4·9");
-    }
-
-    #[test]
-    fn the_width_is_the_visible_width_of_the_long_form() {
-        assert_eq!(counts(6, 6, 4, 9).width(), "workers 6/6 · 4 waiting · 9 queued".chars().count());
-        assert_eq!(counts(6, 6, 4, 9).width(), 34);
-        assert_eq!(counts(0, 3, 0, 0).width(), 34);
-        assert_eq!(counts(10, 12, 100, 1000).width(), 41);
-    }
-
-    #[test]
-    fn the_short_width_is_the_visible_width_of_the_short_form() {
-        assert_eq!(counts(6, 6, 4, 9).short_width(), "6/6·4·9".chars().count());
-        assert_eq!(counts(10, 12, 100, 1000).short_width(), 14);
     }
 
     /// The tables the Ready rule reads, with three Plans' worth of rows.
