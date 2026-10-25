@@ -69,13 +69,18 @@ impl Runner for SystemRunner {
         cmd.process_group(0).output()
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
-        let mut cmd = if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) };
+        let mut cmd = system_command(call);
         if let Some(path) = &call.stderr_to {
             let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
             cmd.stderr(file);
         }
         deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some(), call.tool == HOOK_TOOL)
     }
+}
+
+/// The `Command` [`SystemRunner`] starts for `call`: [`command`], and a Git hook (`HOOK_TOOL`) behind the idle priority prefix.
+pub fn system_command(call: &Call) -> Command {
+    if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) }
 }
 
 /// `call` behind the idle priority prefix (hs-d528): its environment and working directory are the same.

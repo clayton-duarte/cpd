@@ -35,9 +35,10 @@ mod cells;
 mod chat;
 mod cockpit;
 mod host_click;
+mod incident_click;
 pub mod dialog;
 pub mod fold;
-mod history;
+pub mod history;
 mod input_box;
 #[cfg(test)]
 mod layout_dialog_tests;
@@ -79,11 +80,9 @@ mod trace_tests;
 mod icons_tests;
 pub mod merge;
 pub mod pace;
-pub mod pump;
+mod pump;
 #[cfg(test)]
 mod pump_tests;
-#[cfg(test)]
-mod pump_scripted_tests;
 #[cfg(test)]
 mod pace_tests;
 pub mod palette;
@@ -96,7 +95,7 @@ mod updating_label;
 mod pill_colours;
 pub mod plan;
 pub use plan::draw_first_frame;
-pub use history::{draw_history, show_with as show_history_with};
+pub use history::draw_history;
 mod popup;
 pub mod read;
 mod runner;
@@ -112,7 +111,7 @@ mod no_notes;
 mod terminal_writes;
 #[cfg(test)]
 mod test_text;
-mod tree;
+pub mod tree;
 mod viewlog;
 pub mod widgets;
 pub mod worker;
@@ -191,10 +190,10 @@ pub enum Command {
     Action(ActionArgs),
 }
 
-/// `cpd tui action <reset|legend|logs> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
+/// `cpd tui action <reset|legend|logs|host|incident> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
 #[derive(clap::Args, Debug)]
 pub struct ActionArgs {
-    /// `reset`, `legend` or `logs`: the button's range; or `merge`, the `merge` popup's confirm. Optional and free
+    /// `reset`, `legend`, `logs`, `host` or `incident`: the button's range; or `merge`, the `merge` popup's confirm. Optional and free
     /// text, so that any value, an empty `#{mouse_status_range}` included, reaches the command and fails with
     /// `display-message`, never a usage error on stdout
     pub action: Option<String>,
@@ -241,7 +240,7 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
             View::Plan => plan::run(ports, run_command),
             View::Widgets => widgets::run(ports, run_command),
             View::Worker(args) => worker::run(ports, args),
-            View::History(args) => history::run(args),
+            View::History(args) => history::run(ports, args),
             View::Legend => widgets::legend::run(ports),
             View::Logs(args) => logs::run(ports, args),
             View::Merge(args) => merge::run(ports, args),

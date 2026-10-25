@@ -3,6 +3,7 @@
 //! Read-only, except the migration of a database's first open.
 
 mod check;
+mod holographic;
 mod pi;
 mod state;
 mod tools;
@@ -78,6 +79,7 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
     checks.push(state::watch(&home, store.as_mut()));
     checks.extend(tmux_restart(&home));
+    checks.push(with_config("holographic", Severity::Error, &holographic::holographic));
 
     let failed: Vec<&str> = checks.iter().filter(|c| c.is_error_failure()).map(|c| c.name).collect();
     if failed.is_empty() {

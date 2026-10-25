@@ -277,15 +277,14 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest] [--topic <t>]
+cpd context show [--context <id>] [--since <seq>] [--record <id>] [--topic <t>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
-| `--digest` | print the Context's digest (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--topic` (`usage`) |
-| `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--digest` (`usage`) |
+| `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since` and `--record` (`usage`) |
 
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor, and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
@@ -302,13 +301,7 @@ Effects: none. Output: the Context, its records in index order, and `markdown`, 
 
 Idempotent: read-only.
 
-**`--digest`** (hs-d194, D6; rewritten by hs-d549, hs-d551; FX6, FX8). **Built by cpd on demand, with no model and no file** (contract §4.6 "The Context digest"): the relevant curated records in force, as short forms by topic, then the topic list with counts. Relevant: the records whose `at` is within the last `context_recent_days` days (contract §8.2; default 1), the open questions, and the records cited by id in the text of a brief of a Plan that is not done, archived or deleted. The text is `## <topic>` (topics ordered by their newest relevant record, newest first) with `- [<id>] <short>` lines, then `## Topics` with `- <topic> (<n>)`, `n` the records in force of that topic; at most 32768 bytes (FX6), the oldest relevant lines dropped first, ending with `and <k> older: cpd context show --context <context> --topic <t>` per topic lost. FX8: `digest` output fields are `{bytes, records}` only, and the text is `markdown`. A Context with no curated record in force is not an error: `markdown` is empty and `records` 0 (the uncurated records are read with `context show`; `cpd context distill` curates them, §3.12).
 
-```json
-{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
- "digest": {"bytes": 4120, "records": 37},
- "markdown": "## engine\n- [hs-d7] one engine per machine …\n\n## Topics\n- engine (12)\n…"}
-```
 
 **`--topic <t>`** (FX5 of hs-d549, hs-d551): prints every curated record in force of the topic `<t>` (the exact topic string of `record_curations`), oldest first, one per line `- [<id>] <short>`; the way to read what the digest leaves out. `markdown` is those lines and `records` the list `{id, short}`. FX5: an unknown topic (no curated record in force has that topic) is refused `topic_not_found` (exit 4, `details: {context, topic, topics}`, the topics in use). Read-only.
 
@@ -318,7 +311,28 @@ Idempotent: read-only.
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-### 3.4 `context decide`, `context note`, `context ask`
+### 3.4 `context search`
+
+```
+cpd context search <query> [--context <id>]
+```
+
+Searches the Context's curated records by topic and short form against the query string (hs-d655: on-demand retrieval). The Context is `--context`, else the selected Plan's (§1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+| Flag | Meaning |
+|---|---|
+| `<query>` | search string to match against topics and short forms of curated records |
+
+Effects: none. Output: records with curated topics or short forms matching the query, in topic order, then index order. `markdown` renders results; `records` is the list of matching `{id, topic, short}` entries.
+
+Idempotent: read-only.
+
+### 3.5 `context decide`, `context note`, `context ask`
 
 ```
 cpd context decide <text> [--supersedes <record>] [--context <id>]
@@ -346,7 +360,7 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-### 3.5 `context answer`
+### 3.6 `context answer`
 
 ```
 cpd context answer <question> <text> [--context <id>]
@@ -367,11 +381,11 @@ Effects: the record write with kind `answer` (letter `a`) and `question` = `<que
 
 Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
 
-### 3.6 `context sync`
+### 3.7 `context sync`
 
 Removed by Plan manager B1 (hs-a1): Contexts are machine-local; records live in the database. The command is now unknown (`usage`, exit 2); engine E6 is removed with it (contract §3.7).
 
-### 3.7 `context rename`
+### 3.8 `context rename`
 
 ```
 cpd context rename <id> --title <text>
@@ -391,7 +405,7 @@ Effects: an unchanged title: `"already": true`, nothing written. Otherwise **row
 
 Idempotent: yes.
 
-### 3.8 `context archive`
+### 3.9 `context archive`
 
 ```
 cpd context archive <id>
@@ -416,7 +430,7 @@ Effects, in this order (all or nothing):
 
 `closed` lists the panes closed in step 2. Idempotent: yes; a Context that is archived already (and whose cascade has nothing to archive) returns `"already": true`, writes nothing and closes nothing.
 
-### 3.9 `context unarchive`
+### 3.10 `context unarchive`
 
 ```
 cpd context unarchive <id>
@@ -436,7 +450,7 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 
 `archived` lists the objects changed (their `archived_at` is now null); `closed` is always empty. Idempotent: yes; nothing archived: `"already": true`, nothing written.
 
-### 3.10 `context manager`
+### 3.11 `context manager`
 
 ```
 cpd context manager [--context <c>] [--by-user]
@@ -467,7 +481,7 @@ The command never moves the chat slot (hs-d103); `session open <manager>` does (
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
 
-### 3.11 `context pending`
+### 3.12 `context pending`
 
 ```
 cpd context pending [--context <c>] [--markdown]
@@ -506,13 +520,13 @@ With `--markdown` the output is the same data as markdown: `# Pending work in <c
 
 Idempotent: yes; it only reads.
 
-### 3.12 `context distill`
+### 3.13 `context distill`
 
 ```
 cpd context distill [--context <c>] [--batch <n>]
 ```
 
-Curates one batch of the Context's records (contract §4.6 "The distiller curates" and "The distill run", hs-d549, hs-d551, replacing the digest-writing run of hs-d194 D1–D5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated): at most **N uncurated records** in force (FX4: N is `--batch` from 1 to 60, default 60, at most 49152 bytes of their text in batch.md, hs-d549, hs-d551) get a topic and a short form (for machines), and the run may propose retirements and flag documentation candidates, written by one-shot pi and **checked structurally by cpd**, with each line validated independently so invalid lines do not fail the whole output (GXD1). It writes no digest: the digest is rendered by cpd on demand, with no model (§3.3 `--digest`). Engine E9 starts it detached when the Context has uncurated records in force and the newest of them is 10 minutes old, or 20 or more exist (contract §3.7); one batch per run, so a backlog (751 records for `building-cpd`) is curated by one run per tick. When a run for a state (the highest uncurated seq and count) fails (distill_invalid only when no line passes, distill_failed after the whole ladder, or a crash), E9 starts the next run for the same state with the next smaller batch (60 → 30 → 15 → 5 → 1, FX4) and records the batch size with the state; after batch 1 fails, it stops until the state changes (a success curates at least one record, GXD1, or a new record) or the engine restarts (contract §3.7 E9). Anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
+Curates one batch of the Context's records (contract §4.6 "The distiller curates" and "The distill run", hs-d549, hs-d551, replacing the digest-writing run of hs-d194 D1–D5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated): at most **N uncurated records** in force (FX4: N is `--batch` from 1 to 60, default 60, at most 49152 bytes of their text in batch.md, hs-d549, hs-d551) get a topic and a short form (for machines), and the run may propose retirements and flag documentation candidates, written by one-shot pi and **checked structurally by cpd**, with each line validated independently so invalid lines do not fail the whole output (GXD1). The curations are read by `context show --topic` for discovery and retrieval. Engine E9 starts it detached when the Context has uncurated records in force and the newest of them is 10 minutes old, or 20 or more exist (contract §3.7); one batch per run, so a backlog (751 records for `building-cpd`) is curated by one run per tick. When a run for a state (the highest uncurated seq and count) fails (distill_invalid only when no line passes, distill_failed after the whole ladder, or a crash), E9 starts the next run for the same state with the next smaller batch (60 → 30 → 15 → 5 → 1, FX4) and records the batch size with the state; after batch 1 fails, it stops until the state changes (a success curates at least one record, GXD1, or a new record) or the engine restarts (contract §3.7 E9). Anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -554,7 +568,7 @@ Failures, after the lock is taken. Each appends **one** `error` Event `{source: 
 
 Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
-### 3.13 `context owner`
+### 3.14 `context owner`
 
 ```
 cpd context owner <login> [--context <c>]
@@ -586,7 +600,7 @@ Effects: **rows and Events**, one transaction with the checks and the UPDATE on 
 
 Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
 
-### 3.14 `context delete`
+### 3.15 `context delete`
 
 ```
 cpd context delete <id> [--yes]
@@ -634,7 +648,7 @@ Idempotent: yes; a Context already deleted returns `"already": true` and writes 
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `context_delete.rs` expects no Session with `context = <id>`, but the Leads' rows stay (tombstoned Plans reference them), and `plan_rows` as under `plan delete` counts the Leads and the Plans' `plan-deleted` Events; the Manager and every other Session are what is gone.
 
-### 3.15 `context curation` (internal)
+### 3.16 `context curation` (internal)
 
 ```
 cpd context curation [--context <c>] [--limit <n>]
@@ -664,7 +678,7 @@ Effects: none. Output: `retire`, the first n `pending` rows of `record_retiremen
 
 Idempotent: read-only.
 
-### 3.16 `context retire` (internal)
+### 3.17 `context retire` (internal)
 
 ```
 cpd context retire [--context <c>] [--approve <id,...>] [--reject <id,...>]
@@ -695,7 +709,7 @@ Effects: **one transaction**, all or nothing (a refusal writes nothing). **Rows:
 
 Idempotent: no. A rerun finds the rows decided and is refused `curation_not_pending`.
 
-### 3.17 `context docs` (internal)
+### 3.18 `context docs` (internal)
 
 ```
 cpd context docs [--context <c>] [--send <id,...>] [--dismiss <id,...>]
@@ -759,10 +773,11 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
-3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the Context (contract §4.6 "Consumers", hs-d194 D6):
-   - **the digest** (§3.3 `--digest`: the relevant short forms by topic, then the topic list; built by cpd, no model; hs-d549, hs-d551), then the **uncurated** records in force raw, oldest first, at most 20, rendered as `context show` renders them (briefs short), then, when more exist, `and <K> more: cpd context show --context <c>`, then the pointer line `cpd context show --since <seq>`; `cpd context show --topic <t>` reads the rest of a topic;
-
-   The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
+3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md` (contract §4.6 "Consumers", hs-d655): a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the pointer line:
+   ```
+   Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
+   ```
+   The Lead gets on-demand access to the Context through these commands. The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
 5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2).
 
@@ -1530,7 +1545,7 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
 | (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
 | (kinds `open`, `update`) HEAD does not conflict with `origin/<base>`, freshly fetched (`git merge-tree --write-tree --name-only origin/<base> HEAD`; hs-d490: the base is merged only on a conflict, and a base that merely moved ahead is no refusal); `details` `{pr, base, base_sha, sha, files, next}`, `next` = `["git -C <worktree> merge --no-edit origin/<base>", "cpd attempt submit <attempt>"]` | `base_conflict` | 3 |
-| (kinds `open`, `update`; `pr.gate` `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
+| (kinds `open`, `update`; `gate.pr` is `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
 | (the same) the gate worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
 
 Effects:
@@ -1669,7 +1684,7 @@ A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6
 
 **The repair** (hs-d340). A PR is opened by its `open` Job (contract §7.7), not by the Lead: engine E4 adds the Job to every started PR, its Worker merges the base, and its submit runs the Gate, pushes, and opens the pull request in its merge. `pr open` stays for what that cannot cover: a PR whose `open` Job is `failed` (the Lead decides between `job retry <job> --tier <T>` (§5.4) and this command), an engine that is down, or a PR whose `open` Job the Lead cancelled (`job cancel` stands, §5.3: E4 adds no new one, so this is how the PR is opened later; to give it up, `pr cancel`, §9.6). It is refused `open_job_live` while the PR has an `open` Job that is `draft`, `queued` or `running` (hs-d573), and its `jobs_not_done` counts every Job of the PR except its `open` and `update` Jobs. Nothing else here changes: the steps and refusals below are the ones the Job's submit and merge share (contract §7.6 steps 0, 1, 3, 4).
 
-`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `pr.gate` is `local`** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
+`pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`)** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
 
 ```
 cpd pr open [--pr <key>] [--plan <id>]
@@ -1687,7 +1702,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the Gate | `pr_title_required` | 3 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`: a merged one was unstacked first, below): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
-| after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `pr.gate` `ci` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
+| after `git fetch origin <base>`, G (the Lead Branch's head, read once: the commit that is gated, pushed and opened) does not conflict with `origin/<base>` (`git merge-tree --write-tree --name-only`; checked before the Gate, with `gate.merge` and `gate.pr` are `none` as with `local`; hs-d490, contract §7.6 step 1). A base that merely moved ahead is no refusal. `details` is `{pr, base, base_sha, sha, files, next}`, `sha` = G, `files` the conflicted paths, `next` = `["git -C <lead worktree> merge --no-edit origin/<base>", "cpd pr open --pr <key>"]` | `base_conflict` | 3 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
 | its owner has a policy file | `owner_unconfirmed` | 1 |
 | the PR's repo has its policy file, `$CPD_HOME/policy/repos/<owner>/<name>.toml` (contract §8.3 "Keys and resolution"; an empty file is valid; a PR with no `name` has none to miss); `details.repo`, `details.file` | `repo_unconfigured` | 3 |
@@ -1702,14 +1717,14 @@ The Lead worktree's local changes refuse nothing: the Gate does not run there (h
 
 **A stacked PR** (hs-d324, hs-d325, hs-d301, contract §3.8 "Stacked PRs" step 7): when its base PR is `merged`, the command first **unstacks** it, **before the lookup and before every precondition below, `base_not_found` included** (its `base` becomes the base PR's own `base`, normally `main`, walking a chain of merged base PRs to its end; in its own transaction, **Event** `pr-base-changed` with `by` `pr open`, one per step, §5.2; the unstack is kept even when a later check refuses) and goes on with the new base, because GitHub deleted the merged base PR's branch: that branch is never looked up. The poll already unstacks such a PR when it records the base PR's merge (`by` `poll`, contract §7.6 step 6), so this is the case where no poll did yet. Otherwise `<base>` is the base PR's Lead Branch, so the conflict check, the Gate (its `target` the base PR's Lead Branch) and `gh pr create --base <base>` all run on top of it, and GitHub will not land the stacked pull request before the base PR. The Lead Branch contains the base PR's work, because it was started from the base PR's head (§9.7); a base PR that has moved on since is merged in only when it conflicts (`base_conflict`, `next`; hs-d490). Opened ready, never a draft, like every PR.
 
-**Ready, never a draft** (hs-d329): the pull request is opened only after the conflict check above and, with `pr.gate` `local`, the Gate; `gh pr create` never has `--draft` and no cpd command makes a pull request a draft or ready (contract §7.6 "Ready, never a draft"). Under `ci` the conflict check still applies and the pull request opens ready (the Lead's reading of hs-d329: `ci` skips only the Gate).
+**Ready, never a draft** (hs-d329): the pull request is opened only after the conflict check above and, with `gate.pr` is `local`, the Gate; `gh pr create` never has `--draft` and no cpd command makes a pull request a draft or ready (contract §7.6 "Ready, never a draft"). Under `ci` the conflict check still applies and the pull request opens ready (the Lead's reading of hs-d329: `ci` skips only the Gate).
 
 Effects:
 - **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The PR body's `# <title>` line uses the same title. The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
 - **No lock** (hs-d243, contract §7): merges into the PR go on during the command; no R first (an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses).
-- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request whose `pr.gate` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. Before the `plan-done` Event, every pending review of the Plan is closed `superseded`, reason "Plan review r<k> of Plan P is superseded: the Plan is done." The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
+- **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request where `gate.pr` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. Before the `plan-done` Event, every pending review of the Plan is closed `superseded`, reason "Plan review r<k> of Plan P is superseded: the Plan is done." The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Conflict check** (contract §7.6 step 1, hs-d490): `git -C <repo> fetch origin <base>` (no `origin`: skipped, `refs/heads/<base>` used), `B = rev-parse origin/<base>` read once, `G = rev-parse refs/heads/<lead branch>` read once, then `git merge-tree --write-tree --name-only B G`; exit 1 is `base_conflict` with nothing run, pushed or written, any other failure `git_failed`. No ancestry test: a base that moved ahead is not a refusal and starts no Gate. It also applies to the adoption of an open pull request, not to a merged one. B is not fetched again after the Gate.
-- **Hooks:** with `pr.gate` `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The test slot** (contract §7.6 "The test slot", hs-d336): before `pre-start` it takes one of `test_concurrency` machine-wide slots (`run/test-<i>.lock`, default 2, shared with `cpd slot`, §23), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; test_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. It sets `CPD_TEST_SLOT=<i>` in the environment of both hooks, so a `cpd slot` inside them takes no second slot (§23). Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
+- **Hooks:** with `gate.pr` is `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The test slot** (contract §7.6 "The test slot", hs-d336): before `pre-start` it takes one of `test_concurrency` machine-wide slots (`run/test-<i>.lock`, default 2, shared with `cpd slot`, §23), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; test_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. It sets `CPD_TEST_SLOT=<i>` in the environment of both hooks, so a `cpd slot` inside them takes no second slot (§23). Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
 - **Re-read:** after the Gate the PR is read again; when it is no longer `dispatch` (a concurrent `pr open` opened it), the first precondition answers (`already`) and nothing is pushed.
 - **git:** rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`). The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op, and it pushes again what an earlier `push_failed` left behind. A rejection when the remote tip already contains G (a merge during the Gate pushed a descendant) is a success with `pushed` false; any other git failure is `git_failed`.
 - **gh:** the lookup above (`--state all`); when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (never `--draft`). When `gh pr create` fails, the `gh pr list` lookup runs again and a pull request it finds (a concurrent `pr open` created it) is adopted; otherwise the failure stands. `<title>` is the PR's stored title (Title, above); `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
@@ -1788,7 +1803,7 @@ Idempotent: yes; the rows hold what was reported, so a rerun with no change on G
 cpd pr rebase [--pr <key>] [--plan <id>] [--continue | --abort]
 ```
 
-Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required for a base that merely moved ahead (hs-d490). **The repair since hs-d497**, not how fix Jobs reach an `open` PR (the `update` Job they queue does it, §5.1): for a failed `update` Job, an engine that is down, or a conflict the Lead resolves itself. On a conflict the rebase **stays in progress in the PR's Lead worktree** and the command exits `rebase_conflict`; the Lead resolves the files and runs `--continue` (the rest of the rebase, the Gate and the lease push) or `--abort` (hs-d289; contract §7.6 "The conflict stop"). The Gate runs only when the PR's `pr.gate` is `local` (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
+Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required for a base that merely moved ahead (hs-d490). **The repair since hs-d497**, not how fix Jobs reach an `open` PR (the `update` Job they queue does it, §5.1): for a failed `update` Job, an engine that is down, or a conflict the Lead resolves itself. On a conflict the rebase **stays in progress in the PR's Lead worktree** and the command exits `rebase_conflict`; the Lead resolves the files and runs `--continue` (the rest of the rebase, the Gate and the lease push) or `--abort` (hs-d289; contract §7.6 "The conflict stop"). The Gate runs only when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
 
 | Flag | Meaning |
 |---|---|
@@ -1816,13 +1831,13 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); never required fo
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
-Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `pr.gate` `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from the PR's policy (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the Gate takes a machine-wide slot first and logs its wait (the Gate slot, contract §7.6, as `pr open`); the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, then the conflict stop below.
+Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `gate.pr` is `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from the PR's policy (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the Gate takes a machine-wide slot first and logs its wait (the Gate slot, contract §7.6, as `pr open`); the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, then the conflict stop below.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `pr.gate` `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `gate.pr` is `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
 
 **The conflict stop** (contract §7.6). On a conflict nothing is aborted: the Lead worktree holds the rebase, stopped at the first conflicting commit, and the Lead Branch ref is unchanged until the rebase finishes. The error:
 
@@ -1850,7 +1865,7 @@ Finishes the stopped rebase, then the Gate and the lease push of `pr rebase`. Or
 | `gate_error` and `gate_failed` as the rows above; nothing is pushed, the rebased Lead Branch stays | `gate_error` / `gate_failed` | 1 / 3 |
 | the push, as above: `--force-with-lease` against `X0`, `X0` read after guard U | `git_failed` | 1 |
 
-Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the tip the rebase started from, `rebase-merge/orig-head`); `GIT_EDITOR=true git -C <lead worktree> rebase --continue` (no editor; messages kept); `R'` the Lead worktree's `HEAD`; no rule S (that worktree was the one rebased); the Gate in a gate worktree at `R'` and the push exactly as `pr rebase` (slot and logged wait included: contract §7.6 "The Gate slot") (contract §7.6 C0–C6), the Gate only when `pr.gate` is `local`. No `fetch`: the rebase ends on the `origin/<base>` it started from. **Rows**: none; no Event. Output as `pr rebase`, `"rebased": true`, `old` = `S`, `new` = `R'`. Idempotent: no; a second run is `no_rebase_in_progress`.
+Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the tip the rebase started from, `rebase-merge/orig-head`); `GIT_EDITOR=true git -C <lead worktree> rebase --continue` (no editor; messages kept); `R'` the Lead worktree's `HEAD`; no rule S (that worktree was the one rebased); the Gate in a gate worktree at `R'` and the push exactly as `pr rebase` (slot and logged wait included: contract §7.6 "The Gate slot") (contract §7.6 C0–C6), the Gate only when `gate.pr` is `local`. No `fetch`: the rebase ends on the `origin/<base>` it started from. **Rows**: none; no Event. Output as `pr rebase`, `"rebased": true`, `old` = `S`, `new` = `R'`. Idempotent: no; a second run is `no_rebase_in_progress`.
 
 ### `pr rebase --abort`
 
@@ -2071,7 +2086,7 @@ Idempotent: yes (a read).
 cpd pr push [--pr <key>] [--plan <id>]
 ```
 
-Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `pr.gate` is `local` (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair since hs-d497, as `pr rebase`; the `update` Job does this for fix Jobs, §5.1) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
+Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the PR's `gate.merge` is `local` (for `pr open` and `pr push`) or `gate.pr` is `local` (for `pr rebase`) (hs-d139, hs-d292; contract §7.6, §8.3; with `ci` there is no Gate and the two Gate rows below do not apply). It does not rebase: use it (the repair since hs-d497, as `pr rebase`; the `update` Job does this for fix Jobs, §5.1) when the branch carries a merge of the base, which `pr rebase` would drop (§9.3), when the remote has not moved and the Jobs Merged since only need to reach the pull request, or for a stacked PR that took its base PR's new commits. It checks nothing about the base (hs-d490): a Lead Branch that lacks a base that moved ahead is pushed as it is.
 
 | Flag | Meaning |
 |---|---|
@@ -2092,13 +2107,13 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
-Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lead branch>`, read once; with `pr.gate` `local`, the Gate on a snapshot (§7.6, as `pr open`) in a gate worktree detached at G; it takes the Gate slot and logs its wait as `pr open` does (§7.6 "The Gate slot"); the PR re-read; then rule P, `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`, never `--force` or a lease). A rejection whose remote tip already contains G (a merge during the Gate pushed a descendant) is a success that pushed nothing. Any other git failure is `git_failed`. **Rows**: none; no Event.
+Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lead branch>`, read once; with `gate.pr` is `local`, the Gate on a snapshot (§7.6, as `pr open`) in a gate worktree detached at G; it takes the Gate slot and logs its wait as `pr open` does (§7.6 "The Gate slot"); the PR re-read; then rule P, `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`, never `--force` or a lease). A rejection whose remote tip already contains G (a merge during the Gate pushed a descendant) is a success that pushed nothing. Any other git failure is `git_failed`. **Rows**: none; no Event.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "pushed": true, "sha": "77aa01e…", "remote": "77aa01e…"}
 ```
 
-`sha` is G, the gated commit (the Lead Branch's tip when the command read it); `remote` is the remote branch's tip after the push, past G when merges that landed during the Gate were pushed (hs-d243). Idempotent: yes; a G the remote already has (git's porcelain status `=`, "up to date"), or has a descendant of, still runs the Gate (with `pr.gate` `local`), pushes nothing and returns `"pushed": false`.
+`sha` is G, the gated commit (the Lead Branch's tip when the command read it); `remote` is the remote branch's tip after the push, past G when merges that landed during the Gate were pushed (hs-d243). Idempotent: yes; a G the remote already has (git's porcelain status `=`, "up to date"), or has a descendant of, still runs the Gate (with `gate.pr` is `local`), pushes nothing and returns `"pushed": false`.
 
 ### 9.10 `pr merge`
 
@@ -2148,6 +2163,10 @@ cpd host repair
 ### 9.12 `cpd tui action host`
 
 (internal): what a click on the red version pill runs when `@cpd_host_alert` is set. Reads the install state file; when it is not `skipped` it does nothing. Finds the live (not archived) Manager of Context `host`; none: reports on the client with `display-message -c <client>` `cpd: no host Manager: apply dotfiles`. Else: brings that Manager into the chat slot as `session open` does (a stopped or asleep Manager is resumed), then, when `$CPD_HOME/run/cpd-install-notified` does not hold this incident's `since`, sends the Manager one message (as the User, `session send` with `--unblocks "cpd install skipped"`) and writes `since` and a newline to that file atomically; a later click on the same incident only opens the Manager. Message text (fixed): `cpd install skipped: <reason> (since <since>). Checkout: ~/projects/cpd. Read it with git -C ~/projects/cpd status / diff / log origin/main..HEAD (read only; never write in the checkout). Show the User what a repair would discard, ask with the tool cpd_host_approve, then run cpd host repair.` (contract §3.7 E6, §1.4, commands.md §15.18).
+
+### 9.13 `cpd tui action incident`
+
+(internal): what a click on the incident pill runs (contract §6.1). Reads the incident's stored Lead (`incident.lead`); when it is null, resolves the `lead_session` of the alphabetically first Plan in `incident_plans`. Brings that Lead into the chat slot as `session open` does (a stopped or asleep Lead is resumed), sends it no message. With incident mode off it reports on the client with `display-message -c <client>` `no incident: nothing to open`; with no resolvable Lead `incidents require a lead`. It prints nothing on stdout or stderr and exits 0, as every `cpd tui action` does..
 
 ## 10. `session`
 
@@ -3181,8 +3200,8 @@ The column has no engine line, no slots, no Escalations, no Events and no footer
 - **Writer and remover:** only this action (**B4**). It writes the marker first (the initial `{"pid", "at"}`), before `cpd pr merge`; on success rewrites it atomically with `"merged": true` after the merge and then runs `cpd pr poll`; then removes it when the pull request's `pull_requests` row is not `open` (merged, closed, or no row); removes it before opening the failure dialog on failure; and removes it on any error path, so no exit leaves it behind. **B5**: a marker with `merged: true` whose pull request's row is not open, and a marker without it whose pid is not alive, are ignored; a second `cpd tui action merge` for a pull request that is merging (`merged` field true or pid alive) does nothing and logs `merge already running`.
 - **Readers:** the views, on each snapshot (above); a marker whose pid is not alive is stale and ignored.
 
-**`cpd tui action <reset|legend|logs> --client <name>`** (internal) is what a click on a StatusBar button runs (the `MouseDown1Status` binding, contract §6.1); **`cpd tui action merge <owner>/<repo>#<n> --client <name>`** is what the `merge` popup's confirm starts (hs-d473, below). Not a view, it owns no terminal; it runs the action **on the client named** (`#{client_name}` of the clicking client), so a popup opens on that client only, whatever other clients are attached.
-- `reset` runs reset-layout (below); `legend` opens the legend popup and `logs` the logs popup, each `display-popup -c <name> …` sized to that client.
+**`cpd tui action <reset|legend|logs|host|incident> --client <name>`** (internal) is what a click on a StatusBar button runs (the `MouseDown1Status` binding, contract §6.1); **`cpd tui action merge <owner>/<repo>#<n> --client <name>`** is what the `merge` popup's confirm starts (hs-d473, below). Not a view, it owns no terminal; it runs the action **on the client named** (`#{client_name}` of the clicking client), so a popup opens on that client only, whatever other clients are attached.
+- `reset` runs reset-layout (below); `legend` opens the legend popup, `logs` the logs popup (each `display-popup -c <name> …` sized to that client), `host` opens the host Manager (as the host action, §9.12, the same park/swap as the incident action below), and `incident` opens the incident's Lead (the same park/swap as the host action, no message sent; a failure is reported on the client).
 - **It prints nothing, on stdout or stderr**: tmux's `run-shell -b` puts the active pane into view mode when its command fails (research `statusbar-no-row.md` 2c), and shows any output of it in view mode (tmux(1), `run-shell`). On a failure (an unknown action, a client that has gone, a tmux error) it shows the message with `display-message -c <name> '<message>'` and exits 0; the binding also appends `2>/dev/null`.
 
 **`legend`** is what every colour and icon of the cockpit means, from the palette (contract §6.1.1, hs-d534: each swatch and sample is drawn by the same palette call as the element it shows, so the legend shows the colours the views show; its title is a read-only title pill, its section titles and words colour 7, its column header and scroll position colour 8). It opens in a tmux popup (`display-popup -E -T ' legend ' -w <w> -h <h>`, sized to the legend and at most the client's size) from the tree's `?` key or the StatusBar's legend button (`cpd tui action legend`), because the columns are narrower than the legend; its title is drawn in the pill section-title style, the plain form (§17, the dialog kit's, hs-d297, hs-d475, hs-d478): ` ──Legend: …───`; when it is taller than its popup, ↑↓, j/k, PgUp/PgDn and the **mouse wheel** scroll it (mouse capture on; the kit's scrolling); any other key closes it. It has no `@cpd_view` pane of its own. The Job states it lists include **landing** (yellow 3 / bright 11: the sample is the Job pill's, drawn by the same palette call; a Job is landing from its first check to the end of its merge, contract §6.1.1). Its section titles are `Jobs: Plan Pills And Context Counters`, `Session Dots`, `Inbox` and `Pulse` (Title Case, hs-d475; the popup's own tmux title ` legend ` is tmux's and unchanged); the Job statuses it lists are those the chart draws, so `cancelled` is not among them, The Job statuses it lists are those the chart draws, so `cancelled` is not among them, and `running` is listed with the spinner frames `` (the 28 frames of §17 section 17). `Session Dots` lists each glyph (`` U+E3E3, `` U+E3E3, U+E3C8..U+E3E2 in each of the five phase colours (grounding grey 15, plan magenta 13, dispatch cyan 14, deploy yellow 11, done green 10) labelled with the phase (hs-d622, hs-d624), then `` U+E3E3, U+E3C8..U+E3E2 in red 9 (the Lead is working on a Plan with a failed Job (one frame every 50 ms), hs-d581), `󱡓` U+F1853, `` U+E3D5, `` U+E3D5) and each `` colour (red, yellow, magenta, blue, white) with its meaning, as §17's dot rule gives them (the same colours mark the Inbox's items; the Inbox's items draw their own tier glyphs, below; the legend says so in one line), then the precedence line `red > yellow > magenta > blue > white >  > 󱡓 >  > `, drawn with the real glyphs and colours. `Inbox` (hs-d483; between `Session Dots` and `Pulse`) lists the five tiers, one line each, in the order red, yellow, magenta, blue, white: the tier's glyph in its colour, then its meaning: `\u{F0362}` (U+F0362, red) `a blocker only you can clear`, `\u{F069A}` (U+F069A, yellow) `pull-request work`, `\u{F06F1}` (U+F06F1, magenta) `a decision before the work runs or a cpd notice (a digest that needed an S Tier)` (hs-d546, hs-d547), `\u{F0366}` (U+F0366, white) `an unread reply`; the Inbox rows draw no state dot. Its lines say what needs the User and what only waits for an agent (hs-d303): `red: a dialog in dispatch or deploy, a stuck Job, an engine error, loop guard, your own failing or changed pull request` (an Escalation is no Inbox item, so it is never red; the phase is `deploy`, not `pr`; a pull request a cpd Plan owns is not red, hs-d302); `yellow: ready to merge, review requested`; `magenta: a Plan review decision, a dialog question while planning` (hs-d570 changed meaning); `blue: a cpd notice: curation (hs-d570)`; `waiting: an agent waits for another agent (a Worker for its Lead), not for you` (the `waiting` dot, between `working` and `idle`); the `white` line is unchanged. The `Meanings → colour` table lists `waiting on an agent` in `Meaning::Waiting`'s colour, cyan (`Color::Cyan`: not blue, which means focus only, §17 "Blue"; neither the red of a failure nor the yellow of attention; the User's decision of 2026-10-20, which resolves hs-d303 against hs-d352, and cyan is agent activity in hs-d534). Its Jobs list shows one failed pill row: red with the static U+F0159, and the red loader sample (the same pill with the moon frames, 'its Lead is working on it', one frame every 50 ms, hs-d586); no stuck row, as E8 opens no `job-stuck` item (hs-d318). Its counters row lists the four roles in the tree's order `planned⋅active⋅failed⋅done`, with a sample of one of each (planned 1 magenta 13, active 1 cyan 14, failed 1 red 9, done 1 green 10); the tree draws only nonzero roles, and a failed counter is always red (hs-d580, hs-d636). Its PR states list is `open`, `merged`, `closed` (waiting: `its Lead handles it`), `closed` (red: `its Lead asks you`) `updating` (cyan, both: `its update Job is fixing the conflict`, `its update Job is queued`; the rule of §17 PR boxes, hs-d532) and `conflict` (red: the one of a pull request no Plan owns; an owned one with no update Job is drawn cyan, as the plan view's box titles do). Its sample pill has the same form, `` + `<icon> key│S1` + ``, drawn as the Job pill is (hs-d534: the status colour's bright pair, text in the terminal's background colour (inverted), caps the same; one sample per status); the legend's titles are read-only title pills (colour 7 inverted: text in the terminal's background colour). Pulse section (hs-d327): `▂▄▆` = `activity per 5 min, first colour wins` (a slot takes the first colour below); then one `▄` per kind in the precedence, red `an error, or a Job failed`, magenta `a Plan or ask Event`, cyan `a PR opened`, cyan `an escalation`, green `a Job or a PR merged`, cyan `any other activity` (the colours are the bars', §13.2 Pulse); a `▁` in colour 8 = `no activity`; `quiet 41m` (colour 8) = queued or running work with no activity for 30 min. Three entries a row (the popup is at most 80 % of the client tall).
@@ -3273,6 +3292,7 @@ Checks, in order:
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
 | `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H3` or `S0`–`S3`); effort 0–4) |
+| `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms`, and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
@@ -3294,7 +3314,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_recent_days` `1` (hs-d549, hs-d551: the days of curated records the digest takes as relevant; an integer >= 1), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_curation_min_records` `25` (hs-d592: a Context is curable when it holds at least this many records; an integer >= 1), `loop_guard_turns` `20` (hs-d552, hs-d571: an integer >= 1; the window size for the loop guard's turn counter). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
@@ -4356,10 +4376,13 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
  "files": ["/home/clayton/.cpd/policy/machines/homeserver.toml", "/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
  "policy": {
+   "gate": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
+           "keys": {"merge": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
+                    "pr": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+           "text": "These repos run no GitHub Actions: …"},
    "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
-                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
-          "text": "These repos run no GitHub Actions: …"},
+          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+          "text": ""},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
@@ -4751,7 +4774,7 @@ cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <p
 | `--until-pr` is absent, or its value's Plan is one of the named Plans | `until_pr_not_incident` | 3 |
 | `--until-pr` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
-**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set or `until_pr` changed, update `until_plan` and `until_pr` and append `incident-plans` Event with the new `plans` array; when both are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-pr` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_pr`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
+**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `lead` the `lead_session` of the first `--plan` argument's Plan, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set changed, recompute `lead` from the new first Plan's `lead_session`; when the set or `until_pr` changed, update `until_plan`, `until_pr` and `lead` and append `incident-plans` Event with the new `plans` array; when all are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-pr` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_pr`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
 
 **Output examples:**
 

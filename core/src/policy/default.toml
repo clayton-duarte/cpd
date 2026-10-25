@@ -2,8 +2,12 @@
 # same loader as every scope file. Every `text` is empty.
 # The repo-only domains (hooks, test-commands, protected) have no `text`: no hook, no test commands, no protected path.
 
+[gate]
+merge = "none"
+pr = "none"
+text = ""
+
 [pr]
-gate = "ci"
 text = ""
 
 [pr.feedback]

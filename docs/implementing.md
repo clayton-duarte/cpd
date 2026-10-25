@@ -124,11 +124,11 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `secret*`, `host_repair` |
-  | `session` | `session*`, `host`, `board`, `pill_lines`, `plannotator_env`, `host_pill` |
-  | `store` | `store*`, `events`, `home` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `host_repair` |
+  | `session` | `session*`, `host`, `board`, `host_pill` |
+  | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fx`, `guards`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run`, `pill_parity`, `pill_sites` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `fx`, `guards`, `fake_tmux`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `layout`, `version`, `gate_run*`, `pill_parity`, `pill_sites`, `run_with`, `smoke`, `testkit*` |
 
 ### Time in tests
 
@@ -361,7 +361,7 @@ PR testkit2 adds, on top of `Fx` (PR tk0), what a test needs to run a command th
 - **Launched children.** A `cpd` child a command launches (a driver, a poll) is recorded by `FakeSpawn`, never started. The test takes it with `fx.take_launch(i)` and runs it itself with `fx.run_launch(..)`, which calls `run_with`.
 - **Screens.** `Screen` and `Keys` are helpers on `ratatui::backend::TestBackend` for the tui views: `Keys` feeds key and mouse events to the view's own handler, `Screen` reads the rendered buffer as text. They replace `capture-pane` and `send-keys`.
 - **The scripted pump and the inline reads.** The loops that follow the store (`cpd_tui::plan::show_with`, `cpd_tui::widgets::show_with`) wait in one place, the `Pump`. A test gives them `Feed::scripted(ports.clock.clone(), signals)`: a `Pump::scripted` with no input thread, and no commit watcher (`Feed::watch` is `Ok(None)`; `Waker::commit()` is how a test says the store changed). `wait(until)` answers the next scripted `Signal` (`Input(Event)`, `Commit`, `Read`, `Due`, `InputFailed`) at once; signals sent through the `Waker` come first. With none left and a time to wait for, it advances `ports.clock` (the `ManualClock`) to `until`, never past it, and answers `Due`; with none left and no time, or after 10 000 `Due` in a row, it panics, because a script that does not end the loop is a test that hangs. Neither view has a key that ends it, so the script ends it with `Signal::InputFailed`, and the loop returns `ViewError::Terminal`. The reads and the Worker actions run INLINE for a scripted pump (`Reads::on`, `Background::on`): the job runs in the caller, so it is finished when `request` or `submit` returns and `take` yields it; no reader thread, no race. The loop reads the pump's events, not `ctx.input`. `plan::prepare` and `widgets::prepare` make what the loop starts from, on a `CpdHome` the test passes; `history::show_with` (`cpd_tui::show_history_with`), `logs::show_with`, `widgets::legend::show_with`, `merge::show_with`, `dialog::show_with` and `worker::event_loop_with` take a `Ctx` and `ctx.input` as before. Production calls them with `Feed::real` (the input thread, the `notify` watcher) and `CrosstermInput`.
-- **Not in this PR.** The git and tmux fixtures are in `The git and tmux fixtures of Fx`. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script, as a named exception list.
+- **Not in this PR.** The git and tmux fixtures are in `The git and tmux fixtures of Fx`. There is no `cpd-fake` binary and no fake binary or script of any kind. The shell scripts that stay shell (cargo.sh, npm-fresh.sh, preview-tui.sh, check-portable.sh, check-migrations-frozen.sh, repin.sh, new-migration.sh, test-time.sh, pi-check.sh, tripwire/) keep the exec tests of their own script: each file is one line of `scripts/tripwire/shell-tests.txt` (`<file> # <reason>`), the named exception list.
 
 ## The Gate leak check
 

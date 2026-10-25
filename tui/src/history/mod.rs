@@ -14,11 +14,15 @@
 
 mod view;
 
+use std::io::Write;
+use std::time::Duration;
+
+use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::Event;
 use rusqlite::OptionalExtension;
 
-use super::view_ports::Ctx;
+use super::view_ports::{Ctx, Input, Tty, run_view_with};
 use super::{Capture, chat, run_view_on};
 use crate::worker::render::render;
 use cpd_core::config::Config;
@@ -45,17 +49,37 @@ struct History {
     text: String,
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    let history = open(args)?;
+    run_view_on(ports, "history", Capture::Mouse, || Ok(history), |ctx, history| Ok(event_loop_with(ctx, history)?))?;
+    // `q` or Esc: the pane shows the placeholder text, as the chat slot's placeholder does.
+    chat::run()
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn. It ends with the view: the
+/// chat slot's placeholder, which `run` shows after it, reads the terminal and is no part of the history.
+pub fn run_on<B: Backend, W: Write>(
+    ports: &Ports,
+    args: Args,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    let history = open(args)?;
+    run_view_with(ports, tty, out, terminal, input, "history", Capture::Mouse, || Ok(history), |ctx, history| {
+        Ok(event_loop_with(ctx, history)?)
+    })
+}
+
+/// What the view shows, read before anything is drawn.
+fn open(args: Args) -> Result<History, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     // `session_not_found` and `file_unreadable` refuse before anything is drawn.
-    let history = load(&mut store, &args.id)?;
-    run_view_on(&Ports::current(), "history", Capture::Mouse, || Ok(history), |ctx, history| {
-        Ok(show_with(ctx, &history.name, history.archived, &history.text)?)
-    })?;
-    // `q` or Esc: the pane shows the placeholder text, as the chat slot's placeholder does.
-    chat::run()
+    load(&mut store, &args.id)
 }
 
 /// The view's first frame for the Session `name` over the text of its file, drawn on `f` as `run` draws it (the view starts at
@@ -82,13 +106,15 @@ fn load(store: &mut Store, id: &SessionId) -> Result<History, CpdError> {
     Ok(History { name, archived, text })
 }
 
-/// Draws the history of the Session `name` over the text of its file and takes input until `q` or Esc: what `run` runs in
-/// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
-pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
-    let mut view = View::new(name, archived);
-    view.set_lines(render(text));
+/// What the loop waits for the input, when nothing else is due: the view changes only by input, so any time will do.
+const IDLE: Duration = Duration::from_secs(60);
+
+fn event_loop_with<B: Backend>(ctx: &mut Ctx<B>, history: History) -> std::io::Result<()> {
+    let mut view = View::new(&history.name, history.archived);
+    view.set_lines(render(&history.text));
     loop {
         ctx.draw(|f| view.draw(f))?;
+        while !ctx.input.poll(IDLE)? {}
         match ctx.input.read()? {
             Event::Key(key) => {
                 if view.key(key) {

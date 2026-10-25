@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use toml::de::{DeTable, DeValue};
 use toml::{Table, Value};
 
-use super::domain::{HooksSet, Scope};
+use super::domain::{GatesSet, HooksSet, Scope};
 use super::exposure::{check_exposed, ScopeKind};
 use crate::git::hooks::parse_value;
 use crate::error::{CpdError, ErrorCode};
@@ -40,6 +40,14 @@ pub fn parse_scope(file: &Path, text: &str) -> Result<Scope, CpdError> {
         }
     };
     scope.hooks = hooks;
+    // The deprecated `[pr] gate` alias: `local` -> both gates `local`, `ci`/`none` -> both `none`.
+    // An explicit `[gate]` table in the same file wins over it.
+    if scope.gate.is_none() {
+        if let Some(alias) = scope.pr.as_ref().and_then(|pr| pr.gate) {
+            let gate = alias.gate();
+            scope.gate = Some(GatesSet { merge: Some(gate), pr: Some(gate), text: None });
+        }
+    }
     if let Some(set) = &scope.test_commands {
         set.commands().map_err(|why| policy_invalid(file, Some("test-commands"), why))?;
     }

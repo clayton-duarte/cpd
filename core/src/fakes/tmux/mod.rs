@@ -677,13 +677,18 @@ fn swap_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     let a = resolve(cx.db, o.val('s'), Kind::Pane)?;
     let b = resolve(cx.db, o.val('t'), Kind::Pane)?;
     let (a, b) = (a.pane.expect("pane"), b.pane.expect("pane"));
-    let place = |p: i64| -> (i64, i64) {
-        cx.db.query_row("SELECT window, pos FROM panes WHERE id = ?1", [p], |r| Ok((r.get(0)?, r.get(1)?))).expect("pane row")
+    // A pane takes the cell of the other: its window, its position and its size (the cell keeps its size).
+    let place = |p: i64| -> (i64, i64, i64, i64) {
+        cx.db
+            .query_row("SELECT window, pos, width, height FROM panes WHERE id = ?1", [p], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .expect("pane row")
     };
     let (pa, pb) = (place(a), place(b));
     let fail = |e: rusqlite::Error| e.to_string();
-    for (pane, (window, pos)) in [(a, pb), (b, pa)] {
-        cx.db.execute("UPDATE panes SET window = ?1, pos = ?2 WHERE id = ?3", (window, pos, pane)).map_err(fail)?;
+    for (pane, (window, pos, width, height)) in [(a, pb), (b, pa)] {
+        cx.db
+            .execute("UPDATE panes SET window = ?1, pos = ?2, width = ?3, height = ?4 WHERE id = ?5", (window, pos, width, height, pane))
+            .map_err(fail)?;
     }
     if pa.0 != pb.0 {
         cx.db

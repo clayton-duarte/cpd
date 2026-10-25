@@ -16,20 +16,12 @@ pub(crate) struct Background<T> {
     queued: VecDeque<Job<T>>,
     running: bool,
     waker: crate::pump::Waker,
-    /// Jobs run in the caller (a scripted pump's), not on a thread of their own.
-    inline: bool,
 }
 
 impl<T: Send + 'static> Background<T> {
     pub(crate) fn with_waker(waker: crate::pump::Waker) -> Background<T> {
         let (tx, rx) = channel();
-        Background { tx, rx, queued: VecDeque::new(), running: false, waker, inline: false }
-    }
-
-    /// The background of the loop `pump` drives: threads, or for a scripted pump each job runs in `submit` and is finished
-    /// when it returns.
-    pub(crate) fn on(pump: &crate::pump::Pump) -> Background<T> {
-        Background { inline: pump.inline(), ..Background::with_waker(pump.waker()) }
+        Background { tx, rx, queued: VecDeque::new(), running: false, waker }
     }
 
     /// Runs `job` on a thread, after the jobs submitted before it.
@@ -46,6 +38,11 @@ impl<T: Send + 'static> Background<T> {
         Some(result)
     }
 
+    /// Whether a job is running or waits: its result is still to be taken.
+    pub(crate) fn busy(&self) -> bool {
+        self.running
+    }
+
     fn start(&mut self) {
         if self.running {
             return;
@@ -54,11 +51,6 @@ impl<T: Send + 'static> Background<T> {
         self.running = true;
         let tx = self.tx.clone();
         let waker = self.waker.clone();
-        if self.inline {
-            let _ = tx.send(job());
-            waker.read_done();
-            return;
-        }
         // The job reads `Ports::current()`: this thread's scope is not the new thread's.
         let ports = Ports::current();
         std::thread::spawn(move || {

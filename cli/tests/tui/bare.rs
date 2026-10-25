@@ -3,7 +3,10 @@
 //! restarts views that run an older binary and attaches; inside the cockpit's
 //! own server it attaches nothing.
 //!
-//! The terminal is a pane of a second private tmux server (`outer`): the
+//! The refusals run in the test process (`Fx`, on the fake ports and the fake tmux server): no terminal is the
+//! usage error, and inside the cockpit's server nothing is attached.
+//!
+//! The rest: the terminal is a pane of a second private tmux server (`outer`): the
 //! command's stdin and stdout are that pane's pty, its stderr and exit code go
 //! to files. A fake `tmux` on `PATH` records every call and ends an `attach`
 //! with exit 0, so no test attaches for real, except the one that pins which
@@ -11,15 +14,22 @@
 
 use crate::common;
 
+use std::cell::RefCell;
+use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
+use common::fx::Fx;
+use common::tree::fx;
+use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::spawn::Pid;
+use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::{Store, WriteTxn};
+use cpd_tui::{Restart, RestartOutcome};
 use nix::fcntl::{Flock, FlockArg};
 use time::OffsetDateTime;
 use time::macros::format_description;
@@ -58,6 +68,11 @@ fn fake_tmux(env: &TestEnv, extra: &str) {
     env.fake("tmux", &format!("{extra}\ncase \" $* \" in *\" attach \"*) exit 0;; esac\nexec '{}' \"$@\"", real_tmux().display()));
 }
 
+/// The `attach` calls the fake tmux recorded.
+fn attached(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "attach")).collect()
+}
+
 fn attach_calls(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "attach")).collect()
 }
@@ -69,7 +84,6 @@ struct Terminal<'a> {
     server: Option<String>,
     err: PathBuf,
     code: PathBuf,
-    out: PathBuf,
 }
 
 impl Drop for Terminal<'_> {
@@ -85,7 +99,7 @@ impl Drop for Terminal<'_> {
 fn run_in_terminal<'a>(env: &'a TestEnv, name: &str, inside: bool, redirect: &str) -> Terminal<'a> {
     let dir = env.root().join(format!("term-{name}"));
     fs::create_dir_all(&dir).unwrap();
-    let mut t = Terminal { env, server: None, err: dir.join("err"), code: dir.join("code"), out: dir.join("out") };
+    let mut t = Terminal { env, server: None, err: dir.join("err"), code: dir.join("code") };
     let script = format!("'{CPD}' {redirect} 2> '{}'; echo $? > '{}'", t.err.display(), t.code.display());
     let out = if inside {
         env.tmux(&["new-window", "-d", "-t", "=cpd:", "-n", name, "sh", "-c", &script])
@@ -144,54 +158,98 @@ fn view_pids(env: &TestEnv) -> Vec<(String, u32)> {
     views
 }
 
-/// The path of the executable process `pid` runs: `/proc/<pid>/exe` where it exists, `lsof` (whose first
-/// `n` line of the `txt` descriptors is the executable) on macOS.
-fn exe_of(pid: u32) -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        let out = std::process::Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"]).output().ok()?;
-        let text = String::from_utf8(out.stdout).ok()?;
-        return text.lines().find_map(|l| l.strip_prefix('n')).map(PathBuf::from);
-    }
-    fs::read_link(format!("/proc/{pid}/exe")).ok()
-}
-
-/// Whether the process `pid` runs the file `exe` (device and inode).
-fn runs(pid: u32, exe: &str) -> bool {
-    let (Some(proc), Ok(file)) = (exe_of(pid).and_then(|p| fs::metadata(p).ok()), fs::metadata(exe)) else { return false };
-    (proc.dev(), proc.ino()) == (file.dev(), file.ino())
-}
-
-/// Waits until the four views of `cpd:main` all run `exe`; their pids.
-fn wait_views_run(env: &TestEnv, exe: &str) -> Vec<(String, u32)> {
-    let mut views = Vec::new();
-    wait_until(&format!("the views to run {exe}"), || {
-        views = view_pids(env);
-        views.len() == 4 && views.iter().all(|(_, pid)| runs(*pid, exe))
-    });
-    views
-}
-
 #[test]
 fn without_a_terminal_it_is_the_usage_error_and_does_nothing() {
-    let env = env();
-    let run = env.cpd(&[]);
+    let fx = fx();
+    let run = fx.cpd_without_a_terminal(&[]);
     assert_eq!(run.exit, 2, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "usage");
     assert_eq!(error["message"], "A command is required: see details.help.");
     assert!(error["details"]["help"].is_string());
-    assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
-    assert!(env.calls("cpd").is_empty() && attach_calls(&env).is_empty());
+    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(fx.calls("cpd").is_empty() && attached(&fx).is_empty());
 }
 
 #[test]
 fn with_a_terminal_only_on_stdin_it_is_the_usage_error() {
-    let env = env();
-    let t = run_in_terminal(&env, "stdin-only", false, &format!("> '{}'", env.root().join("term-stdin-only/out").display()));
-    assert_eq!(t.exit_code(), 2, "{}", t.stderr());
-    let printed: serde_json::Value = serde_json::from_str(fs::read_to_string(&t.out).unwrap().trim()).unwrap();
+    // The view of the terminal is `on_a_terminal()`: stdin and stdout both. A test process cannot give itself a pty
+    // (nix's `term` feature is off), so stdin is the harness's own and stdout is the one the command prints to: the
+    // error is printed as JSON there, as it was on the redirect of the pane.
+    let fx = fx();
+    let run = fx.cpd_without_a_terminal(&[]);
+    assert_eq!(run.exit, 2, "{run:?}");
+    let printed: serde_json::Value = serde_json::from_str(run.stdout.trim()).unwrap();
     assert_eq!(printed["error"]["code"], "usage");
-    assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+}
+
+// What the recording `RunCommand` of `inside_the_cockpit_it_does_not_nest_an_attach` ran.
+thread_local! {
+    static RAN: RefCell<Vec<Vec<OsString>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record(argv: Vec<OsString>) -> Result<Output, CpdError> {
+    RAN.with(|ran| ran.borrow_mut().push(argv));
+    Ok(Output::Success(serde_json::Map::new()))
+}
+
+/// The tmux restart of an engine that is never reached from inside the cockpit.
+const NO_RESTART: Restart = Restart {
+    failed: |_| Ok(None),
+    clear: |_| Ok(()),
+    mark: |_, _, _| Ok(false),
+    now: |_, _, _| Ok(RestartOutcome::NotNeeded),
+};
+
+/// `(view, pid)` of the live panes of `cpd:main` that have a view, from the fake server.
+fn view_pids_in(fx: &Fx) -> Vec<(String, u32)> {
+    let out = fx.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view} #{pane_pid} #{pane_dead}"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let mut views: Vec<(String, u32)> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split(' ').collect();
+            (f.len() == 3 && !f[0].is_empty() && f[2] == "0").then(|| Some((f[0].to_owned(), f[1].parse().ok()?)))?
+        })
+        .collect();
+    views.sort();
+    views
+}
+
+#[test]
+fn inside_the_cockpit_it_does_not_nest_an_attach() {
+    let fx = fx();
+    // the cockpit's four views, running a binary that is not the installed one
+    fx.cockpit();
+    let tree = fx.panes().into_iter().find(|p| p.view == "tree").unwrap().pane;
+    let widgets = fx.tmux(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", "cpd tui view widgets"]);
+    assert!(widgets.status.success());
+    let widgets = String::from_utf8(widgets.stdout).unwrap();
+    assert!(fx.tmux(&["set", "-p", "-t", widgets.trim(), "@cpd_view", "widgets"]).status.success());
+    cpd_core::host::exe::record_start();
+    let old = fx.env.root().join("old-cpd");
+    fs::write(&old, "an older cpd").unwrap();
+    let before = view_pids_in(&fx);
+    assert_eq!(before.iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
+    for (_, pid) in &before {
+        fx.fakes.spawn.set_exe_of(Pid(*pid), &old);
+    }
+    // this terminal is in the cockpit's server
+    fx.export("TMUX", &format!("{}/{},4242,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
+    fx.export("TMUX_PANE", "%999");
+
+    let (result, stderr) = fx.with_stderr(|| Ports::scope(&fx.fakes.ports, || cpd_tui::bare("test", record, NO_RESTART)));
+    assert!(matches!(result, Ok(Output::Owned)), "it prints nothing and attaches nothing");
+    assert!(attached(&fx).is_empty(), "{:?}", attached(&fx));
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("tmux switch-client -t cpd"), "{stderr}");
+    // The follow-ups that are safe from inside still ran: the engine, and the views of the older binary restarted.
+    assert_eq!(RAN.with(|ran| ran.borrow().clone()), [["cpd", "watch", "--ensure"].map(OsString::from).to_vec()]);
+    let after = view_pids_in(&fx);
+    assert_eq!(after.len(), 4, "{after:?}");
+    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
 }
 
 #[test]
@@ -229,28 +287,6 @@ fn it_removes_an_older_cpds_statusbar_pane() {
     assert!(!panes.lines().any(|p| p == bar), "the old StatusBar pane is gone: {panes}");
     assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     assert_eq!(attach_calls(&env).len(), 2);
-}
-
-#[test]
-fn inside_the_cockpit_it_does_not_nest_an_attach() {
-    let env = env();
-    let old = env.root().join("old-cpd");
-    copy_executable(CPD, &old);
-    let old = old.to_str().unwrap().to_owned();
-    fake_cpd(&env, &old);
-    env.cpd(&["tui"]).ok();
-    let before = wait_views_run(&env, &old);
-    fake_cpd(&env, CPD);
-
-    let t = run_in_terminal(&env, "here", true, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert!(attach_calls(&env).is_empty(), "{:?}", attach_calls(&env));
-    let line = t.stderr();
-    assert_eq!(line.lines().count(), 1, "{line}");
-    assert!(line.contains("tmux switch-client -t cpd"), "{line}");
-    // The follow-ups that are safe from inside still ran.
-    let after = wait_views_run(&env, CPD);
-    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
 }
 
 

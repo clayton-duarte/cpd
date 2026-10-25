@@ -1,71 +1,88 @@
 //! `pr add`, `pr edit` and `pr cancel` (commands.md §9.4–§9.6, contract §2.3,
-//! §3.8, §5.2) and the plan fingerprint with the PRs: the built binary against
-//! a temporary `$CPD_HOME`, temporary git repos, and a Plan written straight
-//! into the database.
+//! §3.8, §5.2) and the plan fingerprint with the PRs: in-process on `Fx::with_ports()` (the fake git route, the fake
+//! `gh`), against a temporary `$CPD_HOME`, and a Plan written straight into the database.
+//!
+//! The five tests of the legacy Lead Branch (`add_moves_the_legacy_lead_branch_of_a_merged_pr`, ...) stay on the
+//! built binary and real git until PR `mr-pr-3` migrates them (they need a bare origin that the route does not
+//! model yet): their fixture is [`Exec`].
 
 use crate::common;
 
 use std::fs;
+use std::ops::Deref;
 use std::path::PathBuf;
 
+use common::fx::Fx;
 use common::{Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::plan_fingerprint;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
-/// The env with its config, repos `pay` and `web`, and Plan `pay-1` in `phase`
-/// with no PR (the Lead's session beside it).
-struct Fx {
-    env: TestEnv,
+/// The in-process env (fake ports, the git route) with its config, repos `pay` and `web`, and Plan `pay-1` in `phase`
+/// with no PR (the Lead's session beside it). It derefs to the [`Fx`] (`cpd`, `git`, `env`, `calls`, ...).
+struct Crud {
+    fx: Fx,
     pay: PathBuf,
     web: PathBuf,
+}
+
+impl Deref for Crud {
+    type Target = Fx;
+
+    fn deref(&self) -> &Fx {
+        &self.fx
+    }
 }
 
 /// The repo policy file's `[test-commands]` (contract §7.7): what a `tdd` PR needs of its repo.
 const TESTS_TABLE: &str = "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n";
 
-/// A keyed repo whose policy file has `[test-commands]`.
-fn keyed_repo_with_tests(env: &TestEnv, name: &str) -> PathBuf {
-    let repo = env.keyed_repo(name).canonicalize().unwrap();
-    env.repo_policy("acme", name, TESTS_TABLE);
+/// A keyed repo of the `Universe` whose policy file has `[test-commands]`.
+fn keyed_repo_with_tests(fx: &Fx, name: &str) -> PathBuf {
+    let repo = fx.keyed_repo(name).canonicalize().unwrap();
+    fx.env.repo_policy("acme", name, TESTS_TABLE);
     repo
 }
 
-fn fx(phase: &str) -> Fx {
-    let env = TestEnv::new();
-    // `pr add` of the default shape, `tdd`, needs the repo policy's `[test-commands]`.
-    let pay = keyed_repo_with_tests(&env, "pay");
-    let web = keyed_repo_with_tests(&env, "web");
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+/// The `INSERT`s of Context `ctx`, the Lead and Plan `pay-1` in `phase`.
+fn plan_sql(phase: &str) -> String {
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
-    let fx = Fx { env, pay, web };
-    fx.env.sql(&format!(
+    format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay-1', 'ctx', 'Pay the bills', '{phase}', 'lead1', '1999-12-31T00:00:00.000Z', {locked}, {done});"
-    ));
-    fx
+    )
 }
 
-impl Fx {
+fn crud(phase: &str) -> Crud {
+    let fx = Fx::with_ports();
+    // `pr add` of the default shape, `tdd`, needs the repo policy's `[test-commands]`.
+    let pay = keyed_repo_with_tests(&fx, "pay");
+    let web = keyed_repo_with_tests(&fx, "web");
+    fx.env.write_config("version = 1\nmachine = \"t\"\n");
+    fx.env.sql(&plan_sql(phase));
+    Crud { fx, pay, web }
+}
+
+impl Crud {
     fn store(&self) -> Store {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
-    /// `cpd pr <args> --plan pay-1`; see [`Fx::pr_in`].
+    /// `cpd pr <args> --plan pay-1`; see [`Crud::pr_in`].
     fn pr(&self, args: &[&str]) -> Run {
         self.pr_in("pay-1", args)
     }
 
     /// `cpd pr <args> --plan <plan>`. A `pr add` that added a PR is followed by the cancelling of the stub drafts of its
     /// shape (`job cancel`): these tests are about PRs, and a PR with a live Job is not one `pr cancel` ends and no
-    /// Plan review takes. The template itself is tested with [`Fx::add_with_stubs`].
+    /// Plan review takes. The template itself is tested with [`Crud::add_with_stubs`].
     fn pr_in(&self, plan: &str, args: &[&str]) -> Run {
         let run = self.add_with_stubs(plan, args);
         if args.first() == Some(&"add") && run.exit == 0 {
@@ -73,7 +90,7 @@ impl Fx {
             if out.get("already").is_none() {
                 for job in out["pr"]["jobs"].as_array().unwrap() {
                     let job = job.as_str().unwrap();
-                    self.env.cpd(&["job", "cancel", job, "--reason", "a stub of the template", "--plan", plan]).ok();
+                    self.cpd(&["job", "cancel", job, "--reason", "a stub of the template", "--plan", plan]).ok();
                 }
             }
         }
@@ -85,7 +102,7 @@ impl Fx {
         let mut all = vec!["pr"];
         all.extend(args);
         all.extend(["--plan", plan]);
-        self.env.cpd(&all)
+        self.cpd(&all)
     }
 
     /// `pr add <key> --repo <repo> --title "Change <key>" <extra…>`.
@@ -102,7 +119,7 @@ impl Fx {
         self.job_kind(key, pr, status, "work");
     }
 
-    /// [`Fx::job`] of kind `kind` (a `test` Job is only ever a draft or cancelled here: it has no `tests`).
+    /// [`Crud::job`] of kind `kind` (a `test` Job is only ever a draft or cancelled here: it has no `tests`).
     fn job_kind(&self, key: &str, pr: &str, status: &str, kind: &str) {
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
@@ -118,7 +135,7 @@ impl Fx {
     }
 
     fn events(&self, kind: &str) -> Vec<Value> {
-        self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+        self.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
 
     fn fingerprint(&self) -> String {
@@ -157,9 +174,64 @@ impl Fx {
 
     /// `[base, base_pr, needs]` of PR `key` of Plan `plan` as `plan show` prints them.
     fn shown(&self, plan: &str, key: &str) -> Value {
-        let shown = self.env.cpd(&["plan", "show", "--plan", plan]).ok();
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
         let pr = shown["prs"].as_array().unwrap().iter().find(|p| p["key"] == key).unwrap().clone();
         json!([pr["base"], pr["base_pr"], pr["needs"]])
+    }
+
+    /// [`common::refused`], and nothing written.
+    fn refused(&self, run: &Run, code: &str, exit: i32, writes: (i64, i64)) -> Value {
+        let error = common::refused(run, code, exit);
+        assert_eq!(self.writes(), writes, "{code} wrote something");
+        error
+    }
+}
+
+/// The built binary against a temporary `$CPD_HOME` and real git: what the legacy-branch tests still need.
+struct Exec {
+    env: TestEnv,
+    pay: PathBuf,
+}
+
+fn exec(phase: &str) -> Exec {
+    let env = TestEnv::new();
+    let pay = env.keyed_repo("pay").canonicalize().unwrap();
+    env.repo_policy("acme", "pay", TESTS_TABLE);
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    env.sql(&plan_sql(phase));
+    Exec { env, pay }
+}
+
+impl Exec {
+    /// `cpd pr <args> --plan pay-1`; a `pr add` that added a PR is followed by the cancelling of its stub drafts.
+    fn pr(&self, args: &[&str]) -> Run {
+        let mut all = vec!["pr"];
+        all.extend(args);
+        all.extend(["--plan", "pay-1"]);
+        let run = self.env.cpd(&all);
+        if args.first() == Some(&"add") && run.exit == 0 {
+            let out = run.json();
+            if out.get("already").is_none() {
+                for job in out["pr"]["jobs"].as_array().unwrap() {
+                    let job = job.as_str().unwrap();
+                    self.env.cpd(&["job", "cancel", job, "--reason", "a stub of the template", "--plan", "pay-1"]).ok();
+                }
+            }
+        }
+        run
+    }
+
+    /// `pr add <key> --repo <repo> --title "Change <key>" --shape config <extra…>`.
+    fn add(&self, key: &str, repo: &PathBuf, extra: &[&str]) -> Run {
+        let title = format!("Change {key}");
+        let mut args = vec!["add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
+        args.extend(extra);
+        self.pr(&args)
+    }
+
+    fn writes(&self) -> (i64, i64) {
+        (self.env.query("SELECT count(*) FROM txns"), self.env.query("SELECT count(*) FROM events"))
     }
 
     /// [`common::refused`], and nothing written.
@@ -174,8 +246,8 @@ impl Fx {
 
 #[test]
 fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
-    let fx = fx("grounding");
-    let branches = fx.env.git(&fx.pay, &["branch", "--list"]);
+    let fx = crud("grounding");
+    let branches = fx.git(&fx.pay, &["branch", "--list"]);
     let out = fx.add("api", &fx.pay, &[]).ok();
     assert_eq!(
         out["pr"],
@@ -199,7 +271,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
         .unwrap();
     assert_eq!(row, ("waiting".into(), fx.web.display().to_string(), "cpd/pay-1/web".into(), None, "main".into()));
     assert_eq!(fx.needs("web"), "api");
-    assert_eq!(fx.env.git(&fx.pay, &["branch", "--list"]), branches, "no git write");
+    assert_eq!(fx.git(&fx.pay, &["branch", "--list"]), branches, "no git write");
 
     let added = fx.events("pr-added");
     assert_eq!(added.len(), 2);
@@ -209,14 +281,14 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
         json!({"pr": "web", "repo": fx.web.display().to_string(), "base": "main", "title": "Change web", "needs": ["api"], "appended": false})
     );
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Change web");
-    let shown = fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
+    let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
     let titles: Vec<&Value> = shown["prs"].as_array().unwrap().iter().map(|p| &p["title"]).collect();
     assert_eq!(titles, [&json!("Change api"), &json!("Change web")], "plan show's PR objects carry the title");
 }
 
 #[test]
 fn add_accepts_a_title_of_72_characters() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     let title = "é".repeat(72);
     let out = fx.pr(&["add", "api", "--repo", fx.pay.to_str().unwrap(), "--title", &title, "--shape", "config"]).ok();
     assert_eq!(out["pr"]["title"], title.as_str());
@@ -225,16 +297,16 @@ fn add_accepts_a_title_of_72_characters() {
 
 #[test]
 fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     let linked = fx.env.root().join("linked");
-    fx.env.git(&fx.pay, &["worktree", "add", "-q", "-b", "other", linked.to_str().unwrap()]);
+    fx.git(&fx.pay, &["worktree", "add", "-q", "-b", "other", linked.to_str().unwrap()]);
     let out = fx.add("api", &linked.join("."), &[]).ok();
     assert_eq!(out["pr"]["repo"], fx.pay.display().to_string());
 }
 
 #[test]
 fn add_in_dispatch_appends_the_pr() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     let out = fx.add("late", &fx.pay, &[]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
@@ -245,10 +317,10 @@ fn add_in_dispatch_appends_the_pr() {
 
 // ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
 
-impl Fx {
+impl Crud {
     /// `[key, kind, title, status, appended, has tier, has goal, needs]` of every Job of PR `pr`, in creation order.
     fn stubs(&self, pr: &str) -> Value {
-        let shown = self.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
+        let shown = self.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
         let jobs: Vec<Value> = shown["jobs"]
             .as_array()
             .unwrap()
@@ -268,7 +340,7 @@ impl Fx {
 
 #[test]
 fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     let out = fx.add_shape("api", None).ok();
     assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("tdd"), json!(["api-docs", "api-tests", "api-impl", "open-api"])));
     assert_eq!(
@@ -297,7 +369,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
 
 #[test]
 fn add_lays_out_one_stub_for_docs_and_for_config() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     let out = fx.add_shape("api", Some("docs")).ok();
     assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("docs"), json!(["api-docs", "open-api"])));
     assert_eq!(
@@ -321,7 +393,7 @@ fn add_lays_out_one_stub_for_docs_and_for_config() {
 
 #[test]
 fn add_lays_out_the_opener_stub_in_every_shape() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     for (key, shape) in [("api", "tdd"), ("web", "docs"), ("cfg", "config")] {
         let out = fx.add_shape(key, Some(shape)).ok();
         let opener = format!("open-{key}");
@@ -346,9 +418,9 @@ fn add_lays_out_the_opener_stub_in_every_shape() {
 
 #[test]
 fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add_shape("api", None).ok();
-    let open_tier = fx.env.cpd(&["config"]).ok()["config"]["open_tier"].as_str().unwrap().to_owned();
+    let open_tier = fx.cpd(&["config"]).ok()["config"]["open_tier"].as_str().unwrap().to_owned();
     let row: (String, String, Option<String>, i64, String, String, String, String, String) = fx
         .store()
         .read(|c| {
@@ -377,7 +449,7 @@ fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
 #[test]
 fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
     for phase in ["dispatch", "deploy"] {
-        let fx = fx(phase);
+        let fx = crud(phase);
         fx.add_shape("late", Some("docs")).ok();
         assert_eq!(
             fx.stubs("late"),
@@ -394,7 +466,7 @@ fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_
 
 #[test]
 fn a_shape_is_one_of_tdd_docs_and_config() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     let writes = fx.writes();
     for shape in ["free", "other", ""] {
         let run = fx.add_shape("api", Some(shape));
@@ -405,8 +477,8 @@ fn a_shape_is_one_of_tdd_docs_and_config() {
 
 #[test]
 fn add_refuses_a_tdd_pr_in_a_repo_without_test_commands_and_reads_them_from_its_policy_file() {
-    let fx = fx("plan");
-    let bare = fx.env.keyed_repo("bare").canonicalize().unwrap();
+    let fx = crud("plan");
+    let bare = fx.keyed_repo("bare").canonicalize().unwrap();
     let add = |shape: Option<&str>| {
         let mut args = vec!["add", "api", "--repo", bare.to_str().unwrap(), "--title", "Add retries"];
         args.extend(shape.into_iter().flat_map(|s| ["--shape", s]));
@@ -423,7 +495,7 @@ fn add_refuses_a_tdd_pr_in_a_repo_without_test_commands_and_reads_them_from_its_
     fx.env.repo_policy("acme", "bare", TESTS_TABLE);
     assert_eq!(add(None).ok()["pr"]["shape"], "tdd");
     // A repo that never had it is fine for a `docs` or a `config` PR.
-    let plain = fx.env.keyed_repo("plain").canonicalize().unwrap();
+    let plain = fx.keyed_repo("plain").canonicalize().unwrap();
     for (key, shape) in [("docs-pr", "docs"), ("cfg-pr", "config")] {
         let args = ["add", key, "--repo", plain.to_str().unwrap(), "--title", "No behaviour", "--shape", shape];
         assert_eq!(fx.add_with_stubs("pay-1", &args).ok()["pr"]["shape"], shape);
@@ -432,8 +504,8 @@ fn add_refuses_a_tdd_pr_in_a_repo_without_test_commands_and_reads_them_from_its_
 
 #[test]
 fn add_refuses_a_test_commands_table_that_is_not_as_documented() {
-    let fx = fx("plan");
-    let bad = fx.env.keyed_repo("bad").canonicalize().unwrap();
+    let fx = crud("plan");
+    let bad = fx.keyed_repo("bad").canonicalize().unwrap();
     fx.env.repo_policy("acme", "bad", "[test-commands]\nbuild = \"true\"\n");
     let writes = fx.writes();
     let args = ["add", "api", "--repo", bad.to_str().unwrap(), "--title", "Add retries"];
@@ -444,8 +516,8 @@ fn add_refuses_a_test_commands_table_that_is_not_as_documented() {
 #[test]
 fn add_refuses_a_tdd_template_after_the_tests_table_before_the_job_keys() {
     // §9.4's order: `tests_unconfigured` precedes `job_key_exists`.
-    let fx = fx("plan");
-    let bare = fx.env.keyed_repo("bare").canonicalize().unwrap();
+    let fx = crud("plan");
+    let bare = fx.keyed_repo("bare").canonicalize().unwrap();
     fx.env.sql(
         "INSERT INTO prs (plan, key, repo, base, title, status, lead_branch, created_txn, created_at) VALUES ('pay-1', 'other', '/x', 'main', 'T', 'waiting', 'cpd/pay-1/other', cpd_txn(), 't');
          INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('pay-1', 'other', 'api-impl', 'T', 'draft', 0, cpd_txn(), 't')",
@@ -457,7 +529,7 @@ fn add_refuses_a_tdd_template_after_the_tests_table_before_the_job_keys() {
 
 #[test]
 fn add_refuses_a_template_whose_job_keys_the_plan_has_and_writes_nothing() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add_shape("api", Some("config")).ok();
     // A Job `web-impl` of another PR is in the way of the tdd template of `web`.
     fx.env.sql(
@@ -472,7 +544,7 @@ fn add_refuses_a_template_whose_job_keys_the_plan_has_and_writes_nothing() {
 
 #[test]
 fn the_shape_is_part_of_what_add_compares() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add_shape("api", Some("docs")).ok();
     let writes = fx.writes();
     // The same flags, the shape included, are `already`: the default, `tdd`, is another shape.
@@ -485,7 +557,7 @@ fn the_shape_is_part_of_what_add_compares() {
 
 #[test]
 fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     let writes = fx.writes();
@@ -507,8 +579,8 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
 
 #[test]
 fn add_stores_the_name_parsed_from_origin_lowercased() {
-    let fx = fx("grounding");
-    fx.env.git(&fx.web, &["remote", "set-url", "origin", "git@github.com:ACME/Web.Site.git"]);
+    let fx = crud("grounding");
+    fx.git(&fx.web, &["remote", "set-url", "origin", "git@github.com:ACME/Web.Site.git"]);
     fx.env.repo_policy("acme", "web.site", "");
     let out = fx.add("web", &fx.web, &[]).ok();
     assert_eq!(out["pr"]["name"], "web.site");
@@ -517,7 +589,7 @@ fn add_stores_the_name_parsed_from_origin_lowercased() {
 
 #[test]
 fn add_keys_the_repo_before_anything_is_written() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
 
     // owner_unset: the Context has no owner (a Context made before the policy keys).
     fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");
@@ -529,46 +601,46 @@ fn add_keys_the_repo_before_anything_is_written() {
     let writes = fx.writes();
 
     // No origin: the repo is clayton-duarte's, so another owner's Context is owner_mismatch.
-    fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+    fx.git(&fx.pay, &["remote", "remove", "origin"]);
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
     assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("clayton-duarte")));
 
     // repo_unkeyed (exit 1): a local path, another host, an SSH alias.
     for url in ["/tmp/somewhere/pay.git", "https://gitlab.com/acme/pay.git", "git@github-work:acme/pay.git"] {
-        fx.env.git(&fx.pay, &["remote", "add", "origin", url]);
+        fx.git(&fx.pay, &["remote", "add", "origin", url]);
         let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
         assert_eq!(error["details"]["url"], url);
-        fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+        fx.git(&fx.pay, &["remote", "remove", "origin"]);
     }
 
     // owner_mismatch (exit 3): another owner's repo.
-    fx.env.git(&fx.pay, &["remote", "add", "origin", "https://github.com/other/pay.git"]);
+    fx.git(&fx.pay, &["remote", "add", "origin", "https://github.com/other/pay.git"]);
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
     assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("other")));
 
     // owner_unconfirmed (exit 1): the Context's owner has no policy file.
-    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
+    fx.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
     fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unconfirmed", 1, writes);
     assert_eq!(error["details"]["owner"], "acme");
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
 
     // With every refusal cleared (`remote remove` dropped the tracking ref), the same add succeeds.
-    fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
+    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
     fx.add("api", &fx.pay, &[]).ok();
 }
 
 #[test]
 fn edit_repo_keys_the_new_repo_and_stores_its_name() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("web", &fx.web, &[]).ok();
     let writes = fx.writes();
-    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/other/pay.git"]);
+    fx.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/other/pay.git"]);
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "owner_mismatch", 3, writes);
     assert_eq!(error["details"]["repo_owner"], "other");
-    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "git@github-work:acme/pay.git"]);
+    fx.git(&fx.pay, &["remote", "set-url", "origin", "git@github-work:acme/pay.git"]);
     fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "repo_unkeyed", 1, writes);
-    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/Payments.git"]);
+    fx.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/Payments.git"]);
     fx.env.repo_policy("acme", "payments", "");
     fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]).ok();
     assert_eq!(fx.env.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "payments");
@@ -576,7 +648,7 @@ fn edit_repo_keys_the_new_repo_and_stores_its_name() {
 
 #[test]
 fn add_refusals_write_nothing() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("gone", &fx.web, &[]).ok();
     fx.pr(&["cancel", "gone"]).ok();
@@ -607,23 +679,23 @@ fn add_refusals_write_nothing() {
     // A cancelled PR keeps its key.
     fx.refused(&fx.add("gone", &fx.pay, &[]), "pr_exists", 3, writes);
 
-    fx.env.git(&fx.web, &["branch", "cpd/pay-1/web"]);
+    fx.git(&fx.web, &["branch", "cpd/pay-1/web"]);
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "branch_exists", 3, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1/web");
-    fx.env.git(&fx.web, &["branch", "-D", "cpd/pay-1/web"]);
-    fx.env.git(&fx.web, &["branch", "cpd/pay-1"]);
+    fx.git(&fx.web, &["branch", "-D", "cpd/pay-1/web"]);
+    fx.git(&fx.web, &["branch", "cpd/pay-1"]);
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "branch_exists", 3, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
 
-    fx.refused(&fx.env.cpd(&["pr", "add", "web", "--repo", web, "--title", "T"]), "plan_required", 2, writes);
-    let run = fx.env.cpd(&["pr", "add", "web", "--repo", web, "--title", "T", "--plan", "nope"]);
+    fx.refused(&fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T"]), "plan_required", 2, writes);
+    let run = fx.cpd(&["pr", "add", "web", "--repo", web, "--title", "T", "--plan", "nope"]);
     fx.refused(&run, "plan_not_found", 4, writes);
 }
 
 #[test]
 fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
     for phase in ["deploy", "done"] {
-        let fx = fx(phase);
+        let fx = crud(phase);
         let out = fx.add("fix", &fx.pay, &[]).ok();
         assert_eq!((out["pr"]["appended"].clone(), out["pr"]["status"].clone()), (json!(true), json!("waiting")), "{phase}");
         let row: (String, Option<String>) = fx
@@ -651,7 +723,7 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
 #[test]
 fn add_to_an_archived_plan_is_archived() {
     for phase in ["grounding", "dispatch", "done"] {
-        let fx = fx(phase);
+        let fx = crud(phase);
         fx.env.sql("UPDATE plans SET archived_at = '2001-01-01T00:00:00.000Z' WHERE id = 'pay-1'");
         let writes = fx.writes();
         let error = fx.refused(&fx.add("api", &fx.pay, &[]), "archived", 3, writes);
@@ -664,14 +736,14 @@ fn add_to_an_archived_plan_is_archived() {
 /// Plan `pay-1` in `done` with one PR `old` on the legacy Lead Branch `cpd/pay-1`: the repo `pay`
 /// has a bare `origin` with that branch, and a second worktree has it checked out.
 struct Legacy {
-    fx: Fx,
+    fx: Exec,
     origin: PathBuf,
     lead: PathBuf,
     sha: String,
 }
 
 fn legacy(status: &str) -> Legacy {
-    let fx = fx("done");
+    let fx = exec("done");
     let origin = fx.env.root().join("repos/pay-origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
     fx.env.local_origin(&fx.pay, &origin);
@@ -758,9 +830,9 @@ fn add_keeps_refusing_the_legacy_lead_branch_of_a_pr_that_is_not_merged() {
 
 #[test]
 fn edit_changes_the_repo_the_base_and_the_needs() {
-    let fx = fx("plan");
-    fx.env.git(&fx.web, &["branch", "develop"]);
-    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
+    let fx = crud("plan");
+    fx.git(&fx.web, &["branch", "develop"]);
+    fx.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     for key in ["a", "b", "c"] {
         fx.add(key, &fx.pay, &[]).ok();
     }
@@ -792,7 +864,7 @@ fn edit_changes_the_repo_the_base_and_the_needs() {
 
 #[test]
 fn edit_with_no_change_is_already_and_writes_nothing() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     let writes = fx.writes();
@@ -811,7 +883,7 @@ fn edit_with_no_change_is_already_and_writes_nothing() {
 
 #[test]
 fn edit_refusals_write_nothing() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     fx.add("ui", &fx.web, &["--needs", "web"]).ok();
@@ -831,8 +903,8 @@ fn edit_refusals_write_nothing() {
     let error = fx.refused(&fx.pr(&["edit", "web", "--base", "nope"]), "base_not_found", 4, writes);
     assert_eq!(error["details"]["base"], "nope");
     // --repo keeps the stored base, which must exist in the new repo.
-    fx.env.git(&fx.web, &["branch", "develop"]);
-    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
+    fx.git(&fx.web, &["branch", "develop"]);
+    fx.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     fx.pr(&["edit", "web", "--base", "develop"]).ok();
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "base_not_found", 4, writes);
@@ -847,18 +919,18 @@ fn edit_refusals_write_nothing() {
     let cycle = error["details"]["cycle"].as_array().unwrap();
     assert_eq!((cycle.first(), cycle.len()), (cycle.last(), 4), "{cycle:?}");
 
-    fx.env.git(&fx.pay, &["branch", "cpd/pay-1/web"]);
+    fx.git(&fx.pay, &["branch", "cpd/pay-1/web"]);
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap(), "--base", "main"]), "branch_exists", 3, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1/web");
-    fx.env.git(&fx.pay, &["branch", "-D", "cpd/pay-1/web"]);
-    fx.env.git(&fx.pay, &["branch", "cpd/pay-1"]);
+    fx.git(&fx.pay, &["branch", "-D", "cpd/pay-1/web"]);
+    fx.git(&fx.pay, &["branch", "cpd/pay-1"]);
     let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap(), "--base", "main"]), "branch_exists", 3, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
 }
 
 #[test]
 fn edit_and_cancel_of_a_pr_that_is_not_waiting_are_illegal_transitions() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'api'");
     let writes = fx.writes();
@@ -869,7 +941,7 @@ fn edit_and_cancel_of_a_pr_that_is_not_waiting_are_illegal_transitions() {
 
 #[test]
 fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let writes = fx.writes();
@@ -880,14 +952,14 @@ fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
 
 #[test]
 fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lock() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.job("a", "api", "draft");
-    fx.env.outline_for_review("pay-1");
-    let id = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
-    fx.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
+    fx.outline_for_review("pay-1");
+    let id = fx.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
+    fx.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
     let fingerprint = fx.fingerprint();
-    let current = |fx: &Fx| fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok()["review"]["current"].clone();
+    let current = |fx: &Crud| fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok()["review"]["current"].clone();
 
     // Before the lock, `waiting`: the title changes and the review stays current.
     let out = fx.pr(&["edit", "api", "--title", "Renamed api"]).ok();
@@ -898,10 +970,10 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     assert_eq!(current(&fx), true);
     // `plan lock` starts the engine with `cpd watch --ensure` from `PATH`; a fake one that starts nothing keeps the
     // engine from writing `txns` beside the writes this test counts.
-    fx.env.fake("cpd", "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'");
+    fx.fake("cpd", Reply::ok("{\"ok\": true, \"started\": true, \"pane\": \"%9\"}\n"));
     // The lock starts the PR, which fetches `origin`: the keyed repo's GitHub origin is unreachable in tests.
-    fx.env.drop_unreachable_origin(&fx.pay);
-    fx.env.cpd(&["plan", "lock", "--plan", "pay-1"]).ok();
+    fx.drop_unreachable_origin(&fx.pay);
+    fx.cpd(&["plan", "lock", "--plan", "pay-1"]).ok();
 
     // After the lock the other flags are refused, the title is not.
     fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "pr_locked", 3, fx.writes());
@@ -925,7 +997,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
 }
 
 /// PR `api` is `open` with pull request #7, and `gh` is a fake that runs `gh`.
-fn open_pr(fx: &Fx, gh: &str) {
+fn open_pr(fx: &Crud, gh: Reply) {
     fx.env.sql(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Change api', 0, 'open', 'none', 'none', 't', NULL, 't');
@@ -933,33 +1005,38 @@ fn open_pr(fx: &Fx, gh: &str) {
          UPDATE prs SET status = 'open', pr_number = 7, pr_opened_at = 't',
                         pr_url = 'https://github.com/acme/pay/pull/7', pull_request = (SELECT id FROM pull_requests);",
     );
-    fx.env.fake_gh(gh);
+    fx.fake_gh(gh);
+}
+
+/// The arguments of every `gh` call so far.
+fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
+    fx.calls("gh").into_iter().map(|call| call.args).collect()
 }
 
 #[test]
 fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.add("api", &fx.pay, &[]).ok();
-    open_pr(&fx, "echo '{}'");
+    open_pr(&fx, Reply::ok("{}\n"));
 
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
 
     assert_eq!(out["fields"], json!(["title"]));
-    assert_eq!(fx.env.calls("gh"), [["api", "-X", "PATCH", "repos/acme/pay/pulls/7", "-f", "title=Charge the card"]]);
+    assert_eq!(gh_args(&fx), [["api", "-X", "PATCH", "repos/acme/pay/pulls/7", "-f", "title=Charge the card"]]);
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Charge the card");
     assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
 
     // The same title again: already, and gh is not called.
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
     assert_eq!(out["already"], true);
-    assert_eq!(fx.env.calls("gh").len(), 1);
+    assert_eq!(fx.calls("gh").len(), 1);
 }
 
 #[test]
 fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.add("api", &fx.pay, &[]).ok();
-    open_pr(&fx, "echo 'HTTP 422: nope' >&2; exit 1");
+    open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
     let writes = fx.writes();
 
     let error = fx.refused(&fx.pr(&["edit", "api", "--title", "Charge the card"]), "gh_failed", 1, writes);
@@ -971,9 +1048,9 @@ fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
 
 #[test]
 fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
-    fx.env.fake_gh("echo unexpected >&2; exit 1");
+    fx.fake_gh(Reply::exit(1, "", "unexpected\n"));
 
     fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Charge the card");
@@ -981,7 +1058,7 @@ fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
     // A dispatch PR has no pull request yet either.
     fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't'");
     fx.pr(&["edit", "api", "--title", "Charge it"]).ok();
-    assert!(fx.env.calls("gh").is_empty());
+    assert!(fx.calls("gh").is_empty());
 }
 
 #[test]
@@ -993,7 +1070,7 @@ fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
     // With another flag it is the same refusal: `--title` is checked first.
     fx.refused(&fx.pr(&["edit", "old", "--title", "History", "--no-needs"]), "pr_ended", 3, writes);
 
-    let fx = self::fx("plan");
+    let fx = exec("plan");
     fx.add("gone", &fx.pay, &[]).ok();
     fx.pr(&["cancel", "gone"]).ok();
     let writes = fx.writes();
@@ -1003,7 +1080,7 @@ fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
 
 #[test]
 fn edit_title_refuses_a_bad_title_and_writes_nothing() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     let writes = fx.writes();
     for bad in ["", &"a".repeat(73), "one\ntwo"] {
@@ -1016,7 +1093,7 @@ fn edit_title_refuses_a_bad_title_and_writes_nothing() {
 
 #[test]
 fn cancel_removes_the_pr_and_keeps_its_key() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     let out = fx.pr(&["cancel", "web"]).ok();
@@ -1038,7 +1115,7 @@ fn cancel_removes_the_pr_and_keeps_its_key() {
 
 #[test]
 fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     // A `running` Job holds the PR; a draft one (and a cancelled one) does not.
@@ -1059,7 +1136,7 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "cancelled");
 }
 
-impl Fx {
+impl Crud {
     /// A PR row as the lock and `pr open` leave it: `status` `dispatch` (a Lead worktree, no pull request),
     /// `open` or `merged` (with a pull request).
     fn locked_pr(&self, key: &str, repo: &PathBuf, status: &str) {
@@ -1100,7 +1177,7 @@ impl Fx {
 
 #[test]
 fn cancel_that_completes_the_plan_supersedes_the_pending_reviews() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gateci", &fx.web, "dispatch");
     fx.job("a", "gateci", "cancelled");
@@ -1114,7 +1191,7 @@ fn cancel_that_completes_the_plan_supersedes_the_pending_reviews() {
 
 #[test]
 fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gateci", &fx.web, "dispatch");
     fx.job("a", "gateci", "cancelled");
@@ -1141,7 +1218,7 @@ fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done()
 
 #[test]
 fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "dispatch");
     fx.locked_pr("web", &fx.web, "dispatch");
     let out = fx.pr(&["cancel", "web"]).ok();
@@ -1162,7 +1239,7 @@ fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
 
 #[test]
 fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_merged_one_too() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     for key in ["queued", "running", "merged"] {
         fx.locked_pr(key, &fx.pay, "dispatch");
         fx.job(&format!("{key}-old"), key, "cancelled");
@@ -1203,7 +1280,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
 
 // ---------- pr cancel of an open PR whose pull request is closed (hs-d329) ----------
 
-impl Fx {
+impl Crud {
     fn pull_state(&self, state: &str) {
         self.env.sql(&format!("UPDATE pull_requests SET state = '{state}', merged_at = iif('{state}' = 'merged', 't', NULL) WHERE number = 7"));
     }
@@ -1211,7 +1288,7 @@ impl Fx {
 
 #[test]
 fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_done() {
-    let fx = fx("deploy");
+    let fx = crud("deploy");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("web", &fx.web, "open");
     fx.pull_state("closed");
@@ -1254,17 +1331,20 @@ fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_don
 #[test]
 fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_merge() {
     // `dispatch`: a PR is still to start.
-    let fx = fx("dispatch");
-    fx.locked_pr("web", &fx.web, "open");
-    fx.locked_pr("api", &fx.pay, "dispatch");
-    fx.pull_state("closed");
-    let out = fx.pr(&["cancel", "web"]).ok();
-    assert!(out.get("phase").is_none(), "{out}");
-    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
-    assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
+    {
+        let fx = crud("dispatch");
+        fx.locked_pr("web", &fx.web, "open");
+        fx.locked_pr("api", &fx.pay, "dispatch");
+        fx.pull_state("closed");
+        let out = fx.pr(&["cancel", "web"]).ok();
+        assert!(out.get("phase").is_none(), "{out}");
+        assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
+        assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
+    }
 
     // `deploy`: another PR is still `open`.
-    let fx = self::fx("deploy");
+    // The first Fx is dropped: the lock is process-wide.
+    let fx = crud("deploy");
     fx.locked_pr("web", &fx.web, "open");
     fx.locked_pr("api", &fx.pay, "open");
     fx.pull_state("closed");
@@ -1280,7 +1360,7 @@ fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_me
 
 #[test]
 fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
-    let fx = fx("deploy");
+    let fx = crud("deploy");
     fx.locked_pr("web", &fx.web, "open");
     for state in ["open", "merged"] {
         fx.pull_state(state);
@@ -1297,7 +1377,7 @@ fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
 
 #[test]
 fn an_open_pr_that_another_pr_needs_is_refused_pr_in_use() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("base", &fx.pay, "open");
     fx.pull_state("closed");
     fx.env.sql(&format!(
@@ -1316,9 +1396,9 @@ fn an_open_pr_that_another_pr_needs_is_refused_pr_in_use() {
 
 #[test]
 fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
-    let fx = fx("plan");
-    fx.env.git(&fx.web, &["branch", "develop"]);
-    fx.env.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
+    let fx = crud("plan");
+    fx.git(&fx.web, &["branch", "develop"]);
+    fx.git(&fx.web, &["update-ref", "refs/remotes/origin/develop", "develop"]);
     let none = fx.fingerprint();
     assert_eq!(fx.fingerprint(), none, "the same PRs give the same fingerprint");
 
@@ -1350,7 +1430,7 @@ fn the_plan_fingerprint_changes_with_a_prs_repo_base_needs_and_existence() {
 
 #[test]
 fn the_plan_fingerprint_ignores_a_prs_title() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &["--needs", "api"]).ok();
     let before = fx.fingerprint();
@@ -1361,28 +1441,28 @@ fn the_plan_fingerprint_ignores_a_prs_title() {
 
 #[test]
 fn a_plan_review_goes_stale_when_a_pr_changes() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
     fx.job("a", "api", "draft");
-    fx.env.outline_for_review("pay-1");
-    let review = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok();
+    fx.outline_for_review("pay-1");
+    let review = fx.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok();
     let id = review["review"]["id"].as_str().unwrap().to_owned();
     assert_eq!(review["review"]["fingerprint"], fx.fingerprint());
-    assert_eq!(fx.env.cpd(&["plan", "render", "--plan", "pay-1"]).ok()["fingerprint"], fx.fingerprint());
-    assert_eq!(fx.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok()["current"], true);
-    let current = |fx: &Fx| fx.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok()["review"]["current"].clone();
+    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay-1"]).ok()["fingerprint"], fx.fingerprint());
+    assert_eq!(fx.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok()["current"], true);
+    let current = |fx: &Crud| fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok()["review"]["current"].clone();
     assert_eq!(current(&fx), true);
 
     for args in [&["edit", "web", "--repo", fx.web.to_str().unwrap()][..], &["edit", "web", "--needs", "api"], &["cancel", "web"]] {
         fx.pr(args).ok();
         assert_eq!(current(&fx), false, "{args:?}");
-        let lock = fx.env.cpd(&["plan", "lock", "--plan", "pay-1"]);
+        let lock = fx.cpd(&["plan", "lock", "--plan", "pay-1"]);
         assert_eq!(lock.error()["code"], "plan_not_approved", "{lock:?}");
         // A new review of what the PRs are now, approved, is current again.
-        fx.env.outline_for_review("pay-1");
-        let id = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
-        fx.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
+        fx.outline_for_review("pay-1");
+        let id = fx.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
+        fx.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
         assert_eq!(current(&fx), true, "{args:?}");
     }
 }
@@ -1391,7 +1471,7 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
 
 #[test]
 fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stacked_all_the_same() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     let out = fx.add("web", &fx.pay, &["--base", "pay-1/api", "--needs", "pay-1/api"]);
     let error = fx.refused(&out, "usage", 2, fx.writes());
@@ -1399,8 +1479,8 @@ fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stac
     let out = fx.add("web", &fx.pay, &["--base", "pay-1/api"]).ok();
     assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("cpd/pay-1/api"), json!("pay-1/api")));
     // Its Lead Branch, given as a branch (it exists in the repo), is the derivation of §2.2 all the same: the refusals apply.
-    fx.env.git(&fx.pay, &["branch", "cpd/pay-1/api"]);
-    fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/cpd/pay-1/api", "cpd/pay-1/api"]);
+    fx.git(&fx.pay, &["branch", "cpd/pay-1/api"]);
+    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/cpd/pay-1/api", "cpd/pay-1/api"]);
     let out = fx.add("ui", &fx.pay, &["--base", "cpd/pay-1/api"]).ok();
     assert_eq!(out["pr"]["base_pr"], "pay-1/api");
     fx.pr(&["cancel", "ui"]).ok();
@@ -1411,10 +1491,10 @@ fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stac
 
 #[test]
 fn a_base_that_is_not_a_pr_reference_is_a_branch() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
-    fx.env.git(&fx.pay, &["branch", "feature/x"]);
-    fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/feature/x", "feature/x"]);
+    fx.git(&fx.pay, &["branch", "feature/x"]);
+    fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/feature/x", "feature/x"]);
     // `feature` is no Plan: a branch, which exists.
     let out = fx.add("a", &fx.pay, &["--base", "feature/x"]).ok();
     assert_eq!((out["pr"]["base"].clone(), out["pr"]["base_pr"].clone()), (json!("feature/x"), Value::Null));
@@ -1434,7 +1514,7 @@ fn a_base_that_is_not_a_pr_reference_is_a_branch() {
 
 #[test]
 fn add_refuses_a_bad_reference_and_writes_nothing() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &[]).ok();
     fx.add("gone", &fx.pay, &[]).ok();
@@ -1466,7 +1546,7 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
 
 #[test]
 fn a_cycle_of_needs_and_base_prs_is_refused() {
-    let fx = fx("grounding");
+    let fx = crud("grounding");
     fx.add("x", &fx.pay, &[]).ok();
     // y is stacked on x: x only has to start before y; so x may not need y, which would wait for x to merge.
     fx.add("y", &fx.pay, &["--base", "pay-1/x"]).ok();
@@ -1487,7 +1567,7 @@ fn a_cycle_of_needs_and_base_prs_is_refused() {
 
 #[test]
 fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("schema", &fx.web, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
@@ -1512,7 +1592,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     fx.refused(&fx.pr(&["edit", "web", "--needs", "api"]), "usage", 2, writes);
     fx.refused(&fx.pr(&["edit", "web", "--needs", "ghost"]), "needs_unknown", 3, writes);
     // A new repo is checked against its base PR: a stacked PR cannot move away from it.
-    fx.env.git(&fx.web, &["branch", "cpd/pay-1/api"]);
+    fx.git(&fx.web, &["branch", "cpd/pay-1/api"]);
     fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "pay-1/api"]), "base_pr_other_repo", 3, writes);
 
     // A PR that another PR is stacked on keeps its repo.
@@ -1524,7 +1604,7 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
 
 // ---------- pr cancel --superseded-by (hs-d301) ----------
 
-impl Fx {
+impl Crud {
     /// A Job of PR `pr` that merged.
     fn merged_job(&self, key: &str, pr: &str) {
         self.job(key, pr, "queued");
@@ -1537,7 +1617,7 @@ impl Fx {
 
 #[test]
 fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reaches_done() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.merged_pr("other-1", "storefix", &fx.pay, 8);
     fx.locked_pr("api", &fx.pay, "merged");
@@ -1573,7 +1653,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
 
 #[test]
 fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_do() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("busyfix", &fx.web, "dispatch");
     fx.locked_pr("storefix", &fx.pay, "dispatch");
     fx.merged_job("done", "busyfix");
@@ -1585,7 +1665,7 @@ fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_
 
 #[test]
 fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_own_pr_and_a_pr_that_is_not_dispatch() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.plan("alien-1", "alien", "deploy");
     fx.merged_pr("other-1", "storefix", &fx.pay, 8);
@@ -1623,7 +1703,7 @@ fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_o
 
 #[test]
 fn superseding_a_waiting_pr_before_the_lock_is_refused() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.web, &[]).ok();
     let writes = fx.writes();
@@ -1676,7 +1756,7 @@ fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
 
 // ---------- pr cancel cancels the draft, queued and failed Jobs of its PR (hs-d573, rule B2) ----------
 
-impl Fx {
+impl Crud {
     /// A Job of PR `pr` that is `status`, of kind `kind`: a `failed` one has the cause `timed_out`, a `running` one has
     /// gone `queued` then `running`.
     fn job_of(&self, key: &str, pr: &str, kind: &str, status: &str) {
@@ -1707,7 +1787,7 @@ impl Fx {
 
 #[test]
 fn a_dispatch_pr_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_pr() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gone", &fx.web, "dispatch");
     fx.job_of("d", "gone", "work", "draft");
@@ -1729,7 +1809,7 @@ fn a_dispatch_pr_cancel_cancels_its_draft_queued_and_failed_jobs_with_the_pr() {
 
 #[test]
 fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_shaped_pr("gone", &fx.web, "dispatch", "tdd");
     fx.job_of("gone-docs", "gone", "docs", "cancelled");
@@ -1739,7 +1819,7 @@ fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
 
     // `job cancel` by hand keeps the last `test` Job of a `tdd` PR (unchanged) ...
     let writes = fx.writes();
-    let run = fx.env.cpd(&["job", "cancel", "gone-tests", "--reason", "No.", "--plan", "pay-1"]);
+    let run = fx.cpd(&["job", "cancel", "gone-tests", "--reason", "No.", "--plan", "pay-1"]);
     fx.refused(&run, "shape_incomplete", 3, writes);
     assert_eq!(fx.job_row("gone-tests"), "draft/-/-");
 
@@ -1754,7 +1834,7 @@ fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
 
 #[test]
 fn a_waiting_tdd_pr_with_its_template_stubs_is_cancelled_before_the_lock() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add_with_stubs("pay-1", &["add", "gone", "--repo", fx.pay.to_str().unwrap(), "--title", "Change gone"]).ok();
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE pr = 'gone' AND status = 'draft'"), 4);
 
@@ -1768,7 +1848,7 @@ fn a_waiting_tdd_pr_with_its_template_stubs_is_cancelled_before_the_lock() {
 
 #[test]
 fn a_running_job_holds_the_pr_cancel_and_nothing_is_cancelled() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("gone", &fx.web, "dispatch");
     fx.job_of("d", "gone", "work", "draft");
@@ -1789,7 +1869,7 @@ fn a_running_job_holds_the_pr_cancel_and_nothing_is_cancelled() {
 
 #[test]
 fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancelled() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.plan("other-1", "ctx", "deploy");
     fx.merged_pr("other-1", "storefix", &fx.pay, 8);
     fx.locked_pr("api", &fx.pay, "merged");
@@ -1811,7 +1891,7 @@ fn a_merged_job_holds_the_pr_cancel_unless_superseded_and_the_others_are_cancell
 
 #[test]
 fn a_pr_that_another_pr_needs_still_refuses_and_none_of_its_jobs_is_cancelled() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("base", &fx.pay, "dispatch");
     fx.job_of("d", "base", "work", "draft");
@@ -1835,7 +1915,7 @@ fn a_pr_that_another_pr_needs_still_refuses_and_none_of_its_jobs_is_cancelled() 
 
 #[test]
 fn an_open_pr_with_a_closed_pull_request_has_its_draft_queued_and_failed_jobs_cancelled() {
-    let fx = fx("deploy");
+    let fx = crud("deploy");
     fx.locked_pr("api", &fx.pay, "merged");
     fx.locked_pr("web", &fx.web, "open");
     fx.pull_state("closed");
@@ -1853,13 +1933,13 @@ fn an_open_pr_with_a_closed_pull_request_has_its_draft_queued_and_failed_jobs_ca
 
 #[test]
 fn after_a_pr_cancel_the_plan_can_be_archived() {
-    let fx = fx("dispatch");
+    let fx = crud("dispatch");
     fx.locked_shaped_pr("gone", &fx.web, "dispatch", "tdd");
     fx.job_of("gone-tests", "gone", "test", "draft");
     fx.job_of("gone-impl", "gone", "impl", "draft");
     fx.job_of("open-gone", "gone", "open", "queued");
 
-    let archive = || fx.env.cpd(&["plan", "archive", "--plan", "pay-1"]);
+    let archive = || fx.cpd(&["plan", "archive", "--plan", "pay-1"]);
     common::refused(&archive(), "archive_blocked", 3);
     fx.pr(&["cancel", "gone"]).ok();
     archive().ok();
@@ -1868,10 +1948,10 @@ fn after_a_pr_cancel_the_plan_can_be_archived() {
 
 #[test]
 fn owner_is_in_use_while_a_plan_has_a_pr_row() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fs::write(fx.env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
     fx.add("api", &fx.pay, &[]).ok();
-    let owner = |fx: &Fx| fx.env.cpd(&["context", "owner", "other", "--context", "ctx"]);
+    let owner = |fx: &Crud| fx.cpd(&["context", "owner", "other", "--context", "ctx"]);
 
     let run = owner(&fx);
     let error = crate::common::refused(&run, "owner_in_use", 3);
@@ -1881,7 +1961,7 @@ fn owner_is_in_use_while_a_plan_has_a_pr_row() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE owner = 'acme'"), 1);
     assert_eq!(fx.events("context-owner").len(), 0);
 
-    let same = fx.env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    let same = fx.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
     assert_eq!(same["already"], true);
 
     // A cancelled row still blocks.
@@ -1892,9 +1972,9 @@ fn owner_is_in_use_while_a_plan_has_a_pr_row() {
 
 #[test]
 fn a_null_owner_is_still_set_while_a_pr_row_exists() {
-    let fx = fx("plan");
+    let fx = crud("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.env.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");
-    let out = fx.env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    let out = fx.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
     assert_eq!(out["context"], json!({"id": "ctx", "owner": "acme"}));
 }

@@ -107,7 +107,8 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
 /// from) and the writer `out` for its lines, not the process's stdout: what a test of the loop calls.
 /// `out` failing with `BrokenPipe` ends it as the reader's end does. With no `self_exe` to watch there is no restart.
 pub fn follow_in(env: &mut Env, args: FollowArgs, out: &mut dyn Write) -> Result<Output, CpdError> {
-    follow_loop(env, args, out, &|| false)
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    follow_loop(env, args, out, &|| false, &argv)
 }
 
 /// `events follow` (§11.2, §5.4): prints each Event as a line, in id order,
@@ -116,11 +117,20 @@ pub fn follow_in(env: &mut Env, args: FollowArgs, out: &mut dyn Write) -> Result
 fn follow(args: FollowArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let mut stdout = std::io::stdout().lock();
-    follow_loop(&mut env, args, &mut stdout, &|| reader_gone(&std::io::stdout()))
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    follow_loop(&mut env, args, &mut stdout, &|| reader_gone(&std::io::stdout()), &argv)
 }
 
-/// The loop of [`follow`] and [`follow_in`]; `gone` says whether the reader went away without a write (G1).
-fn follow_loop(env: &mut Env, args: FollowArgs, out: &mut dyn Write, gone: &dyn Fn() -> bool) -> Result<Output, CpdError> {
+/// The loop of [`follow`] and [`follow_in`]: `gone` says whether the reader went away without a write (G1), and `argv`
+/// is the command line (without the program name) a restart on a new install repeats with `--since` moved on. A test
+/// of the end by `gone` or of the restart calls it; `follow` passes the process's own.
+pub fn follow_loop(
+    env: &mut Env,
+    args: FollowArgs,
+    out: &mut dyn Write,
+    gone: &dyn Fn() -> bool,
+    argv: &[OsString],
+) -> Result<Output, CpdError> {
     let Env { store, config, ports, .. } = env;
     let exe = match ports.spawn.self_exe() {
         Ok(path) => Some(Exe::at(path)?),
@@ -193,7 +203,7 @@ fn follow_loop(env: &mut Env, args: FollowArgs, out: &mut dyn Write, gone: &dyn 
         }
         // A new install: the same follower again, after the last Event printed (hs-d140). Returns only on failure.
         if let Some(exe) = exe.as_ref().filter(|exe| exe.replaced()) {
-            let args = restart_args(std::env::args_os().skip(1), cursor).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+            let args = restart_args(argv.iter().cloned(), cursor).iter().map(|a| a.to_string_lossy().into_owned()).collect();
             let launch = Launch { program: exe.path().display().to_string(), args, ..Launch::default() };
             let e = ports.spawn.exec(&launch);
             return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", exe.path().display()))
@@ -269,6 +279,17 @@ mod tests {
     #[test]
     fn a_closed_reader_ends_the_follower_without_an_error() {
         assert!(matches!(print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"), Err(Ok(()))));
+    }
+
+    /// What the follower's `stdout` being a pipe whose reader went away comes to, with no process: a pipe of this
+    /// process (nothing is written to it, so no `SIGPIPE`), and a file, which has no reader to lose.
+    #[test]
+    fn a_pipe_whose_reader_is_gone_is_gone_and_a_file_is_not() {
+        let (reader, writer) = nix::unistd::pipe().unwrap();
+        assert!(!reader_gone(&writer), "the reader is still there");
+        drop(reader);
+        assert!(reader_gone(&writer));
+        assert!(!reader_gone(&tempfile::tempfile().unwrap()));
     }
 
     fn restarted(args: &[&str], cursor: i64) -> Vec<String> {
