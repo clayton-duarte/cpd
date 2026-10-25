@@ -282,8 +282,11 @@ fn a_missing_disabled_or_failed_engine_is_the_designed_code() {
     let error = common::refused(&missing, "engine_missing", 4);
     assert!(error["details"]["bridge"].as_str().unwrap().ends_with("nope.py"), "{error}");
 
-    // The operator's kill switch: no spawn.
-    fx.env.write_config(&format!("version = 1\nmachine = \"hs\"\ncontext_engine_enabled = false\n{}", bridge.config()));
+    // The operator's kill switch: no spawn. The key appears once (TOML forbids duplicates).
+    fx.env.write_config(&format!(
+        "version = 1\nmachine = \"hs\"\n{}",
+        bridge.config().replacen("context_engine_enabled = true", "context_engine_enabled = false", 1)
+    ));
     let disabled = fx.cpd(&["context", "search", "note", "--context", CTX]);
     common::refused(&disabled, "engine_disabled", 3);
     assert!(!bridge.log.exists(), "a disabled engine spawns nothing");

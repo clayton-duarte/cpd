@@ -87,7 +87,17 @@ fn healthy() -> TestEnv {
 
 /// [`healthy`] in `env`.
 fn healthy_in(env: TestEnv) -> TestEnv {
-    write_config(&env, "");
+    // A stub engine that answers `ping`; `context_engine_python` is spawned as
+    // `<python> <bridge>`, so the same script can serve as both.
+    let engine = env.root().join("fake-engine.sh");
+    write_executable(
+        &engine,
+        "#!/bin/sh\nwhile IFS= read -r _line; do echo '{\"ok\":true,\"engine\":\"holographic\",\"version\":\"test\",\"pid\":1}'; done\n",
+    );
+    write_config(
+        &env,
+        &format!("context_engine_bridge = \"{}\"\ncontext_engine_python = \"{}\"\n", engine.display(), engine.display()),
+    );
     healthy_tools(&env);
     symlink(real_node(), env.bin().join("node")).unwrap();
     env

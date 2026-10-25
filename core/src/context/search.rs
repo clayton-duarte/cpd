@@ -54,6 +54,8 @@ pub(super) struct Snapshot {
     pub retired: HashMap<String, String>,
     pub successor: HashMap<String, String>,
     pub curations: HashMap<String, Curation>,
+    pub max_seq: i64,
+    pub max_curated: Option<String>,
 }
 
 /// Reads the Context's row, records (index order), approved retirements, the live
@@ -65,6 +67,8 @@ pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapsho
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
         let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         let as_of = records.last().map(|(seq, _)| *seq).unwrap_or(0);
+        let curated = curations(conn, context)?;
+        let max_curated = curated.values().filter_map(|(_, _, at)| at.as_deref()).max().map(str::to_owned);
         let retired_ids = inforce::retired(conn, context)?;
         let in_force = inforce::in_force_without(&records, as_of, &retired_ids)
             .into_iter()
@@ -76,7 +80,9 @@ pub(super) fn snapshot(store: &mut Store, context: &ContextId) -> Result<Snapsho
             in_force,
             retired: retired_labels(conn, context)?,
             successor: successors(conn, context)?,
-            curations: curations(conn, context)?,
+            curations: curated,
+            max_seq: as_of,
+            max_curated,
         })
     })
 }
@@ -107,11 +113,11 @@ pub(super) fn curations(conn: &Connection, context: &ContextId) -> Result<HashMa
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// A projected fact: the record id, its text and its curation (topic, short).
-pub(super) fn fact(record: &Record, curations: &HashMap<String, Curation>) -> Value {
+/// A projected fact: the record id, its index position, its text and its curation (topic, short).
+pub(super) fn fact(seq: i64, record: &Record, curations: &HashMap<String, Curation>) -> Value {
     let id = record.id.to_string();
     let (topic, short): (&str, &str) = curations.get(&id).map(|(topic, short, _)| (topic.as_str(), short.as_str())).unwrap_or(("", ""));
-    json!({"record": id, "topic": topic, "short": short, "text": record.text})
+    json!({"record": id, "seq": seq, "topic": topic, "short": short, "text": record.text})
 }
 
 /// `cpd context search` (docs/research/context-holographic.md, `## Search contract`).
@@ -141,7 +147,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
     let mut requests: Vec<Value> = Vec::new();
     if indexed_seq == 0 {
         requests.push(json!({"cmd": "reset"}));
-        requests.push(index(&snap.records, &snap.curations));
+        requests.push(index(&snap, &snap.records));
     } else {
         let changed: Vec<Indexed> = snap
             .records
@@ -152,7 +158,7 @@ pub(super) fn search(args: SearchArgs) -> Result<Output, CpdError> {
             .cloned()
             .collect();
         if !changed.is_empty() {
-            requests.push(index(&changed, &snap.curations));
+            requests.push(index(&snap, &changed));
         }
     }
 
@@ -214,10 +220,17 @@ fn curation_is_newer(snap: &Snapshot, id: &str, indexed_curated: Option<&str>) -
         .is_some_and(|at| indexed_curated.is_none_or(|before| at > before))
 }
 
-/// `{"cmd":"index","facts":[…]}` for `records`.
-fn index(records: &[Indexed], curations: &HashMap<String, Curation>) -> Value {
-    let facts: Vec<Value> = records.iter().map(|(_, record)| fact(record, curations)).collect();
-    json!({"cmd": "index", "facts": facts})
+/// `{"cmd":"index","facts":[…],"indexed_seq":…,"curated_at":…}` for `records`,
+/// carrying the Context's watermark so the bridge advances it even when only an
+/// older record's curation changed.
+pub(super) fn index(snap: &Snapshot, records: &[Indexed]) -> Value {
+    let facts: Vec<Value> = records.iter().map(|(seq, record)| fact(*seq, record, &snap.curations)).collect();
+    json!({
+        "cmd": "index",
+        "facts": facts,
+        "indexed_seq": snap.max_seq,
+        "curated_at": snap.max_curated,
+    })
 }
 
 /// `{"cmd":"search","query":…,"limit":…}`.
@@ -301,7 +314,10 @@ fn hits_of(response: &Value, snap: &Snapshot, kinds: &HashSet<&'static str>, all
             let id = hit["record"].as_str()?;
             let (seq, record) = snap.records.iter().find(|(_, record)| record.id.to_string() == id)?;
             let in_force = snap.in_force.contains(id);
-            if !all && !in_force {
+            // `--all` governs supersession and retirement, which only the four
+            // force kinds have; a `plan`/`brief` is never in force and is shown
+            // whenever its kind is selected.
+            if !all && !in_force && force_kind(record.kind()) {
                 return None;
             }
             if !kinds.contains(record.kind().as_str()) {
@@ -320,6 +336,11 @@ fn hits_of(response: &Value, snap: &Snapshot, kinds: &HashSet<&'static str>, all
         .collect();
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.seq.cmp(&a.seq)));
     hits
+}
+
+/// Whether a record kind is ever in force (`inforce.rs`).
+fn force_kind(kind: RecordKind) -> bool {
+    matches!(kind, RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer)
 }
 
 /// The curated short form, else the record's first line at most 120 bytes.

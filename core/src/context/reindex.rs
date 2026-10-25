@@ -6,7 +6,7 @@
 //! watermark); it changes no Context record and appends no Event.
 
 use clap::Args;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::engine::{Bridge, ContextEngine};
 use super::search::{self, check_ok};
@@ -34,8 +34,8 @@ pub(super) fn reindex(args: ReindexArgs) -> Result<Output, CpdError> {
         config.context_engine_reindex_timeout(),
     )?;
     let db = config.context_engine_dir(&home).join(format!("{}.db", context.as_str()));
-    let facts: Vec<Value> = snap.records.iter().map(|(_, record)| search::fact(record, &snap.curations)).collect();
-    let responses = bridge.run(&db, &[json!({"cmd": "reset"}), json!({"cmd": "index", "facts": facts})])?;
+    let archive = search::index(&snap, &snap.records);
+    let responses = bridge.run(&db, &[json!({"cmd": "reset"}), archive])?;
     for response in &responses {
         check_ok(response, "")?;
     }
