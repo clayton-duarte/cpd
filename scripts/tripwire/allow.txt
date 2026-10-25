@@ -37,7 +37,6 @@ cpd::session session::  # m-session: session tests on a real tmux server
 cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
-cpd::flow context_curation::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_digest::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_distill::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_manager_by_user::  # m-flow: flow commands that may reach a real tmux
