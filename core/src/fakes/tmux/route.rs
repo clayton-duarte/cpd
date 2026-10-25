@@ -1,6 +1,27 @@
 //! The fake tmux as a route of the `FakeRunner` (ADR 0013): `TmuxRoute` is the [`Handler`] of the program `tmux`.
 //! It maps a [`Call`] to an [`Invocation`](super::Invocation), tries a scripted reply (what a shell `tmux` wrapper
 //! did) before the fake, and answers `-u -V` itself. STUB: the red tests of `route_tests` pin the behaviour.
+//!
+//! # Fault injections (the engine tests; each has a test in `route_tests`)
+//!
+//! - The first `kill-window` (or any call) fails: `FakeRunner::once("tmux", |call| call.args.iter().any(|a| a == "kill-window"),
+//!   Reply::exit(1, "", "can't find window\n"))`. The rule answers once, then the call goes to the route again. `on` is the
+//!   rule for every call; its matcher can read a flag the test flips to make tmux work again.
+//! - The first `list-panes` fails: the same, matching `"list-panes"`.
+//! - Tabs printed as `_` (a tmux that cannot print a tab, which the adapter refuses as `tmux_failed`): a `once` or `on`
+//!   reply whose stdout has the rows with `_` between the fields.
+//! - The command of a window exits with 7, or a signal killed it: [`TmuxRoute::new_panes_end`] with [`PaneEnd::Status`]`(7)` or
+//!   [`PaneEnd::Signal`] (no status, `#{pane_dead_status}` empty), or `ctl pane-exit <pane> [--status N | --signal]` on a pane that
+//!   exists.
+//!
+//! # What the engine reads of `FakeSpawn` (core/src/host/spawn.rs)
+//!
+//! - E1 (escalations): `alive(Pid(asker_pid))`; a pid the test made with `spawn` or `add_process` and has not `exit`ed is alive,
+//!   any other is not.
+//! - E3 (start a Job): `self_exe()` (the engine's executable, the driver's `argv[0]`) and `spawn(&Launch)`, one launch per
+//!   driver, whose argv a test reads from `launches()`.
+//! - E10 (titles): `self_exe()`, `spawn(&Launch)` for `session retitle <session> --width <w>`, then `try_wait(pid)` at each
+//!   later tick: the test runs the launch (`Fx::children`), which marks the pid exited.
 
 use super::{FakeTmux, Invocation, VERSION};
 use crate::clock::ManualClock;
