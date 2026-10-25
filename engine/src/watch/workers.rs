@@ -93,7 +93,7 @@ pub(super) fn run(engine: &mut Engine) {
     let (width, short_width) = (right(counts.width()), right(counts.short_width()));
     // What was last set: the four workers values and the incident value, one string (no value holds a newline).
     let incident_state = match &incident {
-        Some(reason) => format!("on:{reason}"),
+        Some(elapsed) => format!("on:{elapsed}"),
         None => "off".to_string(),
     };
     let state = format!("{long}\n{short}\n{width}\n{short_width}\n{incident_state}");
@@ -115,7 +115,7 @@ pub(super) fn run(engine: &mut Engine) {
         .to_vec();
     args.push(";".to_string());
     match &incident {
-        Some(reason) => args.extend(["set", "-g", INCIDENT, reason].map(str::to_owned)),
+        Some(elapsed) => args.extend(["set", "-g", INCIDENT, elapsed].map(str::to_owned)),
         None => args.extend(["set", "-gu", INCIDENT].map(str::to_owned)),
     }
     let set: Result<String, CpdError> = engine.tmux.run(&args);
@@ -128,14 +128,14 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// The `@cpd_incident` text while incident mode is on (contract §6.1): the one `incident` row's `reason`, or `1`
-/// when a row exists but its reason cannot be read. `None` while off.
+/// The `@cpd_incident` text while incident mode is on (contract §6.1, hs-d640): the coarse human
+/// duration from the one `incident` row's `started_at` to now. `None` while off.
 fn incident(conn: &rusqlite::Connection) -> Result<Option<String>, CpdError> {
     if !is_on(conn) {
         return Ok(None);
     }
-    let reason = conn.query_row("SELECT reason FROM incident WHERE id = 1", [], |r| r.get::<_, String>(0)).optional()?;
-    Ok(Some(reason.unwrap_or_else(|| "1".to_string())))
+    let started_at = conn.query_row("SELECT started_at FROM incident WHERE id = 1", [], |r| r.get::<_, String>(0)).optional()?;
+    started_at.map(|started_at| cpd_core::incident::elapsed(&started_at, time::OffsetDateTime::now_utc())).transpose()
 }
 
 /// A tmux call of the step failed: nothing is remembered (a restarted server starts without the
