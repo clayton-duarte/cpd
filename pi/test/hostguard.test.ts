@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { hostApproveBypass } from "../lib/hostapprove.ts";
-import { Fixture, shown, waitFor } from "./fake.ts";
+import { Fixture, shown } from "./fake.ts";
 
-// commands.md §15.<n>: the approval is the User's, so no agent runs `cpd host approve`; the adapter refuses it.
-// `cpd host repair` and every other cpd command pass. The §15.<n> number is the docs' placeholder.
+// commands.md §15.18: the approval is the User's, so no agent runs `cpd host approve`; the adapter refuses it.
+// `cpd host repair` and every other cpd command pass.
 
 type Result = { block?: boolean; reason?: string } | undefined;
 
@@ -20,7 +20,6 @@ async function manager(t: TestContext) {
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
   return (command: string) => f.pi.fireWith("tool_call", { toolName: "bash", toolCallId: "t", input: { command } }).then((out) => out[0] as Result);
 }
 

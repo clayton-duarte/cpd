@@ -3,9 +3,9 @@ import { test, type TestContext } from "node:test";
 import { createHost, type Host } from "../lib/host.ts";
 import { registerHostApproveTool } from "../lib/hostapprove.ts";
 import type { Run } from "../lib/run.ts";
-import { Fixture, waitFor } from "./fake.ts";
+import { Fixture } from "./fake.ts";
 
-// commands.md §15.<n> "The pi tool cpd_host_approve", driven through the fake host.
+// commands.md §15.18 "The pi tool cpd_host_approve", driven through the fake host.
 // The exact dialog sentence is the doc's: the tool provides it because pi gives the dialog no title.
 
 const NAME = "host-manager";
@@ -42,7 +42,8 @@ test("the tool cpd_host_approve is for Manager Sessions only", async (t) => {
 test("Allow once runs cpd host approve and tells the Manager to run cpd host repair now", async (t) => {
   const { f, tool, hostCalls } = setup(t, "manager");
   const running = f.pi.runTool(tool, { reason: REASON });
-  const d = await waitFor("the dialog", () => f.pi.openDialog("select"));
+  const d = f.pi.openDialog("select");
+  assert.ok(d, "the dialog is open");
   assert.equal(d.title, TITLE);
   assert.deepEqual(d.options, ["Allow once", "Deny"]);
   d.answer("Allow once");
@@ -54,7 +55,9 @@ test("Allow once runs cpd host approve and tells the Manager to run cpd host rep
 test("Deny runs nothing and tells the Manager not to retry", async (t) => {
   const { f, tool, hostCalls } = setup(t, "manager");
   const running = f.pi.runTool(tool, { reason: REASON });
-  (await waitFor("the dialog", () => f.pi.openDialog("select"))).answer("Deny");
+  const d = f.pi.openDialog("select");
+  assert.ok(d, "the dialog is open");
+  d.answer("Deny");
   const out = await running;
   assert.equal(out.text, "The User denied it. Do not try again.");
   assert.deepEqual(hostCalls(), []);
