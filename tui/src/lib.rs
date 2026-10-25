@@ -92,7 +92,7 @@ mod pill_tests;
 mod updating_label;
 #[cfg(test)]
 mod pill_colours;
-mod plan;
+pub mod plan;
 pub use plan::draw_first_frame;
 mod popup;
 pub mod read;

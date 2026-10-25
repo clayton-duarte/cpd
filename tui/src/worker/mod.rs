@@ -168,6 +168,7 @@ pub(crate) fn event_loop_with<B: Backend>(
             let retry = !view.note.is_empty();
             if let Some(events) = kept(follow.poll(store), &mut error) {
                 if retry || !events.is_empty() {
+                    ctx.snapshot_read();
                     if let Some(worker) = kept(read::worker(store, plan, target), &mut error) {
                         snapshot = Some(worker);
                     }

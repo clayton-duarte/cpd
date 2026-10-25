@@ -37,6 +37,10 @@ pub trait Input {
     fn ready_while_busy(&mut self) -> io::Result<bool> {
         Ok(false)
     }
+
+    /// Told by a loop each time it takes a snapshot of the store (the model it draws, read again): what a test that
+    /// drives a view from outside counts, to assert that an idle view reads nothing. The real input ignores it.
+    fn snapshot_read(&mut self) {}
 }
 
 /// The facts of the terminal a view must not read from the process: whether there is one, and its raw mode.
@@ -92,6 +96,12 @@ impl<'a, B: Backend> Ctx<'a, B> {
         self.terminal.draw(render).map_err(|e| io::Error::other(e.to_string()))?;
         self.draws += 1;
         Ok(())
+    }
+
+    /// The loop took a snapshot of the store: its input is told ([`Input::snapshot_read`]). Every loop calls this where it
+    /// reads its model again, and nowhere else (the polls of the Events are no snapshot).
+    pub fn snapshot_read(&mut self) {
+        self.input.snapshot_read();
     }
 
     /// How many frames were drawn.

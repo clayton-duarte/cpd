@@ -238,6 +238,7 @@ fn event_loop<B: Backend>(
                 redraw |= view.set_merging(merging);
             }
             if let Some(next) = done.snapshot {
+                ctx.snapshot_read();
                 if let Some((end, tree)) = kept(next, &mut snapshot_error) {
                     snooze_end = end;
                     let t = &view.tree;
