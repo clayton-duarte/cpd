@@ -64,12 +64,9 @@ pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
 pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait
 pi/test/testguard.test.ts 1  # m-pi: sleep or wall-clock wait
 pi/test/updates.test.ts 1  # m-pi: sleep or wall-clock wait
-tui/src/lib.rs 1  # m-units: sleep or wall-clock wait
 tui/src/menu.rs 1  # m-units: sleep or wall-clock wait
-tui/src/plan/mod.rs 15  # m-units: one-time raise (+5) after PRs #315/#316: the scan counts production code after the first #[cfg(test)]; lower it when the scan is limited to test modules
+tui/src/plan/mod.rs 2  # m-units: sleep or wall-clock wait
 tui/src/tree/folds.rs 1  # m-units: sleep or wall-clock wait
-tui/src/tree/mod.rs 11  # m-units: sleep or wall-clock wait
 tui/src/tree/view.rs 8  # m-units: sleep or wall-clock wait
-tui/src/widgets/mod.rs 5  # m-units: sleep or wall-clock wait
 pi/test/secret-approve.test.ts 3  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact
 pi/test/secretguard.test.ts 1  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact

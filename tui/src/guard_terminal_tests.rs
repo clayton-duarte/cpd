@@ -4,7 +4,7 @@
 
 use crate::guard_tests::product_sources;
 
-/// The calls only `runner.rs` may make: `run_view`'s setup and its `Restore` guard.
+/// The calls only `runner.rs` and `view_ports.rs` may make: `run_view`'s setup and its `Restore` guard.
 const FORBIDDEN: [&str; 5] =
     ["ratatui::init", "ratatui::try_init", "ratatui::restore", "EnableMouseCapture", "DisableMouseCapture"];
 
@@ -14,7 +14,7 @@ const FORBIDDEN: [&str; 5] =
 fn no_view_starts_the_terminal_by_hand() {
     let mut offenders = Vec::new();
     for (file, text) in product_sources() {
-        if file == "runner.rs" {
+        if file == "runner.rs" || file == "view_ports.rs" {
             continue;
         }
         for (n, line) in text.lines().enumerate() {
@@ -25,7 +25,7 @@ fn no_view_starts_the_terminal_by_hand() {
     }
     assert!(
         offenders.is_empty(),
-        "only runner.rs starts the terminal: run_view's Restore guard turns mouse reporting off on every exit, a \
+        "only runner.rs and view_ports.rs start the terminal: run_view's Restore guard turns mouse reporting off on every exit, a \
          panic included, so no view may call ratatui::init / restore or toggle mouse capture by hand:\n{}",
         offenders.join("\n")
     );
