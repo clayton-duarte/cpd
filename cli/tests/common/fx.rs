@@ -40,7 +40,7 @@ use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::host::spawn::{Launch, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
-use cpd_core::ports::Fakes;
+use cpd_core::ports::{Fakes, Ports};
 
 use super::{Run, TestEnv};
 
@@ -84,6 +84,8 @@ pub struct Fx {
     allow_unscripted: Cell<bool>,
     /// The migration [`Fx::hold_store_migration`] simulates, while it runs; dropped (and the lock released) with the `Fx`.
     migration: Option<Arc<Migration>>,
+    /// The clock of [`Fx::on_nap`], once installed.
+    nap: Option<Arc<NapClock>>,
     /// The process's environment and directory when this `Fx` took the lock.
     saved_vars: Vec<(OsString, OsString)>,
     saved_cwd: PathBuf,
@@ -203,6 +205,24 @@ impl Fx {
         self.migration = Some(migration);
     }
 
+    /// Runs `hook` at every `sleep` of the `Ports`' clock, on the thread that sleeps, in place of what another process
+    /// does while a command waits (an `ask` waits for its `answer`): the `ManualClock` advances by the nap as usual, then
+    /// the hook runs with a [`Nap`] that runs `cpd` on the ports as they were before the hook's clock (a `sleep` of that
+    /// command runs no hook). Replaces the hook of an earlier call; it stays until replaced. Only on [`Fx::with_ports`].
+    pub fn on_nap(&mut self, hook: impl FnMut(&Nap) + Send + 'static) {
+        assert!(self.on_fake_ports, "on_nap: on an Fx::with_ports");
+        let hook: Hook = Box::new(hook);
+        match &self.nap {
+            Some(clock) => *clock.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook),
+            None => {
+                let nap = Nap { ports: self.fakes.ports.clone() };
+                let clock = Arc::new(NapClock { inner: self.fakes.ports.clock.clone(), nap, hook: Mutex::new(Some(hook)) });
+                self.fakes.ports.clock = clock.clone();
+                self.nap = Some(clock);
+            }
+        }
+    }
+
     /// The `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).
     pub fn take_launch(&self, i: usize) -> Launch {
         let launches = self.fakes.spawn.launches();
@@ -253,7 +273,7 @@ impl Fx {
         // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
         let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
         let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
-        let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), migration: None, saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), migration: None, nap: None, saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
@@ -443,17 +463,62 @@ impl Fx {
     /// `Fx`; the environment and the directory are put back after.
     fn run(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
         let _scope = Scope::enter(cwd, set, remove);
-        let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
-        let mut stdout = Vec::new();
-        let code = if self.on_fake_ports {
-            cpd::run_with(&self.fakes.ports, argv, &mut stdout)
-        } else {
-            cpd::main_with(argv, &mut stdout)
-        };
-        // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
-        // `print!` on the process's, which nobody can read back here.
-        assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
-        Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+        run_cpd(self.on_fake_ports.then_some(&self.fakes.ports), args)
+    }
+}
+
+/// `cpd <args>` in this process, on `ports` or (`None`) the real ones, with the process's environment and directory as they are.
+fn run_cpd(ports: Option<&Ports>, args: &[&str]) -> Run {
+    let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
+    let mut stdout = Vec::new();
+    let code = match ports {
+        Some(ports) => cpd::run_with(ports, argv, &mut stdout),
+        None => cpd::main_with(argv, &mut stdout),
+    };
+    // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
+    // `print!` on the process's, which nobody can read back here.
+    assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
+    Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+}
+
+/// What a hook of [`Fx::on_nap`] runs `cpd` with: the ports of the `Fx` without the hook's clock.
+pub struct Nap {
+    ports: Ports,
+}
+
+impl Nap {
+    /// `cpd <args>` in this process, in the environment and the directory of the command that sleeps.
+    pub fn cpd(&self, args: &[&str]) -> Run {
+        run_cpd(Some(&self.ports), args)
+    }
+}
+
+type Hook = Box<dyn FnMut(&Nap) + Send>;
+
+/// The clock of [`Fx::on_nap`]: `inner`, and the hook after every `sleep`.
+struct NapClock {
+    inner: Arc<dyn Clock>,
+    nap: Nap,
+    hook: Mutex<Option<Hook>>,
+}
+
+impl Clock for NapClock {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        // Out of the mutex while it runs, and put back after (unless the call put another there), so the hook never
+        // runs inside itself and a panic of it leaves none behind.
+        let taken = self.hook.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(mut hook) = taken {
+            hook(&self.nap);
+            let mut slot = self.hook.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.get_or_insert(hook);
+        }
+    }
+    fn utc(&self) -> OffsetDateTime {
+        self.inner.utc()
     }
 }
 

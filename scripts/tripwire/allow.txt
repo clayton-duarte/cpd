@@ -29,7 +29,6 @@ cpd::session session_titles_glance::  # m-session: session tests on a real tmux 
 cpd::session session_titles::  # m-session: session tests on a real tmux server
 cpd::session session_watchdog::  # m-session: session tests on a real tmux server
 cpd::session session::  # m-session: session tests on a real tmux server
-cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux
 cpd::flow context_digest::  # m-flow: flow commands that may reach a real tmux
