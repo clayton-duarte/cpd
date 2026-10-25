@@ -20,7 +20,7 @@
 //! panics on it, as it reads nothing). stdin is the test process's own. stderr is not captured: `Run::stderr` is empty (what the
 //! product writes there goes to the test's own stderr, which nextest shows only for a failed test).
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, Write};
@@ -37,8 +37,8 @@ use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
-use cpd_core::host::runner::{Call, Reply};
 use cpd_core::error::CpdError;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::Fakes;
@@ -306,6 +306,8 @@ pub struct Fx {
     /// Whether `cpd` runs on `fakes.ports` ([`Fx::with_ports`]) or on the real ports ([`Fx::new`]).
     on_fake_ports: bool,
     allow_unscripted: Cell<bool>,
+    /// The route of the `op` program, registered by the first [`Fx::op`].
+    op_route: OnceCell<Arc<OpRoute>>,
     /// The process's environment and directory when this `Fx` took the lock.
     saved_vars: Vec<(OsString, OsString)>,
     saved_cwd: PathBuf,
@@ -324,7 +326,11 @@ impl Fx {
     /// process is started and nothing external is run. Its drop fails the test when a program was called that no
     /// `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
     pub fn with_ports() -> Fx {
-        let mut env = bare_with_store();
+        Fx::with_ports_over(bare_with_store())
+    }
+
+    /// [`Fx::with_ports`] over `env`, a [`TestEnv::bare`] one (with a store) that the test seeded.
+    pub fn with_ports_over(mut env: TestEnv) -> Fx {
         // The fake tmux has no socket: its directory is the env's own, never the shared `/tmp` a long root would give.
         env.tmux_in_root = true;
         let mut fx = Fx::with(env);
@@ -357,6 +363,36 @@ impl Fx {
     /// [`Fx::fake`] for `op`.
     pub fn fake_op(&self, reply: Reply) {
         self.fake("op", reply);
+    }
+
+    /// The route of the `op` program on the `FakeRunner`, registered by the first call of this: it answers by
+    /// subcommand (the word after `item`) from [`Fx::op_says`], exit 0 with nothing for a subcommand no one scripted,
+    /// and keeps every call it answered, stdin included. A rule of [`Fx::fake_op`] answers before it, so a call that
+    /// rule answers is not the route's.
+    pub fn op(&self) -> &Arc<OpRoute> {
+        self.op_route.get_or_init(|| {
+            let route = Arc::new(OpRoute::default());
+            let _ = (*self.fakes.runner).clone().route("op", route.clone());
+            route
+        })
+    }
+
+    /// The `item <sub>` of op answers with `stdout`, `stderr` and exit status `code`, until the next call of this for
+    /// the same `sub` (`get`, `list`, `create`, `edit`, `delete`).
+    pub fn op_says(&self, sub: &str, stdout: &str, stderr: &str, code: i32) {
+        self.op().says(sub, Reply::exit(code, stdout, stderr));
+    }
+
+    /// The calls the route of `op` answered, one line of argv each, in order.
+    pub fn op_log(&self) -> Vec<String> {
+        self.op().calls().iter().map(|call| call.args.join(" ")).collect()
+    }
+
+    /// What the route of `op` read on stdin in its last call of `item <sub>` that had one (`create` or `edit`).
+    pub fn op_stdin(&self, sub: &str) -> String {
+        let call = self.op().calls().into_iter().rev().find(|call| op_sub(call) == sub && call.stdin.is_some());
+        let bytes = call.unwrap_or_else(|| panic!("op got no stdin for {sub}")).stdin.expect("found by its stdin");
+        String::from_utf8(bytes).expect("the stdin is UTF-8")
     }
 
     /// [`Fx::fake`] for `node`.
@@ -507,7 +543,7 @@ impl Fx {
         // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
         let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
         let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
-        let fx = Fx { env, fakes, nap, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes, nap, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), op_route: OnceCell::new(), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
@@ -687,6 +723,15 @@ impl Fx {
         self.run(cwd, args, vars, &[])
     }
 
+    /// Runs `cpd <args>` from this env's root with `vars` added and `stdin` as the process's stdin for the call (a file
+    /// of the env's, put back after, also on a panic): what a command that reads its stdin (`secret create`) sees.
+    pub fn cpd_stdin(&self, args: &[&str], vars: &[(&str, &str)], stdin: &str) -> Run {
+        let file = self.env.root().join("stdin");
+        std::fs::write(&file, stdin).expect("write the stdin file");
+        let _fed = Stdin::enter(&file);
+        self.cpd_with(self.env.root(), args, vars)
+    }
+
     /// Runs `cpd <args>` in `cwd` with `set` added to and `remove` taken out of its environment, on the ports of this
     /// `Fx`; the environment and the directory are put back after.
     fn run(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
@@ -736,12 +781,48 @@ impl Drop for Fx {
     }
 }
 
+/// The route of `op` ([`Fx::op`]): the reply of each subcommand, and the calls it answered.
+#[derive(Default)]
+pub struct OpRoute {
+    replies: Mutex<Vec<(String, Reply)>>,
+    calls: Mutex<Vec<Call>>,
+}
+
+impl OpRoute {
+    /// `reply` is the answer of `item <sub>` from now on.
+    pub fn says(&self, sub: &str, reply: Reply) {
+        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        replies.retain(|(known, _)| known != sub);
+        replies.push((sub.to_owned(), reply));
+    }
+
+    /// Every call it answered, in order.
+    pub fn calls(&self) -> Vec<Call> {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+}
+
+impl Handler for OpRoute {
+    fn handle(&self, call: &Call) -> Reply {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner).push(call.clone());
+        let replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let sub = op_sub(call);
+        replies.iter().find(|(known, _)| known == sub).map_or_else(|| Reply::ok(""), |(_, reply)| reply.clone())
+    }
+}
+
+/// The word after `item` in `call`'s arguments (`get`, `list`, `create`, `edit`, `delete`); empty when there is none.
+fn op_sub(call: &Call) -> &str {
+    call.args.iter().skip_while(|arg| *arg != "item").nth(1).map_or("", String::as_str)
+}
+
 /// The program's file name: `/usr/bin/gh` is `gh`.
 fn file_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 
-fn bare_with_store() -> TestEnv {
+/// A [`TestEnv::bare`] env with a store: a copy of the template.
+pub fn bare_with_store() -> TestEnv {
     let env = TestEnv::bare();
     std::fs::copy(super::store_template(), env.cpd_home().join("cpd.db")).expect("copy the store template");
     env
@@ -774,6 +855,26 @@ impl Drop for NoTerminal {
     fn drop(&mut self) {
         let _ = dup2_stdin(&self.stdin);
         let _ = dup2_stdout(&self.stdout);
+    }
+}
+
+/// The process's stdin pointing at a file, put back on drop.
+struct Stdin {
+    saved: OwnedFd,
+}
+
+impl Stdin {
+    fn enter(path: &Path) -> Stdin {
+        let file = std::fs::File::open(path).expect("open the stdin file");
+        let saved = Stdin { saved: dup(std::io::stdin()).expect("dup stdin") };
+        dup2_stdin(&file).expect("point stdin at the file");
+        saved
+    }
+}
+
+impl Drop for Stdin {
+    fn drop(&mut self) {
+        let _ = dup2_stdin(&self.saved);
     }
 }
 

@@ -12,6 +12,7 @@ mod tui_checklist;
 mod tui_dialog;
 mod tui_history;
 mod tui_host_click;
+mod tui_incident_click;
 mod tui_idle;
 mod tui_logs;
 mod tui_merge;
