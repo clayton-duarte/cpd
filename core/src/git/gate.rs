@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CpdError, ErrorCode};
+use crate::ports::Ports;
 pub use crate::slot::{Slot, Slots};
 
 /// Takes a slot for a Gate (waiting for one when every slot is busy) and logs it (contract §7.6):
@@ -14,8 +15,13 @@ pub use crate::slot::{Slot, Slots};
 ///   output is appended;
 /// - the lines of a Gate that waited are on stderr too; the line of a Gate that found a slot free is in `log` only.
 pub fn take(slots: &Slots, log: &Path) -> Result<Slot, CpdError> {
+    take_with(&Ports::real(), slots, log)
+}
+
+/// [`take`] with `ports.clock` for the elapsed time and the polls' naps ([`Slots::take_with`]).
+pub fn take_with(ports: &Ports, slots: &Slots, log: &Path) -> Result<Slot, CpdError> {
     let mut log = HeadLog::begin(log)?;
-    slots.take("gate", &mut |line, waited| log.line(line, waited))
+    slots.take_with(ports, "gate", &mut |line, waited| log.line(line, waited))
 }
 
 /// The `pre-merge` log, which the wait's lines head.

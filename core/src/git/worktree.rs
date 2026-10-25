@@ -6,8 +6,9 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_list};
+use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_list_with};
 use super::{TAIL_LINES, tail};
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
 use crate::host::runner::{Runner, SystemRunner};
@@ -68,7 +69,12 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    let text = worktree_list(dir)?;
+    list_with(&SystemRunner, &SystemClock, dir)
+}
+
+/// [`list`] on `runner`, the naps of its re-reads on `clock`.
+pub fn list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<Vec<Worktree>, CpdError> {
+    let text = worktree_list_with(runner, clock, dir)?;
     let mut found = Vec::new();
     for block in text.split("\n\n") {
         let mut path = None;
@@ -89,7 +95,12 @@ pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
 
 /// The worktree that has `branch` checked out, if any.
 pub fn worktree_of_branch(dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
-    Ok(list(dir)?.into_iter().find(|w| w.branch.as_deref() == Some(branch)).map(|w| w.path))
+    worktree_of_branch_with(&SystemRunner, &SystemClock, dir, branch)
+}
+
+/// [`worktree_of_branch`] on `runner`, its naps on `clock`.
+pub fn worktree_of_branch_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
+    Ok(list_with(runner, clock, dir)?.into_iter().find(|w| w.branch.as_deref() == Some(branch)).map(|w| w.path))
 }
 
 /// `path` with symlinks resolved, also when the last component does not exist yet.
