@@ -39,3 +39,7 @@ mod universe_tests;
 mod worktree_tests;
 #[cfg(test)]
 mod remote_tests;
+#[cfg(test)]
+mod fixture_tests;
+#[cfg(test)]
+mod twin_tests;
