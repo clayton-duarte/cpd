@@ -396,8 +396,8 @@ fn the_tree_of_a_prepared_store() {
         format!(" ╰─{IDLE} ship·f-id"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰬪`), one empty row between two Contexts; the Inbox section is pinned below
+        " ╰\u{F0B2A} new".to_owned(),
+    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a live Context with no row ends with the clickable `╰󰬪 new`), one empty row between two Contexts; the Inbox section is pinned below
     expected.extend(inbox_section(46));
     let screen = screen(&draw(&mut env.view(), 46, 20));
     assert_eq!(
@@ -430,7 +430,7 @@ fn the_tree_orders_live_rows_by_dot_tier_then_last_activity() {
         format!(" ╰─{STOPPED} old"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
+        " ╰\u{F0B2A} new".to_owned(),
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
@@ -472,7 +472,7 @@ fn an_archived_row_is_last_after_the_live_rows() {
         format!(" ╰{UP} collapse"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
+        " ╰\u{F0B2A} new".to_owned(),
     ];
     expected.extend(inbox_section(46));
     let screen = screen(&draw(&mut env.view(), 46, 21));
