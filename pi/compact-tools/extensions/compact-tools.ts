@@ -72,6 +72,7 @@ import { renderCodexCall, renderCodexResult } from "./compact-tools-codex-rows.t
 import { ToolGroupController } from "./compact-tools-grouping.ts";
 import { chrome, ink, paint, paintIndicator, statusPill, TEXT } from "./compact-tools-indices.ts";
 import { EditorBoxController } from "./compact-tools-editor.ts";
+import { CursorController } from "./compact-tools-cursor.ts";
 import { ProgressController } from "./compact-tools-progress.ts";
 import { findOtherCopy, standDown } from "./compact-tools-double-load.ts";
 import { ToolRuntime } from "./compact-tools-runtime.ts";
@@ -827,6 +828,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	const viewport = new ViewportKeeper();
 	const silent = new SilentModeController(pi);
 	const editorBox = new EditorBoxController();
+	const cursor = new CursorController();
 	const groups = new ToolGroupController(runtime);
 	builtinStates = new WeakMap();
 	authorStates = new WeakMap();
@@ -859,6 +861,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		// Observe relayout keys before the thinking controller consumes them.
 		// Before the thinking controller: its terminal input handler is the one the tests (and the key relayout) look for last.
 		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx));
+		attemptUI(failures, "cursor bind", () => cursor.bind());
 		attemptUI(failures, "viewport bind", () => viewport.bind(ctx));
 		attemptUI(failures, "progress bind", () => progress.bind(ctx, resume));
 		attemptUI(failures, "thinking bind", () => thinkingCycle.bind(ctx));
@@ -873,6 +876,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		attemptUI(failures, "progress cleanup", () => progress.dispose(options.preservePhase));
 		attemptUI(failures, "silent cleanup", () => silent.dispose());
 		attemptUI(failures, "editor box cleanup", () => editorBox.dispose(sessionContext));
+		attemptUI(failures, "cursor cleanup", () => cursor.dispose());
 		attemptUI(failures, "groups cleanup", () => groups.dispose());
 		attemptUI(failures, "viewport cleanup", () => viewport.dispose());
 		attemptUI(failures, "animation cleanup", () => runtime.reset(options.clearTimings === true));
