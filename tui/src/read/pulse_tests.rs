@@ -1,20 +1,30 @@
 //! Pulse's read model (`read::manager_slot`, `read::pulse`), against a store prepared through the store
 //! API. Every read takes a fixed `now_ms`: no wall clock, no sleeps.
 
-use crate::common;
-
-use common::{TestEnv, sql};
+use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 use cpd_core::store::Store;
-use cpd_tui::read::{self, Bucket, Dot, Kind, PulseRow};
+
+use crate::read::{self, Bucket, Dot, Kind, PulseRow};
 
 /// 2026-10-18T15:07:30.000Z; with 12 buckets the window is 14:10:00 .. 15:10:00, the current bucket (index 11) from 15:05:00.
 const NOW: i64 = 1_792_336_050_000;
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-fn open(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+/// A store in a temporary home, which lives as long as the returned directory.
+fn open(dir: &tempfile::TempDir) -> Store {
+    Store::open(&CpdHome::resolve(Some(dir.path().into()), None).unwrap(), 5000).unwrap()
+}
+
+/// Runs `text` as the store's own write.
+fn sql(store: &mut Store, text: &str) {
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(text)?;
+            Ok::<(), CpdError>(())
+        })
+        .unwrap();
 }
 
 fn ctx(id: &str) -> ContextId {
@@ -108,16 +118,16 @@ fn moved(at: &str, context: &str, session: &str, place: &str) -> String {
 }
 
 /// `ctx` with Plans `p1` (first) and `p2`, and Context `other` with `o1`.
-fn base() -> (TestEnv, Store) {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+fn base() -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(&dir);
     let mut s = context("ctx") + &context("other");
     s += &plan("p1", "ctx", "2026-01-02T00:00:00.000Z", "idle");
     s += &plan("p2", "ctx", "2026-01-02T00:00:01.000Z", "idle");
     s += &plan("o1", "other", "2026-01-02T00:00:00.000Z", "idle");
     s += &ev("15:06:00.000", "job-merged", "o1").replace("'ctx'", "'other'");
     sql(&mut store, &s);
-    (env, store)
+    (dir, store)
 }
 
 fn read(store: &mut Store, buckets: usize) -> read::Pulse {
@@ -136,7 +146,7 @@ fn counts(r: &PulseRow) -> Vec<u32> {
 
 #[test]
 fn the_manager_slot_is_the_newest_chat_move_when_a_manager_made_it() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     assert_eq!(read::manager_slot(&mut store).unwrap(), None, "nobody was ever in the chat slot");
 
     let mut s = session("m-ctx", "manager", "ctx", None, None, "idle", None);
@@ -157,7 +167,7 @@ fn the_manager_slot_is_the_newest_chat_move_when_a_manager_made_it() {
 
 #[test]
 fn a_lead_in_the_slot_alone_is_no_manager() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     sql(&mut store, &moved("2026-10-18T15:00:00.000Z", "ctx", "l-p1", "chat"));
     assert_eq!(read::manager_slot(&mut store).unwrap(), None);
 }
@@ -166,7 +176,7 @@ fn a_lead_in_the_slot_alone_is_no_manager() {
 
 #[test]
 fn the_rows_are_the_contexts_live_plans_in_created_order() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = plan("p0", "ctx", "2026-01-01T00:00:00.000Z", "idle");
     s += &plan("arch", "ctx", "2026-01-02T00:00:02.000Z", "idle");
     s += &plan_done("old", "ctx", "2026-01-02T00:00:03.000Z", "2026-10-18T14:09:59.999Z");
@@ -186,7 +196,7 @@ fn the_rows_are_the_contexts_live_plans_in_created_order() {
 
 #[test]
 fn every_activity_kind_counts_and_the_others_do_not() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let counted = [
         "plan-phase", "plan-review", "plan-done", "job-added", "job-edited", "job-merged", "job-failed", "job-retried",
         "job-cancel-requested", "job-cancelled", "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
@@ -213,7 +223,7 @@ fn every_activity_kind_counts_and_the_others_do_not() {
 
 #[test]
 fn only_a_leads_turns_count_and_so_does_a_side_fork() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = job("p1", "a", "running") + &attempt("p1", "a", "2026-10-18T13:00:00.000Z", Some("2026-10-18T13:01:00.000Z"));
     s += &session("f-p1", "lead", "ctx", Some("p1"), None, "idle", None);
     s += &session("w-1", "worker", "ctx", Some("p1"), Some("a-a1"), "idle", None);
@@ -231,7 +241,7 @@ fn only_a_leads_turns_count_and_so_does_a_side_fork() {
 
 #[test]
 fn buckets_are_wall_clock_five_minute_marks() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = String::new();
     s += &ev("15:04:59.999", "job-added", "p1"); // bucket 10: 15:00 .. 15:05
     s += &ev("15:05:00.000", "job-added", "p1"); // bucket 11
@@ -250,7 +260,7 @@ fn buckets_are_wall_clock_five_minute_marks() {
 
 #[test]
 fn merges_set_their_flags_and_are_counted_in_the_window() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = String::new();
     s += &ev("15:01:00.000", "job-merged", "p1");
     s += &ev("15:02:00.000", "job-merged", "p1");
@@ -266,7 +276,7 @@ fn merges_set_their_flags_and_are_counted_in_the_window() {
 
 #[test]
 fn an_attempt_marks_every_bucket_it_overlaps_through_now_while_not_ended() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = job("p1", "a", "running") + &job("p1", "b", "merged") + &job("p2", "c", "running");
     s += &attempt("p1", "a", "2026-10-18T14:22:00.000Z", None); // from bucket 2 through the current one
     s += &attempt("p1", "b", "2026-10-18T13:00:00.000Z", Some("2026-10-18T14:10:00.000Z")); // ends on the first instant
@@ -282,7 +292,7 @@ fn an_attempt_marks_every_bucket_it_overlaps_through_now_while_not_ended() {
 
 #[test]
 fn max_is_the_largest_bucket_over_all_rows_and_age_counts_whole_minutes() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let mut s = String::new();
     for _ in 0..3 {
         s += &ev("15:06:00.000", "job-added", "p1");
@@ -301,7 +311,7 @@ fn max_is_the_largest_bucket_over_all_rows_and_age_counts_whole_minutes() {
 
 #[test]
 fn age_reads_an_event_older_than_the_window_zero_while_an_attempt_runs_and_none_without_activity() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     assert_eq!(read(&mut store, 12).max, 0);
     assert_eq!(row(&read(&mut store, 12), "p1").age_minutes, None);
 
@@ -318,7 +328,7 @@ fn age_reads_an_event_older_than_the_window_zero_while_an_attempt_runs_and_none_
 
 #[test]
 fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_user() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     let quiet = |store: &mut Store, plan: &str| row(&read(store, 12), plan).quiet;
 
     assert!(!quiet(&mut store, "p1"), "no Jobs");
@@ -360,7 +370,7 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
 
 #[test]
 fn the_cursor_is_the_highest_event_id_of_the_read() {
-    let (_env, mut store) = base();
+    let (_dir, mut store) = base();
     sql(&mut store, &ev("15:06:00.000", "job-added", "p1"));
     let newest: i64 = store.read(|c| Ok(c.query_row("SELECT max(id) FROM events", [], |r| r.get(0))?)).unwrap();
     assert_eq!(read(&mut store, 12).events_cursor, newest);

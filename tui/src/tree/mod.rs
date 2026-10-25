@@ -53,7 +53,13 @@ mod new_context_tests;
 mod another_owner_tests;
 #[cfg(test)]
 mod counter_tests;
+#[cfg(test)]
+mod asleep_tests;
+#[cfg(test)]
+mod loop_guard_tests;
 mod menu;
+#[cfg(test)]
+mod prepared_tests;
 mod rows;
 mod slug;
 mod view;

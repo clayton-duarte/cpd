@@ -192,6 +192,15 @@ fn stored_title(store: &mut Store, pull: &Pull) -> Result<Option<String>, CpdErr
     })
 }
 
+/// The dialog for the pull request `arg` (`<owner>/<repo>#<n>`) as `run` shows it, with its title read from `store`, drawn on
+/// `f`. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_dialog(store: &mut Store, f: &mut Frame, arg: &str) -> Result<(), CpdError> {
+    let pull = Pull::parse(arg).map_err(|e| CpdError::new(ErrorCode::ArgsInvalid, e))?;
+    let title = stored_title(store, &pull)?;
+    draw(f, f.area(), &pull, title.as_deref());
+    Ok(())
+}
+
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     // `run_view` refuses `not_a_terminal` first, then `prepare` reads the store; the same order as before.
     let mut ending: Option<(Action, String)> = None;
