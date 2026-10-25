@@ -543,7 +543,7 @@ fn the_tree_of_a_prepared_store() {
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "1"),
-        row(&format!("╰─{STOPPED} old"), ""),
+        format!(" ╰─{STOPPED} old"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
         " ╰\u{F0B2A}".to_owned(),

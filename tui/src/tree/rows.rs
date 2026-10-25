@@ -42,6 +42,7 @@ use std::collections::HashSet;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 use tui_tree_widget::TreeState;
@@ -50,7 +51,7 @@ use crate::fold;
 use crate::palette;
 use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
-use crate::read::{ContextNode, Dot, Place, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, JobCounts, Place, PlanNode, SessionNode, Tree};
 use super::actions::{Action, Subject};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
@@ -284,10 +285,15 @@ pub fn counters(plan: &PlanNode) -> Line<'static> {
         if !spans.is_empty() {
             spans.push(palette::separator());
         }
-        let (status, merging) = counts.counter_role(i);
-        spans.push(Span::styled(n.to_string(), palette::count_style(status, merging, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(&counts, i, n)));
     }
     Line::from(spans)
+}
+
+/// Style of the `index`th counter of `JobCounts::counters`: its role's status colour (colour 8 when zero).
+fn counter_style(counts: &JobCounts, index: usize, n: usize) -> Style {
+    let (status, merging) = counts.counter_role(index);
+    palette::count_style(status, merging, n)
 }
 
 /// The display width of `text` in terminal columns (wide characters take two, combining marks none).
@@ -876,10 +882,10 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Idle)]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("╭{IDLE} cc").to_owned(), row_of(&format!("╰─{IDLE} pp"), "", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("╭{IDLE} cc").to_owned(), format!("╰─{IDLE} pp")]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of(&format!("╰─{NEEDS_YOU} pp"), "", 30));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), format!("╰─{NEEDS_YOU} pp"));
     }
 
     #[test]
@@ -887,8 +893,8 @@ mod tests {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
         assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} pp"), "4", 20));
-        assert_eq!(fg(&buf, 9, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
-        assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing), "the zero");
+        assert_eq!(fg(&buf, 17, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
+        assert_eq!(buf[(16, 1)].symbol(), " ", "no separator before a lone role");
     }
 
     #[test]
@@ -896,7 +902,7 @@ mod tests {
         let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-lon…"), "36⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-long-pl…"), "36⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -1028,7 +1034,7 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 4, false);
-        assert_eq!(lines(&buf)[1..], [row_of(&format!("├─{IDLE} pp"), "", 30), format!("╰─{IDLE} pp·f").to_owned(), String::new()]);
+        assert_eq!(lines(&buf)[1..], [format!("├─{IDLE} pp"), format!("╰─{IDLE} pp·f").to_owned(), String::new()]);
     }
 
     #[test]
@@ -1107,12 +1113,12 @@ mod tests {
         assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (grey, grey), "the branch");
         assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working), "the dot");
         // counters "2⋅2⋅5" end `RIGHT_PAD` columns before the edge
-        let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 33 + 2 * i, 1)).collect();
+        let counters: Vec<Color> = [37, 39, 41].iter().map(|&x| fg(&buf, x, 1)).collect();
         assert_eq!(
             counters,
-            [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::InProgress), palette::color_clickable(Meaning::Review), color(Meaning::Nothing), palette::color_clickable(Meaning::Done)]
+            [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::Review), palette::color_clickable(Meaning::Done)]
         );
-        assert!((0..4).all(|i| fg(&buf, 34 + 2 * i, 1) == grey), "the separators");
+        assert_eq!((fg(&buf, 38, 1), fg(&buf, 40, 1)), (grey, grey), "the separators");
     }
 
     #[test]
