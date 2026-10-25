@@ -134,7 +134,8 @@ For each test file under `cli/tests/<area>/`:
    - If unit-testable: move to `<crate>/src/<module>.rs` with `#[cfg(test)]`
    - If integration needed: rewrite on the ports, keep same name where behaviour is the same
 4. **Delete old**: remove the original test file or test function
-5. **Measure**: `scripts/test-time.sh` before and after (one PR per file, ~150 tests per PR)
+5. **Restore**: restore the deleted tests of the file (docs/research/tests-mock-deleted.md) on the fake, then delete their rows.
+6. **Measure**: `scripts/test-time.sh` before and after (one PR per file, ~150 tests per PR)
 
 ## What dies in mig-final
 
@@ -156,170 +157,201 @@ The Gate then refuses any test that spawns a real tmux or git.
 
 One row per file with held tests, grouped by area and PR. Counts by `rg -c '#\[(test|tokio::test)'`. Target layer: `unit` = move to `<crate>/src/<module>`, `integration` = rewrite on ports in `cli/tests/`, `deleted` = removed, or mixed.
 
-### engine (191 tests total)
+### engine (131 tests total)
 
-| File | Tests | Target | PR |
-|---|---|---|---|
-| watch.rs | 120 | integration (tmux, clock) | mig-engine-1 |
-| doctor.rs | 32 | unit + integration | mig-engine-1 |
-| watch_inbox.rs | 10 | integration (tmux) | mig-engine-2 |
-| watch_curate_inbox.rs | 5 | integration | mig-engine-2 |
-| watch_distill_inbox.rs | 1 | integration | mig-engine-2 |
-| watch_loop_guard_inbox.rs | 4 | integration | mig-engine-2 |
-| watch_sleep.rs | 6 | integration (clock) | mig-engine-2 |
-| watch_team.rs | 7 | integration (clock) | mig-engine-2 |
-| watch_titles_width.rs | 2 | integration | mig-engine-1 |
-| watch_worker_archive.rs | 3 | integration | mig-engine-1 |
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| watch.rs | 68 | 44 | integration (tmux, clock) | mig-engine-1 |
+| doctor.rs | 27 | 4 | unit + integration | mig-engine-1 |
+| watch_inbox.rs | 9 | 1 | integration (tmux) | mig-engine-2 |
+| watch_curate_inbox.rs | 5 | – | integration | mig-engine-2 |
+| watch_distill_inbox.rs | 1 | – | integration | mig-engine-2 |
+| watch_loop_guard_inbox.rs | 4 | – | integration | mig-engine-2 |
+| watch_sleep.rs | 6 | – | integration (clock) | mig-engine-2 |
+| watch_team.rs | 6 | 1 | integration (clock) | mig-engine-2 |
+| watch_titles_width.rs | 2 | – | integration | mig-engine-1 |
+| watch_worker_archive.rs | 3 | – | integration | mig-engine-1 |
 
-### flow (508 tests total)
+### flow (531 tests total)
 
-| File | Tests | Target | PR |
-|---|---|---|---|
-| plan.rs | 50 | integration (tmux) | mig-flow-1 |
-| job.rs | 67 | integration (git, runner) | mig-flow-2 |
-| attempt.rs | 44 | integration (git, clock) | mig-flow-2 |
-| driver.rs | 43 | integration (tmux, clock) | mig-flow-3 |
-| context.rs | 42 | integration (git) | mig-flow-4 |
-| config.rs | 47 | unit + integration | mig-flow-1 |
-| context_distill.rs | 33 | integration (git, clock) | mig-flow-2 |
-| review.rs | 32 | integration (git) | mig-flow-3 |
-| spec.rs | 26 | unit | mig-flow-1 |
-| secret.rs | 30 | integration (tmux) | mig-flow-1 |
-| secret_op.rs | 18 | integration (git) | mig-flow-2 |
-| policy_scopes.rs | 18 | unit | mig-flow-1 |
-| policy_fallback.rs | 15 | unit | mig-flow-1 |
-| review_job.rs | 14 | integration | mig-flow-3 |
-| context_curation.rs | 14 | integration | mig-flow-4 |
-| policy.rs | 14 | unit | mig-flow-1 |
-| plan_outline.rs | 20 | integration | mig-flow-1 |
-| plan_cancel.rs | 12 | integration (clock) | mig-flow-1 |
-| plan_show.rs | 10 | unit | mig-flow-1 |
-| context_digest.rs | 11 | unit | mig-flow-4 |
-| ask.rs | 10 | integration (clock) | mig-flow-3 |
-| repo_cmds.rs | 10 | integration (git) | mig-flow-4 |
-| metrics.rs | 8 | unit | mig-flow-1 |
-| secret_grants.rs | 5 | integration | mig-flow-2 |
-| driver_reload.rs | 5 | integration (tmux, clock) | mig-flow-3 |
-| secret_guard.rs | 3 | unit | mig-flow-1 |
-| repo_config.rs | 8 | unit | mig-flow-1 |
-| context_pending.rs | 6 | unit | mig-flow-4 |
-| context_pending_waiting.rs | 2 | unit | mig-flow-4 |
-| plan_new_by_user.rs | 2 | integration | mig-flow-1 |
-| context_manager_by_user.rs | 2 | integration | mig-flow-4 |
-| driver_idle.rs | 2 | integration (clock) | mig-flow-3 |
-| review_close.rs | 7 | integration | mig-flow-3 |
-| context_manager.rs | 7 | integration | mig-flow-4 |
-| plan_delete.rs | 7 | integration (git) | mig-flow-4 |
-| context_delete.rs | 2 | integration (git) | mig-flow-4 |
-| plan_render_waiting.rs | 2 | unit | mig-flow-1 |
-| plan_render_cancelled.rs | 4 | unit | mig-flow-1 |
-| plan_overlap.rs | 12 | integration | mig-flow-1 |
-| review_plannotator.rs | 11 | integration | mig-flow-3 |
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| plan.rs | 45 | 5 | integration (tmux) | mig-flow-1 |
+| job.rs | 73 | – | integration (git, runner) | mig-flow-2 |
+| attempt.rs | 30 | 14 | integration (git, clock) | mig-flow-2 |
+| driver.rs | 25 | 18 | integration (tmux, clock) | mig-flow-3 |
+| context.rs | 41 | 1 | integration (git) | mig-flow-4 |
+| config.rs | 47 | – | unit + integration | mig-flow-1 |
+| context_distill.rs | 33 | – | integration (git, clock) | mig-flow-2 |
+| review.rs | 1 | – | integration (git) | mig-flow-3 |
+| spec.rs | 14 | – | unit | mig-flow-1 |
+| secret.rs | 0 | – | integration (tmux) | mig-flow-1 |
+| secret_op.rs | 17 | – | integration (git) | mig-flow-2 |
+| policy_scopes.rs | 18 | – | unit | mig-flow-1 |
+| policy_fallback.rs | 15 | – | unit | mig-flow-1 |
+| review_job.rs | 7 | 2 | integration | mig-flow-3 |
+| context_curation.rs | 14 | – | integration | mig-flow-4 |
+| policy.rs | 14 | – | unit | mig-flow-1 |
+| plan_outline.rs | 20 | – | integration | mig-flow-1 |
+| plan_cancel.rs | 1 | 11 | integration (clock) | mig-flow-1 |
+| plan_show.rs | 10 | – | unit | mig-flow-1 |
+| context_digest.rs | 11 | – | unit | mig-flow-4 |
+| ask.rs | 9 | 1 | integration (clock) | mig-flow-3 |
+| repo_cmds.rs | 0 | 6 | deleted file | mig-flow-4 |
+| metrics.rs | 8 | – | unit | mig-flow-1 |
+| secret_grants.rs | 6 | – | integration | mig-flow-2 |
+| driver_reload.rs | 4 | 1 | integration (tmux, clock) | mig-flow-3 |
+| secret_guard.rs | 9 | – | unit | mig-flow-1 |
+| repo_config.rs | 6 | 1 | unit | mig-flow-1 |
+| context_pending.rs | 6 | – | unit | mig-flow-4 |
+| context_pending_waiting.rs | 2 | – | unit | mig-flow-4 |
+| plan_new_by_user.rs | 2 | – | integration | mig-flow-1 |
+| context_manager_by_user.rs | 2 | – | integration | mig-flow-4 |
+| driver_idle.rs | 2 | – | integration (clock) | mig-flow-3 |
+| review_close.rs | 4 | – | integration | mig-flow-3 |
+| context_manager.rs | 5 | 1 | integration | mig-flow-4 |
+| plan_delete.rs | 4 | 3 | integration (git) | mig-flow-4 |
+| context_delete.rs | 0 | 1 | deleted file | mig-flow-4 |
+| plan_render_waiting.rs | 2 | – | unit | mig-flow-1 |
+| plan_render_cancelled.rs | 4 | – | unit | mig-flow-1 |
+| plan_overlap.rs | 12 | – | integration | mig-flow-1 |
+| review_plannotator.rs | 8 | – | integration | mig-flow-3 |
 
-### pr (411 tests total)
+### pr (317 tests total)
 
-| File | Tests | Target | PR |
-|---|---|---|---|
-| pr.rs | 102 | integration (git) | mig-pr-1 |
-| pr_crud.rs | 108 | integration (git) | mig-pr-2 |
-| merge.rs | 46 | integration (git) | mig-pr-1 |
-| git.rs | 126 | integration (git, runner) | mig-pr-3 |
-| pr_local_needs.rs | 11 | unit | mig-pr-1 |
-| pr_merge.rs | 20 | integration (git) | mig-pr-2 |
-| pr_push.rs | 23 | integration (git) | mig-pr-2 |
-| pr_view.rs | 6 | unit | mig-pr-1 |
-| pr_start.rs | 14 | integration (git, clock) | mig-pr-3 |
-| pr_cleanup.rs | 17 | integration (git) | mig-pr-3 |
-| pr_cleanup_cancel.rs | 8 | integration (git) | mig-pr-3 |
-| repo_hooks.rs | 14 | integration (git) | mig-pr-3 |
-| git_guard.rs | 29 | integration (git) | mig-pr-3 |
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| pr.rs | 103 | 37 | integration (git) | mig-pr-1 |
+| pr_crud.rs | 67 | – | integration (git) | mig-pr-2 |
+| merge.rs | 6 | 41 | integration (git) | mig-pr-1 |
+| git.rs | 51 | 14 | integration (git, runner) | mig-pr-3 |
+| pr_local_needs.rs | 5 | – | unit | mig-pr-1 |
+| pr_merge.rs | 14 | – | integration (git) | mig-pr-2 |
+| pr_push.rs | 11 | – | integration (git) | mig-pr-2 |
+| pr_view.rs | 6 | – | unit | mig-pr-1 |
+| pr_start.rs | 25 | – | integration (git, clock) | mig-pr-3 |
+| pr_cleanup.rs | 14 | – | integration (git) | mig-pr-3 |
+| pr_cleanup_cancel.rs | 3 | – | integration (git) | mig-pr-3 |
+| repo_hooks.rs | 6 | – | integration (git) | mig-pr-3 |
+| git_guard.rs | 6 | 2 | integration (git) | mig-pr-3 |
 
-### session (167 tests total)
+### session (166 tests total)
 
-| File | Tests | Target | PR |
-|---|---|---|---|
-| session_reload.rs | 31 | integration (tmux, runner, clock) | mig-session-1 |
-| host.rs | 30 | unit + integration (tmux) | mig-session-1 |
-| session.rs | 25 | integration (tmux) | mig-session-1 |
-| session_watchdog.rs | 25 | integration (tmux, clock) | mig-session-2 |
-| board.rs | 18 | integration (tmux) | mig-session-1 |
-| session_send.rs | 15 | integration (tmux, runner) | mig-session-1 |
-| session_resume.rs | 17 | integration (tmux) | mig-session-1 |
-| session_asleep.rs | 15 | integration | mig-session-2 |
-| session_first_message.rs | 10 | integration (runner) | mig-session-1 |
-| pill_lines.rs | 12 | unit | mig-session-1 |
-| session_titles.rs | 10 | unit | mig-session-1 |
-| plannotator_env.rs | 8 | unit | mig-session-1 |
-| session_list_archived.rs | 2 | unit | mig-session-2 |
-| session_report.rs | 2 | unit | mig-session-2 |
-| session_retier.rs | 2 | unit | mig-session-2 |
-| session_titles_glance.rs | 2 | unit | mig-session-2 |
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| session_reload.rs | 12 | – | integration (tmux, runner, clock) | mig-session-1 |
+| host.rs | 26 | – | unit + integration (tmux) | mig-session-1 |
+| session.rs | 55 | – | integration (tmux) | mig-session-1 |
+| session_watchdog.rs | 1 | 2 | integration (tmux, clock) | mig-session-2 |
+| board.rs | 6 | – | integration (tmux) | mig-session-1 |
+| session_send.rs | 18 | – | integration (tmux, runner) | mig-session-1 |
+| session_resume.rs | 5 | – | integration (tmux) | mig-session-1 |
+| session_asleep.rs | 3 | – | integration | mig-session-2 |
+| session_first_message.rs | 3 | – | integration (runner) | mig-session-1 |
+| pill_lines.rs | 5 | – | unit | mig-session-1 |
+| session_titles.rs | 14 | – | unit | mig-session-1 |
+| plannotator_env.rs | 2 | – | unit | mig-session-1 |
+| session_list_archived.rs | 2 | – | unit | mig-session-2 |
+| session_report.rs | 3 | – | unit | mig-session-2 |
+| session_retier.rs | 7 | – | unit | mig-session-2 |
+| session_titles_glance.rs | 4 | – | unit | mig-session-2 |
 
 ### store (110 tests total)
 
-| File | Tests | Target | PR |
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| store.rs | 68 | – | unit + integration | mig-engine-1 |
+| events.rs | 35 | – | unit | mig-engine-1 |
+| store_window.rs | 4 | – | integration | mig-engine-2 |
+| store_local_needs.rs | 2 | – | unit | mig-engine-2 |
+| store_asleep.rs | 1 | – | unit | mig-engine-2 |
+
+### tui (357 tests total)
+
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| tui_tree.rs | 65 | – | unit (delete 6 real-tmux render tests) | mig-tui-1 |
+| tui_widgets.rs | 44 | – | integration (tmux, backend) | mig-tui-2 |
+| tui.rs | 33 | 1 | integration (tmux, tmux render deleted) | mig-tui-1 |
+| tui_worker.rs | 19 | – | unit | mig-tui-1 |
+| tui_plan.rs | 25 | – | unit | mig-tui-1 |
+| tui_dialog.rs | 13 | – | unit (TestBackend) | mig-tui-1 |
+| inbox.rs | 15 | – | integration (tmux) | mig-tui-2 |
+| bare.rs | 9 | 1 | integration (tmux) | mig-tui-1 |
+| tui_merge.rs | 16 | – | unit (TestBackend) | mig-tui-2 |
+| tui_logs.rs | 16 | – | unit | mig-tui-1 |
+| tui_history.rs | 5 | – | unit | mig-tui-1 |
+| tui_checklist.rs | 7 | – | unit | mig-tui-1 |
+| tui_idle.rs | 3 | – | integration (clock, backend) | mig-tui-3 |
+| inbox_rules.rs | 11 | – | unit | mig-tui-2 |
+| tui_loop_guard.rs | 2 | – | unit + integration | mig-tui-3 |
+| tui_runner.rs | 3 | – | unit | mig-tui-1 |
+| tui_chat_pad.rs | 2 | – | unit | mig-tui-1 |
+| tui_plan_cancelled.rs | 3 | – | unit | mig-tui-1 |
+| tui_plan_waiting.rs | 3 | – | unit | mig-tui-1 |
+| tui_tree_asleep.rs | 3 | – | unit | mig-tui-1 |
+| tui_tree_archive_manager.rs | 2 | – | unit | mig-tui-1 |
+| tui_tree_delete.rs | 3 | – | unit | mig-tui-1 |
+| tui_pulse.rs | 12 | – | unit | mig-tui-1 |
+| tui_read.rs | 42 | – | unit | mig-tui-1 |
+| tui_reset_layout.rs | 1 | – | unit | mig-tui-1 |
+| tui_titles.rs | 0 | – | unit | mig-tui-1 |
+
+### tooling (253 tests total)
+
+| File | Tests | Deleted | Target | PR |
+|---|---|---|---|---|
+| harness.rs | 34 | – | integration (TestEnv behaviour) | mig-tooling |
+| install_script.rs | 51 | – | integration (fake tmux, fake git) | mig-tooling |
+| fake_tmux.rs | 57 | – | integration (fake-tmux binary) | mig-tooling |
+| cargo_script.rs | 12 | – | unit (sccache, cargo.sh) | mig-tooling |
+| slot.rs | 14 | – | integration (clock) | mig-tooling |
+| e2e.rs | 0 | – | deleted file | mig-tooling |
+| tag_script.rs | 7 | – | unit (tag-version.sh logic) | mig-tooling |
+| prune_script.rs | 5 | – | unit (prune-worktrees.sh logic) | mig-tooling |
+| test_changed_script.rs | 17 | – | unit (test-changed logic) | mig-tooling |
+| tests_script.rs | 6 | – | integration (real cargo, nextest, tsc in scratch workspace) | mig-tooling |
+| preview_script.rs | 11 | – | unit (preview-tui.sh) | mig-tooling |
+| npm_fresh.rs | 4 | – | unit | mig-tooling |
+| gate_run.rs | 10 | – | integration (gate-run.sh) | mig-tooling |
+| layout.rs | 4 | – | unit (test binary layout) | mig-tooling |
+| version.rs | 12 | – | unit (version string) | mig-tooling |
+| no_repo_lock.rs | 2 | – | unit | mig-tooling |
+| interface.rs | 3 | – | unit (command tree) | mig-tooling |
+| dead_code.rs | 1 | – | unit (unused code check) | mig-tooling |
+| pill_parity.rs | 1 | – | unit (pill rendering) | mig-tooling |
+| pill_sites.rs | 2 | – | unit (pill locations) | mig-tooling |
+
+## Tests deleted before the migration
+
+On 2026-10-25 the incident PR tripfix (#329) deleted 213 exec-based tests that failed Gates under load (e2e.rs was deleted earlier by PR #322), and docs/research/tests-mock-deleted.md lists them. The PR that migrates a file restores the tests listed for it there as in-process tests on fakes, keeps their names, and deletes their rows from that file in the same PR.
+
+| Area | File | Deleted | PR that restores them |
 |---|---|---|---|
-| store.rs | 28 | unit + integration | mig-engine-1 |
-| events.rs | 38 | unit | mig-engine-1 |
-| store_window.rs | 14 | integration | mig-engine-2 |
-| store_local_needs.rs | 9 | unit | mig-engine-2 |
-| store_asleep.rs | 3 | unit | mig-engine-2 |
-
-### tui (365 tests total)
-
-| File | Tests | Target | PR |
-|---|---|---|---|
-| tui_tree.rs | 61 | unit (delete 6 real-tmux render tests) | mig-tui-1 |
-| tui_widgets.rs | 36 | integration (tmux, backend) | mig-tui-2 |
-| tui.rs | 23 | integration (tmux, tmux render deleted) | mig-tui-1 |
-| tui_worker.rs | 15 | unit | mig-tui-1 |
-| tui_plan.rs | 15 | unit | mig-tui-1 |
-| tui_dialog.rs | 12 | unit (TestBackend) | mig-tui-1 |
-| inbox.rs | 18 | integration (tmux) | mig-tui-2 |
-| bare.rs | 16 | integration (tmux) | mig-tui-1 |
-| tui_merge.rs | 10 | unit (TestBackend) | mig-tui-2 |
-| tui_logs.rs | 5 | unit | mig-tui-1 |
-| tui_history.rs | 3 | unit | mig-tui-1 |
-| tui_checklist.rs | 6 | unit | mig-tui-1 |
-| tui_idle.rs | 4 | integration (clock, backend) | mig-tui-3 |
-| inbox_rules.rs | 4 | unit | mig-tui-2 |
-| tui_loop_guard.rs | 3 | unit + integration | mig-tui-3 |
-| tui_runner.rs | 3 | unit | mig-tui-1 |
-| tui_chat_pad.rs | 2 | unit | mig-tui-1 |
-| tui_plan_cancelled.rs | 2 | unit | mig-tui-1 |
-| tui_plan_waiting.rs | 2 | unit | mig-tui-1 |
-| tui_tree_asleep.rs | 2 | unit | mig-tui-1 |
-| tui_tree_archive_manager.rs | 2 | unit | mig-tui-1 |
-| tui_tree_delete.rs | 2 | unit | mig-tui-1 |
-| tui_pulse.rs | 1 | unit | mig-tui-1 |
-| tui_read.rs | 1 | unit | mig-tui-1 |
-| tui_reset_layout.rs | 1 | unit | mig-tui-1 |
-| tui_titles.rs | 1 | unit | mig-tui-1 |
-
-### tooling (201 tests total)
-
-| File | Tests | Target | PR |
-|---|---|---|---|
-| harness.rs | 36 | integration (TestEnv behaviour) | mig-tooling |
-| install_script.rs | 52 | integration (fake tmux, fake git) | mig-tooling |
-| fake_tmux.rs | 48 | integration (fake-tmux binary) | mig-tooling |
-| cargo_script.rs | 12 | unit (sccache, cargo.sh) | mig-tooling |
-| slot.rs | 14 | integration (clock) | mig-tooling |
-| e2e.rs | 2 | integration (all ports) | mig-tooling |
-| tag_script.rs | 7 | unit (tag-version.sh logic) | mig-tooling |
-| prune_script.rs | 6 | unit (prune-worktrees.sh logic) | mig-tooling |
-| test_changed_script.rs | 17 | unit (test-changed logic) | mig-tooling |
-| tests_script.rs | 6 | integration (real cargo, nextest, tsc in scratch workspace) | mig-tooling |
-| preview_script.rs | 11 | unit (preview-tui.sh) | mig-tooling |
-| npm_fresh.rs | 4 | unit | mig-tooling |
-| gate_run.rs | 8 | integration (gate-run.sh) | mig-tooling |
-| layout.rs | 4 | unit (test binary layout) | mig-tooling |
-| version.rs | 4 | unit (version string) | mig-tooling |
-| no_repo_lock.rs | 2 | unit | mig-tooling |
-| interface.rs | 3 | unit (command tree) | mig-tooling |
-| dead_code.rs | 1 | unit (unused code check) | mig-tooling |
-| pill_parity.rs | 5 | unit (pill rendering) | mig-tooling |
-| pill_sites.rs | 3 | unit (pill locations) | mig-tooling |
+| engine | watch.rs | 44 | mig-engine-1 |
+| engine | doctor.rs | 4 | mig-engine-1 |
+| engine | watch_inbox.rs | 1 | mig-engine-2 |
+| engine | watch_team.rs | 1 | mig-engine-2 |
+| flow | plan.rs | 5 | mig-flow-1 |
+| flow | attempt.rs | 14 | mig-flow-2 |
+| flow | driver.rs | 18 | mig-flow-3 |
+| flow | context.rs | 1 | mig-flow-4 |
+| flow | review_job.rs | 2 | mig-flow-3 |
+| flow | plan_cancel.rs | 11 | mig-flow-1 |
+| flow | ask.rs | 1 | mig-flow-3 |
+| flow | repo_cmds.rs | 6 | mig-flow-4 |
+| flow | driver_reload.rs | 1 | mig-flow-3 |
+| flow | repo_config.rs | 1 | mig-flow-1 |
+| flow | context_manager.rs | 1 | mig-flow-4 |
+| flow | plan_delete.rs | 3 | mig-flow-4 |
+| flow | context_delete.rs | 1 | mig-flow-4 |
+| pr | pr.rs | 37 | mig-pr-1 |
+| pr | merge.rs | 41 | mig-pr-1 |
+| pr | git.rs | 14 | mig-pr-3 |
+| pr | git_guard.rs | 2 | mig-pr-3 |
+| session | session_watchdog.rs | 2 | mig-session-2 |
+| tui | tui.rs | 1 | mig-tui-1 |
+| tui | bare.rs | 1 | mig-tui-1 |
 
 ## Scripts table
 
@@ -357,17 +389,17 @@ One row per file with held tests, grouped by area and PR. Counts by `rg -c '#\[(
 | `port-git` | seam | `clk` | `Git` trait, `FakeGit` (stub for now) | None direct | 2 |
 | `ports` | product | `clk`, `port-*` | `Ports` struct, thin main, `run_with`, engine/session/tui signatures | None direct | 2 |
 | `testkit` | harness | `ports` | `#[cfg(testkit)]` features, `ManualClock` tests, trait unit tests | Saves build (10s) | 1 |
-| `mig-pr-1..3` | tests | `testkit`, `port-git` | Migrate `cli/tests/pr/*` (411 tests, ~140 each) | Saves ~100 s | 3 |
-| `mig-flow-1..4` | tests | `port-*`, `testkit` | Migrate `cli/tests/flow/*` (508 tests, ~130 each) | Saves ~80 s | 4 |
-| `mig-tui-1..3` | tests | `port-tmux`, `testkit` | Migrate `cli/tests/tui/*` (365 tests, ~120 each) | Saves ~60 s | 3 |
-| `mig-engine-1..2` | tests | `port-*`, `testkit` | Migrate `cli/tests/engine/*` + `cli/tests/store/*` (301 tests, ~150 each) | Saves ~50 s | 2 |
-| `mig-session-1..2` | tests | `port-*`, `testkit` | Migrate `cli/tests/session/*` (167 tests, ~83 each) | Saves ~20 s | 2 |
+| `mig-pr-1..3` | tests | `testkit`, `port-git` | Migrate `cli/tests/pr/*` (317 tests, ~105 each) | Saves ~100 s | 3 |
+| `mig-flow-1..4` | tests | `port-*`, `testkit` | Migrate `cli/tests/flow/*` (531 tests, ~132 each) | Saves ~80 s | 4 |
+| `mig-tui-1..3` | tests | `port-tmux`, `testkit` | Migrate `cli/tests/tui/*` (357 tests, ~119 each) | Saves ~60 s | 3 |
+| `mig-engine-1..2` | tests | `port-*`, `testkit` | Migrate `cli/tests/engine/*` + `cli/tests/store/*` (241 tests, ~120 each) | Saves ~50 s | 2 |
+| `mig-session-1..2` | tests | `port-*`, `testkit` | Migrate `cli/tests/session/*` (166 tests, ~83 each) | Saves ~20 s | 2 |
 | `rs-install` | product | `ports` | Rust subcommand for install-cpd.sh logic | Saves ~5 s (Shell → Rust) | 1 |
 | `rs-prune` | product | `ports` | Rust subcommand for prune-worktrees.sh | Saves ~2 s | 1 |
 | `rs-tag` | product | `ports` | Rust subcommand for tag-version.sh + sync-version.sh | Saves ~1 s | 1 |
 | `rs-gate-run` | product | `ports` | Rust subcommand for gate-run.sh | Saves ~3 s | 1 |
 | `rs-tools` | product | `ports` | Rust subcommand for other scripts | Saves ~1 s | 1 |
-| `mig-tooling` | tests | `testkit`, `rs-*` | Migrate `cli/tests/tooling/*` (201 tests, ~25 each) | Saves ~15 s | 1 |
+| `mig-tooling` | tests | `testkit`, `rs-*` | Migrate `cli/tests/tooling/*` (253 tests, ~253 each) | Saves ~15 s | 1 |
 | `smoke` | tests | `ports` | Assert_cmd tests: help, version, one e2e | None direct | 1 |
 | `lint-audit` | audit | `mig-*` | Exec inventory check, per-file plan audit | None (doc) | 1 |
 | `lint-fix` | audit | `lint-audit` | Fix any audit findings | None direct | 1 |
