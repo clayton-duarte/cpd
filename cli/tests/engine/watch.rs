@@ -18,6 +18,7 @@ use cpd_core::clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
+use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -615,6 +616,39 @@ fn the_engine_in_process_runs_until_the_nap_it_is_told_and_the_hook_sees_each_na
 }
 
 #[test]
+fn the_engine_in_process_runs_until_its_step_says_the_nap_is_the_last_and_the_step_sees_the_state_after_each_tick() {
+    let fx = engine("");
+    let clock = fx.fakes.clock.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+
+    // The engine is quiet, so the state the step reads is the virtual time: it stops at the nap that passes the 2 s mark.
+    fx.watch_steps(move |nap| {
+        log.lock().unwrap().push((nap, clock.elapsed()));
+        clock.elapsed() >= Duration::from_secs(2)
+    })
+    .unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.first(), Some(&(1, Duration::ZERO)));
+    assert_eq!(seen.last(), Some(&(21, Duration::from_secs(2))));
+    assert_eq!(fx.fakes.clock.naps().len(), 21);
+}
+
+#[test]
+fn a_plan_and_a_queued_job_in_process_have_the_locked_fingerprint_the_engine_checks() {
+    let fx = engine("");
+    fx.engine_plan();
+    fx.add_job("api", &[], "");
+    fx.add_job("web", &["api"], "");
+
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "queued");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay' AND fingerprint IS NOT NULL"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT needs FROM dependencies WHERE plan = 'pay' AND job = 'web'"), "api");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+}
+
+#[test]
 fn a_restart_sends_no_downtime_notice() {
     let fx = engine("");
     fx.manager("mgr1");
@@ -1078,21 +1112,6 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
     let texts = fx.texts("attempt-ended");
     assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
-}
-
-/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where `fx_bare` put a `cpd` that records its calls).
-#[test]
-fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
-    let fx = fx_bare("");
-    let installed = fx.env.root().join("cpd-installed");
-    copy_executable(CPD, &installed);
-    let engine = fx.start_from(&installed);
-
-    wait_until("a poll (the search reaches gh)", || !fx.env.calls("gh").is_empty());
-    engine.stop();
-
-    assert_eq!(fx.env.calls("cpd"), Vec::<Vec<String>>::new(), "E5 ran the cpd on PATH");
-    assert_eq!(fx.count("error"), 0);
 }
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
@@ -1787,11 +1806,48 @@ else echo '{ok}'; fi; exit 0"#,
     assert_eq!(data["details"], json!({"remaining": 50, "reset_at": reset_at}));
 }
 
+// ---------- E3's back-off, E5's executable and E6, in-process ----------
+
+/// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
+#[test]
+fn e3_does_not_start_a_job_in_its_backoff() {
+    let fx = engine("");
+    fx.engine_plan();
+    let now = fx.stamp_ago(0);
+    let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
+    fx.add_job("api", &[], &attempts);
+
+    // Three whole ticks (a tick is ten naps of a tenth of a second).
+    fx.watch(30, |_| {}).unwrap();
+
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 9);
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "queued");
+    assert_eq!(fx.texts("error"), Vec::<String>::new());
+}
+
+/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where the `cpd` route of `engine_routes` stands:
+/// it must see no call).
+#[test]
+fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
+    let fx = engine("");
+    let installed = fx.env.root().join("cpd-installed");
+    fx.fakes.spawn.set_self_exe(&installed);
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
+
+    fx.watch_first_tick().unwrap();
+
+    let polls = fx.calls("cpd-installed");
+    assert_eq!(polls.iter().map(|call| (call.program.as_str(), call.args.as_slice())).collect::<Vec<_>>(), [(installed.to_str().unwrap(), ["pr".to_owned(), "poll".to_owned()].as_slice())]);
+    assert_eq!(fx.calls("cpd"), Vec::<Call>::new(), "E5 ran the cpd on PATH");
+    assert_eq!(fx.events("error").len(), 0);
+}
+
 // ---------- E6 (removed) ----------
 
 #[test]
 fn the_engine_neither_imports_nor_syncs_a_context_store() {
-    let fx = fx("");
+    let fx = engine("");
     // An old git store the database does not hold: only migration 0007 reads those, once.
     let store = fx.env.cpd_home().join("contexts/demo");
     fs::create_dir_all(store.join("records")).unwrap();
@@ -1804,16 +1860,15 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     // Not a store at all: E6 used to log and skip it; nothing looks now.
     fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(2);
-    let run = engine.stop();
+    // Two whole ticks (a tick is ten naps of a tenth of a second) and the one that ends the run.
+    fx.watch(20, |_| {}).unwrap();
 
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM context_records"), 0);
-    assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
-    assert_eq!(fx.count("error"), 0);
+    assert_eq!(fx.events("context-created").len() + fx.events("context-record").len(), 0);
+    assert_eq!(fx.events("error").len(), 0);
     assert!(store.join("context.json").is_file(), "the folder is left alone");
-    assert!(!run.stderr.contains("E6"), "{}", run.stderr);
+    assert!(!engine_log(&fx).contains("E6"), "{}", engine_log(&fx));
 }
 
 // ---------- scripts/install-cpd.sh (Finding 5) ----------
