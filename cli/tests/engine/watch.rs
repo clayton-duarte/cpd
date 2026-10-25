@@ -1217,79 +1217,77 @@ fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_cras
 
 // ---------- a busy store (contract §3.7, §4.2) ----------
 
-/// A connection that is not cpd's holding the write lock until [`Held::release`] or its drop.
-struct Held(rusqlite::Connection);
+/// `store_busy_ms` of 1 ms (its least): SQLite's own wait for the lock is then no time, and the engine's wait for it to clear is
+/// the `ManualClock`'s.
+const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 1\n";
 
-fn hold_write_lock(fx: &Fx) -> Held {
-    let conn = rusqlite::Connection::open(fx.home().db()).unwrap();
-    conn.busy_timeout(Duration::from_secs(10)).unwrap();
+/// A connection that is not cpd's holding the write lock until it is dropped.
+fn hold_write_lock(db: &Path) -> Connection {
+    let conn = Connection::open(db).unwrap();
+    conn.busy_timeout(Duration::ZERO).unwrap();
     conn.execute_batch("BEGIN IMMEDIATE").unwrap();
-    Held(conn)
-}
-
-impl Held {
-    fn release(self) {
-        self.0.execute_batch("ROLLBACK").unwrap();
-    }
-}
-
-fn watch_log(fx: &Fx) -> String {
-    fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap_or_default()
-}
-
-/// `store_busy_ms` of 200 ms: far shorter than the locks these tests hold.
-const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 200\n";
-
-/// `cpd watch` started and not waited for.
-fn spawn_engine(fx: &Fx) -> Engine {
-    let child = fx.env.command(CPD).arg("watch").envs([PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-    Engine { child: Some(child) }
+    conn
 }
 
 /// A store that stays busy for longer than `store_busy_ms` does not end the engine, at its start or in a
 /// step, and no Event is lost: it waits, logs, and goes on when the lock is released.
 #[test]
 fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_event() {
-    let fx = fx(SHORT_BUSY);
-    // E5's poll says when it runs, and lasts until the test lets it end (`go`): the engine is then in its first tick, past E4.
-    let (marker, go) = (fx.env.root().join("gh-ran"), fx.env.root().join("gh-go"));
-    fx.env.fake_gh(&format!(
-        "touch '{}'; until [ -e '{go}' ]; do sleep 0.01; done; echo '{EMPTY_SEARCH}'",
-        marker.display(),
-        go = go.display()
-    ));
+    let fx = engine(SHORT_BUSY);
+    fx.engine_plan();
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api';");
+    let (home, db, log) = (fx.home(), fx.home().db(), fx.home().watch_log());
+    let count = {
+        let db = db.clone();
+        move |sql: &str| Connection::open(&db).unwrap().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap()
+    };
+    let busy_lines = move || fs::read_to_string(&log).unwrap_or_default().matches("store_busy: ").count();
 
-    // The start: `watch-started` waits for the lock.
-    let held = hold_write_lock(&fx);
-    let mut engine = spawn_engine(&fx);
-    // Its first `store_busy` is logged once the lock outlasted `store_busy_ms`; an engine that ended on it never appends `watch-started`.
-    wait_until("the engine to meet the lock at its start", || watch_log(&fx).contains("store_busy: "));
-    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
-    assert_eq!(fx.count("watch-started"), 0, "{}", watch_log(&fx));
-    held.release();
-    wait_until("watch-started", || fx.count("watch-started") == 1);
-    wait_until("E5's poll", || marker.exists());
+    // The start: `watch-started` waits for the lock, held from before the engine starts.
+    let mut held = Some(hold_write_lock(&db));
+    #[derive(Clone, Copy, PartialEq)]
+    enum Phase {
+        AtStart,
+        Ticking,
+        InTick { busy: usize },
+        Released,
+    }
+    let mut phase = Phase::AtStart;
+    let out = fx
+        .watch_steps(move |_| {
+            match phase {
+                // Its first `store_busy` is logged once the lock outlasted `store_busy_ms`: the engine is in the wait, not ended.
+                Phase::AtStart if busy_lines() > 0 => {
+                    assert_eq!(count("SELECT count(*) FROM events WHERE kind = 'watch-started'"), 0);
+                    held.take().expect("held");
+                    phase = Phase::Ticking;
+                }
+                // A step: the next tick's E4 meets the lock. The first tick added `open-repo`; an open Job that merged on a PR
+                // still `dispatch` counts for nothing, so E4 has a Job to add (a write) at the next tick.
+                Phase::Ticking if count("SELECT count(*) FROM jobs WHERE kind = 'open'") == 1 => {
+                    assert_eq!(count("SELECT count(*) FROM events WHERE kind = 'watch-started'"), 1);
+                    common::sql(&mut Store::open(&home, 5000).unwrap(), "UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
+                    held = Some(hold_write_lock(&db));
+                    phase = Phase::InTick { busy: busy_lines() };
+                }
+                Phase::InTick { busy } if busy_lines() > busy => {
+                    assert_eq!(count("SELECT count(*) FROM jobs WHERE kind = 'open'"), 1);
+                    held.take().expect("held");
+                    phase = Phase::Released;
+                }
+                _ => {}
+            }
+            phase == Phase::Released && count("SELECT count(*) FROM jobs WHERE kind = 'open'") == 2
+        })
+        .unwrap();
 
-    // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running. The first tick added `open-repo`;
-    // an open Job that merged on a PR still `dispatch` counts for nothing, so E4 has a Job to add (a write) at the second tick.
-    assert_eq!(fx.jobs_of_kind("open").len(), 1);
-    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
-    let busy = watch_log(&fx).matches("store_busy: ").count();
-    let held = hold_write_lock(&fx);
-    fs::write(&go, "").unwrap();
-    wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() > busy);
-    assert_eq!(fx.jobs_of_kind("open").len(), 1);
-    held.release();
-    wait_until("the fresh open Job", || fx.jobs_of_kind("open").len() == 2);
-    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
-    engine.stop();
-
-    let log = watch_log(&fx);
+    assert_eq!(out, Output::success(json!({"stopped": true})));
+    let log = engine_log(&fx);
     assert!(log.contains("store_busy: "), "{log}");
     assert!(log.contains("the store is clear again after "), "{log}");
-    assert_eq!(fx.count("error"), 0, "{log}");
-    assert_eq!(fx.count("job-added"), 2, "each open Job's Event was appended once");
+    assert_eq!(fx.events("error").len(), 0, "{log}");
+    assert_eq!(fx.events("job-added").len(), 2, "each open Job's Event was appended once");
+    assert_eq!(fx.events("watch-started").len(), 1);
 }
 
 /// `watch-stopped` is appended when the engine stops while the store is busy, however long that lasts.
@@ -1333,29 +1331,6 @@ fn watch_stopped_waits_for_a_busy_store() {
 // ---------- E3: a draft ----------
 
 // ---------- E4: the open Job (contract §3.7 E4, §3.2 Ready, §2.2 "Job kinds"; hs-d340) ----------
-
-impl Fx {
-    /// Job `key` of PR `repo`, a draft: the PR's open Job waits for it, and E3 never starts it.
-    fn add_draft(&self, key: &str) {
-        self.add_draft_in("repo", key);
-    }
-
-    /// `add_draft` in PR `pr`.
-    fn add_draft_in(&self, pr: &str, key: &str) {
-        self.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
-        ));
-    }
-
-    /// `(key, status)` of every Job of `kind`, by key.
-    fn jobs_of_kind(&self, kind: &str) -> Vec<(String, String)> {
-        self.env.read(|conn| {
-            let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
-            Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-    }
-}
 
 /// PR `repo` (an `open` Job the Lead cancelled) beside PR `web`, which has none: `web`'s own `open-web` is what shows the engine has
 /// looked at both.
@@ -1533,6 +1508,27 @@ fn e5_queues_a_new_update_job_for_a_conflict_that_comes_after_the_first_job_ende
     polls(&fx, 3);
 
     assert_eq!(fx.jobs_of_kind("update"), [("up-repo".to_owned(), "merged".to_owned()), ("up-repo-2".to_owned(), "queued".to_owned())]);
+}
+
+/// The test kit's `cpd` route: a call of `cpd` through the runner is `run_with` of the `Fx`'s ports, and its answer is what the
+/// command printed and its exit code; `gh`, which the command calls in turn, is a closure route.
+#[test]
+fn the_cpd_route_runs_the_command_in_process_and_answers_its_stdout_and_exit_code() {
+    use cpd_core::host::runner::Runner;
+    let fx = polling("");
+    fx.route_fn("gh", |_| Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z")));
+
+    let mut poll = std::process::Command::new(common::engine::ENGINE_EXE);
+    poll.args(["pr", "poll"]);
+    let out = fx.fakes.runner.output(&mut poll, "cpd", Duration::from_secs(30)).unwrap();
+    let mut refused = std::process::Command::new(common::engine::ENGINE_EXE);
+    refused.args(["no-such-command"]);
+    let usage = fx.fakes.runner.output(&mut refused, "cpd", Duration::from_secs(30)).unwrap();
+
+    let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((out.status.code(), &printed["ok"], &printed["rate_limit"]["remaining"]), (Some(0), &json!(true), &json!(4987)), "{printed}");
+    assert_eq!(fx.calls("gh").len(), 1, "the poll called gh once, through the runner");
+    assert_ne!(usage.status.code(), Some(0), "a command that fails answers its exit code");
 }
 
 /// Plan `pay` in phase `deploy`, PR `repo` open as pull request 7.
