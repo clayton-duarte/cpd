@@ -14,8 +14,10 @@ const line = (text: string) => `\x1b[90m${text}\x1b[39m`;
 /**
  * Draw `rows` (already wrapped to at most `width - 8` columns) as a balloon: the user's one column off the
  * right edge of the pane, the agent's one column off the left. A pane narrower than 9 columns draws no balloon.
+ * `at` (Unix ms) is the agent balloon's machine-local time (hs-d637); stub: today's border, time not yet drawn.
  */
-export function drawBalloon(rows: string[], side: BalloonSide, width: number): string[] {
+export function drawBalloon(rows: string[], side: BalloonSide, width: number, at?: number): string[] {
+	void at;
 	if (width < MIN_BALLOON_WIDTH) return rows;
 	const inner = Math.min(Math.max(0, ...rows.map(visibleWidth)), width - 8);
 	const box = inner + 4;
