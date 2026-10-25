@@ -48,7 +48,7 @@ use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use crate::box_widget::spacing;
 use validate::Validator;
-pub(crate) use view::{Dialog, Mode};
+pub use view::{Dialog, Mode};
 use view::{CANCEL, Field, REFUSAL_ROWS, Row, wrap};
 
 /// `cpd tui view dialog <confirm|input|text> …`.
@@ -161,22 +161,22 @@ fn check_options(options: &[String]) -> Result<(), CpdError> {
 /// How a dialog closed: the result file's content. `value` is the typed text of an accepted `input`, and only then.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Outcome {
+pub struct Outcome {
     confirmed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     value: Option<String>,
 }
 
 impl Outcome {
-    pub(crate) fn confirmed() -> Outcome {
+    pub fn confirmed() -> Outcome {
         Outcome { confirmed: true, value: None }
     }
 
-    pub(crate) fn cancelled() -> Outcome {
+    pub fn cancelled() -> Outcome {
         Outcome { confirmed: false, value: None }
     }
 
-    pub(crate) fn value(value: String) -> Outcome {
+    pub fn value(value: String) -> Outcome {
         Outcome { confirmed: true, value: Some(value) }
     }
 }
@@ -250,7 +250,7 @@ fn write_result(path: &Path, dialog: &Dialog, outcome: &Outcome) -> Result<(), C
 }
 
 /// Draws and takes input until the dialog closes: input and frames are the [`Ctx`]'s.
-pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, dialog: &mut Dialog) -> std::io::Result<Outcome> {
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, dialog: &mut Dialog) -> std::io::Result<Outcome> {
     loop {
         ctx.draw(|f| dialog.draw(f))?;
         if let Some(outcome) = dispatch(dialog, ctx.input.read()?) {

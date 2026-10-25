@@ -1,7 +1,5 @@
-//! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced
-//! rebuild (contract §3.7 E9), run as the built binary with a fake `pi` on `PATH`.
-
-//! `context distill` (contract §4.6): every test runs in this process (`Fx::with_ports`). `pi` is a [`FakePi`] route of the
+//! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced rebuild (contract §3.7 E9):
+//! every test runs in this process (`Fx::with_ports`). `pi` is a [`FakePi`] route of the
 //! `FakeRunner` that answers from the files the distiller wrote (`batch.md`, ...), `node` is a scripted reply (pi's
 //! catalog), `git grep` is the git route, and the wait on a held `flock` is a real kernel lock on a file of the env
 //! (a lock of ours, not an external program).

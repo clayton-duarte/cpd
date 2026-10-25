@@ -138,6 +138,10 @@ pub enum Cause {
     DirtyTarget,
     /// Merge step 4: the diff touches protected paths (§7.5).
     Tampered,
+    /// The merge Gate (`gate.merge` or `gate.pr`) exited non-zero (§7.4 step 6).
+    GateFailed,
+    /// The merge Gate could not be judged: killed, at the timeout, or hook_invalid (§7.4 step 6).
+    GateError,
 }
 
 impl Cause {
@@ -151,6 +155,8 @@ impl Cause {
             Cause::CasLost => "cas_lost",
             Cause::DirtyTarget => "dirty_target",
             Cause::Tampered => "tampered",
+            Cause::GateFailed => "gate_failed",
+            Cause::GateError => "gate_error",
         }
     }
 

@@ -7,13 +7,11 @@
 //! The stubs these tests call are `todo!()`: `events::follow_in`, `ask::question::ask_in`,
 //! `plan::cancel::wait_until_ended_with`, `pr::rebase::settle_in`, `pr::poll::take_lock_with`,
 //! `inbox::rules::conditions_on`, `inbox::cmd::snooze_until_on`, `secret::grants::{approve_on, take_approval_on}`,
-//! `context::distill::run_pi_timed_with` and `Slots::take_with`. The old names call them on `Ports::real()` once
-//! implemented.
+//! `context::distill::run_pi_timed_with`. The old names call them on `Ports::real()` once implemented.
 //!
 //! Ported assertions (old -> new): `cli/tests/flow/ask.rs` (an `ask` child the test answers, and the one that times
 //! out) -> `ask_wakes_on_an_answer_that_lands_between_polls` and `ask_expires_at_its_deadline_in_half_second_polls`;
-//! `cli/tests/flow/plan_cancel.rs` (the wait for the drivers) -> the `plan_cancel_*` tests; `core/src/git/gate.rs`
-//! (`Slots::in_files` with 5 ms polls) -> the `*_slot_*` tests. The old tests stay until the impl Job.
+//! `cli/tests/flow/plan_cancel.rs` (the wait for the drivers) -> the `plan_cancel_*` tests.
 //!
 //! The memo of GitHub's answer (`inbox::rules::GITHUB`) is process-wide: each rules test uses a pull request of its
 //! own, so none reads another's answer, under nextest (a process per test) or not.
@@ -49,7 +47,6 @@ use crate::ports::Ports;
 use crate::pr::poll::take_lock_with;
 use crate::pr::rebase::settle_in;
 use crate::secret::grants::{Approval, approve_on, take_approval_on};
-use crate::slot::Slots;
 use crate::store::Store;
 
 const MS: fn(u64) -> Duration = Duration::from_millis;
@@ -749,91 +746,4 @@ fn a_distill_run_past_its_limit_is_timed_out_having_lasted_the_limit() {
     let timed = run_pi(&rig);
     assert!(matches!(timed.waited, Waited::TimedOut), "{:?}", timed.waited);
     assert_eq!(timed.seconds, 900.0);
-}
-
-// ---- the gate slot wait --------------------------------------------------------------------------------------------------------
-
-/// One slot file, polled every second, reminding every three.
-fn one_slot(h: &Home) -> (Slots, PathBuf) {
-    let path = h.home.root().join("run").join("test-0.lock");
-    (Slots::in_files(vec![path.clone()], SECS(1), SECS(3)), path)
-}
-
-type Lines = Vec<(String, bool)>;
-
-fn take(rig: &Rig, slots: &Slots) -> (Lines, Result<(), CpdError>) {
-    let mut lines = Lines::new();
-    let taken = slots.take_with(&rig.ports, "gate", &mut |line, waited| {
-        lines.push((line.to_owned(), waited));
-        Ok(())
-    });
-    (lines, taken.map(|_| ()))
-}
-
-/// The slot held by someone else until the `n`-th nap.
-fn busy_until(path: &Path, n: usize) -> Rig {
-    let mut holder = Some(held(path));
-    rig_hooked(move |nap| {
-        if nap == n {
-            holder.take();
-        }
-    })
-}
-
-#[test]
-fn a_free_slot_is_taken_at_once_without_a_nap() {
-    let rig = rig();
-    let h = home("");
-    let (slots, _) = one_slot(&h);
-    let (lines, taken) = take(&rig, &slots);
-    taken.unwrap();
-    assert_eq!(lines, [("gate: slot 0 taken after 0 s".to_owned(), false)]);
-    assert!(naps_of(&rig).is_empty());
-}
-
-#[test]
-fn a_busy_slot_naps_its_poll_until_the_holder_lets_go() {
-    let h = home("");
-    let (slots, path) = one_slot(&h);
-    let rig = busy_until(&path, 7);
-    take(&rig, &slots).1.unwrap();
-    assert_eq!(naps_of(&rig), vec![SECS(1); 7]);
-}
-
-#[test]
-fn a_slot_taken_after_waiting_says_how_many_seconds_the_clock_counted() {
-    let h = home("");
-    let (slots, path) = one_slot(&h);
-    let rig = busy_until(&path, 7);
-    let (lines, taken) = take(&rig, &slots);
-    taken.unwrap();
-    assert_eq!(lines.last().unwrap(), &("gate: slot 0 taken after 7 s".to_owned(), true));
-}
-
-#[test]
-fn a_caller_that_waits_says_so_once_and_then_every_still_waiting_interval() {
-    let h = home("");
-    let (slots, path) = one_slot(&h);
-    let rig = busy_until(&path, 7);
-    let (lines, taken) = take(&rig, &slots);
-    taken.unwrap();
-    let said: Vec<&str> = lines.iter().map(|(line, _)| line.as_str()).collect();
-    assert_eq!(
-        said,
-        [
-            "gate: waiting for a slot (1 of 1 busy; test_concurrency 1)",
-            "gate: still waiting for a slot (3 s)",
-            "gate: still waiting for a slot (6 s)",
-            "gate: slot 0 taken after 7 s",
-        ]
-    );
-}
-
-#[test]
-fn every_line_of_a_wait_is_marked_as_waited() {
-    let h = home("");
-    let (slots, path) = one_slot(&h);
-    let rig = busy_until(&path, 7);
-    let (lines, _) = take(&rig, &slots);
-    assert!(lines.iter().all(|(_, waited)| *waited), "{lines:?}");
 }

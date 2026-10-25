@@ -80,9 +80,11 @@ mod trace_tests;
 mod icons_tests;
 pub mod merge;
 pub mod pace;
-mod pump;
+pub mod pump;
 #[cfg(test)]
 mod pump_tests;
+#[cfg(test)]
+mod pump_scripted_tests;
 #[cfg(test)]
 mod pace_tests;
 pub mod palette;
@@ -95,7 +97,7 @@ mod updating_label;
 mod pill_colours;
 pub mod plan;
 pub use plan::draw_first_frame;
-pub use history::draw_history;
+pub use history::{draw_history, show_with as show_history_with};
 mod popup;
 pub mod read;
 mod runner;

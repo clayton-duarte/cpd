@@ -1,6 +1,26 @@
 //! The fake tmux (docs/implementing.md, Tests, "The fake tmux"): `run` parses the global flags, splits the
 //! argv on `;` and runs each command inside one `BEGIN IMMEDIATE` transaction. This Job: state, targets,
 //! options, formats, kill, hooks, `__ctl` and pane I/O; the other subcommands answer `unknown command: <name>`.
+//!
+//! # What the views and actions need
+//!
+//! The "in the fake" column is read from this module and pinned by `views_tests.rs` (and `nested_tests.rs`
+//! for `run-shell`); the "for" column is the research's (`tests-mock-mig-tui-b.md`), not read again in every caller. The
+//! tests that use them are in `cli/tests/tui/` and `tui/src/dialog/`:
+//!
+//! | command | for | in the fake |
+//! |---|---|---|
+//! | `list-clients -F` | the dialog kit's newest client (`On::Newest`); `tui_merge`, `tui_logs` actions | yes (`add_client` or `attach`) |
+//! | `display -p -c <client> #{client_width} #{client_height}` | `client_size`: the popup's size | yes; an unknown client prints an empty line |
+//! | `display-popup` | every popup (dialog, logs, merge, legend) | yes: records the argv ([`State::popups`]); [`FakeTmux::on_popup`] writes the dialog's outcome file |
+//! | `display-popup` that fails | `tui_merge` "the dialog cannot open" | by a `FakeRunner` rule (`.on("tmux", .., Reply::exit(1, ..))`) ahead of the route: nothing is recorded in the fake, the runner has the call |
+//! | `set-buffer -w -- <text>` | the tree's copy id and copy url | yes (`-w` accepted; `show-buffer` reads it) |
+//! | `run-shell -b <cmd>` | the merge confirm, the status-click binding | yes: `/bin/sh -c <cmd>` handed to the `Runner`, never a process |
+//! | `list-panes -F #{@cpd_session}` | "Go to Lead": which pane holds a Session | yes (`@` options of pane, window, session, server) |
+//! | `select-pane -t` | the chat slot, the cockpit's focus | yes |
+//! | `split-window`, `respawn-pane [-k]` | the Worker pane beside the chat; `--respawn` | yes |
+//! | `swap-pane -d -s -t` | the chat slot's move | yes |
+//! | `join-pane` | nothing: the product never sends it (no hit in core, tui, engine, cli) | no: `unknown command: join-pane` |
 
 pub mod cmds;
 pub mod ctl;
@@ -847,6 +867,8 @@ mod kit;
 mod nested_tests;
 #[cfg(test)]
 mod route_tests;
+#[cfg(test)]
+mod views_tests;
 #[cfg(test)]
 mod state_tests;
 #[cfg(test)]

@@ -15,7 +15,6 @@ pub mod home;
 pub mod ids;
 pub mod lock;
 pub mod output;
-pub mod slot;
 
 // One module per area, each filled in by its own Job.
 pub mod ask;
