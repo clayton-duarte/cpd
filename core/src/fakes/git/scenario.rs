@@ -22,7 +22,6 @@ pub(super) struct Out {
 
 pub(super) struct World {
     tmp: TempDir,
-    pub clock: ManualClock,
     pub universe: Arc<Mutex<Universe>>,
     pub route: Arc<GitRoute>,
     pub runner: FakeRunner,
@@ -37,7 +36,7 @@ pub(super) fn world() -> World {
     let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let runner = FakeRunner::new(clock.clone()).with_git(&route);
-    World { tmp: tempfile::tempdir().unwrap(), clock, universe, route, runner, dirs: 0 }
+    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, dirs: 0 }
 }
 
 pub(super) fn p(path: &Path) -> &str {
