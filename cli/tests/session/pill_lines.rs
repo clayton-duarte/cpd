@@ -18,13 +18,14 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
 
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const CAP: &str = "#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]";
-    let pill = |title: &str| format!("{CAP}{title}#[noreverse]\u{e0b4}");
+    const LEAD_CAP: &str = "#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]";
+    const VIEW_CAP: &str = "#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}━\u{e0b6}#[reverse]";
     let want = format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
          #{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{views}}}}}}}",
-        lead = pill("#{@cpd_title}"),
-        views = pill(
+        lead = format!("{LEAD_CAP}#{{@cpd_title}}#[noreverse]\u{e0b4}"),
+        views = format!(
+            "{VIEW_CAP}{}#[noreverse]\u{e0b4}",
             "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
              #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
         ),
@@ -39,8 +40,8 @@ fn border_format_title_pills_follow_the_rule() {
 #[test]
 fn status_line_pills_follow_the_rule() {
     const JOIN: &str = "#[fg=colour8]\u{2500}#[default]";
-    let button = |range: &str, glyph: &str| {
-        format!("#[range=user|{range}]#[fg=colour15]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
+    let button = |range: &str, colour: &str, glyph: &str| {
+        format!("#[range=user|{range}]#[fg={colour}]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
     };
     let pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]")
@@ -59,9 +60,9 @@ fn status_line_pills_follow_the_rule() {
          {}\
          #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
          {JOIN}",
-        button("reset", cpd_core::host::tmux::RESET_GLYPH),
-        button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
-        button("logs", cpd_core::host::tmux::LOGS_GLYPH),
+        button("reset", "colour13", cpd_core::host::tmux::RESET_GLYPH),
+        button("legend", "colour15", cpd_core::host::tmux::LEGEND_GLYPH),
+        button("logs", "colour10", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
         italic_pill("colour9", "Incident Mode: #{@cpd_incident}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
