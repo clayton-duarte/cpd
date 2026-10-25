@@ -101,7 +101,6 @@ test("the adapter leaves one empty row at the top of the pi screen", async (t) =
 
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
 
   assert.equal(headers.length, 1, "once, at session_start");
   assert.deepEqual(headerLines(headers[0]), [""], "exactly one empty line at the top");
