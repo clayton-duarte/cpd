@@ -185,6 +185,8 @@ impl GitRoute {
             "status" => status(&mut ctx, rest),
             "diff" => diff(&mut ctx, rest),
             "ls-remote" => ls_remote(&mut ctx, rest),
+            "fetch" => fetch(&mut ctx, rest),
+            "push" => push(&mut ctx, rest),
             "update-ref" => update_ref(&mut ctx, rest),
             "branch" => branch(&mut ctx, rest),
             "worktree" => worktree(&mut ctx, rest),
@@ -1164,4 +1166,14 @@ fn remove_file(root: &Path, path: &str) {
     let mut file = root.join(path);
     let _ = std::fs::remove_file(&file);
     while file.pop() && file != root && std::fs::remove_dir(&file).is_ok() {}
+}
+
+// ---- fetch, push (stubs: PR port-git's Job git-remote) ---------------------------------------------------
+
+fn fetch(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("fetch")
+}
+
+fn push(_c: &mut Ctx, _args: &[String]) -> Run {
+    todo!("push")
 }

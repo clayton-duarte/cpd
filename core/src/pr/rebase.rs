@@ -22,6 +22,7 @@ use crate::policy::{Gate, Policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
+use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
@@ -442,6 +443,12 @@ fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdE
     let Some(tip) = tip else { return Ok(false) };
     let known = git::run::run(lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
     Ok(known && git::run::run(lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
+}
+
+/// [`remote_contains`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+#[allow(dead_code)]
+pub(crate) fn remote_contains_with(_runner: &dyn Runner, _lead: &Path, _reference: &str, _sha: &str) -> Result<bool, CpdError> {
+    todo!("remote_contains_with")
 }
 
 /// `error`, after removing the gate worktree; the removal's own failure is

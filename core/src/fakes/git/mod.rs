@@ -30,3 +30,5 @@ mod route_read_tests;
 mod universe_tests;
 #[cfg(test)]
 mod worktree_tests;
+#[cfg(test)]
+mod remote_tests;

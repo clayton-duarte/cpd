@@ -28,6 +28,8 @@ mod poll;
 pub mod pulls;
 mod push;
 mod rebase;
+#[cfg(test)]
+pub(crate) use rebase::remote_contains_with;
 mod row;
 pub mod start;
 mod status;

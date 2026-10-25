@@ -10,6 +10,7 @@ use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
+use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -238,6 +239,11 @@ pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push
         }
     }
     Ok(Push::Rejected { stderr: tail(&out.stderr, TAIL_LINES) })
+}
+
+/// [`push_commit`] on `runner` (a test passes a `FakeRunner`). Stub: the seam is not made yet.
+pub fn push_commit_with(_runner: &dyn Runner, _lead_worktree: &Path, _branch: &str, _sha: &str) -> Result<Push, CpdError> {
+    todo!("push_commit_with")
 }
 
 /// The line of `push --porcelain` for the pushed ref: `<flag>\t<from>:<to>\t<summary>`,
