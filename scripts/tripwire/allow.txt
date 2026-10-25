@@ -11,7 +11,6 @@ cpd::engine watch_team::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_titles_width::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_worker_archive::  # m-engine: engine tests on a real tmux server
 cpd::engine watch::  # m-engine: engine tests on a real tmux server
-cpd::store events::  # m-engine: store commands that may reach a real tmux
 cpd::store store_asleep::  # m-engine: store commands that may reach a real tmux
 cpd::store store_local_needs::  # m-engine: store commands that may reach a real tmux
 cpd::store store_window::  # m-engine: store commands that may reach a real tmux

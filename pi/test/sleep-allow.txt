@@ -12,7 +12,6 @@ cli/tests/pr/pr.rs 1  # m-pr-a: sleep or wall-clock wait
 cli/tests/session/session_reload.rs 11  # m-session: sleep or wall-clock wait
 cli/tests/session/session_watchdog.rs 1  # m-session: sleep or wall-clock wait
 cli/tests/session/session.rs 2  # m-session: sleep or wall-clock wait
-cli/tests/store/events.rs 3  # m-engine: sleep or wall-clock wait
 cli/tests/store/store.rs 3  # m-engine: sleep or wall-clock wait
 cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/tui/tui_idle.rs 4  # m-tui-t: sleep or wall-clock wait

@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::home::{HasCpdHome, Home};
 use crate::scripted::ScriptedClock;
 use common::fx::Fx;
+use cpd_core::clock::Clock;
 use common::{Run, TestEnv};
 #[path = "../common/follower.rs"]
 mod follower;
@@ -599,14 +600,14 @@ fn list_limit_5000_is_accepted() {
 /// hs-n278: `locks/store.lock` held as a process that migrates the store does (contract §1.4: the lock, and its marker in
 /// the file); released by the returned function, as the last step of that process's setup: the marker emptied, then the
 /// lock let go.
-fn migrating(env: &TestEnv) -> impl FnOnce() + Send + 'static {
+fn migrating(fx: &Fx) -> impl FnOnce() + Send + 'static {
     use nix::fcntl::{Flock, FlockArg};
     use std::io::Write;
-    let locks = env.cpd_home().join("locks");
+    let locks = fx.env.cpd_home().join("locks");
     fs::create_dir_all(&locks).unwrap();
     let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
     let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let now = (fx.fakes.clock.utc().unix_timestamp_nanos() / 1_000_000) as u64;
     let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
     lock.write_all(marker.to_string().as_bytes()).unwrap();
     move || {
@@ -621,7 +622,7 @@ fn migrating(env: &TestEnv) -> impl FnOnce() + Send + 'static {
 fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
     let fx = seeded();
     fx.env.write_config(&format!("{CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
-    let release = migrating(&fx.env);
+    let release = migrating(&fx);
     // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
     // while a migration holds the lock.
     let clock = Arc::new(ScriptedClock::new().at(Duration::from_millis(1500), release));
