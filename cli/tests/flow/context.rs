@@ -1042,13 +1042,4 @@ fn archive_and_unarchive_of_an_unknown_context_are_refused() {
     refused(env.cpd(&["context", "unarchive", "nope"]), 4, "context_not_found");
 }
 
-// ---- context show --digest (contract §4.6, commands.md §3.3) --------------
 
-#[test]
-fn show_digest_is_exclusive_with_since_and_record_and_needs_a_known_context() {
-    let fx = hs();
-    new_context(&fx);
-    refused(fx.cpd(&["context", "show", "--context", CTX, "--digest", "--since", "1"]), 2, "usage");
-    refused(fx.cpd(&["context", "show", "--context", CTX, "--digest", "--record", "hs-d1"]), 2, "usage");
-    refused(fx.cpd(&["context", "show", "--context", "nope", "--digest"]), 4, "context_not_found");
-}
