@@ -33,7 +33,7 @@ impl Drop for Running {
     }
 }
 
-// ETXTBSY on a running executable is a Linux behaviour; macOS lets the open succeed.
+// Opening a running executable for writing is refused by the Linux kernel (the busy-executable error); macOS lets the open succeed. The test describes the Linux behaviour.
 #[cfg(target_os = "linux")]
 #[test]
 fn write_executable_over_a_running_script_does_not_fail() {
