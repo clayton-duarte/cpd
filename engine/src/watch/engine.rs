@@ -358,7 +358,7 @@ pub(super) struct Downtime {
     /// When the previous engine stopped: its `watch-stopped`, else the last time it was alive.
     pub(super) since: OffsetDateTime,
     /// Whether the previous engine said it stopped (`watch-stopped`): otherwise it crashed or was killed.
-    said: bool,
+    pub(super) said: bool,
     pub(super) down: time::Duration,
     /// The previous engine's pid and the install's marker for it, when the stop was an install's planned restart.
     pub(super) planned: bool,
