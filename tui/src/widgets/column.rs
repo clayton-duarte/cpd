@@ -372,6 +372,10 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 }
 
 #[cfg(test)]
+#[path = "column_width_tests.rs"]
+mod column_width_tests;
+
+#[cfg(test)]
 mod tests {
     use crate::read::PrState;
     use ratatui::Terminal;

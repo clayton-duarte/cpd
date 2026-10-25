@@ -346,6 +346,10 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 }
 
 #[cfg(test)]
+#[path = "legend_width_tests.rs"]
+mod legend_width_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::section;

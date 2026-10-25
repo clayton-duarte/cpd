@@ -87,6 +87,10 @@ fn wrap_header(text: &str, width: usize) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "width_tests.rs"]
+mod width_tests;
+
+#[cfg(test)]
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;

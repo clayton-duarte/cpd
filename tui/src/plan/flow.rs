@@ -591,6 +591,10 @@ impl Chart {
 }
 
 #[cfg(test)]
+#[path = "flow_width_tests.rs"]
+mod flow_width_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
