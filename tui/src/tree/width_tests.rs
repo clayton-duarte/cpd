@@ -40,16 +40,12 @@ fn an_inbox_item_with_wide_text_fills_its_row_to_the_width() {
     assert_eq!(tail, age, "the age ends in the body's last column: the row is laid out in display columns, not chars");
     let row: String = (0..width).map(|x| buf[(x, body_row)].symbol()).collect();
     assert!(row.trim_end().ends_with(age), "the age is on the row, not pushed out of the pane: {row:?}");
-}
 
-#[test]
-fn an_inbox_item_with_wide_text_links_the_label_columns() {
-    let width = 41;
-    let mut item = inbox::item(1, Kind::ReviewRequested, Urgency::White, WIDE, "2026-01-01T00:00:00.000Z");
-    item.url = Some("https://example.com/pull/1".into());
-    let buf = drawn(&item, width, 5);
-    let body_row = 2;
-    // Lead is two columns, the label is ten wide chars: its last cell is body column 21 (the pane's column 22).
+    let mut linked = item;
+    linked.kind = Kind::ReviewRequested;
+    linked.url = Some("https://example.com/pull/1".into());
+    let buf = drawn(&linked, width, 5);
+    // The lead is two columns, the label ten wide chars: its last cell is body column 21 (the pane's column 24).
     let last_label_column = 2 + 20 - 1;
     let linked = buf[(3 + last_label_column as u16, body_row)].symbol().contains("\x1b]8;;");
     assert!(linked, "the OSC 8 link covers the label's display columns, not its char count");

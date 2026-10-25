@@ -3,6 +3,7 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Position, Rect};
+use ratatui::text::{Line, Span};
 
 use crate::menu::{Entry, Menu};
 
@@ -32,9 +33,18 @@ fn a_busy_menu_entry_is_padded_by_columns() {
     // A full box's body: one wall and one padding column, then the entries; its last column holds the spinner.
     let (x, y) = (rect.x + 2, rect.y + 1);
     let inner = rect.width - 4;
-    let row: String = (x..x + inner).map(|cx| buf[(cx, y)].symbol()).collect();
-    assert_eq!(row.chars().filter(|c| *c == '計').count(), 10, "the whole wide label fits: {row:?}");
+    // The buffer holds a wide character in its first cell and a blank in its second: skip the second to read the row as
+    // it is drawn.
+    let mut row = String::new();
+    let mut cx = x;
+    while cx < x + inner {
+        let symbol = buf[(cx, y)].symbol();
+        row.push_str(symbol);
+        cx += u16::try_from(Span::raw(symbol).width().max(1)).unwrap();
+    }
+    let row = Line::from(row);
+    assert_eq!(row.width(), usize::from(inner), "the busy entry is padded by columns to the body's width: {row:?}");
+    assert_eq!(row.spans.iter().flat_map(|s| s.content.chars()).filter(|c| *c == '計').count(), 10, "the whole wide label fits: {row:?}");
     let spinner = crate::palette::SPINNER[3];
     assert_eq!(buf[(x + inner - 1, y)].symbol(), spinner, "the spinner is in the body's last column, not one past it: {row:?}");
-    assert_eq!(row.chars().count(), usize::from(inner), "the busy entry fills the body by columns: {row:?}");
 }
