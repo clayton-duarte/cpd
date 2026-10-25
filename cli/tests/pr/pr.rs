@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use common::fx::Fx as Kit;
 use common::{CPD, Run, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -2401,59 +2402,144 @@ fn rebase_touches_only_its_pr() {
     assert!(fx.events("plan-phase").is_empty() && fx.gh_calls().is_empty());
 }
 
-/// The `needs` of PR `key` in Plan `pay`, sorted.
-fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
-    fx.store()
-        .read(|c| {
+/// Plan `pay` in `phase` (`done` or `dispatch`) with its one PR `repo`, in-process: `cpd` runs through `run_with` on the
+/// fake ports, and the repo is a keyed repo of the git route. What `pr add` reads of git is the repo's refs.
+struct Added {
+    fx: Kit,
+    repo: PathBuf,
+}
+
+fn added(phase: &str) -> Added {
+    let fx = Kit::with_ports();
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    // A bare `origin` of the route, as the full fixture's: `pr add` on a reopened Plan asks it for the Lead Branch.
+    let origin = fx.env.root().join("repos/origin.git");
+    fx.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
+    fx.local_origin(&repo, &origin);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    let merged_sha = fx.git(&repo, &["rev-parse", "HEAD"]);
+    // The Lead Branch of PR `repo`, `cpd/pay`, and its Lead worktree (a plain directory: `pr add` only reads its name).
+    fx.git(&repo, &["branch", "cpd/pay"]);
+    let lead = fx.env.root().join("lead");
+    fs::create_dir_all(&lead).unwrap();
+    fx.env.write_tmux_config("");
+    let (status, columns, values, merged) = match phase {
+        "dispatch" => ("dispatch", "", String::new(), "NULL"),
+        "done" => ("merged", ", pr_number, pr_url, pr_opened_at, pull_request, merged_at", format!(", 812, '{URL}', 'opened', (SELECT id FROM pull_requests), 'finished'"), "'finished'"),
+        other => panic!("no phase {other}"),
+    };
+    let pull_request = match phase {
+        "done" => format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+             VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'merged', 'none', 'none', 'opened', 'finished', 'finished');"
+        ),
+        _ => String::new(),
+    };
+    let sql = format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', 't', {merged});
+         {pull_request}
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'pay', 'main', '{status}', 'cpd/pay', '{lead}', '{REPO_TITLE}', 'config', cpd_txn(), 't', 't'{values});",
+        repo = repo.display(),
+        lead = lead.display(),
+    );
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&sql)?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
+                 VALUES ('pay', 'repo', 'api', 'The | API', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                params!["f".repeat(64), merged_sha, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    Added { fx, repo }
+}
+
+impl Added {
+    /// The `needs` of PR `key` in Plan `pay`, sorted.
+    fn needs_of(&self, key: &str) -> Vec<String> {
+        self.fx.env.read(|c| {
             let mut q = c.prepare("SELECT needs FROM pr_needs WHERE plan = 'pay' AND pr = ?1 ORDER BY needs")?;
             let rows = q.query_map([key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
-        .unwrap()
-}
+    }
 
-fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
-    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
-    args.extend(extra);
-    fx.env.cpd(&args)
+    fn phase(&self) -> String {
+        self.fx.env.query("SELECT phase FROM plans WHERE id = 'pay'")
+    }
+
+    /// The `data` of the `pr-added` Events of Plan `pay`, in order.
+    fn pr_added(&self) -> Vec<Value> {
+        let data: Vec<String> = self.fx.env.read(|c| {
+            let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'pr-added' ORDER BY id")?;
+            stmt.query_map([], |r| r.get::<_, String>(0))?.collect()
+        });
+        data.iter().map(|d| serde_json::from_str(d).unwrap()).collect()
+    }
+
+    fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
+        args.extend(extra);
+        self.fx.cpd(&args)
+    }
+
+    fn add_fix(&self, extra: &[&str]) -> Run {
+        self.add("fix", &self.repo, extra)
+    }
 }
 
 #[test]
 fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
-    let f = fx("done");
-    let out = add_fix(&f, &[]).ok();
+    let f = added("done");
+    let out = f.add_fix(&[]).ok();
     assert_eq!(out["pr"]["needs"], json!(["repo"]));
-    assert_eq!(needs_of(&f, "fix"), ["repo"]);
-    assert_eq!(f.events("pr-added")[0].1["needs"], json!(["repo"]));
+    assert_eq!(f.needs_of("fix"), ["repo"]);
+    assert_eq!(f.pr_added()[0]["needs"], json!(["repo"]));
     // A rerun (the Plan is in dispatch now) is `already`, not `pr_exists`.
-    assert_eq!(add_fix(&f, &[]).ok()["already"], true);
+    assert_eq!(f.add_fix(&[]).ok()["already"], true);
 }
 
 #[test]
 fn pr_add_no_needs_and_needs_override_the_reopen_default() {
-    let a = fx("done");
-    assert_eq!(add_fix(&a, &["--no-needs"]).ok()["pr"]["needs"], json!([]));
-    assert!(needs_of(&a, "fix").is_empty());
-
-    let b = fx("done");
-    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay", "--no-needs"]).ok();
-    // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
-    assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
-    assert_eq!(needs_of(&b, "fix"), ["x"]);
-
-    let c = fx("done");
-    assert_eq!(code(&add_fix(&c, &["--needs", "repo", "--no-needs"])), ("usage".into(), 2));
-    assert_eq!(c.phase(), "done");
+    // One in-process `Fx` at a time (its lock is process-wide): each block drops its own before the next.
+    {
+        let a = added("done");
+        assert_eq!(a.add_fix(&["--no-needs"]).ok()["pr"]["needs"], json!([]));
+        assert!(a.needs_of("fix").is_empty());
+    }
+    {
+        let b = added("done");
+        b.add("x", &b.repo, &["--no-needs"]).ok();
+        // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
+        assert_eq!(b.add_fix(&["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
+        assert_eq!(b.needs_of("fix"), ["x"]);
+    }
+    {
+        let c = added("done");
+        assert_eq!(code(&c.add_fix(&["--needs", "repo", "--no-needs"])), ("usage".into(), 2));
+        assert_eq!(c.phase(), "done");
+    }
 }
 
 #[test]
 fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
-    let f = fx("dispatch");
+    let f = added("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
-    let other = f.env.keyed_repo("other").canonicalize().unwrap();
-    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
+    let out = f.add("fix", &other, &[]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
-    assert!(needs_of(&f, "fix").is_empty());
+    assert!(f.needs_of("fix").is_empty());
 }
 
 // ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------

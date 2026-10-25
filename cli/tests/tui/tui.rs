@@ -664,12 +664,12 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
 
 #[test]
 fn tui_attach_without_a_terminal_is_refused_before_anything_is_built() {
-    let env = env();
-    let run = env.cpd(&["tui", "--attach"]);
+    let fx = common::tree::fx();
+    let run = fx.cpd_without_a_terminal(&["tui", "--attach"]);
     assert_eq!(run.exit, 3, "{run:?}");
     assert_eq!(run.error()["code"], "not_a_terminal");
-    assert!(!env.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
-    assert!(env.calls("cpd").is_empty());
+    assert!(!fx.tmux(&["list-sessions"]).status.success(), "a tmux server was started");
+    assert!(fx.calls("cpd").is_empty());
 }
 
 #[test]
