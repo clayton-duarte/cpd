@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
@@ -36,6 +36,9 @@ fn pid(id: &str) -> PlanId {
 fn pane_env_file(env: &TestEnv, session: &str) -> PathBuf {
     env.root().join(format!("pane-{session}.env"))
 }
+
+const WATCH_FAILS: &str =
+    "echo '{\"ok\": false, \"error\": {\"code\": \"watch_start_failed\", \"message\": \"No lock.\", \"details\": {}}}'; exit 1";
 
 /// The env with its config, a fake `cpd`, Context `ctx` and the repo `pay`.
 fn setup(env: &TestEnv) -> PathBuf {
@@ -163,44 +166,16 @@ fn section<'a>(text: &'a str, pr: &str) -> &'a str {
     &rest[..end]
 }
 
-/// The fixtures of the migrated tests, on `Fx::with_ports()`: every external (tmux, git, `cpd watch --ensure`) is a
-/// route or a rule of the `FakeRunner`. The tests not yet migrated use the binary and the helpers above.
+/// The fixtures of the migrated tests, on `Fx::with_ports()`: every external (tmux, git) is a route of the
+/// `FakeRunner`. The tests not yet migrated use the binary and the helpers above.
 mod inproc {
     use super::*;
-
-    /// What `cpd watch --ensure` prints when the engine starts.
-    pub const WATCH_OK: &str = r#"{"ok": true, "started": true, "pane": "%9"}"#;
-
-    /// What it prints (exit 1) when it cannot take its lock.
-    pub const WATCH_FAILS: &str = r#"{"ok": false, "error": {"code": "watch_start_failed", "message": "No lock.", "details": {}}}"#;
-
-    /// Scripts the reply of `cpd watch --ensure` (`plan lock` runs it, `plan/lock.rs`): the first rule that matches
-    /// answers, so a test that changes the reply scripts it with [`watch_once`] before this.
-    pub fn watch(fx: &Fx, reply: Reply) {
-        let _ = (*fx.fakes.runner).clone().on("cpd", is_watch, reply);
-    }
-
-    /// [`watch`] for the next call only.
-    pub fn watch_once(fx: &Fx, reply: Reply) {
-        let _ = (*fx.fakes.runner).clone().once("cpd", is_watch, reply);
-    }
-
-    fn is_watch(call: &cpd_core::host::runner::Call) -> bool {
-        call.args == ["watch", "--ensure"]
-    }
 
     /// The env with its config, Context `ctx` and the repo `pay`.
     pub fn setup(fx: &Fx) -> PathBuf {
         fx.env.write_tmux_config("");
         fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
         fx.keyed_repo("pay")
-    }
-
-    /// [`setup`], and `cpd watch --ensure` answers [`WATCH_OK`]: for a test that locks a Plan.
-    pub fn locking(fx: &Fx) -> PathBuf {
-        let repo = setup(fx);
-        watch(fx, Reply::ok(WATCH_OK));
-        repo
     }
 
     pub fn events(fx: &Fx, kind: &str) -> Vec<Value> {
@@ -232,35 +207,6 @@ mod inproc {
     /// The panes of the fake server: `(pane, window name, @cpd_session)`.
     pub fn panes(fx: &Fx) -> Vec<(String, String, String)> {
         fx.panes().into_iter().map(|p| (p.pane, p.window_name, p.session)).collect()
-    }
-
-    /// A Plan `id` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
-    pub fn planned(fx: &Fx, repo: &Path, id: &str) {
-        new_plan(fx, id, repo);
-        fx.cpd(&["plan", "phase", "plan", "--plan", id]).ok();
-        add_job(&fx.env, id, "a", &[]);
-        add_job(&fx.env, id, "b", &["a"]);
-    }
-
-    /// A Plan `pay` in phase `plan` with an approved, current review.
-    pub fn approved(fx: &Fx, repo: &Path) {
-        planned(fx, repo, "pay");
-        fx.outline_for_review("pay");
-        fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-        fx.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
-    }
-
-    /// `job add <key> --draft --title <t>` in Plan `pay`, a stub, with `extra` flags.
-    pub fn stub(fx: &Fx, key: &str, extra: &[&str]) -> Value {
-        let title = format!("Planned {key}");
-        let mut args = vec!["job", "add", key, "--draft", "--title", &title, "--plan", "pay"];
-        args.extend(extra);
-        fx.cpd(&args).ok()
-    }
-
-    /// The argv (after `cpd`) of every `cpd watch --ensure` run so far.
-    pub fn watch_calls(fx: &Fx) -> Vec<Vec<String>> {
-        fx.calls("cpd").into_iter().map(|c| c.args).filter(|a| a[0] == "watch").collect()
     }
 }
 
@@ -702,28 +648,28 @@ fn phase_refusals() {
 /// A Plan with no PR yet (`plan new` alone) is found by every Plan read: phase, list, show, archive and unarchive.
 #[test]
 fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
-    let env = TestEnv::new();
-    setup(&env);
-    new_plan_only(&env, "pay");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM prs"), 0);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    inproc::new_plan_only(&fx, "pay");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0);
 
-    assert_eq!(show(&env, "pay")["prs"], json!([]));
-    let ids = |env: &TestEnv| -> Vec<String> {
-        env.cpd(&["plan", "list"]).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
+    assert_eq!(inproc::show(&fx, "pay")["prs"], json!([]));
+    let ids = |fx: &Fx| -> Vec<String> {
+        fx.cpd(&["plan", "list"]).ok()["plans"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_owned()).collect()
     };
-    assert_eq!(ids(&env), ["pay"]);
+    assert_eq!(ids(&fx), ["pay"]);
 
-    let archived = env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let archived = fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
     assert_eq!(archived["archived"][0], json!({"kind": "plan", "id": "pay"}));
-    assert_ne!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
-    env.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
-    assert_eq!(show(&env, "pay")["plan"]["archived_at"], Value::Null);
+    assert_ne!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
+    fx.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
 
-    let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    let out = fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     assert_eq!((&out["plan"], &out["phase"]), (&json!("pay"), &json!("plan")));
-    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
     // A Plan with no PR has no Job: lock keeps its own refusal.
-    refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
+    refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
 }
 
 // ---------- plan list, plan show ----------
@@ -1024,17 +970,17 @@ fn job_status(env: &TestEnv, key: &str) -> String {
 
 #[test]
 fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::approved(&fx, &repo);
-    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     // Locked, every Job queued: there is nothing to review.
-    refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
+    refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
 
-    add_draft(&fx.env, "pay", "c", &["a"], true);
-    add_draft(&fx.env, "pay", "d", &["c"], true);
-    fx.outline_for_review("pay");
-    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    add_draft(&env, "pay", "c", &["a"], true);
+    add_draft(&env, "pay", "d", &["c"], true);
+    env.outline_for_review("pay");
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let spec = |key: &str, needs: &str| {
         format!(
             "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
@@ -1044,7 +990,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     let outline = "{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{\"pay\":[\"Done\"]},\"goal\":\"Goal\",\"out_of_scope\":[],\"risks\":[]}";
     let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"outline\":{outline},\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r2"), &json!("pending"), &json!(fingerprint)));
-    assert_eq!(inproc::events(&fx, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
+    assert_eq!(events(&env, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
 
     // The render marks the drafts under review, and the Locked Jobs as context.
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
@@ -1054,36 +1000,36 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert!(text.contains("\nStatus: `draft` · **under review** · Tier: `S2` · Needs: `c`\n"), "{text}");
     // `b` is queued but cannot start until `a` merges: shown as waiting (hs-d521)
     assert!(text.contains("\nStatus: `waiting` · waiting on [`a`](#a-job-a) · Locked · Tier: `S2` · Needs: `a`\n"), "{text}");
-    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
 
     // A PR appended after the lock is not reviewed: the review stays current.
-    let web = fx.keyed_repo("web");
-    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--plan", "pay"]).ok();
+    let web = env.keyed_repo("web");
+    env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--plan", "pay"]).ok();
     // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
-    assert_eq!(inproc::show(&fx, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
-    fx.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "cancel", "open-web", "--reason", "a stub of the template", "--plan", "pay"]).ok();
-    assert_eq!(inproc::show(&fx, "pay")["review"]["current"], true);
+    assert_eq!(show(&env, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
+    env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    env.cpd(&["job", "cancel", "open-web", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    assert_eq!(show(&env, "pay")["review"]["current"], true);
 
     // Rejected: the drafts stay drafts, editable.
-    let out = fx.cpd(&["plan", "decide", "r2", "--reject", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", "r2", "--reject", "--plan", "pay"]).ok();
     assert!(out.get("jobs").is_none(), "{out}");
-    assert!(inproc::events(&fx, "plan-review").last().unwrap()["data"].get("jobs").is_none());
-    assert_eq!((job_status(&fx.env, "c"), job_status(&fx.env, "d")), ("draft".into(), "draft".into()));
-    edit_goal(&fx.env, "pay", "d", "Goal of d.");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!((job_status(&env, "c"), job_status(&env, "d")), ("draft".into(), "draft".into()));
+    edit_goal(&env, "pay", "d", "Goal of d.");
 
     // Approved and current: in one transaction exactly the drafts are queued with their fingerprints.
-    let phase_events = inproc::events(&fx, "plan-phase").len();
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    let out = fx.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    let phase_events = events(&env, "plan-phase").len();
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    let out = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&out["review"]["status"], &out["current"], &out["next"], &out["jobs"]), (&json!("approved"), &json!(true), &Value::Null, &json!(["c", "d"])));
-    let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
+    let decided = events(&env, "plan-review").last().unwrap().clone();
     assert_eq!(decided["data"], json!({"review": "r3", "fingerprint": fingerprint, "status": "approved", "feedback": null, "jobs": ["c", "d"]}));
     assert!(decided["text"].as_str().unwrap().contains("no lock is needed"), "{decided}");
-    let shown = inproc::show(&fx, "pay");
+    let shown = show(&env, "pay");
     assert_eq!(shown["plan"]["phase"], "dispatch");
-    assert_eq!(inproc::events(&fx, "plan-phase").len(), phase_events, "the phase does not change");
+    assert_eq!(events(&env, "plan-phase").len(), phase_events, "the phase does not change");
     for (key, needs) in [("c", &["a"]), ("d", &["c"])] {
         let job = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == key).unwrap();
         assert_eq!((&job["status"], &job["appended"]), (&json!("queued"), &json!(true)), "{key}");
@@ -1092,20 +1038,20 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     // The tamper check holds for them: the fingerprints match what the engine recomputes.
     assert_eq!(shown["tamper"], json!([]));
     // Idempotent: a rerun reports the same Jobs and writes nothing.
-    let again = fx.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["jobs"], &again["next"]), (&json!(true), &json!(["c", "d"]), &Value::Null));
-    assert_eq!(inproc::events(&fx, "plan-review").len(), 6, "r1 and r2 requested and decided, r3 requested and approved once");
+    assert_eq!(events(&env, "plan-review").len(), 6, "r1 and r2 requested and decided, r3 requested and approved once");
 
     // A stale approval queues nothing and asks for a new review.
-    add_draft(&fx.env, "pay", "e", &[], true);
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    edit_goal(&fx.env, "pay", "e", "Changed.");
-    let out = fx.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "e", &[], true);
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    edit_goal(&env, "pay", "e", "Changed.");
+    let out = env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&out["current"], &out["next"]), (&json!(false), &json!("cpd plan review")));
     assert!(out.get("jobs").is_none(), "{out}");
-    assert!(inproc::events(&fx, "plan-review").last().unwrap()["data"].get("jobs").is_none());
-    assert_eq!(job_status(&fx.env, "e"), "draft");
+    assert!(events(&env, "plan-review").last().unwrap()["data"].get("jobs").is_none());
+    assert_eq!(job_status(&env, "e"), "draft");
 }
 
 /// A `draft` `open` Job of PR `pr` as engine E4 inserts it while a draft of the PR remains (hs-d573 B1): `appended`, no fingerprint.
@@ -1131,53 +1077,53 @@ fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
 /// approval queues it with the drafts, in the same transaction.
 #[test]
 fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_with_the_drafts() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::approved(&fx, &repo);
-    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
-    add_draft(&fx.env, "pay", "c", &["a"], true);
-    fx.outline_for_review("pay");
-    let fingerprint = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
-    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "c", &["a"], true);
+    env.outline_for_review("pay");
+    let fingerprint = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!(out["review"]["fingerprint"], fingerprint);
     let review = out["review"]["id"].as_str().unwrap().to_owned();
 
-    add_draft_open(&fx.env, "pay", "open-pay-2");
-    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"], fingerprint, "the open Job is not in the fingerprint");
-    assert_eq!(inproc::show(&fx, "pay")["review"]["current"], true);
+    add_draft_open(&env, "pay", "open-pay-2");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"], fingerprint, "the open Job is not in the fingerprint");
+    assert_eq!(show(&env, "pay")["review"]["current"], true);
 
-    let out = fx.cpd(&["plan", "decide", &review, "--approve", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", &review, "--approve", "--plan", "pay"]).ok();
     assert_eq!((&out["review"]["status"], &out["current"]), (&json!("approved"), &json!(true)));
     let mut queued: Vec<String> = out["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     queued.sort();
     assert_eq!(queued, ["c", "open-pay-2"]);
-    let decided = inproc::events(&fx, "plan-review").last().unwrap().clone();
+    let decided = events(&env, "plan-review").last().unwrap().clone();
     let mut listed: Vec<String> = decided["data"]["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     listed.sort();
     assert_eq!(listed, ["c", "open-pay-2"]);
     for key in ["c", "open-pay-2"] {
-        assert_eq!(job_status(&fx.env, key), "queued", "{key}");
-        assert_eq!(fx.env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
+        assert_eq!(job_status(&env, key), "queued", "{key}");
+        assert_eq!(env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
     }
 }
 
 /// B1 (hs-d573 O4): `draft_jobs` and `no_draft_jobs` do not count a draft `open` Job, and the review document shows it as context.
 #[test]
 fn a_draft_open_job_is_no_job_under_review() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::approved(&fx, &repo);
-    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // The only draft is the open Job: nothing to review.
-    add_draft_open(&fx.env, "pay", "open-pay-2");
-    refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
-    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 0);
+    add_draft_open(&env, "pay", "open-pay-2");
+    refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 0);
 
-    add_draft(&fx.env, "pay", "c", &["a"], true);
-    fx.outline_for_review("pay");
-    assert_eq!(fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
-    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    add_draft(&env, "pay", "c", &["a"], true);
+    env.outline_for_review("pay");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
     let row = text.lines().find(|l| l.starts_with("| `open-pay-2` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
     assert!(!row.contains("**under review**"), "{row}");
@@ -1186,14 +1132,26 @@ fn a_draft_open_job_is_no_job_under_review() {
 
 // ---------- plan lock ----------
 
+/// A Plan `pay` in phase `plan` with an approved, current review.
+fn approved(env: &TestEnv, repo: &Path) {
+    planned(env, repo, "pay");
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
+}
+
+fn watch_calls(env: &TestEnv) -> Vec<Vec<String>> {
+    env.calls("cpd").into_iter().filter(|c| c[0] == "watch").collect()
+}
+
 #[test]
 fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::approved(&fx, &repo);
-    let head = fx.git(&repo, &["rev-parse", "HEAD"]);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    let head = env.git(&repo, &["rev-parse", "HEAD"]);
 
-    let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
     assert_eq!(
         out,
@@ -1202,10 +1160,10 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
                         "base_sha": head, "reused": false, "pushed": false}],
                "watch": {"started": true, "pane": "%9"}})
     );
-    assert_eq!(fx.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/pay");
-    assert_eq!(inproc::watch_calls(&fx), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
+    assert_eq!(env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/pay");
+    assert_eq!(watch_calls(&env), vec![vec!["watch".to_owned(), "--ensure".to_owned()]]);
 
-    let shown = inproc::show(&fx, "pay");
+    let shown = show(&env, "pay");
     assert_eq!((&shown["plan"]["phase"], &shown["prs"][0]["lead_worktree"]), (&json!("dispatch"), &json!(worktree.display().to_string())));
     assert!(shown["plan"]["locked_at"].is_string());
     for job in shown["jobs"].as_array().unwrap().iter().filter(|j| ["a", "b"].contains(&j["key"].as_str().unwrap())) {
@@ -1219,138 +1177,138 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
         assert_eq!(job["fingerprint"], sha256(&canonical), "the Locked-Job fingerprint of {key}");
     }
     assert_eq!(shown["tamper"], json!([]));
-    let phase = inproc::events(&fx, "plan-phase").last().unwrap().clone();
+    let phase = events(&env, "plan-phase").last().unwrap().clone();
     assert_eq!(phase["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["a", "b"], "prs": ["pay"]}));
-    let started = inproc::events(&fx, "pr-started");
+    let started = events(&env, "pr-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!((&started[0]["data"]["pr"], &started[0]["data"]["by"]), (&json!("pay"), &json!("lock")));
 
     // Already: still makes sure the engine runs.
-    let again = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let again = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
     assert_eq!((&again["already"], &again["phase"], &again["watch"]["started"]), (&json!(true), &json!("dispatch"), &json!(true)));
-    assert_eq!(inproc::watch_calls(&fx).len(), 2);
-    assert_eq!(inproc::events(&fx, "plan-phase").len(), 2);
+    assert_eq!(watch_calls(&env).len(), 2);
+    assert_eq!(events(&env, "plan-phase").len(), 2);
 }
 
 // ---------- plan lock and the remote Lead Branch (R35) ----------
 
 /// A bare `origin` for `repo`, holding `main`; returns its path.
-fn with_origin(fx: &Fx, repo: &Path) -> PathBuf {
-    let origin = fx.env.root().join("origins").join("pay.git");
+fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
+    let origin = env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
-    fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    fx.local_origin(repo, &origin);
-    fx.git(repo, &["push", "-q", "origin", "main"]);
+    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    env.local_origin(repo, &origin);
+    env.git(repo, &["push", "-q", "origin", "main"]);
     origin
 }
 
 #[test]
 fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    let origin = with_origin(&fx, &repo);
-    inproc::approved(&fx, &repo);
-    let head = fx.git(&repo, &["rev-parse", "HEAD"]);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    let origin = with_origin(&env, &repo);
+    approved(&env, &repo);
+    let head = env.git(&repo, &["rev-parse", "HEAD"]);
 
-    let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
     // No upstream: nothing in the shared .git/config (hs-d243 G1).
-    let config = fx.git_output(&repo, &["config", "--get-regexp", r"^branch\."]);
+    let config = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
     assert_eq!(String::from_utf8(config.stdout).unwrap(), "");
-    assert_eq!(fx.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
-    assert!(inproc::events(&fx, "error").is_empty());
+    assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
+    assert!(events(&env, "error").is_empty());
 }
 
 #[test]
 fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    with_origin(&fx, &repo);
-    inproc::approved(&fx, &repo);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    with_origin(&env, &repo);
+    approved(&env, &repo);
     // A commit only the remote has, on top of the base.
-    fx.git(&repo, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
-    let remote_tip = fx.git(&repo, &["rev-parse", "HEAD"]);
-    fx.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
-    fx.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    env.git(&repo, &["commit", "-q", "--allow-empty", "-m", "only on the remote"]);
+    let remote_tip = env.git(&repo, &["rev-parse", "HEAD"]);
+    env.git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
+    env.git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
 
-    let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(remote_tip), &json!(true), &json!(false)));
-    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
-    assert_eq!(fx.git(&repo, &["rev-parse", "refs/heads/cpd/pay/pay"]), remote_tip);
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay/pay"));
-    assert!(inproc::events(&fx, "error").is_empty());
+    assert_eq!(env.git(&worktree, &["rev-parse", "HEAD"]), remote_tip);
+    assert_eq!(env.git(&repo, &["rev-parse", "refs/heads/cpd/pay/pay"]), remote_tip);
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_tip}\trefs/heads/cpd/pay/pay"));
+    assert!(events(&env, "error").is_empty());
 }
 
 /// `cpd/pay/pay` is on the remote one commit past the old `main`, writing `clash.txt`; then `main` moves on, writing
 /// `clash.txt` differently (`conflicting`, so the branch conflicts with it) or `moved.txt` (so it only lacks it).
 /// Returns the branch's tip.
-fn remote_lead_branch_then_main_moves(fx: &Fx, repo: &Path, conflicting: bool) -> String {
+fn remote_lead_branch_then_main_moves(env: &TestEnv, repo: &Path, conflicting: bool) -> String {
     let write = |path: &str, content: &str, message: &str| {
         std::fs::write(repo.join(path), content).unwrap();
-        fx.git(repo, &["add", "-A"]);
-        fx.git(repo, &["commit", "-q", "-m", message]);
+        env.git(repo, &["add", "-A"]);
+        env.git(repo, &["commit", "-q", "-m", message]);
     };
     write("clash.txt", "the branch's\n", "the branch");
-    let tip = fx.git(repo, &["rev-parse", "HEAD"]);
-    fx.git(repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
-    fx.git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    let tip = env.git(repo, &["rev-parse", "HEAD"]);
+    env.git(repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
+    env.git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
     let (path, content) = if conflicting { ("clash.txt", "main's\n") } else { ("moved.txt", "main moved\n") };
     write(path, content, "main moves on");
-    fx.git(repo, &["push", "-q", "origin", "main"]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
     tip
 }
 
 #[test]
 fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one_merely_behind_it() {
     // hs-d490: only a conflict refuses; a base that merely moved ahead of the branch does not.
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    with_origin(&fx, &repo);
-    inproc::approved(&fx, &repo);
-    let remote_branch = remote_lead_branch_then_main_moves(&fx, &repo, true);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    with_origin(&env, &repo);
+    approved(&env, &repo);
+    let remote_branch = remote_lead_branch_then_main_moves(&env, &repo, true);
 
-    let error = refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
 
     assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay/pay"), &json!("pay")));
     assert_eq!(error["details"]["files"], json!(["clash.txt"]));
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
     assert!(!repo.parent().unwrap().join("pay.pay.pay").exists());
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
-    assert!(inproc::watch_calls(&fx).is_empty());
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert!(watch_calls(&env).is_empty());
 }
 
 #[test]
 fn lock_without_an_origin_remote_is_as_before() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::approved(&fx, &repo);
-    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
-    assert_eq!(fx.git(&repo, &["remote"]), "");
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch");
-    assert!(inproc::events(&fx, "error").is_empty());
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    assert_eq!(env.git(&repo, &["remote"]), "");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
+    assert!(events(&env, "error").is_empty());
 }
 
 #[test]
 fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    with_origin(&fx, &repo);
-    inproc::approved(&fx, &repo);
-    // The remote refuses the push (a `pre-receive` hook of its own is git's behaviour, not ours: scripted).
-    let _ = (*fx.fakes.runner).clone().on("git", |call| call.args.iter().any(|a| a == "push"), Reply::exit(1, "", "refused by hook\n"));
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    let origin = with_origin(&env, &repo);
+    let hook = origin.join("hooks").join("pre-receive");
+    write_executable(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n");
+    approved(&env, &repo);
 
-    let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     assert_eq!(out["phase"], "dispatch");
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch");
-    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), "");
-    let errors = inproc::events(&fx, "error");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), "");
+    let errors = events(&env, "error");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["data"]["code"], "push_failed");
     assert_eq!(errors[0]["data"]["source"], "plan lock");
@@ -1359,163 +1317,161 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
 
 #[test]
 fn lock_stays_locked_when_the_engine_cannot_start() {
-    let fx = Fx::with_ports();
-    let repo = inproc::setup(&fx);
-    inproc::approved(&fx, &repo);
-    inproc::watch_once(&fx, Reply::exit(1, &format!("{}\n", inproc::WATCH_FAILS), ""));
-    let error = refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.fake_cpd_panes(WATCH_FAILS);
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert_eq!(error["details"]["error"]["message"], "No lock.");
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch", "the Plan stays locked");
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch", "the Plan stays locked");
 
     // An engine that prints nothing usable fails the same way.
-    inproc::watch_once(&fx, Reply::ok("nonsense\n"));
-    let error = refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
+    env.fake_cpd_panes("echo nonsense; exit 0");
+    let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["error"]["stdout"], "nonsense");
 }
 
 #[test]
 fn lock_refusals_change_nothing() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    inproc::new_plan(&fx, "pay", &repo);
-    let lock = || fx.cpd(&["plan", "lock", "--plan", "pay"]);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan(&env, "pay", &repo);
+    let lock = || env.cpd(&["plan", "lock", "--plan", "pay"]);
     let error = refused(&lock(), "illegal_transition", 3);
     assert_eq!(error["details"]["from"], "grounding");
-    fx.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     refused(&lock(), "no_draft_jobs", 3);
 
-    add_job(&fx.env, "pay", "b", &[]);
-    add_job(&fx.env, "pay", "a", &["b"]);
+    add_job(&env, "pay", "b", &[]);
+    add_job(&env, "pay", "a", &["b"]);
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"], Value::Null);
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     refused(&lock(), "plan_not_approved", 3);
-    fx.cpd(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
+    env.cpd(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"]["status"], "rejected");
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    fx.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
-    edit_goal(&fx.env, "pay", "a", "Changed after approval.");
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    edit_goal(&env, "pay", "a", "Changed after approval.");
     refused(&lock(), "plan_not_approved", 3);
 
     // A cycle (b needs a, a needs b), approved.
-    store(&fx.env).write("fixture", |tx| exec(tx, "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');")).unwrap();
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    fx.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
+    store(&env).write("fixture", |tx| exec(tx, "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');")).unwrap();
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     let error = refused(&lock(), "dependency_cycle", 3);
     assert_eq!(error["details"]["cycle"].as_array().unwrap().len(), 3);
-    store(&fx.env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE plan = 'pay' AND job = 'b';")).unwrap();
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    fx.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
+    store(&env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE plan = 'pay' AND job = 'b';")).unwrap();
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
 
     // Something at the Lead worktree's path, then the branch.
     let path = repo.parent().unwrap().join("pay.pay.pay");
     fs::create_dir_all(&path).unwrap();
     refused(&lock(), "worktree_exists", 3);
     fs::remove_dir(&path).unwrap();
-    fx.git(&repo, &["branch", "cpd/pay/pay"]);
+    env.git(&repo, &["branch", "cpd/pay/pay"]);
     refused(&lock(), "branch_exists", 3);
-    fx.git(&repo, &["branch", "-D", "cpd/pay/pay"]);
+    env.git(&repo, &["branch", "-D", "cpd/pay/pay"]);
 
     // pre-start fails: the worktree and branch are removed.
-    fx.env.repo_policy("acme", "pay", "[hooks]\npre-start = \"echo setting up; exit 3\"\n");
-    // The hook is a shell run (external): its failing answer is scripted.
-    fx.fake("sh", Reply::exit(3, "setting up\n", ""));
+    env.repo_policy("acme", "pay", "[hooks]\npre-start = \"echo setting up; exit 3\"\n");
     let error = refused(&lock(), "setup_failed", 1);
-    assert_eq!(error["details"]["log"], home(&fx.env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
+    assert_eq!(error["details"]["log"], home(&env).root().join("run/pay/logs/lead-pay.pre-start.log").display().to_string());
     assert_eq!((&error["details"]["pr"], &error["details"]["step"]), (&json!("pay"), &json!("pre-start")));
     assert!(!path.exists());
-    assert_eq!(fx.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
+    assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
 
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
-    assert_eq!(inproc::show(&fx, "pay")["counts"]["draft"], 2);
-    assert!(inproc::watch_calls(&fx).is_empty());
-    refused(&fx.cpd(&["plan", "lock"]), "plan_required", 2);
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert_eq!(show(&env, "pay")["counts"]["draft"], 2);
+    assert!(watch_calls(&env).is_empty());
+    refused(&env.cpd(&["plan", "lock"]), "plan_required", 2);
 }
 
 // ---- plan rename ----------------------------------------------------------
 
 #[test]
 fn rename_sets_the_title_and_appends_one_event() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    new_plan(&env, "pay", &repo);
-    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry payouts"]).ok();
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
+    inproc::new_plan(&fx, "pay", &repo);
+    let out = fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry payouts"]).ok();
     assert_eq!(out["plan"], json!({"id": "pay", "context": "ctx", "title": "Retry payouts"}));
     assert!(out.get("already").is_none());
-    assert_eq!(show(&env, "pay")["plan"]["title"], "Retry payouts");
-    let renamed = events(&env, "plan-renamed");
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["title"], "Retry payouts");
+    let renamed = inproc::events(&fx, "plan-renamed");
     assert_eq!(renamed.len(), 1);
     assert_eq!((renamed[0]["context"].as_str(), renamed[0]["plan"].as_str()), (Some("ctx"), Some("pay")));
     assert_eq!(renamed[0]["data"], json!({"title": "Retry payouts"}));
 
     // CPD_PLAN selects the Plan; the same title is already and writes nothing.
-    let again = cpd_with(&env, &[("CPD_PLAN", "pay")], &["plan", "rename", "--title", "Retry payouts"]).ok();
+    let again = fx.cpd_with(fx.env.root(), &["plan", "rename", "--title", "Retry payouts"], &[("CPD_PLAN", "pay")]).ok();
     assert_eq!(again["already"], true);
-    assert_eq!(events(&env, "plan-renamed").len(), 1);
+    assert_eq!(inproc::events(&fx, "plan-renamed").len(), 1);
 }
 
 /// `@cpd_title` of `pane`.
-fn pane_title(env: &TestEnv, pane: &str) -> String {
-    let out = env.tmux(&["show", "-pqv", "-t", pane, "@cpd_title"]);
+fn pane_title(fx: &Fx, pane: &str) -> String {
+    let out = fx.tmux(&["show", "-pqv", "-t", pane, "@cpd_title"]);
     String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
 }
 
 #[test]
 fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
-    let env = TestEnv::new();
-    setup(&env);
-    let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    let out = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
     let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
     // Untitled: the header follows the rename (the test above). Titled: it keeps the title.
-    store(&env)
+    store(&fx.env)
         .write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{lead}';")))
         .unwrap();
-    env.tmux(&["set", "-p", "-t", &pane, "@cpd_title", "Dynamic subject"]);
+    fx.tmux(&["set", "-p", "-t", &pane, "@cpd_title", "Dynamic subject"]);
 
-    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
-    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
-    assert_eq!(env.query::<String>("SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
-    assert_eq!(events(&env, "plan-renamed").len(), 1);
+    fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(pane_title(&fx, &pane), "Dynamic Subject");
+    assert_eq!(fx.env.query::<String>("SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
+    assert_eq!(inproc::events(&fx, "plan-renamed").len(), 1);
 
-    env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
-    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
+    fx.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
+    assert_eq!(pane_title(&fx, &pane), "Dynamic Subject");
 
     // A rerun with the same title repairs a cleared header to the dynamic title.
-    env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
-    let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    fx.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
+    let again = fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
     assert_eq!(again["already"], true);
-    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
+    assert_eq!(pane_title(&fx, &pane), "Dynamic Subject");
 }
 
 #[test]
 fn rename_refusals() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    new_plan(&env, "pay", &repo);
-    refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", "X"]), "plan_not_found", 4);
-    refused(&env.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
-    refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
-    assert!(events(&env, "plan-renamed").is_empty());
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
+    inproc::new_plan(&fx, "pay", &repo);
+    refused(&fx.cpd(&["plan", "rename", "--plan", "nope", "--title", "X"]), "plan_not_found", 4);
+    refused(&fx.cpd(&["plan", "rename", "--title", "X"]), "plan_required", 2);
+    refused(&fx.cpd(&["plan", "rename", "--plan", "pay", "--title", ""]), "usage", 2);
+    assert!(inproc::events(&fx, "plan-renamed").is_empty());
 }
 
 #[test]
 fn rename_works_on_an_archived_plan() {
-    let env = TestEnv::new();
-    setup(&env);
-    new_plan_only(&env, "pay");
-    env.cpd(&["plan", "archive", "--plan", "pay"]).ok();
-    let out = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    inproc::new_plan_only(&fx, "pay");
+    fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let out = fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Archived and renamed"]).ok();
     assert_eq!(out["plan"]["title"], "Archived and renamed");
-    let plan = show(&env, "pay");
+    let plan = inproc::show(&fx, "pay");
     assert_eq!(plan["plan"]["title"], "Archived and renamed");
     assert_ne!(plan["plan"]["archived_at"], Value::Null, "still archived");
-    assert_eq!(events(&env, "plan-renamed").len(), 1);
+    assert_eq!(inproc::events(&fx, "plan-renamed").len(), 1);
 }
 
 // ---- plan archive and unarchive -------------------------------------------
@@ -1734,94 +1690,94 @@ fn stub(env: &TestEnv, key: &str, extra: &[&str]) -> Value {
 
 #[test]
 fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_approved_and_queued() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    seed_tiers(&fx.env);
-    inproc::approved(&fx, &repo);
-    fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
-    let out = inproc::stub(&fx, "next-1", &[]);
+    let out = stub(&env, "next-1", &[]);
     assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
-    inproc::stub(&fx, "next-2", &["--tier", "S3", "--needs", "next-1"]);
-    inproc::stub(&fx, "dropped", &[]);
-    fx.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
-    add_draft(&fx.env, "pay", "done-1", &["a"], true);
-    let shown = inproc::show(&fx, "pay");
+    stub(&env, "next-2", &["--tier", "S3", "--needs", "next-1"]);
+    stub(&env, "dropped", &[]);
+    env.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "done-1", &["a"], true);
+    let shown = show(&env, "pay");
     let listed = shown["jobs"].as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
     assert_eq!((&listed["status"], &listed["tier"], &listed["goal"], &listed["touches"]), (&json!("draft"), &Value::Null, &Value::Null, &Value::Null));
     assert_eq!(shown["counts"]["draft"], 3);
     // The Plan view of the Context holds the stub's registered work too.
-    let pending = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let pending = env.cpd(&["context", "pending", "--context", "ctx"]).ok();
     let jobs = &pending["plans"][0]["prs"][0]["jobs"];
     let pending_stub = jobs.as_array().unwrap().iter().find(|j| j["key"] == "next-1").unwrap();
     assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
 
     // The review is refused, listing each stub and what it lacks (the cancelled one is not a draft); nothing is written.
-    let (reviews, evs) = (inproc::events(&fx, "plan-review").len(), fx.env.query::<i64>("SELECT count(*) FROM events"));
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
+    let (reviews, evs) = (events(&env, "plan-review").len(), env.query::<i64>("SELECT count(*) FROM events"));
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
     assert_eq!(error["details"]["jobs"], json!([{"key": "next-1", "missing": ["tier", "spec"]}, {"key": "next-2", "missing": ["spec"]}]));
     assert_eq!(error["details"]["plan"], "pay");
     assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
-    assert_eq!((inproc::events(&fx, "plan-review").len(), fx.env.query::<i64>("SELECT count(*) FROM events")), (reviews, evs));
-    assert!(!home(&fx.env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
+    assert_eq!((events(&env, "plan-review").len(), env.query::<i64>("SELECT count(*) FROM events")), (reviews, evs));
+    assert!(!home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
     // `plan render` still shows them, and the fingerprint covers them as they are.
-    let before = fx.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+    let before = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
 
     // Completing one is not enough; completing both lets the review through, with a new fingerprint.
-    let spec_1 = spec_file(&fx.env, "next-1");
-    let out = fx.cpd(&["job", "edit", "next-1", "--tier", "S2", "--spec", &spec_1, "--plan", "pay"]).ok();
+    let spec_1 = spec_file(&env, "next-1");
+    let out = env.cpd(&["job", "edit", "next-1", "--tier", "S2", "--spec", &spec_1, "--plan", "pay"]).ok();
     assert_eq!(out["fields"], json!(["tier", "spec"]));
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
     assert_eq!(error["details"]["jobs"], json!([{"key": "next-2", "missing": ["spec"]}]));
-    let spec_2 = spec_file(&fx.env, "next-2");
-    fx.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
-    fx.outline_for_review("pay");
-    let out = fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    let spec_2 = spec_file(&env, "next-2");
+    env.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
+    env.outline_for_review("pay");
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!((&out["review"]["id"], &out["review"]["status"]), (&json!("r2"), &json!("pending")));
     assert_ne!(out["review"]["fingerprint"], before, "completing a stub changes the plan fingerprint");
 
     // Approved and current: exactly the complete drafts are queued, each with its Locked-Job fingerprint.
-    let out = fx.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    let out = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&out["current"], &out["jobs"]), (&json!(true), &json!(["done-1", "next-1", "next-2"])));
-    let shown = inproc::show(&fx, "pay");
+    let shown = show(&env, "pay");
     for key in ["done-1", "next-1", "next-2"] {
-        assert_eq!(job_status(&fx.env, key), "queued", "{key}");
+        assert_eq!(job_status(&env, key), "queued", "{key}");
     }
-    assert_eq!(job_status(&fx.env, "dropped"), "cancelled");
+    assert_eq!(job_status(&env, "dropped"), "cancelled");
     assert_eq!(shown["tamper"], json!([]));
     assert_eq!(shown["counts"]["draft"], 0);
 }
 
 #[test]
 fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
-    let fx = Fx::with_ports();
-    let repo = inproc::locking(&fx);
-    seed_tiers(&fx.env);
-    inproc::approved(&fx, &repo);
-    inproc::stub(&fx, "later", &[]);
-    inproc::stub(&fx, "also", &["--tier", "S2"]);
-    let lock = || fx.cpd(&["plan", "lock", "--plan", "pay"]);
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    seed_tiers(&env);
+    approved(&env, &repo);
+    stub(&env, "later", &[]);
+    stub(&env, "also", &["--tier", "S2"]);
+    let lock = || env.cpd(&["plan", "lock", "--plan", "pay"]);
 
     // The approved review no longer covers the Jobs; the lock names the stubs before it names the review.
     let error = refused(&lock(), "draft_incomplete", 3);
     assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
-    let error = refused(&fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
+    let error = refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
     assert_eq!(error["details"]["jobs"], json!([{"key": "also", "missing": ["spec"]}, {"key": "later", "missing": ["tier", "spec"]}]));
-    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "plan");
-    assert_eq!(job_status(&fx.env, "later"), "draft");
-    assert!(inproc::watch_calls(&fx).is_empty());
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
+    assert_eq!(job_status(&env, "later"), "draft");
+    assert!(watch_calls(&env).is_empty());
 
     // Cancelled, a stub is no draft and blocks nothing; the other is completed.
-    fx.cpd(&["job", "cancel", "later", "--reason", "No.", "--plan", "pay"]).ok();
-    fx.cpd(&["job", "edit", "also", "--spec", &spec_file(&fx.env, "also"), "--plan", "pay"]).ok();
-    fx.outline_for_review("pay");
-    fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
-    fx.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
+    env.cpd(&["job", "cancel", "later", "--reason", "No.", "--plan", "pay"]).ok();
+    env.cpd(&["job", "edit", "also", "--spec", &spec_file(&env, "also"), "--plan", "pay"]).ok();
+    env.outline_for_review("pay");
+    env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     let out = lock().ok();
     assert_eq!(out["jobs"], json!(["a", "b", "also"]), "in creation order");
-    assert_eq!(job_status(&fx.env, "also"), "queued");
-    assert_eq!(job_status(&fx.env, "later"), "cancelled");
+    assert_eq!(job_status(&env, "also"), "queued");
+    assert_eq!(job_status(&env, "later"), "cancelled");
 }
 
 #[test]
