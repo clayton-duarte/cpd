@@ -236,23 +236,29 @@ pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
     let shown = |u: &Update| match (porcelain, u.reason) {
         (true, Some(reason)) => format!("{}\t{}:{}\t{} ({reason})\n", u.flag, u.from, u.to, u.summary),
         (true, None) => format!("{}\t{}:{}\t{}\n", u.flag, u.from, u.to, u.summary),
-        (false, reason) => {
-            let to = shorten(&u.to);
-            let what = if u.flag == '-' { to.to_owned() } else { format!("{} -> {to}", shorten(&u.from)) };
-            let reason = reason.map_or(String::new(), |r| format!(" ({r})"));
-            format!(" {} {:<17} {what}{reason}\n", u.flag, u.summary)
-        }
+        (false, _) => shown_plain(u),
     };
     let to_url = format!("To {}\n", remote.url);
     let code = i32::from(rejected);
     let tail = if rejected { failed } else { String::new() };
     if porcelain {
+        // The route's own, not recorded from git: the rejected refs are also told on stderr in the plain form
+        // (with the reason), which is what the product keeps of a rejected push (`Push::Rejected`).
+        let rejections: String = updates.iter().filter(|u| u.flag == '!').map(|u| shown_plain(u)).collect();
         let lines: String = updates.iter().map(shown).collect();
-        return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: tail });
+        return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: format!("{rejections}{tail}") });
     }
     if updates.iter().all(|u| u.flag == '=') {
         return Ok(Out::fail(0, "Everything up-to-date\n"));
     }
     let lines: String = updates.iter().map(shown).collect();
     Ok(Out { code, stdout: String::new(), stderr: format!("{to_url}{lines}{tail}") })
+}
+
+/// The line of a plain push: ` <flag> <summary> <from> -> <to> (<reason>)`, the summary padded to 17.
+fn shown_plain(u: &Update) -> String {
+    let to = shorten(&u.to);
+    let what = if u.flag == '-' { to.to_owned() } else { format!("{} -> {to}", shorten(&u.from)) };
+    let reason = u.reason.map_or(String::new(), |r| format!(" ({r})"));
+    format!(" {} {:<17} {what}{reason}\n", u.flag, u.summary)
 }
