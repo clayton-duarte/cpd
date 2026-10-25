@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cpd::cli::Cli;
+use cpd_core::clock::{Clock, SystemClock};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard;
@@ -579,7 +580,7 @@ pub const WAIT: Duration = Duration::from_secs(30);
 /// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
 /// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
 /// ms (a `tmux capture-pane`).
-const POLL: Duration = Duration::from_millis(10);
+pub const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
@@ -587,24 +588,34 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 }
 
 /// [`wait_until`] with its own `timeout`.
-pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
-    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+pub fn wait_until_for(what: &str, timeout: Duration, ready: impl FnMut() -> bool) {
+    wait_until_on(&SystemClock, what, timeout, ready);
+}
+
+/// [`wait_until_for`] on `clock`: a test of the wait itself passes a `ManualClock`, whose time is virtual.
+pub fn wait_until_on(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll_on(clock, timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
 }
 
 /// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
 /// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
 /// [`wait_some`], or its own message); a check that something does not happen within a window
 /// asserts `None`.
-pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
-    let deadline = Instant::now() + timeout;
+pub fn poll<T>(timeout: Duration, ready: impl FnMut() -> Option<T>) -> Option<T> {
+    poll_on(&SystemClock, timeout, ready)
+}
+
+/// [`poll`] on `clock`: the time it reads and the naps it takes are the clock's.
+pub fn poll_on<T>(clock: &dyn Clock, timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = clock.now() + timeout;
     loop {
         if let Some(value) = ready() {
             return Some(value);
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return None;
         }
-        std::thread::sleep(POLL);
+        clock.sleep(POLL);
     }
 }
 
@@ -626,9 +637,14 @@ pub fn wait_for_flock_waiter(path: &Path) {
 
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
-pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
+pub fn wait_some<T>(what: &str, timeout: Duration, ready: impl FnMut() -> Result<T, String>) -> T {
+    wait_some_on(&SystemClock, what, timeout, ready)
+}
+
+/// [`wait_some`] on `clock` (see [`wait_until_on`]).
+pub fn wait_some_on<T>(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
     let mut state = String::new();
-    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
+    poll_on(clock, timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that

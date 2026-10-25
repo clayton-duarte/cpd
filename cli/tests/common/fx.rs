@@ -211,6 +211,19 @@ impl Fx {
         self.fakes.clock.advance(d);
     }
 
+    /// A second env with a migrated store, made as [`Fx::new`]'s own: starts no process. Its commands run on this `Fx`
+    /// with its `$CPD_HOME`: `fx.cpd_with(env.root(), args, &[("CPD_HOME", ..)])`.
+    pub fn another_env(&self) -> TestEnv {
+        bare_with_store()
+    }
+
+    /// Runs `f` with the variables `set` added to the process's environment, put back after it, also when `f` panics:
+    /// for code that reads the environment outside a `cpd` command (`TestEnv::bare` reads `TMPDIR`). Under this `Fx`'s lock.
+    pub fn with_vars<T>(&self, set: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let _scope = Scope::enter(&std::env::current_dir().expect("the current directory"), set, &[]);
+        f()
+    }
+
     /// Returns as soon as `cond` holds, advancing the `ManualClock` by [`TICK`] between two looks; panics
     /// `waited <limit> virtual time` when it never holds within [`LIMIT`].
     pub fn until(&self, mut cond: impl FnMut() -> bool) {
@@ -778,7 +791,7 @@ pub fn bare_with_store() -> TestEnv {
 }
 
 /// The number of `code`, which `ExitCode` does not give.
-fn exit_code(code: ExitCode) -> i32 {
+pub fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 
