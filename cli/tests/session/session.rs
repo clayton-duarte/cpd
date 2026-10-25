@@ -1,9 +1,11 @@
 //! Sessions (contract §3.6, §6.4, §6.7; commands.md §10 with §19 amendments
-//! 1–3). The tests of `fork`, `open`, `park`, `close` and `history` (15), and the 13 that start no tmux, run the command
-//! tree in this process (`Fx`; the 15 on `Fx::with_ports`: the cockpit is `Fx::cockpit` on the fake tmux, a pane's program
-//! is what the fake server recorded for it, a refusing `tmux` is a rule of the `FakeRunner`). The others (a wrapper in a
-//! pane, `rename`, `archive`, the engine's tick) stay on `TestEnv` — the built binary against a private tmux server, with
-//! fake `pi` and `cpd` scripts on `PATH` — until their Jobs migrate them.
+//! 1–3). Every test of `fork`, `open`, `park`, `close`, `history`, `rename`, `archive` and `unarchive`, the engine's E2 on
+//! a dead Lead pane, the short ids, and the ones that start no tmux, run the command tree in this process (`Fx`; on
+//! `Fx::with_ports` when tmux is reached: the cockpit is `Fx::cockpit` on the fake tmux, a pane's program is what the
+//! fake server recorded for it, a pane whose program ends is `Fx::pane_exit`, the engine's tick is `Fx::engine_tick`, a
+//! refusing `tmux` is a rule of the `FakeRunner`). The wrapper's tests (a `session run` in a pane, `fork` waiting for
+//! its source, the user's quit) stay on `TestEnv` — the built binary against a private tmux server, with fake `pi` and
+//! `cpd` scripts on `PATH` — until their Job migrates them.
 
 use crate::common;
 
