@@ -1141,6 +1141,150 @@ mod tests {
         assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {}", *STATUS_FORMAT);
     }
 
+    // ---------- the status line, as `STATUS_FORMAT`'s text (the pane tests of `cli/tests/tui/tui.rs` drew it on a real tmux client) ----------
+    //
+    // tmux renders the format and is not tested. These pin what cpd writes into it: the option names, the arithmetic of `long_fits!`
+    // and of the fill, the preview and version widths, and the order, colours and joins of the pills.
+
+    /// A join: one grey `─`, outside the click ranges.
+    const JOIN: &str = "#[fg=colour8]\u{2500}#[default]";
+    /// The width a pill adds while its option is set, and 0 while it is unset.
+    const PREVIEW_WIDTH: &str = "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}";
+    const VERSION_WIDTH: &str = "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}";
+    const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
+    /// The left group: the leading `─`, three buttons of 3 cells and the joins between them.
+    const LEFT_WIDTH: usize = 12;
+    /// The long workers form in the pane tests: `workers 6/6 · 4 waiting · 9 queued` (34 cells) and two caps, `@cpd_workers_width`.
+    const LONG_WIDTH: usize = 34 + 2;
+
+    /// `long_fits!()` as text: the client is at least the workers pill's width plus 14 (the left group's 12, the closing `─` and a
+    /// fill of at least 1), the preview pill, the version pill and the incident pill.
+    fn long_fits() -> String {
+        format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{@cpd_workers_width}},14}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
+    }
+
+    /// A button of the left group: its click range, its glyph between the two caps (3 cells), a block of colour 15.
+    fn button(range: &str, glyph: &str) -> String {
+        format!("#[range=user|{range}]#[fg=colour15]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]")
+    }
+
+    /// A pill of colour `colour`: its text between the caps, with no padding, in reverse video.
+    fn pill_of(colour: u8, text: &str) -> String {
+        format!("#[fg=colour{colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]")
+    }
+
+    /// The workers pill: the long form while the client is wide enough, else the short form.
+    fn workers_pill() -> String {
+        pill_of(8, &format!("#{{?{},#{{@cpd_workers}},#{{@cpd_workers_short}}}}", long_fits()))
+    }
+
+    /// The fill's cell count: the client's width less the left group, the preview, version and incident pills and the right
+    /// group's workers pill in the form drawn plus the closing `─`.
+    fn fill_count() -> String {
+        format!(
+            "#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}},#{{e|+:#{{?{},#{{@cpd_workers_width}},#{{@cpd_workers_short_width}}}},1}}}}",
+            long_fits()
+        )
+    }
+
+    /// The preview pill's conditional: the join and `preview: <value>`, empty while `@cpd_preview` is unset.
+    fn preview_branch() -> String {
+        format!("#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}", pill_of(3, "preview: #{@cpd_preview}"))
+    }
+
+    /// What follows the logs button in the format.
+    fn after_the_buttons() -> String {
+        let logs = button("logs", LOGS_GLYPH);
+        let f: &str = &STATUS_FORMAT;
+        f[f.find(&logs).expect("the logs button") + logs.len()..].to_owned()
+    }
+
+    // The right group is 37 cells wide in the long form (a text of 34 cells, 2 caps, the closing `─`):
+    // with the left group's 12 and a fill of at least 1 it needs a client of 50 columns; one less gets the short form.
+    #[test]
+    fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_50_columns() {
+        let f: &str = &STATUS_FORMAT;
+        assert_eq!(long_fits!(), long_fits(), "`client_width >= @cpd_workers_width + 14`, plus the pills that are set");
+        assert_eq!(LEFT_WIDTH + 1 + 1, 14, "the left group's 12, the closing `─` and a fill of 1");
+        assert_eq!(LONG_WIDTH + 14, 50, "the long form needs a client of 50 columns");
+        assert!(f.contains(&workers_pill()), "the workers pill reads `@cpd_workers` when the long form fits: {f}");
+        // the line is full: the fill is the width less the left group and the right group in the form drawn
+        assert_eq!(fill_count!(), fill_count());
+        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2500},{}}},", fill_count())), "{f}");
+    }
+
+    #[test]
+    fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_50_columns() {
+        let f: &str = &STATUS_FORMAT;
+        // the short form is the else branch of the long form's test, and the fill subtracts its width then
+        assert!(f.contains(&workers_pill()) && workers_pill().contains(",#{@cpd_workers},#{@cpd_workers_short}}"), "{f}");
+        assert!(fill_count().contains(",#{@cpd_workers_width},#{@cpd_workers_short_width}}"), "{}", fill_count());
+        // 50 fits and 49 does not: the test is `>=`
+        assert!(long_fits().starts_with("#{e|>=:#{client_width},"), "{}", long_fits());
+        // the format writes no `workers` word of its own: it is in `@cpd_workers`, which the engine sets
+        assert!(!f.replace("@cpd_workers", "").contains("workers"), "{f}");
+    }
+
+    #[test]
+    fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
+        let f: &str = &STATUS_FORMAT;
+        let buttons = format!("{JOIN}{}{JOIN}{}{JOIN}{}", button("reset", RESET_GLYPH), button("legend", LEGEND_GLYPH), button("logs", LOGS_GLYPH));
+        // the leading `─`, then the three buttons joined by a single `─` each: 3 joins and 3 buttons of 3 cells, 12 cells
+        assert!(f.starts_with(&buttons), "{f}");
+        assert_eq!(buttons.matches('\u{2500}').count() + 3 * 3, LEFT_WIDTH);
+        assert!(f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour15]\u{e0b6}")), "the leading line cell, grey, then a button's cap: {f}");
+        // the right group ends with the version conditional, then the closing `─`, grey
+        assert!(f.ends_with(&format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}{JOIN}", pill_of(8, "#{@cpd_version}"))), "{f}");
+        // the right pills are joined by one `─` (never a space), and the left group by the buttons' own
+        assert!(!f.contains("inbox"), "{f}");
+        assert!(!f.contains("\u{e0b4} \u{e0b6}") && !f.contains("\u{e0b4}\u{e0b6}"), "no space and no touching caps between two pills: {f}");
+    }
+
+    #[test]
+    fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
+        let f: &str = &STATUS_FORMAT;
+        // the fill follows the logs button (and the preview pill, while set) in grey, and the right group follows it
+        let after = after_the_buttons();
+        assert!(after.starts_with(&preview_branch()), "{after}");
+        assert!(after[preview_branch().len()..].starts_with("#[fg=colour8]#{?window_zoomed_flag,#{R:\u{2500},"), "{after}");
+        assert!(after.contains("#[default]#[align=right]#{?@cpd_incident,"), "{after}");
+        // a zoomed window's fill is one run of the whole free width, in either form (40 and 100 columns: the short form and the long one)
+        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2500},{}}},", fill_count())), "{f}");
+        // otherwise it starts after the left group's 12 cells and the preview pill
+        assert!(f.contains(&format!("#{{e|+:12,{PREVIEW_WIDTH}}}")), "{f}");
+    }
+
+    const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+    // The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
+    // 33 of value. With the left group's 12, the long form's 37 and a fill of 1 it needs 95 columns.
+    #[test]
+    fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_option_is_set() {
+        let f: &str = &STATUS_FORMAT;
+        // `#{n:@cpd_preview}` + 12: the join, two caps and `preview: `
+        assert_eq!(1 + 2 + "preview: ".chars().count(), 12);
+        assert_eq!(PREVIEW.chars().count(), 33);
+        assert_eq!(LONG_WIDTH + 14 + PREVIEW.chars().count() + 12, 95, "the long form fits from 95 columns with this preview");
+        // right after the buttons: a join, then the pill in reverse video on colour 3, unpadded and with no background
+        assert!(after_the_buttons().starts_with(&preview_branch()), "{}", after_the_buttons());
+        assert!(preview_branch().contains("\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}"), "{}", preview_branch());
+        assert!(!f.contains("bg="), "{f}");
+        // the fill and the long form's test are shorter by the pill's width while the option is set
+        assert!(fill_count().contains(PREVIEW_WIDTH) && long_fits().contains(PREVIEW_WIDTH), "{f}");
+        assert!(f.contains(&fill_count()) && f.contains(&long_fits()), "the format uses them: {f}");
+    }
+
+    #[test]
+    fn the_status_line_shows_no_preview_once_the_option_is_unset() {
+        let f: &str = &STATUS_FORMAT;
+        // the pill is a conditional on the option with an empty else branch, and the width one with 0
+        assert!(f.contains(&preview_branch()) && preview_branch().ends_with(",}"), "{f}");
+        assert!(PREVIEW_WIDTH.ends_with(",0}"), "{PREVIEW_WIDTH}");
+        // and the option is used nowhere else: with those two forms taken out, no `@cpd_preview` is left
+        let rest = f.replace(PREVIEW_WIDTH, "").replace(&preview_branch(), "");
+        assert!(!rest.contains("@cpd_preview"), "{rest}");
+    }
+
     #[test]
     fn a_split_is_placed_by_its_flags() {
         assert_eq!(Split::Right.flags(), ["-h"]);

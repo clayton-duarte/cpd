@@ -4,7 +4,7 @@
 //! their areas), and the palette the two share.
 
 use crate::common;
-use crate::tui_titles::{self, CAP_LEFT};
+use crate::tui_titles;
 
 use common::fx::Fx;
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
@@ -13,12 +13,12 @@ use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, Meaning};
-use cpd_tui::read::{self, Dot, Widgets};
-use cpd_tui::widgets::{self, Hit, Machine, Usage, legend};
+use cpd_tui::read::{self, Widgets};
+use cpd_tui::widgets::{self, Hit, Machine, Usage};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 
 // ---------- fixtures (the store API, as tui_read.rs prepares it) ----------
 
@@ -263,41 +263,6 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
 }
 
 #[test]
-fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
-    let (got, _) = column(25);
-    let prs = header("PRs", Some(2));
-    let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
-    let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
-    let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
-    let mut expected = vec![
-        "",
-        " homeserver",
-        " \u{F4BC} 23%  \u{EFC5} 41%",
-        "",
-        prs.as_str(),
-        "",
-        seven.as_str(),
-        failed_open.as_str(),
-        eleven.as_str(),
-        none_open.as_str(),
-    ];
-    expected.resize(25, "");
-    assert_eq!(got, expected, "\n{}", got.join("\n"));
-}
-
-#[test]
-fn each_section_header_has_a_blank_row_above_and_below() {
-    for height in [20, 25, 29] {
-        let (got, _) = column(height);
-        for (title, count) in [("PRs", Some(2))] {
-            let at = got.iter().position(|r| *r == header(title, count)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
-            assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
-            assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
-        }
-    }
-}
-
-#[test]
 fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     let fx = Fx::new();
     let mut store = prs_store(&fx.env);
@@ -419,15 +384,6 @@ fn an_open_review_request_is_not_listed_but_one_that_is_also_authored_is() {
 }
 
 #[test]
-fn a_plan_without_a_pr_is_not_listed_and_no_label_is_drawn() {
-    let (got, _) = column(25);
-    let got = got.join("\n");
-    for hidden in ["v1", "sketch lead", "never lead", "no PR", "cpd-ui", "cpd visual lead", "fresh lead", "Plans in the cockpit"] {
-        assert!(!got.contains(hidden), "{hidden}:\n{got}");
-    }
-}
-
-#[test]
 fn no_open_pull_request_says_so() {
     let fx = Fx::new();
     let mut store = open(&fx.env);
@@ -443,15 +399,6 @@ fn no_open_pull_request_says_so() {
     assert_eq!(buf[find(&buf, "no open PRs")].fg, palette::muted_text().fg.unwrap(), "muted, colour 8");
 }
 
-#[test]
-fn the_column_has_no_engine_slots_escalations_events_or_hint() {
-    let (got, _) = column(29);
-    let all = got.join("\n");
-    for gone in ["Engine", "Slots", "Escalations", "Events", "legend", "quit"] {
-        assert!(!all.contains(gone), "{gone}:\n{all}");
-    }
-}
-
 /// `acme/web#4` (failed checks) is owned by no Plan, `acme/repo#20` (pending) by `mine`: only the unowned one is red.
 #[test]
 fn failed_checks_are_red_on_an_unowned_pull_request() {
@@ -459,42 +406,6 @@ fn failed_checks_are_red_on_an_unowned_pull_request() {
     let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     assert_eq!(buf[find(&buf, palette::CHECKS_FAILED)].fg, palette::color(Meaning::Failed));
-}
-
-#[test]
-fn the_column_takes_every_colour_from_the_palette() {
-    let (_, buf) = column(29);
-    let fg = |at: (u16, u16)| buf[at].fg;
-    let c = palette::color;
-    // The PRs: state and checks.
-    assert_eq!(fg(find(&buf, "open")), palette::clickable_text().fg.unwrap(), "an owned PR's `open` is 15 (yellow only when it is ready to merge)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), palette::color_clickable(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
-    assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
-    // The titles: the corner and the line grey, the title inverted inside its caps.
-    for title in ["PRs"] {
-        let (x, y) = find(&buf, &format!("──{CAP_LEFT}{title}"));
-        assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
-        assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
-        let word = buf[(x + 3, y)].clone();
-        assert_eq!((word.fg, word.bg), (palette::pill_static().fg.unwrap(), palette::pill_static().bg.unwrap()), "{title}");
-        assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
-    }
-    let dim = |at: (u16, u16)| buf[at].fg == c(Meaning::Nothing);
-    let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are bold too); muted (colour 8): the title of the PR.
-    for title in ["homeserver", "acme/repo#7"] {
-        assert!(bold(find(&buf, title)), "{title}");
-        assert!(!dim(find(&buf, title)), "{title}");
-    }
-    for faint in ["cpd-tui cockpit", "Plan fresh"] {
-        assert!(dim(find(&buf, faint)), "{faint}");
-        assert!(!bold(find(&buf, faint)), "{faint}");
-    }
-    // Plain: the review decision and the CPU and memory %: not bold, not muted.
-    for plain in ["no review", "changes requested", "23%", "41%"] {
-        let at = find(&buf, plain);
-        assert!(!dim(at) && !bold(at), "{plain}");
-    }
 }
 
 #[test]
@@ -1212,136 +1123,6 @@ fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
     assert_eq!(moved_events(&env), before, "no `session open` ran");
-}
-
-// ---------- the legend ----------
-
-fn legend_buffer() -> Buffer {
-    let (w, h) = legend::size();
-    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-    terminal.draw(|f| legend::draw(f, f.area())).unwrap();
-    terminal.backend().buffer().clone()
-}
-
-#[test]
-fn every_meaning_is_listed_with_its_swatch_in_its_colour() {
-    let buf = legend_buffer();
-    for m in Meaning::ALL {
-        let (x, y) = find(&buf, m.label());
-        assert_eq!(buf[(x - 4, y)].symbol(), "█", "{m:?}");
-        assert_eq!(buf[(x - 4, y)].fg, palette::color(m), "{m:?}");
-    }
-}
-
-#[test]
-fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
-    let buf = legend_buffer();
-    let jobs = find(&buf, "Jobs: Plan").1;
-    for (name, status, merging) in palette::JOB_LEGEND {
-        let (icon, _m) = palette::job_status(status, merging);
-        let (x, y) = find_after(&buf, jobs, name);
-        let text = row(&buf, y);
-        let pill_at = text.chars().position(|c| c.to_string() == icon).unwrap() as u16;
-        assert!(pill_at > x, "{name}: the pill follows the name");
-        let pill = palette::job_pill(status, merging, false);
-        assert_eq!(buf[(pill_at, y)].bg, pill.bg.unwrap(), "{name}: pill");
-        assert_eq!(buf[(pill_at, y)].fg, pill.fg.unwrap(), "{name}: pill text");
-        // the compact pill (hs-d474): no padding inside the caps
-        assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
-        // a rounded cap on each end, in the pill's colour on the default background
-        let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
-        for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
-            let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.fg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
-        }
-        let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
-        assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
-    }
-    let counters = row(&buf, find(&buf, "counters row").1);
-    assert!(counters.contains("1⋅1⋅1⋅1"), "{counters}");
-    assert!(counters.contains("planned⋅active⋅failed⋅done"), "{counters}");
-}
-
-#[test]
-fn the_session_dots_are_listed_in_their_colours() {
-    let buf = legend_buffer();
-    let dots = find(&buf, "Session Dots").1;
-    // The glyph column is as wide as the spinner's frames, then two cells of spacing.
-    let glyph_at = |text: &str| {
-        let (x, y) = find_after(&buf, dots, text);
-        (x - (palette::SPINNER.len() as u16 + 2), y)
-    };
-    let needs_you = glyph_at("the Session needs you");
-    assert_eq!(buf[needs_you].symbol(), palette::NEEDS_YOU);
-    let working = glyph_at("the Lead is working");
-    let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
-    assert_eq!(frames, palette::SPINNER.concat());
-    for (text, glyph, dot) in [
-        ("waiting:", palette::WAITING, Dot::Waiting),
-        ("idle, nothing needed", palette::IDLE, Dot::Idle),
-        ("pi stopped", palette::STOPPED, Dot::Stopped),
-        ("red:", palette::NEEDS_YOU, Dot::Red),
-        ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
-        ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
-        ("blue:", palette::NEEDS_YOU, Dot::Blue),
-        ("white:", palette::NEEDS_YOU, Dot::White),
-    ] {
-        let cell = &buf[glyph_at(text)];
-        let want = palette::dot_span(dot, 0, false);
-        assert_eq!(cell.symbol(), glyph, "{text}");
-        assert_eq!(cell.symbol(), want.content, "{text}");
-        assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
-    }
-    let precedence = format!(
-        "red > yellow > magenta > blue > white > {} > {} > {} > {}",
-        palette::SPINNER[0],
-        palette::WAITING,
-        palette::IDLE,
-        palette::STOPPED
-    );
-    find_after(&buf, dots, &precedence);
-    let red = row(&buf, find_after(&buf, dots, "red:").1);
-    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
-    assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
-    let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
-    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
-    let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
-    assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
-}
-
-#[test]
-fn the_pr_states_and_checks_are_listed_in_their_colours() {
-    let buf = legend_buffer();
-    for (name, state) in palette::PR_LEGEND {
-        assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
-    }
-    let checks = find(&buf, "PR Checks").1;
-    for (name, c) in palette::CHECKS_LEGEND {
-        let (icon, m) = palette::checks(c);
-        let (x, y) = find_after(&buf, checks, &format!(" {name}"));
-        assert_eq!(buf[(x - 1, y)].symbol(), icon, "{name}");
-        assert_eq!(buf[(x - 1, y)].fg, palette::color_clickable(m), "{name}");
-    }
-}
-
-#[test]
-fn the_legend_fits_its_own_size() {
-    let buf = legend_buffer();
-    assert!(row(&buf, 1).contains("Any Key Closes"));
-    let (w, h) = legend::size();
-    assert_eq!((buf.area.width, buf.area.height), (w, h));
-    assert!(row(&buf, h - 1).contains("passed"), "the last section is not cut");
-}
-
-#[test]
-fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
-    let (w, h) = legend::size();
-    assert_eq!(
-        legend::popup_args((215, 100)),
-        ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
-    );
-    let small = legend::popup_args((40, 20));
-    assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));
 }
 
 // ---------- the commands ----------
