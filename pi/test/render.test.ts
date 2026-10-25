@@ -4,12 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, mock } from "node:test";
 import { type Component } from "@earendil-works/pi-tui";
-import { errorMessage, eventMessage, sessionMessage } from "../lib/delivery.ts";
+import { errorMessage as rawError, eventMessage as rawEvent, sessionMessage as rawSession } from "../lib/delivery.ts";
 import type { CpdEvent, EventOf } from "../lib/event.ts";
 import type { Message, MessageRenderer, RenderedMessage, Theme } from "../lib/pi.ts";
 import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.ts";
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
 import { ev, Fixture, ID, OTHER } from "./fake.ts";
+
+// Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
+process.env.TZ = "Asia/Kolkata";
+
+/** hs-d637: the one known instant every surface renders; in Asia/Kolkata (UTC+05:30) it is 03:11 the next day. */
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+const TIME = "03:11";
+
+/** The test message constructors (pi/test/): carry pi's `CustomMessage.timestamp`, the source of the fold's local time. */
+const eventMessage = (...args: Parameters<typeof rawEvent>) => ({ ...rawEvent(...args), timestamp: TIME_MS });
+const sessionMessage = (...args: Parameters<typeof rawSession>) => ({ ...rawSession(...args), timestamp: TIME_MS });
+const errorMessage = (...args: Parameters<typeof rawError>) => {
+  const sent = rawError(...args);
+  return { ...sent, message: { ...sent.message, timestamp: TIME_MS } };
+};
+const timed = <T extends object>(message: T): T & { timestamp: number } => ({ ...message, timestamp: TIME_MS });
 
 /** commands.md §15.9 (hs-d286): every cpd message is a collapsed row like pi-compact-tools' tool rows; the model's `content` is untouched. */
 
@@ -59,7 +75,7 @@ const TERM = ` <c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F0B26}";
 const OPEN = "\u{F0B2C}";
-const closing = (word: string) => ` <c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word}</>`;
+const closing = (word: string) => ` <c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word} · ${TIME}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
@@ -90,7 +106,7 @@ test("a head wider than the pane wraps under the title, it is never cut", () => 
   assert.ok(lines[0]!.startsWith(` ╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
   assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith(" │ ")), "continuation rows are aligned like a tool row's");
   assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
-  assert.equal(lines.at(-1), ` ╰${FOLDED} expand`);
+  assert.equal(lines.at(-1), ` ╰${FOLDED} expand · ${TIME}`);
 });
 
 test("an empty content shows no body", () => {
@@ -103,15 +119,16 @@ test("an empty content shows no body", () => {
 test("a message from the User: `Message from the User`", () => {
   const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
   assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("expand")]);
-  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11): hi there"), closing("collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
   const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
   assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("expand")]);
-  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}): hello`)]);
+  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11): hello`)]);
   const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
+  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11): hello`)]);
 });
 
 // ---- the adapter's errors ----
@@ -132,7 +149,7 @@ test("an `error` Event (it has an id) is an Event: its text", () => {
 const record = (n: number): ContextRecord => ({ seq: 40 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}` });
 const planEvent = (n: number): PlanEvent => ({ event: 300 + n, at: "2026-10-18T09:00:00Z", plan: "pay-4521", text: `Plan phase ${n}.`, kind: "plan-phase", data: {} });
 const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key: "api", status: "dispatch", number: 212, jobs: [{ key: "j1", status: "queued", title: "T" }] }] }];
-const context = () => contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!;
+const context = () => timed(contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!);
 const FULL = [
   "Context ctx: 2 new records since your last turn.",
   "- hs-n1 note (2026-10-17): note 1",
@@ -164,11 +181,12 @@ test("cpd-context whose details lack the counts (an older adapter's): always ope
 
 // ---- cpd-plan-decision ----
 
-const decision = (approved: boolean): Message => ({
+const decision = (approved: boolean): Message & { timestamp: number } => ({
   customType: "cpd-plan-decision",
   content: `Plan review rv-3 was ${approved ? "APPROVED" : "REJECTED"}.\nNext: cpd plan lock`,
   display: true,
   details: { plan: "p1", review: "rv-3", plannotator_id: "x", approved, current: true },
+  timestamp: TIME_MS,
 });
 
 test("cpd-plan-decision: `Plan review <id> approved|rejected`", () => {
@@ -178,12 +196,12 @@ test("cpd-plan-decision: `Plan review <id> approved|rejected`", () => {
 });
 
 test("a review that is gone (no verdict) shows the first line of its content", () => {
-  const lost: Message = { customType: "cpd-plan-decision", content: "Plan review rv-3 is gone (plannotator no longer knows it).\nCall cpd_plan_review again.", display: true, details: { review: "rv-3", lost: true } };
+  const lost: Message & { timestamp: number } = { customType: "cpd-plan-decision", content: "Plan review rv-3 is gone (plannotator no longer knows it).\nCall cpd_plan_review again.", display: true, details: { review: "rv-3", lost: true }, timestamp: TIME_MS };
   assert.equal(show(lost, false)[0], HEAD("Plan review rv-3 is gone (plannotator no longer knows it)."));
 });
 
 test("a customType the adapter starts to display later: the first line of its content", () => {
-  const m: Message = { customType: "cpd-later", content: "first\nsecond", display: true, details: undefined };
+  const m: Message & { timestamp: number } = { customType: "cpd-later", content: "first\nsecond", display: true, details: undefined, timestamp: TIME_MS };
   assert.equal(show(m, false)[0], HEAD("first"));
 });
 
@@ -191,7 +209,7 @@ test("a customType the adapter starts to display later: the first line of its co
 
 test("cpd-plan-summary: `Plan review <id> summary`, always open with its Markdown content in full, no closing row and no toggle", () => {
   const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)";
-  const m: Message = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" } };
+  const m: Message & { timestamp: number } = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" }, timestamp: TIME_MS };
   const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)"), TERM];
   assert.deepEqual(show(m, false), expected);
   assert.deepEqual(show(m, true), expected);
@@ -258,7 +276,7 @@ test("Click to expand is gone; only the closing ╰ row names the toggle, muted"
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand`]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {

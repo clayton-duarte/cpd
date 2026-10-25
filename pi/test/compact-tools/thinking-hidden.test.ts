@@ -10,6 +10,8 @@ import { ThinkingCycleController } from "../../compact-tools/extensions/compact-
 import chalk from "chalk";
 chalk.level = 3;
 initTheme("dark", false);
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-hidden-agent-"));
 test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
 
@@ -25,10 +27,10 @@ const EXPANDED = [
 	"│ built.",
 	"│",
 	"│ Then decide what the fold should hold.",
-	"╰\u{F0B2C} collapse",
+	"╰\u{F0B2C} collapse · 03:11",
 	"done",
 ];
-const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand", "done"];
+const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand · 03:11", "done"];
 const PLAIN = ["Thinking…", "done"];
 
 function live(hideThinkingBlock: boolean) {
@@ -39,7 +41,7 @@ function live(hideThinkingBlock: boolean) {
 	const pi = { on: () => {}, registerMarkdownTransformer: (h: typeof transform) => { transform = h; } } as unknown as ExtensionAPI;
 	const controller = new ThinkingCycleController(pi, () => true, () => NERD);
 	const message = new AssistantMessageComponent({
-		content: [{ type: "thinking", thinking: TEXT }, { type: "text", text: "done" }], stopReason: "stop",
+		content: [{ type: "thinking", thinking: TEXT }, { type: "text", text: "done" }], stopReason: "stop", timestamp: TIME_MS,
 	} as never, hideThinkingBlock, undefined, undefined, 1, [(m: string, c: unknown) => transform!(m, c)] as never);
 	controller.bind({ ui: { theme, setHiddenThinkingLabel: (l?: string) => { if (l !== undefined) message.setHiddenThinkingLabel(l); }, onTerminalInput: (h: typeof input) => { input = h; return () => {}; } } } as unknown as ExtensionContext);
 	const draw = () => message.render(80);

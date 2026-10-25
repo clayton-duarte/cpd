@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5, E7–E11, E12 and E13 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7–E11, E12–E14 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -120,10 +120,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12 and E13 (§3.7), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 16] = [
+        let steps: [fn(&mut Engine); 17] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -140,6 +140,7 @@ impl Engine {
             team::run,
             archive::run,
             sleep::run,
+            archive_leads::run,
         ];
         for step in steps {
             if stopping() {
@@ -148,6 +149,16 @@ impl Engine {
             step(self);
         }
     }
+}
+
+/// Whether incident mode holds `step` (contract §3.7): E4 (open Jobs), E7 (PR start), E9 (Context curation),
+/// E10 (Session titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1,
+/// E2, E5, E8, E12 and E13 run as usual. E3 is not held: it starts only urgent Jobs ([`schedule`]).
+pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
+    if !matches!(step, Step::E4 | Step::E7 | Step::E9 | Step::E10 | Step::E11) {
+        return false;
+    }
+    engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
 }
 
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
@@ -167,6 +178,10 @@ fn startable() -> String {
 /// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
+    if incident_holds(engine, Step::E7) {
+        engine.log.line("E7: holding: incident mode is on");
+        return;
+    }
     let waiting = engine.store.read(|conn| {
         let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;

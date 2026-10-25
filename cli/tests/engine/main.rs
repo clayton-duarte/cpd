@@ -5,6 +5,7 @@
 mod common;
 
 mod doctor;
+mod watch_archive_leads;
 mod watch_curate_inbox;
 mod watch_distill_inbox;
 mod watch_host_alert;
@@ -15,3 +16,4 @@ mod watch;
 mod watch_worker_archive;
 mod watch_team;
 mod watch_titles_width;
+mod write_executable;

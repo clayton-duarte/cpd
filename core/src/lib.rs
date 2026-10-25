@@ -29,6 +29,7 @@ pub mod host;
 pub mod host_repair;
 pub mod host_repair_approval;
 pub mod inbox;
+pub mod incident;
 pub mod job;
 pub mod merge;
 pub mod metrics;
@@ -41,6 +42,9 @@ pub mod secret;
 pub mod session;
 pub mod spec;
 pub mod store;
+
+#[cfg(test)]
+mod incident_tests;
 
 #[cfg(test)]
 mod pill_tests;

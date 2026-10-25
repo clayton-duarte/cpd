@@ -13,7 +13,7 @@ use cpd_core::host_repair as host;
 use cpd_core::output::Output;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, inbox, job, plan, policy, pr, review, secret, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, incident, job, plan, policy, pr, review, secret, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -67,6 +67,9 @@ pub enum Command {
     /// Events (commands.md §11)
     #[command(subcommand)]
     Events(events::Command),
+    /// Incident mode (commands.md §25)
+    #[command(subcommand)]
+    Incident(incident::Command),
     /// What needs you (commands.md §21)
     #[command(subcommand)]
     Inbox(inbox::cmd::Command),
@@ -132,6 +135,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
+        Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run(c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run(a, version(), run_command, RESTART),
@@ -292,7 +296,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 13);
+        assert_eq!(fields["protocol"], 14);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

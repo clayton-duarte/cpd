@@ -6,6 +6,9 @@ import { Rendering } from "../lib/render.ts";
 
 /** hs-d557 (2), (5): in a cpd block the lines (`╭─`, `│ `, `╰`) are 8 on every row; only the toggle glyph and its word are 7. */
 
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
 const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const GREY = (s: string): string => `\x1b[90m${s}\x1b[39m`;
 const RAIL = GREY("│ ");
@@ -17,7 +20,7 @@ test("every row of a cpd block has the rail in 8", () => {
     for (const customType of ["cpd", "cpd-plan-summary"])
       for (const outputPad of [1, 0])
         for (const expanded of [true, false]) {
-          const message = { role: "custom" as const, timestamp: 0, customType, content, display: true, details: { review: "r1" } };
+          const message = { role: "custom" as const, timestamp: TIME_MS, customType, content, display: true, details: { review: "r1" } };
           const where = JSON.stringify({ customType, outputPad, expanded, content });
           const component = new CustomMessageComponent(message, new Rendering().render, undefined, outputPad);
           component.setExpanded(expanded);
@@ -30,7 +33,7 @@ test("every row of a cpd block has the rail in 8", () => {
           if (open) assert.equal(rows[rows.length - 1]!.replace(/^ /, ""), GREY("╰\u{F0B2A}"), `terminator: ${where}`);
           else {
             const glyph = expanded ? "\u{F0B2C} collapse" : "\u{F0B26} expand";
-            assert.equal(rows[rows.length - 1]!.replace(/^ /, ""), `${GREY("╰")}\x1b[37m${glyph}\x1b[39m`, `closing row: ${where}`);
+            assert.equal(rows[rows.length - 1]!.replace(/^ /, ""), `${GREY("╰")}\x1b[37m${glyph} · 03:11\x1b[39m`, `closing row: ${where}`);
           }
         }
 });

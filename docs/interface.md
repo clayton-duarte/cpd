@@ -99,6 +99,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |
 | `cpd events follow` | Follow Events, one per line (the one streaming command) (§11.2) | | |
+| `cpd incident` | Incident mode (commands.md §25) | | |
+| `cpd incident start` | Turn incident mode on (Manager) (commands.md §25.1) | Manager | |
+| `cpd incident end` | Turn incident mode off (Manager) (commands.md §25.2) | Manager | |
+| `cpd incident status` | Report whether incident mode is on (commands.md §25.3) | Manager, Lead, Worker | |
 | `cpd inbox` | What needs you (commands.md §21) | | |
 | `cpd inbox list` | List what needs you (§21.1) | | |
 | `cpd inbox show` | Show one item (§21.2) | | |

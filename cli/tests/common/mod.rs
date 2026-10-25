@@ -342,26 +342,51 @@ const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
 /// it) leaves nothing inconsistent, so it is ignored.
 static SCRIPT_WRITE_VS_SPAWN: RwLock<()> = RwLock::new(());
 
+/// The counter that names the temporary file [`write_executable`] and
+/// [`copy_executable`] rename over their target: unique within this process.
+static TEMP_NAME: AtomicUsize = AtomicUsize::new(0);
+
+/// The path of a temporary file beside `path`, in the same directory so that the
+/// rename over the target never crosses a filesystem.
+fn temp_beside(path: &Path) -> PathBuf {
+    let n = TEMP_NAME.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp-{}-{n}", std::process::id()))
+}
+
 /// Writes the executable script `path` (mode 0755).
 ///
-/// Tests run in parallel threads of one process. `fork` copies every open file
+/// The script is written to a temporary file beside `path` and renamed over it,
+/// never opened in place: a file that is being executed (an ELF for its whole
+/// life, a script until its interpreter has exec'd) cannot be opened for writing
+/// and the open fails with ETXTBSY ("Text file busy"), while a rename over it is
+/// allowed. The rename is atomic, so a reader sees the old or the new file, never
+/// a half-written one.
+///
+/// Tests also run in parallel threads of one process. `fork` copies every open file
 /// descriptor, and close-on-exec acts only at the child's `exec`. A child forked
-/// by a concurrent test while this file is open for writing therefore holds a
-/// write descriptor to it for a moment, and an `exec` of the script in that
-/// moment fails with ETXTBSY ("Text file busy"). So the file is written and
-/// closed under the exclusive lock, and every spawn ([`spawn`], [`output`])
-/// takes the shared lock until the child has exec'd. Never retry instead.
+/// by a concurrent test while the temporary file is open for writing therefore holds
+/// a write descriptor to it for a moment, but that temporary file is never exec'd.
+/// So the temporary file is written and closed under the exclusive lock, and every
+/// spawn ([`spawn`], [`output`]) takes the shared lock until the child has exec'd.
+/// Never retry instead.
 pub fn write_executable(path: &Path, contents: &str) {
     let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
-    fs::write(path, contents).expect("write script");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod script");
+    let temp = temp_beside(path);
+    fs::write(&temp, contents).expect("write script");
+    fs::set_permissions(&temp, fs::Permissions::from_mode(0o755)).expect("chmod script");
+    fs::rename(&temp, path).expect("rename script over its target");
 }
 
 /// Copies the executable `from` to `to` (an install of a binary the test later runs), under
-/// the same exclusive lock and for the same reason as [`write_executable`].
+/// the same exclusive lock and for the same reason as [`write_executable`]: to a temporary
+/// file beside `to` (which `fs::copy` gives the source's mode) and renamed over it, so a
+/// running `to` is never opened for writing.
 pub fn copy_executable(from: &str, to: &Path) {
     let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
-    fs::copy(from, to).expect("copy executable");
+    let temp = temp_beside(to);
+    fs::copy(from, &temp).expect("copy executable");
+    fs::rename(&temp, to).expect("rename executable over its target");
 }
 
 /// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`

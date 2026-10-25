@@ -24,8 +24,9 @@ import type {
 	ToolDefinition,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { classifyCallStatus, formatDurationMs, normalizeLineEndings, type RowStatus } from "./compact-tools-core.ts";
+import { localTime } from "../../lib/time.ts";
 import { LOADER_INTERVAL_MS, loaderFrame } from "./compact-tools-loader.ts";
 import { loadConfig } from "./compact-tools-config.ts";
 import { hasAuthorRenderers, loadNativeTimerRenderers, syncNativeToolTimer } from "./compact-tools-rendering.ts";
@@ -125,6 +126,46 @@ function isClaude(): boolean {
 /** fork option fold: "toggle"; only the compact style draws it. */
 function foldToggles(): boolean {
 	return runtime.config.fold === "toggle" && runtime.config.style === "compact";
+}
+
+/**
+ * The branch of the session being drawn, read when a restored row resolves its
+ * start time (docs/contract.md §6.9, hs-d637). /tree changes the branch without a
+ * session_start, so it is read at draw time rather than captured once.
+ */
+let sessionBranch: (() => readonly unknown[] | undefined) | undefined;
+
+/** `HH:MM` in the process timezone for a stored millisecond instant. */
+function localTimeOf(ms: number): string {
+	return localTime(new Date(ms).toISOString());
+}
+
+/** The persisted start of `toolCallId`: the tool result's timestamp, else its assistant call entry's. */
+function branchTime(toolCallId: string): string | undefined {
+	const branch = sessionBranch?.();
+	if (!branch) return undefined;
+	let callTime: number | undefined;
+	for (const entry of branch) {
+		if (!entry || typeof entry !== "object") continue;
+		const message = (entry as { message?: unknown }).message;
+		if (!message || typeof message !== "object") continue;
+		const record = message as { role?: unknown; toolCallId?: unknown; content?: unknown; timestamp?: unknown };
+		if (record.role === "toolResult" && record.toolCallId === toolCallId && typeof record.timestamp === "number") {
+			return localTimeOf(record.timestamp);
+		}
+		if (callTime === undefined && record.role === "assistant" && Array.isArray(record.content)) {
+			const called = record.content.some((part) => part && typeof part === "object"
+				&& (part as { type?: unknown }).type === "toolCall" && (part as { id?: unknown }).id === toolCallId);
+			if (called && typeof record.timestamp === "number") callTime = record.timestamp;
+		}
+	}
+	return callTime === undefined ? undefined : localTimeOf(callTime);
+}
+
+/** The time a closing toggle row draws: the live start, else the persisted one (hs-d637). */
+function rowTime(state: RowState, toolCallId: string | undefined): string | undefined {
+	if (state.startedAt !== undefined) return localTimeOf(state.startedAt);
+	return toolCallId === undefined ? undefined : branchTime(toolCallId);
 }
 
 function isCodex(): boolean {
@@ -255,6 +296,7 @@ function renderControls(
 	prefix = " └ ",
 	indent = "   ",
 	pending: Component = loaderRow(),
+	toolCallId?: string,
 ): Component {
 	const duration = running ? undefined : formatDuration(state);
 	const status = running
@@ -277,11 +319,25 @@ function renderControls(
 		return pending;
 	}
 	if (!running && foldToggles() && prefix === " └ ") {
-		// fold: "toggle": the closing row is the toggle, and today's text becomes its metadata.
+		// fold: "toggle": the closing row is the toggle, the machine-local start time and today's metadata.
 		const { expand, collapse } = runtime.config.toggle;
 		const label = state.expanded ? " collapse" : " expand";
 		const bare = !isError && !duration && !nestedSummary && !state.resultLineSummary && !changes;
-		return prefixedSentence(paint(TEXT, label) + (bare ? "" : chrome(" · ") + details), chrome(" ╰") + paint(TEXT, state.expanded ? collapse : expand), "   ", true);
+		const time = rowTime(state, toolCallId);
+		const metadata = bare ? "" : chrome(" · ") + details;
+		const firstPrefix = chrome(" ╰") + paint(TEXT, state.expanded ? collapse : expand);
+		const prefixWidth = visibleWidth(firstPrefix);
+		// A time that does not fit on the toggle's line is omitted, not wrapped (hs-d637).
+		const timeWidth = visibleWidth(label) + " · ".length + 5;
+		return {
+			render: (width) => {
+				const available = Math.max(1, width - prefixWidth);
+				const showTime = time !== undefined && timeWidth <= available;
+				const text = paint(TEXT, label) + (showTime && time !== undefined ? chrome(" · ") + chrome(time) : "") + metadata;
+				return prefixedSentence(text, firstPrefix, "   ", true).render(width);
+			},
+			invalidate() {},
+		};
 	}
 	return nestedSummary ? prefixedSentence(details, chrome(prefix), indent, true) : prefixedText(details, chrome(prefix), indent);
 }
@@ -549,7 +605,7 @@ function renderRowResult(
 		// the output shows, it already says why, and repeating it only doubles the error.
 		const failureReason = ctx.isError && !state.expanded && !state.preview ? summarizeFailure(name, output) : undefined;
 		const closingRow = (reason?: string) => renderControls(theme, state, options.isPartial, ctx.isError, reason,
-			name === "edit" ? countEditChanges(result) : undefined, nestedSummary, " └ ", "   ", pending);
+			name === "edit" ? countEditChanges(result) : undefined, nestedSummary, " └ ", "   ", pending, ctx.toolCallId);
 		// The reason is cut to fewer than half the row's cells (docs/contract.md section 6.9), so it is cut as the row draws.
 		container.addChild(failureReason ? {
 			render: (width) => {
@@ -846,6 +902,10 @@ export default function compactTools(pi: ExtensionAPI): void {
 		const failures: UIFailure[] = [];
 		detachUI({ restoreNative: true }, failures);
 		sessionContext = ctx;
+		sessionBranch = () => {
+			const branch = ctx.sessionManager?.getBranch?.();
+			return Array.isArray(branch) ? branch : undefined;
+		};
 		if (event.reason !== "reload") {
 			runtime.clearTimings();
 			nestedSummaries.clear();
@@ -909,6 +969,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		detachUI({ clearTimings: event.reason !== "reload" }, failures);
 		reportFailures(sessionContext, failures);
 		sessionContext = undefined;
+		sessionBranch = undefined;
 		if (event.reason !== "reload") nestedSummaries.clear();
 		// A reload that keeps the extension sets it again before Pi rebuilds the transcript.
 		if (legacyResolver) clearRowResolver(legacyResolver);

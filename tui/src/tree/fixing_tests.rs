@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 use tui_tree_widget::TreeState;
 
