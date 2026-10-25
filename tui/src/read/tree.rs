@@ -53,6 +53,9 @@ pub struct ContextNode {
     pub manager_place: Option<Place>,
     /// Its live Manager is asleep (§2.2 "Asleep"): the Context row is drawn muted.
     pub manager_asleep: bool,
+    /// The id of the newest Event that names the Context, or its live Manager (hs-d686), 0 with none: the tree's
+    /// last-activity tie-break.
+    pub last_activity: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,12 +204,12 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
         // row's dot, a `●` only from the Manager's own items (hs-d215, hs-d217); each archived one goes into the
         // Context's archived section, oldest first (hs-d630, hs-d633).
         let all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
-        let managers: BTreeMap<ContextId, (Dot, Place, bool)> = all_managers
+        let managers: BTreeMap<ContextId, (Dot, Place, bool, i64)> = all_managers
             .iter()
             .filter(|s| !s.is_archived())
             .map(|s| {
                 let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false, None);
-                (s.context.clone(), (dot, s.place, s.is_asleep()))
+                (s.context.clone(), (dot, s.place, s.is_asleep(), s.last_activity))
             })
             .collect();
         let mut archived_managers: BTreeMap<ContextId, Vec<SessionNode>> = BTreeMap::new();
@@ -214,8 +217,11 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
             archived_managers.entry(manager.context.clone()).or_default().push(manager);
         }
 
-        let mut stmt = conn
-            .prepare("SELECT id, title, jira, archived_at FROM contexts WHERE deleted_at IS NULL ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, jira, archived_at,
+                    (SELECT coalesce(max(e.id), 0) FROM events e WHERE e.context = contexts.id)
+               FROM contexts WHERE deleted_at IS NULL ORDER BY id",
+        )?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {
@@ -232,10 +238,13 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 })
                 .collect::<Vec<PlanNode>>();
             let archived_at: Option<String> = r.get(3)?;
+            let own_activity: i64 = r.get(4)?;
+            let manager_activity = managers.get(&context).map_or(0, |m| m.3);
             contexts.push(ContextNode {
                 dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
                 manager_place: managers.get(&context).map(|m| m.1),
                 manager_asleep: managers.get(&context).is_some_and(|m| m.2),
+                last_activity: own_activity.max(manager_activity),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
