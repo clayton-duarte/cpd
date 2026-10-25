@@ -12,7 +12,7 @@ const WORK: &str = "/work/dir";
 
 /// The environment a call carries (what `Tmux::command` hands the fake); the nested call must pass it on.
 fn env() -> Vec<(String, String)> {
-    vec![("PATH".into(), "/usr/bin".into()), ("CPD_HOME".into(), "/home/cpd".into())]
+    vec![("CPD_HOME".into(), "/home/cpd".into()), ("PATH".into(), "/usr/bin".into())]
 }
 
 fn nested() -> (M, FakeRunner) {
