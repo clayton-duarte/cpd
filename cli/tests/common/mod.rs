@@ -49,6 +49,7 @@ use tempfile::TempDir;
 pub mod engine;
 pub mod fx;
 pub mod healthy;
+pub mod pi;
 pub mod screen;
 pub mod session;
 pub mod tree;

@@ -1,14 +1,17 @@
 //! The cpd-rendered Context digest, `context show --digest` and `--topic`, and the first message (contract §4.6 "The
-//! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551). The tests that start no pane run in
-//! this process (`Fx`), the others as the built binary. Curations are written through `curation::propose`, as the
-//! distiller will.
+//! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551). The tests run in this process (`Fx`); the
+//! ones that run `plan new` on the fake ports, where `cpd watch --ensure` is a scripted reply. One test, the Manager's
+//! first message, still runs the built binary (it starts a pane). Curations are written through `curation::propose`, as
+//! the distiller will.
 
 use crate::common;
 
 use std::fs;
+use std::path::PathBuf;
 
 use common::fx::Fx;
 use common::{Run, SLEEP_SECONDS, TestEnv, WATCH_OK};
+use cpd_core::host::runner::Reply;
 use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
@@ -25,7 +28,7 @@ fn fx() -> TestEnv {
     env
 }
 
-/// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that start no pane (`plan new` does).
+/// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that do not run `plan new`.
 fn fast() -> Fx {
     let fx = Fx::new();
     fx.env.write_tmux_config("");
@@ -33,20 +36,37 @@ fn fast() -> Fx {
     fx
 }
 
+/// [`fast`] on the fake ports, with `cpd watch --ensure` (which `plan new` runs) answering that the engine started.
+fn ported() -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.fake("cpd", Reply::ok(r#"{"ok": true, "started": true, "pane": "%9"}"#));
+    fx.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
+    fx
+}
+
 /// `cpd <args>` in this process (`Fx`) or as the binary (`TestEnv`): the same call, the same [`Run`].
 trait Cpd {
     fn cpd(&self, args: &[&str]) -> Run;
+    /// The env's root directory.
+    fn root(&self) -> PathBuf;
 }
 
 impl Cpd for Fx {
     fn cpd(&self, args: &[&str]) -> Run {
         Fx::cpd(self, args)
     }
+    fn root(&self) -> PathBuf {
+        self.env.root().to_path_buf()
+    }
 }
 
 impl Cpd for TestEnv {
     fn cpd(&self, args: &[&str]) -> Run {
         TestEnv::cpd(self, args)
+    }
+    fn root(&self) -> PathBuf {
+        TestEnv::root(self).to_path_buf()
     }
 }
 
@@ -99,7 +119,7 @@ fn lead_message(env: &TestEnv, plan: &str) -> String {
     fs::read_to_string(home.lead_message(&PlanId::parse(plan).unwrap())).unwrap()
 }
 
-fn new_plan_with_brief(env: &TestEnv, id: &str, brief: &str) {
+fn new_plan_with_brief(env: &impl Cpd, id: &str, brief: &str) {
     let file = env.root().join(format!("{id}-brief.md"));
     fs::write(&file, brief).unwrap();
     env.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
@@ -107,14 +127,14 @@ fn new_plan_with_brief(env: &TestEnv, id: &str, brief: &str) {
 
 #[test]
 fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
-    let env = fx();
-    seed(&env, "m1-n1", "note", 30 * DAY, "Old and uncited.");
-    seed(&env, "m1-n2", "note", 30 * DAY, "Old but a brief cites it.");
-    seed(&env, "m1-q1", "question", 30 * DAY, "Old but still open?");
-    seed(&env, "m1-n3", "note", 60, "Written an hour ago.");
-    seed(&env, "m1-n4", "note", 60, "Recent but not curated.");
+    let fx = ported();
+    seed(&fx.env, "m1-n1", "note", 30 * DAY, "Old and uncited.");
+    seed(&fx.env, "m1-n2", "note", 30 * DAY, "Old but a brief cites it.");
+    seed(&fx.env, "m1-q1", "question", 30 * DAY, "Old but still open?");
+    seed(&fx.env, "m1-n3", "note", 60, "Written an hour ago.");
+    seed(&fx.env, "m1-n4", "note", 60, "Recent but not curated.");
     curate(
-        &env,
+        &fx.env,
         &[
             ("m1-n1", "ledger", "old uncited fact"),
             ("m1-n2", "ledger", "old cited fact"),
@@ -122,9 +142,9 @@ fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
             ("m1-n3", "retries", "recent fact"),
         ],
     );
-    new_plan_with_brief(&env, "pay", "Retry the payouts. Rests on m1-n2.\n");
+    new_plan_with_brief(&fx, "pay", "Retry the payouts. Rests on m1-n2.\n");
 
-    let out = digest(&env);
+    let out = digest(&fx);
     let md = markdown(&out);
     for line in ["- [m1-n2] old cited fact", "- [m1-q1] old open question", "- [m1-n3] recent fact"] {
         assert!(md.lines().any(|l| l == line), "{line:?} in\n{md}");
@@ -135,8 +155,8 @@ fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
     assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
 
     // A wider window takes the old record in.
-    env.write_config("version = 1\nmachine = \"m1\"\ncontext_recent_days = 60\ncontext_curation_min_records = 1\n");
-    assert!(markdown(&digest(&env)).contains("- [m1-n1] old uncited fact"));
+    fx.env.write_config("version = 1\nmachine = \"m1\"\ncontext_recent_days = 60\ncontext_curation_min_records = 1\n");
+    assert!(markdown(&digest(&fx)).contains("- [m1-n1] old uncited fact"));
 }
 
 #[test]
@@ -209,15 +229,15 @@ fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
 
 #[test]
 fn first_message_lists_uncurated_records_raw_at_most_20() {
-    let env = fx();
-    env.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
+    let fx = ported();
+    fx.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
     for n in 2..=25 {
-        env.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
+        fx.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
     }
-    curate(&env, &[("m1-n1", "ledger", "curated short form")]);
-    new_plan_with_brief(&env, "pay", "Pay out.\n");
+    curate(&fx.env, &[("m1-n1", "ledger", "curated short form")]);
+    new_plan_with_brief(&fx, "pay", "Pay out.\n");
 
-    let message = lead_message(&env, "pay");
+    let message = lead_message(&fx.env, "pay");
     let at = |needle: &str| message.find(needle).unwrap_or_else(|| panic!("{needle:?} in\n{message}"));
     assert!(at("- [m1-n1] curated short form") < at("raw-02"), "the digest, then the raw records");
     assert!(!message.contains("FULL TEXT"), "a curated record is a short form, not raw: {message}");
@@ -252,30 +272,30 @@ fn show_topic_prints_every_curated_record_of_the_topic() {
 
 #[test]
 fn a_retired_record_is_in_no_digest() {
-    let env = fx();
-    seed(&env, "m1-n1", "note", 60, "a");
-    seed(&env, "m1-n2", "note", 50, "b");
-    curate(&env, &[("m1-n1", "engine", "retired short"), ("m1-n2", "engine", "kept short")]);
+    let fx = ported();
+    seed(&fx.env, "m1-n1", "note", 60, "a");
+    seed(&fx.env, "m1-n2", "note", 50, "b");
+    curate(&fx.env, &[("m1-n1", "engine", "retired short"), ("m1-n2", "engine", "kept short")]);
     propose(
-        &mut env.store(),
+        &mut fx.env.store(),
         &ContextId::parse(CTX).unwrap(),
         &[],
         &[Proposal { record: "m1-n1".parse().unwrap(), reason: Reason::Duplicate, target: "m1-n2".into() }],
     )
     .unwrap();
     // pending: still in force, so still in the digest
-    assert!(markdown(&digest(&env)).contains("m1-n1"), "a pending proposal changes nothing");
+    assert!(markdown(&digest(&fx)).contains("m1-n1"), "a pending proposal changes nothing");
 
-    env.cpd(&["context", "retire", "--context", CTX, "--approve", "m1-n1"]).ok();
-    new_plan_with_brief(&env, "pay", "Cites the retired m1-n1.\n");
+    fx.cpd(&["context", "retire", "--context", CTX, "--approve", "m1-n1"]).ok();
+    new_plan_with_brief(&fx, "pay", "Cites the retired m1-n1.\n");
 
-    let md = markdown(&digest(&env));
+    let md = markdown(&digest(&fx));
     assert!(md.contains("- [m1-n2] kept short"), "{md}");
     assert!(!md.contains("m1-n1") && !md.contains("retired short"), "{md}");
     assert!(md.contains("- engine (1)"), "the count is of records in force: {md}");
-    let by_topic = topic(&env, "engine");
+    let by_topic = topic(&fx, "engine");
     assert_eq!(markdown(&by_topic), "- [m1-n2] kept short", "{by_topic}");
-    let message = lead_message(&env, "pay");
+    let message = lead_message(&fx.env, "pay");
     assert!(!message.contains("retired short"), "{message}");
 }
 
@@ -350,11 +370,11 @@ fn the_digest_never_exceeds_32_kb_even_when_the_topic_list_is_long() {
 /// hs-d558 FX7: the Plan's own brief is in its Lead's message once, in full; another Plan's brief is short.
 #[test]
 fn the_first_message_does_not_list_the_plans_own_brief_again() {
-    let env = fx();
-    new_plan_with_brief(&env, "old", "OTHER-FIRST-LINE\nOTHER-SECOND-LINE\n");
-    new_plan_with_brief(&env, "pay", "OWN-FIRST-LINE\nOWN-SECOND-LINE\n");
+    let fx = ported();
+    new_plan_with_brief(&fx, "old", "OTHER-FIRST-LINE\nOTHER-SECOND-LINE\n");
+    new_plan_with_brief(&fx, "pay", "OWN-FIRST-LINE\nOWN-SECOND-LINE\n");
 
-    let message = lead_message(&env, "pay");
+    let message = lead_message(&fx.env, "pay");
     assert_eq!(message.matches("OWN-FIRST-LINE").count(), 1, "the own brief once: {message}");
     assert_eq!(message.matches("OWN-SECOND-LINE").count(), 1, "the own brief once, in full: {message}");
     assert!(message.contains("OTHER-FIRST-LINE"), "another brief is listed: {message}");

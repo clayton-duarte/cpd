@@ -1,14 +1,15 @@
-//! Escalations (contract §3.3, §3.5; commands.md §8), against a temporary `$CPD_HOME`: the refusals and `answer` run
-//! in this process (`Fx`); the two tests that block in `ask` run the built binary (`TestEnv`). Plans, Jobs, Attempts and Sessions are
-//! written straight into the database, as fixtures: they belong to other
-//! areas. `ask` blocks, so it runs as a child process the test answers.
+//! Escalations (contract §3.3, §3.5; commands.md §8), against a temporary `$CPD_HOME`, all in this process (`Fx` on
+//! the fake ports). Plans, Jobs, Attempts and Sessions are written straight into the database, as fixtures: they belong
+//! to other areas. `ask` blocks and polls every 500 ms on the clock of the ports: the `ManualClock` passes that time at
+//! once, and what another process does meanwhile (`answer`) the test does in a hook of [`Fx::on_nap`], at the first nap.
 
 use crate::common;
 
-use std::process::{Child, Stdio};
+use std::path::Path;
+use std::time::Duration;
 
 use common::fx::Fx;
-use common::{CPD, Run, TestEnv, refused, wait_until};
+use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -17,7 +18,11 @@ use serde_json::{Value, json};
 // ---------- fixtures ----------
 
 fn store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    store_at(&env.cpd_home())
+}
+
+fn store_at(home: &Path) -> Store {
+    Store::open(&CpdHome::resolve(Some(home.into()), None).unwrap(), 5000).unwrap()
 }
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
@@ -56,139 +61,118 @@ fn setup(env: &TestEnv) {
     );
 }
 
-fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+/// The Events of `kind`, through `cpd`: `Fx::cpd` or the `cpd` of a [`common::fx::Nap`].
+fn events_by(cpd: impl Fn(&[&str]) -> Run, kind: &str) -> Vec<Value> {
+    cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
-/// [`events`] of an `Fx`: `events list` in this process.
 fn fx_events(fx: &Fx, kind: &str) -> Vec<Value> {
-    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    events_by(|args| fx.cpd(args), kind)
 }
 
-fn session_state(env: &TestEnv) -> (String, Option<String>) {
-    store(env)
+fn session_state_at(home: &Path) -> (String, Option<String>) {
+    store_at(home)
         .read(|c| Ok(c.query_row("SELECT state, state_label FROM sessions WHERE id = 'w1'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
         .unwrap()
 }
 
-/// Kills and reaps its child on drop, so a panicking test leaves no process.
-struct KillOnDrop(Option<Child>);
-
-impl KillOnDrop {
-    fn new(child: Child) -> Self {
-        KillOnDrop(Some(child))
-    }
-
-    fn into_inner(mut self) -> Child {
-        self.0.take().unwrap()
-    }
+fn session_state(env: &TestEnv) -> (String, Option<String>) {
+    session_state_at(&env.cpd_home())
 }
 
-impl std::ops::Deref for KillOnDrop {
-    type Target = Child;
-    fn deref(&self) -> &Child {
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl std::ops::DerefMut for KillOnDrop {
-    fn deref_mut(&mut self) -> &mut Child {
-        self.0.as_mut().unwrap()
-    }
-}
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-#[test]
-fn a_guarded_child_is_gone_after_a_panic() {
-    let pid = std::cell::Cell::new(0);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let child = KillOnDrop::new(std::process::Command::new("sleep").arg("60").spawn().unwrap());
-        pid.set(child.id());
-        panic!("boom");
-    }));
-    assert!(result.is_err());
-    let alive = std::process::Command::new("kill").args(["-0", &pid.get().to_string()]).output().unwrap().status.success();
-    assert!(!alive, "child {} survived the panic", pid.get());
-}
-
-/// `cpd ask a-a1 <question> --plan p` running in the background.
-fn spawn_ask(env: &TestEnv, question: &str) -> KillOnDrop {
-    KillOnDrop::new(env.command(CPD)
-        .args(["ask", "a-a1", question, "--plan", "pl"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap())
-}
-
-fn finish(child: KillOnDrop) -> Run {
-    let out = child.into_inner().wait_with_output().unwrap();
-    Run {
-        exit: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+/// `cpd ask a-a1 <question> --plan pl`, in this process.
+fn ask(fx: &Fx, question: &str) -> Run {
+    fx.cpd(&["ask", "a-a1", question, "--plan", "pl"])
 }
 
 // ---------- ask ----------
 
 #[test]
 fn ask_blocks_until_answered_and_prints_the_answer() {
-    let env = TestEnv::new();
-    setup(&env);
-    let child = spawn_ask(&env, "Which field names?");
-    let pid = child.id();
-    wait_until("ask to open a-a1-q1", || env.query::<i64>("SELECT count(*) FROM escalations WHERE id = 'a-a1-q1'") != 0);
+    let mut fx = Fx::with_ports();
+    setup(&fx.env);
+    let home = fx.env.cpd_home().to_path_buf();
+    // At its first nap `ask` waits for an answer: what a test sees "while it waits" is read here, then `answer` runs.
+    fx.on_nap(move |nap| {
+        // While it waits: the row is open, the Worker Session waiting (for the Lead, not the User), both Events appended.
+        let (status, asker_pid, question): (String, u32, String) = store_at(&home)
+            .read(|c| Ok(c.query_row("SELECT status, asker_pid, question FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+            .unwrap();
+        assert_eq!((status.as_str(), asker_pid, question.as_str()), ("open", std::process::id(), "Which field names?"));
+        assert_eq!(session_state_at(&home), ("waiting".to_owned(), Some("cpd: question to the Lead".to_owned())));
+        let asked = events_by(|args| nap.cpd(args), "escalation");
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0]["plan"], "pl");
+        assert_eq!(asked[0]["job"], "a");
+        assert_eq!(asked[0]["attempt"], "a-a1");
+        assert_eq!(asked[0]["data"], json!({"escalation": "a-a1-q1", "question": "Which field names?"}));
+        assert!(asked[0]["text"].as_str().unwrap().contains("cpd answer a-a1-q1"));
+        let states = events_by(|args| nap.cpd(args), "session-state");
+        assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "waiting", "label": "cpd: question to the Lead"}));
+        assert_eq!(states.last().unwrap()["session"], "w1");
 
-    // While it waits: the row is open, the Worker Session waiting (for the Lead, not the User), both Events appended.
-    let (status, asker_pid, question): (String, u32, String) = store(&env)
-        .read(|c| Ok(c.query_row("SELECT status, asker_pid, question FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-        .unwrap();
-    assert_eq!((status.as_str(), asker_pid, question.as_str()), ("open", pid, "Which field names?"));
-    assert_eq!(session_state(&env), ("waiting".to_owned(), Some("cpd: question to the Lead".to_owned())));
-    let asked = events(&env, "escalation");
-    assert_eq!(asked.len(), 1);
-    assert_eq!(asked[0]["plan"], "pl");
-    assert_eq!(asked[0]["job"], "a");
-    assert_eq!(asked[0]["attempt"], "a-a1");
-    assert_eq!(asked[0]["data"], json!({"escalation": "a-a1-q1", "question": "Which field names?"}));
-    assert!(asked[0]["text"].as_str().unwrap().contains("cpd answer a-a1-q1"));
-    let states = events(&env, "session-state");
-    assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "waiting", "label": "cpd: question to the Lead"}));
-    assert_eq!(states.last().unwrap()["session"], "w1");
+        nap.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
+    });
 
-    env.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
-    let run = finish(child);
+    let run = ask(&fx, "Which field names?");
     assert_eq!(run.ok(), json!({"ok": true, "escalation": "a-a1-q1", "answer": "Use the v2 field names."}));
-    assert_eq!(session_state(&env), ("working".to_owned(), None));
-    let states = events(&env, "session-state");
+    assert_eq!(session_state(&fx.env), ("working".to_owned(), None));
+    let states = fx_events(&fx, "session-state");
     assert_eq!(states.last().unwrap()["data"], json!({"from": "waiting", "to": "working", "label": null}));
 }
 
 #[test]
 fn every_ask_is_a_new_escalation() {
-    let env = TestEnv::new();
-    setup(&env);
+    let mut fx = Fx::with_ports();
+    setup(&fx.env);
     for k in 1..=2 {
-        let child = spawn_ask(&env, "Again?");
         let id = format!("a-a1-q{k}");
-        wait_until(&format!("ask to open {id}"), || env.query::<i64>(&format!("SELECT count(*) FROM escalations WHERE id = '{id}'")) != 0);
-        env.cpd(&["answer", &id, "Yes.", "--plan", "pl"]).ok();
-        assert_eq!(finish(child).ok()["escalation"], id.as_str());
+        let answered = id.clone();
+        // `answer` is refused (`escalation_not_found`) unless `ask` opened the row first.
+        fx.on_nap(move |nap| {
+            nap.cpd(&["answer", &answered, "Yes.", "--plan", "pl"]).ok();
+        });
+        assert_eq!(ask(&fx, "Again?").ok()["escalation"], id.as_str());
     }
+}
+
+/// Restored from `adb53fc8^`: the deadline is read on the `ManualClock`, 500 ms at a time, with no real wait.
+#[test]
+fn ask_times_out_and_expires_the_escalation() {
+    let mut fx = Fx::with_ports();
+    setup(&fx.env);
+    let naps = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = naps.clone();
+    fx.on_nap(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    });
+    let run = fx.cpd(&["ask", "a-a1", "Anyone?", "--timeout-minutes", "1", "--plan", "pl"]);
+    let error = refused(&run, "ask_timeout", 5);
+    assert_eq!(error["details"]["escalation"], "a-a1-q1");
+    // One minute of virtual time, in the 500 ms polls of §8.1; the hook ran at every one.
+    assert!(fx.fakes.clock.elapsed() >= Duration::from_secs(60), "{:?}", fx.fakes.clock.elapsed());
+    assert!(fx.fakes.clock.naps().iter().all(|nap| *nap == Duration::from_millis(500)), "{:?}", fx.fakes.clock.naps());
+    assert_eq!(naps.load(std::sync::atomic::Ordering::Relaxed), fx.fakes.clock.naps().len());
+
+    let (status, expired_at, answer): (String, Option<String>, Option<String>) = store(&fx.env)
+        .read(|c| Ok(c.query_row("SELECT status, expired_at, answer FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .unwrap();
+    assert_eq!(status, "expired");
+    assert!(expired_at.is_some());
+    assert_eq!(answer, None);
+    let expired = fx_events(&fx, "escalation-expired");
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0]["data"], json!({"escalation": "a-a1-q1", "reason": "timeout"}));
+    assert_eq!(expired[0]["attempt"], "a-a1");
+    assert_eq!(session_state(&fx.env), ("working".to_owned(), None));
+
+    // An expired Escalation cannot be answered any more.
+    refused(&fx.cpd(&["answer", "a-a1-q1", "Late.", "--plan", "pl"]), "escalation_expired", 3);
 }
 
 #[test]
 fn ask_refuses_an_attempt_that_is_not_running() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     fixture(&fx.env, "UPDATE attempts SET status = 'merging', submitted_sha = 's', submitted_at = 't' WHERE id = 'a-a1';");
     let error = refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
@@ -202,7 +186,7 @@ fn ask_refuses_an_attempt_that_is_not_running() {
 
 #[test]
 fn ask_refusals_before_the_attempt() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     refused(&fx.cpd(&["ask", "a-a2", "Q?", "--plan", "pl"]), "attempt_not_found", 4);
     refused(&fx.cpd(&["ask", "a-a1", "Q?", "--plan", "nope"]), "plan_not_found", 4);
@@ -218,7 +202,7 @@ fn ask_refusals_before_the_attempt() {
 
 #[test]
 fn ask_takes_the_plan_from_the_environment() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     let run = fx.cpd_with(fx.env.root(), &["ask", "a-a1", "Q?", "--timeout-minutes", "0"], &[("CPD_PLAN", "pl")]);
     refused(&run, "ask_timeout", 5);
@@ -237,7 +221,7 @@ fn open_escalation(env: &TestEnv) {
 
 #[test]
 fn answer_records_the_answer() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     open_escalation(&fx.env);
     let out = fx.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();
@@ -258,7 +242,7 @@ fn answer_records_the_answer() {
 
 #[test]
 fn answer_is_refused_unless_the_escalation_is_open() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     open_escalation(&fx.env);
     fx.cpd(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
@@ -277,7 +261,7 @@ fn answer_is_refused_unless_the_escalation_is_open() {
 
 #[test]
 fn answer_refusals_before_the_escalation() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup(&fx.env);
     open_escalation(&fx.env);
     refused(&fx.cpd(&["answer", "a-a1-q9", "A.", "--plan", "pl"]), "escalation_not_found", 4);
