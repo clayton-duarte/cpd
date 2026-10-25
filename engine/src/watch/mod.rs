@@ -42,6 +42,18 @@ mod workers;
 #[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
+mod inbox_tests;
+#[cfg(test)]
+mod open_tests;
+#[cfg(test)]
+mod archive_leads_tests;
+#[cfg(test)]
+mod archive_tests;
+#[cfg(test)]
+mod schedule_tests;
+#[cfg(test)]
+mod testkit;
+#[cfg(test)]
 mod pill_texts;
 #[cfg(test)]
 mod poll_run_tests;

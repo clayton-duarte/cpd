@@ -5,12 +5,9 @@
 mod common;
 
 mod doctor;
-mod watch_archive_leads;
 mod watch_curate_inbox;
 mod watch_distill_inbox;
 mod watch_host_alert;
-mod watch_inbox;
-mod watch_loop_guard_inbox;
 mod watch_sleep;
 mod watch;
 mod watch_worker_archive;

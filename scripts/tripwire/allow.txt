@@ -6,8 +6,6 @@
 cpd::engine doctor::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_curate_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_distill_inbox::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_inbox::  # m-engine: engine tests on a real tmux server
-cpd::engine watch_loop_guard_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_sleep::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_team::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_titles_width::  # m-engine: engine tests on a real tmux server

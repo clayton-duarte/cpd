@@ -495,35 +495,6 @@ fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
     let _ = second.stop();
 }
 
-/// hs-d514: a stuck Job is blocked work, so its message to the Context's Manager wakes it.
-#[test]
-fn a_stuck_job_wakes_its_context_manager() {
-    let fx = fx("[inbox]\nstuck_job_minutes = 1\n");
-    fx.add_manager();
-    fx.add_job(
-        "api",
-        &[],
-        "UPDATE jobs SET status = 'running' WHERE key = 'api';
-         UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'api';",
-    );
-    fx.fixture(&format!(
-        "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
-         VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', 'api', 'x', '{{}}');",
-        ago(2)
-    ));
-    let engine = fx.start();
-    wait_until("the message", || !fx.messages().is_empty());
-    engine.stop();
-    let messages = fx.messages();
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    let (session, _, data) = &messages[0];
-    assert_eq!((session.as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
-    // hs-d647: the stuck Jobs of a PR are one message (contract §3.7 "A stuck Job").
-    let text = data["text"].as_str().unwrap();
-    assert!(text.starts_with("Jobs of PR pay/repo failed "), "{data}");
-    assert!(text.contains("pay/api (2 min ago, crashed)"), "{data}");
-}
-
 // ---------- @cpd_workers ----------
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
@@ -1244,129 +1215,6 @@ impl Fx {
     }
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S1),
-/// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
-/// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
-#[test]
-fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_adds_no_second() {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.add_draft("later");
-
-    let engine = fx.start();
-    wait_until("the open Job", || !fx.jobs_of_kind("open").is_empty());
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "draft".to_owned())]);
-    let row: (String, String, String, i64, i64, bool) = fx.env.read(|conn| {
-        Ok(conn.query_row(
-            "SELECT title, tier, pr, appended, urgent, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
-        )?)
-    });
-    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S1".into(), "repo".into(), 1, 0, false));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0, "its needs are derived");
-    let added = fx.events("job-added");
-    assert_eq!(added.len(), 1, "{added:?}");
-    assert_eq!((&added[0].0, &added[0].1), (&Some("pay".to_owned()), &Some("open-repo".to_owned())));
-    let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S1")));
-    assert_eq!(data["needs"], json!([]));
-    assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
-    assert_eq!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"), None);
-}
-
-/// B1 (hs-d573): the open Job is a draft while a draft of its PR remains, and queued (with its fingerprint) once none does.
-#[test]
-fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it_when_none_does() {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.add_draft("later");
-    // A running Job keeps E3 from starting the open Job once it is queued, and is no draft.
-    fx.add_job_in("repo", "busy", &[], "UPDATE jobs SET status = 'running' WHERE key = 'busy';");
-
-    let engine = fx.start();
-    wait_until("the open Job", || !fx.jobs_of_kind("open").is_empty());
-    fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "draft".to_owned())]);
-    let row: (String, i64, bool) = fx.env.read(|conn| {
-        Ok(conn.query_row("SELECT tier, appended, fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
-    });
-    assert_eq!(row, ("S1".into(), 1, true));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0);
-    let added = fx.events("job-added");
-    assert_eq!(added.len(), 1, "{added:?}");
-    assert_eq!(added[0].3["status"], json!("draft"));
-
-    fx.fixture("UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'later';");
-    wait_until("the open Job queued", || fx.job_status("open-repo") == "queued");
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    let plan = PlanId::parse(PLAN).unwrap();
-    let all = fx.store().read(|conn| jobs::load(conn, &plan)).unwrap();
-    let job = all.iter().find(|j| j.key == "open-repo").unwrap();
-    assert_eq!(fx.env.query::<String>("SELECT fingerprint FROM jobs WHERE key = 'open-repo'"), locked_fingerprint(job));
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "queued".to_owned())]);
-    assert_eq!(fx.count("job-added"), 1);
-}
-
-/// B1: one PR with a draft gets a draft open Job, one without gets a queued one; later ticks change nothing.
-#[test]
-fn e4_queues_the_open_job_at_once_when_its_pr_has_no_draft_and_adds_no_second_to_a_draft_one() {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.add_draft("later");
-    fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
-        fx.repo.display(),
-        fx.lead.display()
-    ));
-    // A running Job keeps E3 from starting the open Job of PR web, and is no draft.
-    fx.add_job_in("web", "ui", &[], "UPDATE jobs SET status = 'running' WHERE key = 'ui';");
-
-    let engine = fx.start();
-    wait_until("both open Jobs", || fx.jobs_of_kind("open").len() == 2);
-    fx.env.wait_whole_ticks(4);
-    engine.stop();
-
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "draft".to_owned()), ("open-web".to_owned(), "queued".to_owned())]);
-    assert_eq!(fx.count("job-added"), 2);
-}
-
-/// A6 (hs-d573): nothing moves a queued open Job back to draft when a draft is added to its PR later.
-#[test]
-fn e4_leaves_a_queued_open_job_queued_when_a_draft_is_added_to_its_pr_later() {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.add_cpd_job("open-repo", "open", "");
-    fx.add_draft("later");
-
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(4);
-    engine.stop();
-
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "queued".to_owned())]);
-    assert_eq!(fx.count("job-added"), 0);
-}
-
-/// `open_tier` is a key of its own (§8.2): the Job takes its Tier from it.
-#[test]
-fn e4_gives_the_open_job_the_tier_open_tier_names() {
-    let fx = fx("open_tier = \"H3\"");
-    fx.add_merged_api();
-    fx.add_draft("later");
-
-    let engine = fx.start();
-    wait_until("the open Job", || !fx.jobs_of_kind("open").is_empty());
-    engine.stop();
-
-    assert_eq!(fx.env.query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'open-repo'"), "H3");
-}
-
 /// PR `repo` (an `open` Job the Lead cancelled) beside PR `web`, which has none: `web`'s own `open-web` is what shows the engine has
 /// looked at both.
 fn fx_cancelled_open_job() -> Fx {
@@ -1425,40 +1273,6 @@ fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
     let web: Vec<_> = fx.jobs_of_kind("open").into_iter().filter(|(key, _)| key.starts_with("open-web")).collect();
     assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'"), "cancelled");
-}
-
-/// Only a PR that is `dispatch`, of a Plan that is not archived, gets one.
-#[test]
-fn e4_adds_no_open_job_to_a_waiting_pr_or_to_a_pr_of_an_archived_plan() {
-    // A PR that is still `waiting`, beside the PR that is `dispatch`.
-    let waiting = fx("");
-    waiting.add_draft("later");
-    waiting.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
-           VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', 'Show the receipt', 'config', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
-        waiting.repo.display()
-    ));
-    let engine = waiting.start();
-    wait_until("the open Job of the dispatch PR", || !waiting.jobs_of_kind("open").is_empty());
-    waiting.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(waiting.jobs_of_kind("open").len(), 1);
-    assert_eq!(waiting.env.query::<String>("SELECT pr FROM jobs WHERE kind = 'open'"), "repo");
-
-    // The Plan is archived: its dispatch PR gets none.
-    let archived = fx_archived();
-    let engine = archived.start();
-    archived.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(archived.jobs_of_kind("open"), Vec::<(String, String)>::new());
-}
-
-fn fx_archived() -> Fx {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.fixture("UPDATE plans SET archived_at = 't' WHERE id = 'pay';");
-    fx
 }
 
 // ---------- E5: the update Job on a conflict (contract §3.7 E5, §7.6 step 6; hs-d340, hs-d497) ----------
