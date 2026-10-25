@@ -6,15 +6,21 @@ pub mod cmds;
 pub mod ctl;
 pub mod format;
 pub mod hooks;
+pub mod route;
 pub mod state;
 pub mod target;
 
+pub use route::TmuxRoute;
 pub use state::{KeyLog, Pane, SessionRow, State, WindowRow};
 
+use crate::host::runner::{Runner, SystemRunner};
 use rusqlite::Connection;
-use state::{db_path, next_id};
+use state::{db_path, next_id, Shared};
+use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use parking_lot::ReentrantMutex;
+use std::sync::{Arc, Mutex};
 use target::{resolve, Kind, Loc};
 
 type R<T> = Result<T, String>;
@@ -34,12 +40,101 @@ pub struct Outcome {
     pub stderr: String,
 }
 
-/// The one entry the bin and the unit tests share.
-pub fn run(inv: &Invocation) -> Outcome {
-    match run_commands(inv) {
+/// Where a call keeps the server's state: a file for the bin (a process boundary), memory for the route.
+pub enum Backing<'a> {
+    /// The directory (the `TMUX_TMPDIR`) that holds `fake-tmux-<socket>.db`.
+    File(PathBuf),
+    /// One in-memory connection per `(TMUX_TMPDIR, socket)` of a [`FakeTmux`]: no file, no fsync.
+    Memory(&'a FakeTmux),
+}
+
+/// The in-memory fake tmux: state per `(TMUX_TMPDIR, socket)` behind a lock, and the `Runner` that
+/// `run-shell` calls. Two values share nothing.
+pub struct FakeTmux {
+    conns: Mutex<HashMap<(PathBuf, String), Shared>>,
+    runner: Option<Arc<dyn Runner>>,
+    popup: Mutex<Option<Arc<Popup>>>,
+}
+
+/// What a popup answers: the outcome file's text for the popup's argv, if any.
+pub type Popup = dyn Fn(&[String]) -> Option<String> + Send + Sync;
+
+impl FakeTmux {
+    pub fn new() -> FakeTmux {
+        FakeTmux { conns: Mutex::default(), runner: None, popup: Mutex::new(None) }
+    }
+    /// The `Runner` that `run-shell`, a hook or a binding calls with `/bin/sh -c <command>`.
+    pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> FakeTmux {
+        self.runner = Some(runner);
+        self
+    }
+    /// One client call, as [`run`] but on this value's memory state.
+    pub fn run(&self, inv: &Invocation) -> Outcome {
+        outcome(run_commands(inv, Backing::Memory(self)))
+    }
+    fn conns(&self) -> std::sync::MutexGuard<'_, HashMap<(PathBuf, String), Shared>> {
+        self.conns.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// The connections of the servers `socket` names, one per `TMUX_TMPDIR` that has one.
+    fn on_socket(&self, socket: &str) -> Vec<Shared> {
+        self.conns().iter().filter(|((_, s), _)| s == socket).map(|(_, c)| c.clone()).collect()
+    }
+    /// The one server this value holds: `add_client` and `set_screen` name no socket.
+    fn sole(&self, what: &str) -> Shared {
+        let all: Vec<Shared> = self.conns().values().cloned().collect();
+        let [only] = &all[..] else { panic!("FakeTmux::{what}: needs exactly one server, there are {}", all.len()) };
+        only.clone()
+    }
+    /// A read-only view of what the server on `socket` holds. Panics when no server, or more than one (in
+    /// different `TMUX_TMPDIR`s), is running on it.
+    pub fn state(&self, socket: &str) -> State {
+        let found = self.on_socket(socket);
+        let [only] = &found[..] else { panic!("FakeTmux::state: needs exactly one server on socket {socket}, there are {}", found.len()) };
+        State::of(only.clone())
+    }
+    /// Adds a client of `w` by `h` cells, attached after the ones already added, to the first session.
+    pub fn add_client(&self, name: &str, w: u32, h: u32) {
+        let db = self.sole("add_client");
+        let db = db.lock();
+        let session: i64 = s(&db, "SELECT min(id) FROM sessions", []).expect("FakeTmux::add_client: the server has no session");
+        db.execute("INSERT INTO clients (name, session, width, height) VALUES (?1, ?2, ?3, ?4)", (name, session, w, h))
+            .expect("FakeTmux::add_client");
+    }
+    /// What a `display-popup` call answers: `answer` gets the popup's argv (the subcommand name first) and returns the
+    /// text of the outcome file the popup's command would write to the path its `--out=` names, or `None` for no
+    /// file. The file is written before the call returns. Without it no popup writes a file (the real no-answer path).
+    pub fn on_popup(&self, answer: impl Fn(&[String]) -> Option<String> + Send + Sync + 'static) {
+        *self.popup.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(answer));
+    }
+    fn popup(&self) -> Option<Arc<Popup>> {
+        self.popup.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+    /// The text `capture-pane -p` prints for `pane` (`%n`).
+    pub fn set_screen(&self, pane: &str, text: &str) {
+        let db = self.sole("set_screen");
+        let db = db.lock();
+        let id: i64 = pane.trim_start_matches('%').parse().unwrap_or_else(|_| panic!("FakeTmux::set_screen: not a pane id: {pane}"));
+        db.execute("INSERT INTO screens (pane, text) VALUES (?1, ?2) ON CONFLICT (pane) DO UPDATE SET text = excluded.text", (id, text))
+            .expect("FakeTmux::set_screen");
+    }
+}
+
+impl Default for FakeTmux {
+    fn default() -> FakeTmux {
+        FakeTmux::new()
+    }
+}
+
+fn outcome(result: R<String>) -> Outcome {
+    match result {
         Ok(stdout) => Outcome { code: 0, stdout, stderr: String::new() },
         Err(e) => Outcome { code: 1, stdout: String::new(), stderr: format!("{e}\n") },
     }
+}
+
+/// The one entry the bin and the unit tests share: the state is a file, `run-shell` a real `/bin/sh`.
+pub fn run(inv: &Invocation) -> Outcome {
+    outcome(run_commands(inv, Backing::File(inv.tmux_tmpdir.clone())))
 }
 
 /// The commands the fake knows.
@@ -55,6 +150,14 @@ const KNOWN: &[&str] = &[
 struct Cx<'a> {
     db: &'a Connection,
     inv: &'a Invocation,
+    /// The `-L` name of the server.
+    socket: &'a str,
+    /// The owner of the `TMUX_TMPDIR`, as in `tmux-<uid>`.
+    uid: u32,
+    /// What `run-shell` calls; `None` for a `FakeTmux` that was given none.
+    runner: Option<&'a dyn Runner>,
+    /// What answers a `display-popup`; `None` for a popup that writes no file.
+    popup: Option<&'a Popup>,
     out: String,
     kill: bool,
     /// The target of the hook or binding being run (`hooks::run_string`), for commands that name none.
@@ -66,12 +169,16 @@ struct Cx<'a> {
     depth: u8,
 }
 
-fn run_commands(inv: &Invocation) -> R<String> {
+/// The version `-V` prints and `#{version}` answers.
+pub(crate) const VERSION: &str = "3.6a";
+
+fn run_commands(inv: &Invocation, backing: Backing) -> R<String> {
     let mut socket = "default".to_string();
     let mut i = 0;
     while i < inv.argv.len() {
         match inv.argv[i].as_str() {
             "-u" => i += 1,
+            "-V" => return Ok(format!("tmux {VERSION}\n")),
             "-L" | "-f" | "-S" => {
                 let v = inv.argv.get(i + 1).ok_or("option requires an argument -- L")?;
                 if inv.argv[i] == "-L" {
@@ -90,38 +197,111 @@ fn run_commands(inv: &Invocation) -> R<String> {
     if let Some(c) = commands.iter().find(|c| !KNOWN.contains(&c[0].as_str())) {
         return Err(format!("unknown command: {}", c[0]));
     }
-    let Some(first) = commands.first() else { return Ok(String::new()) };
-    let _ = first;
+    if commands.is_empty() {
+        return Ok(String::new());
+    }
     let meta = std::fs::metadata(&inv.tmux_tmpdir)
         .map_err(|e| format!("error creating {} ({e})", inv.tmux_tmpdir.display()))?;
-    let path = db_path(&inv.tmux_tmpdir, &socket);
-    let creating = !path.exists() && commands.iter().any(|c| c[0] == "new-session");
-    if !path.exists() && !creating {
-        return Err(format!("no server running on {}/tmux-{}/{socket}", inv.tmux_tmpdir.display(), meta.uid()));
-    }
-    let db = Connection::open(&path).map_err(|e| e.to_string())?;
-    let fail = |e: rusqlite::Error| e.to_string();
-    if creating {
-        db.execute_batch(state::SCHEMA).map_err(fail)?;
-    }
-    db.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
-    let mut cx = Cx { db: &db, inv, out: String::new(), kill: false, loc: None, vars: Vec::new(), queue: Vec::new(), depth: 0 };
-    let result = commands.iter().try_for_each(|c| dispatch(&mut cx, c));
-    let (out, kill) = (std::mem::take(&mut cx.out), cx.kill);
-    // A failing command stops the chain, and what ran before it stays (as in tmux): commit either way.
-    let end = db.execute_batch("COMMIT").map_err(fail);
-    drop(db);
-    if let Err(e) = result {
-        if creating {
-            let _ = std::fs::remove_file(&path);
+    let no_server = || format!("no server running on {}/tmux-{}/{socket}", inv.tmux_tmpdir.display(), meta.uid());
+    let wants_server = commands.iter().any(|c| c[0] == "new-session");
+    let call = Call { inv, socket: &socket, uid: meta.uid(), commands: &commands };
+    match backing {
+        Backing::File(dir) => {
+            let path = db_path(&dir, &socket);
+            let creating = !path.exists() && wants_server;
+            if !path.exists() && !creating {
+                return Err(no_server());
+            }
+            let db = Connection::open(&path).map_err(|e| e.to_string())?;
+            if creating {
+                db.execute_batch(state::SCHEMA).map_err(|e| e.to_string())?;
+            }
+            let result = call.transact(&db, Some(&SystemRunner), None);
+            drop(db);
+            match result {
+                Ok((out, kill)) => {
+                    if kill {
+                        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+                    }
+                    Ok(out)
+                }
+                Err(e) => {
+                    if creating {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    Err(e)
+                }
+            }
         }
-        return Err(e);
+        Backing::Memory(tmux) => {
+            let key = (inv.tmux_tmpdir.clone(), socket.clone());
+            let (conn, creating) = {
+                let mut conns = tmux.conns();
+                match conns.get(&key) {
+                    Some(conn) => (conn.clone(), false),
+                    None if wants_server => {
+                        let db = Connection::open_in_memory().map_err(|e| e.to_string())?;
+                        db.execute_batch(state::SCHEMA).map_err(|e| e.to_string())?;
+                        let conn: Shared = Arc::new(ReentrantMutex::new(db));
+                        conns.insert(key.clone(), conn.clone());
+                        (conn, true)
+                    }
+                    None => return Err(no_server()),
+                }
+            };
+            // The map's lock is not held from here: a nested call (`run-shell`) takes it again.
+            let popup = tmux.popup();
+            let result = call.transact(&conn.lock(), tmux.runner.as_deref(), popup.as_deref());
+            let gone = match &result {
+                Ok((_, kill)) => *kill,
+                Err(_) => creating,
+            };
+            if gone {
+                let mut conns = tmux.conns();
+                if conns.get(&key).is_some_and(|c| Arc::ptr_eq(c, &conn)) {
+                    conns.remove(&key);
+                }
+            }
+            result.map(|(out, _)| out)
+        }
     }
-    end?;
-    if kill {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+}
+
+/// One parsed call, ready to run on a connection.
+struct Call<'a> {
+    inv: &'a Invocation,
+    socket: &'a str,
+    uid: u32,
+    commands: &'a [Vec<String>],
+}
+
+impl Call<'_> {
+    /// Runs the chain in one transaction; the output and whether `kill-server` ran.
+    fn transact(&self, db: &Connection, runner: Option<&dyn Runner>, popup: Option<&Popup>) -> R<(String, bool)> {
+        let fail = |e: rusqlite::Error| e.to_string();
+        db.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
+        let mut cx = Cx {
+            db,
+            inv: self.inv,
+            socket: self.socket,
+            uid: self.uid,
+            runner,
+            popup,
+            out: String::new(),
+            kill: false,
+            loc: None,
+            vars: Vec::new(),
+            queue: Vec::new(),
+            depth: 0,
+        };
+        let result = self.commands.iter().try_for_each(|c| dispatch(&mut cx, c));
+        let (out, kill) = (std::mem::take(&mut cx.out), cx.kill);
+        // A failing command stops the chain, and what ran before it stays (as in tmux): commit either way.
+        let end = db.execute_batch("COMMIT").map_err(fail);
+        result?;
+        end?;
+        Ok((out, kill))
     }
-    Ok(out)
 }
 
 fn dispatch(cx: &mut Cx, c: &[String]) -> R<()> {
@@ -268,15 +448,31 @@ fn variable(cx: &Cx, loc: Loc, name: &str) -> Option<String> {
         "pane_dead_status" => pane_row("dead_status").map(|v| v.to_string()).unwrap_or_default(),
         "pane_width" => pane_row("width")?.to_string(),
         "pane_height" => pane_row("height")?.to_string(),
+        "pane_active" => {
+            let cur: Option<i64> = s::<Option<i64>>(db, "SELECT cur_pane FROM windows WHERE id = ?1", [loc.window?])?;
+            u8::from(cur == loc.pane).to_string()
+        }
+        "pane_current_path" => s(db, "SELECT cwd FROM panes WHERE id = ?1", [loc.pane?])?,
+        "pane_start_command" => pane_argv(db, loc.pane?)?.join(" "),
+        "pane_current_command" => default_window_name(&pane_argv(db, loc.pane?)?),
+        "window_width" => s::<i64>(db, "SELECT width FROM windows WHERE id = ?1", [loc.window?])?.to_string(),
+        "window_height" => s::<i64>(db, "SELECT height FROM windows WHERE id = ?1", [loc.window?])?.to_string(),
+        "mouse_any_flag" | "alternate_on" | "pane_in_mode" => "0".into(),
+        "socket_path" => format!("{}/tmux-{}/{}", cx.inv.tmux_tmpdir.display(), cx.uid, cx.socket),
         "client_name" => "/dev/pts/0".into(),
         "client_width" => "80".into(),
         "client_height" => "24".into(),
         "client_activity" => "0".into(),
-        "version" => "3.6a".into(),
+        "version" => VERSION.into(),
         "pid" => server_pid(cx.inv),
         "hook_window_name" => String::new(),
         _ => return None,
     })
+}
+
+fn pane_argv(db: &Connection, pane: i64) -> Option<Vec<String>> {
+    let argv: String = s(db, "SELECT argv FROM panes WHERE id = ?1", [pane])?;
+    Some(serde_json::from_str(&argv).expect("argv json"))
 }
 
 fn server_pid(inv: &Invocation) -> String {
@@ -328,7 +524,7 @@ fn add_window(cx: &Cx, session: i64, name: Option<&str>, o: &Opts, select: bool)
     let cwd = o.val('c').map_or_else(|| cx.inv.cwd.display().to_string(), str::to_string);
     let (w, h) = (int(o.val('x'), 80)?, int(o.val('y'), 24)?);
     let argv = serde_json::to_string(&o.rest).expect("argv json");
-    db.execute("INSERT INTO windows (id, session, name, cur_pane) VALUES (?1, ?2, ?3, ?4)", (window, session, name, pane)).map_err(fail)?;
+    db.execute("INSERT INTO windows (id, session, name, cur_pane, width, height) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", (window, session, name, pane, w, h)).map_err(fail)?;
     db.execute("INSERT INTO panes (id, window, pos, argv, cwd, dead, dead_status, pid, width, height) VALUES (?1, ?2, 0, ?3, ?4, 0, NULL, ?5, ?6, ?7)", (pane, window, argv, cwd, 10000 + pane, w, h))
         .map_err(fail)?;
     store_env(db, "pane", pane, &o.all('e')).map_err(fail)?;
@@ -595,14 +791,58 @@ fn show_environment(cx: &mut Cx, args: &[String]) -> R<()> {
 }
 
 fn display_message(cx: &mut Cx, args: &[String]) -> R<()> {
-    let o = Opts::parse("display-message", args, "aIpvc:d:F:t:N")?;
+    let o = Opts::parse("display-message", args, "aIlpvc:d:F:t:N")?;
     let loc = resolve(cx.db, o.val('t'), Kind::Pane)?;
     let fmt = o.rest.first().map(String::as_str).or(o.val('F')).unwrap_or("#{session_name}:#{window_index}.#{pane_index}");
-    if o.has('p') {
+    if !o.has('p') {
+        return Ok(());
+    }
+    let Some(client) = o.val('c') else {
         say(cx, fmt, loc);
+        return Ok(());
+    };
+    // A client that was not added answers an empty line (the product reads it as "no tmux client").
+    let found = client_vars(cx.db, "SELECT name, width, height, seq FROM clients WHERE name = ?1", [client]).into_iter().next();
+    match found {
+        Some(vars) => {
+            let kept = cx.vars.len();
+            cx.vars.extend(vars);
+            say(cx, fmt, loc);
+            cx.vars.truncate(kept);
+        }
+        None => cx.out.push('\n'),
     }
     Ok(())
 }
 
+/// The format variables of the clients a query selects (name, width, height, seq).
+fn client_vars(db: &Connection, sql: &str, p: impl rusqlite::Params) -> Vec<Vec<(String, String)>> {
+    let mut st = db.prepare(sql).expect("prepare");
+    let rows: Vec<(String, i64, i64, i64)> =
+        st.query_map(p, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).expect("query").map(|r| r.expect("row")).collect();
+    rows.into_iter()
+        .map(|(name, w, h, seq)| {
+            vec![
+                ("client_name".to_string(), name),
+                ("client_width".to_string(), w.to_string()),
+                ("client_height".to_string(), h.to_string()),
+                ("client_activity".to_string(), seq.to_string()),
+            ]
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod conformance_tests;
+#[cfg(test)]
+mod gaps_tests;
+#[cfg(test)]
+mod kit;
+#[cfg(test)]
+mod nested_tests;
+#[cfg(test)]
+mod route_tests;
+#[cfg(test)]
+mod state_tests;
 #[cfg(test)]
 mod tests;

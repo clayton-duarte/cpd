@@ -1,1 +1,1 @@
-pub mod tmux;
+pub use cpd_core::fakes::tmux;

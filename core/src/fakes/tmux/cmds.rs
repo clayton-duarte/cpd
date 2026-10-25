@@ -3,7 +3,7 @@
 //! display-menu attach list-clients`. Rendering is not modelled (docs/implementing.md, "The fake tmux").
 
 use super::target::{resolve, Kind, Loc};
-use super::{hooks, ids, s, say, store_env, Cx, Opts, R};
+use super::{client_vars, hooks, ids, s, say, store_env, Cx, Opts, R};
 use rusqlite::Connection;
 
 fn fail(e: rusqlite::Error) -> String {
@@ -176,12 +176,29 @@ pub fn show_buffer(cx: &mut Cx, args: &[String]) -> R<()> {
     Ok(())
 }
 
-/// `display-popup` and `display-menu`: record the argv, subcommand name first.
+/// `display-popup` and `display-menu`: record the argv, subcommand name first. A popup that [`FakeTmux::on_popup`]
+/// answers writes the outcome file its command's `--out=` names, as the command it runs would.
+///
+/// [`FakeTmux::on_popup`]: super::FakeTmux::on_popup
 pub fn record_call(cx: &mut Cx, argv: &[String]) -> R<()> {
     let kind = if argv[0] == "display-popup" { "popup" } else { "menu" };
     let json = serde_json::to_string(argv).expect("argv json");
     cx.db.execute("INSERT INTO calls (kind, argv) VALUES (?1, ?2)", (kind, json)).map_err(fail)?;
+    if let (true, Some(answer)) = (kind == "popup", cx.popup) {
+        if let (Some(text), Some(out)) = (answer(argv), out_path(argv)) {
+            std::fs::write(&out, text).map_err(|e| format!("display-popup: cannot write {out}: {e}"))?;
+        }
+    }
     Ok(())
+}
+
+/// The path of `--out=<path>` in a popup's command, `<path>` single-quoted (`sh_quote`) or a bare word.
+fn out_path(argv: &[String]) -> Option<String> {
+    let rest = argv.iter().find_map(|a| a.split_once("--out=").map(|(_, rest)| rest))?;
+    match rest.strip_prefix('\'') {
+        Some(quoted) => quoted.split('\'').next().map(str::to_owned),
+        None => rest.split_whitespace().next().map(str::to_owned),
+    }
 }
 
 pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
@@ -194,14 +211,13 @@ pub fn attach(cx: &mut Cx, args: &[String]) -> R<()> {
 
 pub fn list_clients(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("list-clients", args, "F:f:t:")?;
-    let rows: Vec<(String, i64)> = {
-        let mut st = cx.db.prepare("SELECT name, session FROM clients ORDER BY seq").expect("prepare");
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).expect("query").map(|r| r.expect("row")).collect()
-    };
-    for (name, session) in rows {
-        cx.vars.push(("client_name".into(), name));
+    let sessions = ids(cx.db, "SELECT session FROM clients ORDER BY seq", []);
+    let clients = client_vars(cx.db, "SELECT name, width, height, seq FROM clients ORDER BY seq", []);
+    for (session, vars) in sessions.into_iter().zip(clients) {
+        let kept = cx.vars.len();
+        cx.vars.extend(vars);
         say(cx, o.val('F').unwrap_or("#{client_name}"), Loc { session, window: None, pane: None });
-        cx.vars.pop();
+        cx.vars.truncate(kept);
     }
     Ok(())
 }

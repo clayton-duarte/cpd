@@ -320,9 +320,11 @@ name = "cpd-core"
 version = "0.14.48"
 dependencies = [
  "clap",
+ "cpd-core",
  "libproc",
  "minijinja",
  "nix 0.31.3",
+ "parking_lot",
  "ratatui",
  "rusqlite",
  "serde",

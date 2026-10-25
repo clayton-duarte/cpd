@@ -155,7 +155,7 @@ fn without_yes_lists_what_goes_and_deletes_nothing() {
 
     let out = env.cpd(&["plan", "delete", "pay"]).ok();
     assert_eq!(out["preview"], true, "{out}");
-    assert_eq!(out["jobs"], 2, "the Job `m` and the cancelled stub `api-config` {out}");
+    assert_eq!(out["jobs"], 3, "the Job `m`, the cancelled stub `api-config` and the opener stub `open-api` {out}");
     assert_eq!(out["attempts"], 1, "{out}");
     assert_eq!(out["sessions"], 1, "the Lead {out}");
     assert_eq!(out["worktrees"], 2, "the Lead worktree and the Attempt worktree {out}");

@@ -2,3 +2,4 @@
 //! chosen by the program's file name. Compiled only with the cargo feature `fakes`.
 
 pub mod git;
+pub mod tmux;

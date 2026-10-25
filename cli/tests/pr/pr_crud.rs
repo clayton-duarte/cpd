@@ -180,7 +180,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "jobs": ["api-config"]})
+               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "jobs": ["api-config", "open-api"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
@@ -270,13 +270,14 @@ impl Fx {
 fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
     let fx = fx("plan");
     let out = fx.add_shape("api", None).ok();
-    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("tdd"), json!(["api-docs", "api-tests", "api-impl"])));
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("tdd"), json!(["api-docs", "api-tests", "api-impl", "open-api"])));
     assert_eq!(
         fx.stubs("api"),
         json!([
             ["api-docs", "docs", "Docs: Add retries", "draft", false, false, false, []],
             ["api-tests", "test", "Red tests: Add retries", "draft", false, false, false, ["api-docs"]],
             ["api-impl", "impl", "Implement: Add retries", "draft", false, false, false, ["api-tests"]],
+            ["open-api", "open", "Open the pull request: Add retries", "draft", false, true, true, []],
         ])
     );
     assert_eq!(fx.env.query::<String>("SELECT shape FROM prs WHERE key = 'api'"), "tdd");
@@ -285,7 +286,7 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
     // One `job-added` per stub, after `pr-added`, with the kind.
     let added = fx.events("job-added");
     let kinds: Vec<(Value, Value)> = added.iter().map(|e| (e["job"].clone(), e["data"]["kind"].clone())).collect();
-    assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl"))]);
+    assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl")), (json!("open-api"), json!("open"))]);
     assert_eq!(
         added[1]["data"],
         json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "review": false, "urgent": false})
@@ -298,12 +299,79 @@ fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
 fn add_lays_out_one_stub_for_docs_and_for_config() {
     let fx = fx("plan");
     let out = fx.add_shape("api", Some("docs")).ok();
-    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("docs"), json!(["api-docs"])));
-    assert_eq!(fx.stubs("api"), json!([["api-docs", "docs", "Docs: Add retries", "draft", false, false, false, []]]));
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("docs"), json!(["api-docs", "open-api"])));
+    assert_eq!(
+        fx.stubs("api"),
+        json!([
+            ["api-docs", "docs", "Docs: Add retries", "draft", false, false, false, []],
+            ["open-api", "open", "Open the pull request: Add retries", "draft", false, true, true, []],
+        ])
+    );
     let out = fx.add_shape("web", Some("config")).ok();
-    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("config"), json!(["web-config"])));
-    assert_eq!(fx.stubs("web"), json!([["web-config", "work", "Config: Add retries", "draft", false, false, false, []]]));
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("config"), json!(["web-config", "open-web"])));
+    assert_eq!(
+        fx.stubs("web"),
+        json!([
+            ["web-config", "work", "Config: Add retries", "draft", false, false, false, []],
+            ["open-web", "open", "Open the pull request: Add retries", "draft", false, true, true, []],
+        ])
+    );
     assert_eq!(fx.env.query::<String>("SELECT group_concat(key || '=' || shape) FROM (SELECT key, shape FROM prs ORDER BY key)"), "api=docs,web=config");
+}
+
+#[test]
+fn add_lays_out_the_opener_stub_in_every_shape() {
+    let fx = fx("plan");
+    for (key, shape) in [("api", "tdd"), ("web", "docs"), ("cfg", "config")] {
+        let out = fx.add_shape(key, Some(shape)).ok();
+        let opener = format!("open-{key}");
+        let jobs = out["pr"]["jobs"].as_array().unwrap();
+        assert_eq!(jobs.last().unwrap(), &json!(opener), "the opener is the last Job of the {shape} template");
+        assert!(jobs.contains(&json!(opener)), "{shape} does not report the opener key in pr.jobs");
+        // The inserted row: kind `open`, the PR's own, `draft`, no Dependencies.
+        let row: (String, String, i64, String) = fx
+            .store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT j.kind, j.pr, (SELECT count(*) FROM dependencies d WHERE d.plan = j.plan AND d.job = j.key), j.status
+                       FROM jobs j WHERE j.plan = 'pay-1' AND j.key = ?1",
+                    [opener.as_str()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(row, ("open".into(), key.into(), 0, "draft".into()), "the {shape} opener row");
+    }
+}
+
+#[test]
+fn the_opener_stub_carries_the_fixed_spec_and_open_tier() {
+    let fx = fx("plan");
+    fx.add_shape("api", None).ok();
+    let open_tier = fx.env.cpd(&["config"]).ok()["config"]["open_tier"].as_str().unwrap().to_owned();
+    let row: (String, String, Option<String>, i64, String, String, String, String, String) = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT status, kind, fingerprint, appended, goal, context, touches, acceptance, out_of_scope
+                   FROM jobs WHERE plan = 'pay-1' AND key = 'open-api'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+            )?)
+        })
+        .unwrap();
+    // A draft with no fingerprint; the fixed Spec is stored, the Tier is the config's `open_tier`.
+    assert_eq!((row.0.as_str(), row.1.as_str(), row.2.is_some(), row.3), ("draft", "open", false, 0));
+    let tier: String = fx.store().read(|c| Ok(c.query_row("SELECT tier FROM jobs WHERE plan = 'pay-1' AND key = 'open-api'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(tier, open_tier, "the opener is at the config's open_tier");
+    for (name, value) in [("goal", &row.4), ("context", &row.5), ("touches", &row.6), ("acceptance", &row.7), ("out_of_scope", &row.8)] {
+        assert!(!value.trim().is_empty() && value != "[]" && value != "null", "the fixed Spec has no {name}: {value}");
+    }
+    // The fixed Spec is rendered from the PR: its goal names the base the opener works against.
+    assert!(row.4.contains("fit its base main"), "the fixed goal does not name the PR's base: {}", row.4);
+    let added = fx.events("job-added");
+    let event = added.iter().find(|e| e["job"] == "open-api").unwrap_or_else(|| panic!("no job-added for the opener: {added:?}"));
+    assert_eq!((&event["data"]["pr"], &event["data"]["kind"], &event["data"]["status"]), (&json!("api"), &json!("open"), &json!("draft")));
 }
 
 #[test]
@@ -311,7 +379,14 @@ fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_
     for phase in ["dispatch", "deploy"] {
         let fx = fx(phase);
         fx.add_shape("late", Some("docs")).ok();
-        assert_eq!(fx.stubs("late"), json!([["late-docs", "docs", "Docs: Add retries", "draft", true, false, false, []]]), "{phase}");
+        assert_eq!(
+            fx.stubs("late"),
+            json!([
+                ["late-docs", "docs", "Docs: Add retries", "draft", true, false, false, []],
+                ["open-late", "open", "Open the pull request: Add retries", "draft", true, true, true, []],
+            ]),
+            "{phase}"
+        );
         assert_eq!(fx.events("job-added")[0]["data"]["appended"], true, "{phase}");
         assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch", "{phase}");
     }
@@ -1681,12 +1756,12 @@ fn a_tdd_pr_in_draft_with_a_queued_open_job_is_cancelled_by_one_pr_cancel() {
 fn a_waiting_tdd_pr_with_its_template_stubs_is_cancelled_before_the_lock() {
     let fx = fx("plan");
     fx.add_with_stubs("pay-1", &["add", "gone", "--repo", fx.pay.to_str().unwrap(), "--title", "Change gone"]).ok();
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE pr = 'gone' AND status = 'draft'"), 3);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE pr = 'gone' AND status = 'draft'"), 4);
 
     let out = fx.pr(&["cancel", "gone"]).ok();
     assert_eq!(out["pr"], json!({"key": "gone", "status": "cancelled"}));
     assert_eq!(fx.pr_status("gone"), "cancelled");
-    for key in ["gone-docs", "gone-tests", "gone-impl"] {
+    for key in ["gone-docs", "gone-tests", "gone-impl", "open-gone"] {
         assert_eq!(fx.job_row(key), "cancelled/pr cancelled/-", "{key}");
     }
 }

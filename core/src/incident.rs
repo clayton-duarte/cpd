@@ -3,6 +3,8 @@
 //! engine holds scheduling for every Plan not in the incident (`is_held`, contract §2.2
 //! "Incident", §3.7). `start` and `end` are Manager-only; `status` is for any caller.
 
+use std::collections::BTreeSet;
+
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -31,9 +33,9 @@ pub struct StartArgs {
     /// The Plans in the incident (at least one)
     #[arg(long = "plan", value_name = "id", required = true)]
     pub plan: Vec<PlanId>,
-    /// The explanation of the incident (1 or more characters)
+    /// The explanation of the incident (1 or more characters; required only on a fresh start)
     #[arg(long, value_name = "text")]
-    pub reason: Text,
+    pub reason: Option<Text>,
     /// The `<plan>/<key>` PR that ends the incident when it merges
     #[arg(long, value_name = "<plan>/<key>")]
     pub until_pr: Option<String>,
@@ -47,7 +49,13 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         None => None,
     };
     match command {
-        Command::Start(args) => start(&mut store, caller.as_ref(), &args.plan, args.reason.as_str(), args.until_pr.as_deref()),
+        Command::Start(args) => start(
+            &mut store,
+            caller.as_ref(),
+            &args.plan,
+            args.reason.as_ref().map_or("", |t| t.as_str()),
+            args.until_pr.as_deref(),
+        ),
         Command::End => end(&mut store, caller.as_ref()),
         Command::Status => status(&mut store),
     }
@@ -136,10 +144,14 @@ fn parse_until_pr(value: &str) -> Result<(PlanId, String), CpdError> {
     Ok((plan, key.to_owned()))
 }
 
-/// `cpd incident start` (commands.md §25.1): one transaction that inserts the `incident` row and
-/// one `incident_plans` row per named Plan, requests the stop of every `starting` or `running`
-/// Attempt with no `stop_request`, and appends one `incident-started` Event. `until_pr` is the
-/// optional `<plan>/<key>` auto-end PR.
+/// `cpd incident start` (commands.md §25.1, hs-d664): one transaction. A fresh start (no `incident`
+/// row) inserts the row and one `incident_plans` row per named Plan, requests the stop of every
+/// `starting` or `running` Attempt with no `stop_request`, and appends one `incident-started` Event;
+/// `reason` must be non-empty. A start while `incident` is live replaces `incident_plans` with
+/// exactly the named Plans, keeps `started_at`, `started_by` and `reason`, runs no stop-request
+/// sweep, and appends one `incident-plans` Event only when the set or `until_pr` changed. `until_pr`
+/// is the optional `<plan>/<key>` auto-end PR; when it is absent the stored `until_plan`/`until_pr`
+/// are cleared.
 pub fn start(
     store: &mut Store,
     caller: Option<&SessionId>,
@@ -150,15 +162,9 @@ pub fn start(
     if plans.is_empty() {
         return Err(CpdError::new(ErrorCode::Usage, "Incident mode needs at least one --plan."));
     }
-    if reason.is_empty() {
-        return Err(CpdError::new(ErrorCode::Usage, "The incident needs a reason of at least 1 character."));
-    }
     let until = until_pr.map(parse_until_pr).transpose()?;
     store.write("incident start", |tx| {
         let caller = require_manager(tx, caller)?;
-        if let Some(existing) = row(tx)? {
-            return Ok(Output::success(json!({"changed": false, "incident": existing})));
-        }
         for plan in plans {
             let known: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM plans WHERE id = ?1)", [plan.as_str()], |r| r.get(0))?;
             if !known {
@@ -188,6 +194,42 @@ pub fn start(
                 .with("pr", key.as_str()));
             }
         }
+
+        let live: Option<Option<String>> = tx
+            .query_row("SELECT until_pr FROM incident WHERE id = 1", [], |r| r.get(0))
+            .optional()?;
+        if let Some(stored_until_pr) = live {
+            let new_until_pr = until.as_ref().map(|(plan, key)| format!("{plan}/{key}"));
+            let stored: Vec<PlanId> = self::plans(tx)?;
+            let stored_set: BTreeSet<&str> = stored.iter().map(PlanId::as_str).collect();
+            let new_set: BTreeSet<&str> = plans.iter().map(PlanId::as_str).collect();
+            let set_changed = stored_set != new_set;
+            let until_changed = new_until_pr.as_deref() != stored_until_pr.as_deref();
+            if !set_changed && !until_changed {
+                let incident = row(tx)?.expect("the row just read");
+                return Ok(Output::success(json!({"changed": false, "incident": incident})));
+            }
+            if set_changed {
+                tx.execute("DELETE FROM incident_plans", [])?;
+                for plan in plans {
+                    tx.execute("INSERT INTO incident_plans (plan, started_txn) VALUES (?1, ?2)", params![plan.as_str(), tx.id()])?;
+                }
+            }
+            if until_changed {
+                tx.execute(
+                    "UPDATE incident SET until_plan = ?1, until_pr = ?2 WHERE id = 1",
+                    params![until.as_ref().map(|(plan, _)| plan.as_str()), new_until_pr.as_deref()],
+                )?;
+            }
+            let named: Vec<&str> = plans.iter().map(PlanId::as_str).collect();
+            append(tx, NewEvent::incident_plans("Incident mode Plans updated.", caller.as_str(), &named, new_until_pr.as_deref()))?;
+            let incident = row(tx)?.expect("the row just updated");
+            return Ok(Output::success(json!({"changed": true, "incident": incident})));
+        }
+
+        if reason.is_empty() {
+            return Err(CpdError::new(ErrorCode::Usage, "The incident needs a reason of at least 1 character."));
+        }
         let started_at = clock::now();
         tx.execute(
             "INSERT INTO incident (id, started_at, started_by, reason, started_txn, until_plan, until_pr)
@@ -209,7 +251,7 @@ pub fn start(
              WHERE status IN ('starting', 'running') AND stop_request IS NULL",
             [],
         )?;
-        let named: Vec<&str> = plans.iter().map(|p| p.as_str()).collect();
+        let named: Vec<&str> = plans.iter().map(PlanId::as_str).collect();
         append(tx, NewEvent::incident_started("Incident mode on.", caller.as_str(), reason, &started_at, &named, until_pr))?;
         let incident = row(tx)?.expect("the row just inserted");
         Ok(Output::success(json!({"changed": true, "incident": incident})))

@@ -1896,7 +1896,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 
 Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so no `illegal_phase`. A new PR has no dependents, so it creates no cycle of its own; `dependency_cycle` is possible only through `pr edit` (§9.5).
 
-**The template** (hs-d341). The shape's Jobs are **stub drafts** (§5.1: a title, no Tier and no Spec): `jobs` rows with their `kind`, the titles `Docs: <PR title>`, `Red tests: <PR title>`, `Implement: <PR title>` and `Config: <PR title>`, `status = draft`, `appended` 0 before the lock and 1 after it (as `job add --draft` writes them), no fingerprint, and for `tdd` the `dependencies` rows `<key>-tests → <key>-docs` and `<key>-impl → <key>-tests`. The Lead completes each (`job edit --tier --spec`, §5.2) or cancels the ones it does not need (never, one by one, the `test` and `impl` Jobs of a `tdd` PR: `job cancel` is refused `shape_incomplete`; `pr cancel` of the whole PR cancels them itself, §9.6, hs-d573), and adds the PR's other Jobs with `job add --pr`. The engine runs nothing of them until the batch is approved (§4.6, §4.8). The PR's `open` Job is not part of the template: engine E4 adds it once the PR has started (contract §3.7).
+**The template** (hs-d341). The shape's Jobs are **stub drafts** (§5.1: a title, no Tier and no Spec): `jobs` rows with their `kind`, the titles `Docs: <PR title>`, `Red tests: <PR title>`, `Implement: <PR title>` and `Config: <PR title>`, `status = draft`, `appended` 0 before the lock and 1 after it (as `job add --draft` writes them), no fingerprint, and for `tdd` the `dependencies` rows `<key>-tests → <key>-docs` and `<key>-impl → <key>-tests`. The Lead completes each (`job edit --tier --spec`, §5.2) or cancels the ones it does not need (never, one by one, the `test` and `impl` Jobs of a `tdd` PR: `job cancel` is refused `shape_incomplete`; `pr cancel` of the whole PR cancels them itself, §9.6, hs-d573), and adds the PR's other Jobs with `job add --pr`. The engine runs nothing of them until the batch is approved (§4.6, §4.8). The PR's `open` Job is a **stub draft** laid out by the template, Tier `open_tier` (contract §8.2), no Spec or Dependencies (its Spec is fixed by cpd); the Lead may cancel it. Engine E4 (§3.7) is a **fallback**: when the PR becomes `dispatch`, if it has no `open` Job at all, E4 adds a fresh one `queued`; a `draft`, `queued`, `running`, `failed` or `cancelled` one it leaves alone, and it still promotes a `draft` opener to `queued` when no other draft of its PR remains (contract §3.7, hs-d573).
 
 **The repo's key** (contract §8.3, hs-d288). `pr add` parses the repo's `origin` once, at the boundary: `git -C <repo> remote get-url origin`, which must be `https://github.com/<owner>/<name>` or `git@github.com:<owner>/<name>`, each with or without `.git`, `<owner>` and `<name>` valid by contract §2.1 (stored lowercased). Nothing else is accepted: no `origin`, another host, or an SSH host alias (`git@github-work:<work-owner>/x.git`) is `repo_unkeyed`; cpd never asks the network to resolve one. `<owner>` must be the Context's (`owner_mismatch`): one GitHub owner per Context, and a Plan may span several repos of it. The PR stores `<name>` only; its owner is the Context's.
 
@@ -4680,38 +4680,50 @@ Incident mode (hs-d643, user decision hs-d643; supersedes hs-d634): Plan-scoped 
 ### 25.1 `incident start`
 
 ```
-cpd incident start --plan <id> [--plan <id>...] --reason <text> [--until-pr <plan>/<key>]
+cpd incident start --plan <id> [--plan <id>...] [--reason <text>] [--until-pr <plan>/<key>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--plan <id>` | required, repeatable at least once; names an existing Plan in this Context |
-| `--reason <text>` | required; 1 or more characters, explanation of the incident |
+| `--reason <text>` | optional; 1 or more characters, explanation of the incident; required only on a fresh start |
 | `--until-pr <plan>/<key>` | optional; PR key in format `<plan>/<key>` of one of the named Plans; incident ends when this PR merges |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
 | at least one `--plan` is present | `usage` | 2 |
-| `--reason` is present and at least 1 character | `usage` | 2 |
+| when incident is off, `--reason` is present and at least 1 character | `usage` | 2 |
 | no `--plan` argument, or every one names an existing Plan in the store | `plan_not_found` | 4 |
 | `--until-pr` is absent, or its value is a PR of one of the named Plans and exists | `pr_not_found` | 4 |
 | `--until-pr` is absent, or its value's Plan is one of the named Plans | `until_pr_not_incident` | 3 |
 | `--until-pr` is valid JSON and `<plan>/<key>` format, or not present | `usage` | 2 |
 
-Effects: one transaction; insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
+**Effects:** one transaction. **Fresh start** (when incident is off): insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id, `until_plan` and `until_pr` as specified or null); insert one row per named Plan in `incident_plans` table (plan, started_txn); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event with `data` including `plans` array; return `changed: true`. **Update on a live incident** (when incident is on): replace `incident_plans` with exactly the named Plans; when the set or `until_pr` changed, update `until_plan` and `until_pr` and append `incident-plans` Event with the new `plans` array; when both are unchanged, append no Event; return `changed: true` when the Event is appended, `changed: false` when unchanged; run no stop-request sweep. The `started_at`, `started_by` and stored `reason` stay unchanged on an update. When `--until-pr` is absent and the stored `until_plan` is not in the new set, clear both `until_plan` and `until_pr`. The incident and incident_plans tables are registered in `history_tables` (no_delete 0).
 
-Output examples:
+**Output examples:**
 
+Fresh start:
 ```json
 {"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
 ```
 
+Update with changed set:
+```json
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-c"], "until_pr": null}}
+```
+
+Update with unchanged set and until_pr:
+```json
+{"ok": true, "changed": false, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress", "plans": ["plan-a", "plan-b"], "until_pr": null}}
+```
+
+Fresh start with auto-end:
 ```json
 {"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "fixing PR ci", "plans": ["plan-a"], "until_pr": "plan-a/pr-1"}}
 ```
 
-Idempotent: yes; incident mode already on returns `"changed": false` with the existing row (same Plans, same reason or changed reason; unchanged `started_at` and `by`).
+**Idempotent:** yes; when the set and `until_pr` are already as named, returns `changed: false` with the existing incident.
 
 ### 25.2 `incident end`
 

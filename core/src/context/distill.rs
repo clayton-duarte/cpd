@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -29,7 +29,8 @@ use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::host::deadline::Failed as RunFailed;
 use crate::host::pi;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::deadline;
+use crate::host::runner::{Call, Runner, SystemRunner};
 use crate::ids::{ContextId, RecordId};
 use crate::lock;
 use crate::output::Output;
@@ -43,9 +44,6 @@ const PROMPT: &str = include_str!("distill_prompt.md");
 
 /// How many lines of pi's stderr a `distill_failed` Event carries.
 const TAIL_LINES: usize = 60;
-
-/// How often a run looks at pi while it waits.
-const POLL: Duration = Duration::from_millis(50);
 
 #[derive(Args, Debug)]
 pub struct DistillArgs {
@@ -486,20 +484,10 @@ impl Run<'_> {
         let mut log_file = OpenOptions::new().create(true).append(true).open(&log).map_err(|e| io_failed("open", &log, &e))?;
         // The tail of pi's stderr is what this run appended after this point.
         let offset = log_file.metadata().map_err(|e| io_failed("read", &log, &e))?.len();
-        let mut command = Command::new(&launch.argv[0]);
-        command.args(&launch.argv[1..]);
-        for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CPD_")) {
-            command.env_remove(key);
-        }
-        command
-            .envs(&launch.env)
-            .current_dir(&dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(log_file.try_clone().map_err(|e| io_failed("use", &log, &e))?);
+        let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
         let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
         let started = Instant::now();
-        let waited = wait_limited(&mut command, limit);
+        let waited = run_pi_with(&SystemRunner, &launch, &dir, &log, limit, &environ);
         let mut ran = Ran {
             started_at,
             seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
@@ -871,35 +859,38 @@ mod pi_json {
 
 /// What became of a child that was given a time limit.
 #[derive(Debug)]
-enum Waited {
+pub(super) enum Waited {
     /// It ended; `stdout` is everything it printed (empty when its stdout was not piped).
     Exited { status: ExitStatus, stdout: io::Result<Vec<u8>> },
     TimedOut,
 }
 
-/// Runs `command` and waits at most `limit`, reading its piped stdout meanwhile so a full pipe never stalls
-/// it; a child still alive then is killed and reaped.
-fn wait_limited(command: &mut Command, limit: Duration) -> io::Result<Waited> {
-    let mut child = command.spawn()?;
-    let reader = child.stdout.take().map(|mut out| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            out.read_to_end(&mut bytes).map(|_| bytes)
-        })
-    });
-    let deadline = Instant::now() + limit;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stdout = reader.map_or(Ok(Vec::new()), |r| r.join().expect("the reader of pi's output does not panic"));
-            return Ok(Waited::Exited { status, stdout });
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            child.wait()?;
-            return Ok(Waited::TimedOut);
-        }
-        std::thread::sleep(POLL);
+/// [`Runner::run`] of `call` for at most `limit`; a call that runs past it is [`Waited::TimedOut`].
+pub(super) fn wait_limited_with(runner: &dyn Runner, call: &Call, limit: Duration) -> io::Result<Waited> {
+    let call = Call { deadline: limit, ..call.clone() };
+    match runner.run(&call) {
+        Ok(out) => Ok(Waited::Exited { status: out.status, stdout: Ok(out.stdout) }),
+        Err(deadline::Failed::Timeout(_)) => Ok(Waited::TimedOut),
+        Err(deadline::Failed::Io(e)) => Err(e),
     }
+}
+
+/// Step 4's process on `runner`: `launch` in `dir`, its stderr appended to `log`, no stdin, under `limit`. The
+/// variables of `environ` (the names of the process's environment) that start with `CPD_` are removed.
+pub(super) fn run_pi_with(runner: &dyn Runner, launch: &pi::Launch, dir: &Path, log: &Path, limit: Duration, environ: &[String]) -> io::Result<Waited> {
+    let mut envs: Vec<(String, Option<String>)> = environ.iter().filter(|k| k.starts_with("CPD_")).map(|k| (k.clone(), None)).collect();
+    envs.extend(launch.env.iter().map(|(k, v)| (k.clone(), Some(v.clone()))));
+    let call = Call {
+        tool: "pi".to_owned(),
+        program: launch.argv[0].clone(),
+        args: launch.argv[1..].to_vec(),
+        envs,
+        cwd: Some(dir.to_path_buf()),
+        deadline: limit,
+        stdin: None,
+        stderr_to: Some(log.to_path_buf()),
+    };
+    wait_limited_with(runner, &call, limit)
 }
 
 /// The last [`TAIL_LINES`] lines of `log` after byte `offset`.
@@ -997,23 +988,6 @@ mod tests {
         assert!(pi_json::parse(b"[1]\n").is_err());
         let no_usage = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}"#;
         assert!(pi_json::parse(no_usage.as_bytes()).unwrap_err().contains("malformed"));
-    }
-
-    #[test]
-    fn a_child_that_outlives_its_limit_is_killed() {
-        let started = Instant::now();
-        let waited = wait_limited(Command::new("sleep").arg("30"), Duration::from_millis(200)).unwrap();
-        assert!(matches!(waited, Waited::TimedOut), "{waited:?}");
-        assert!(started.elapsed() < Duration::from_secs(10));
-    }
-
-    #[test]
-    fn a_child_that_ends_in_time_reports_its_status() {
-        let Waited::Exited { status, .. } = wait_limited(Command::new("sh").args(["-c", "exit 3"]), Duration::from_secs(30)).unwrap() else {
-            panic!("it ended in time")
-        };
-        assert_eq!(status.code(), Some(3));
-        assert!(wait_limited(&mut Command::new("/nonexistent/pi"), Duration::from_secs(1)).is_err());
     }
 
     #[test]

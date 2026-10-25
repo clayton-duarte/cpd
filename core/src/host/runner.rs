@@ -1,30 +1,80 @@
 //! The process seam: [`Runner`] runs one `Command` under a deadline, like [`deadline::output`].
 //! [`SystemRunner`] is the real one; [`FakeRunner`] answers from a script, in-process, on virtual time.
 
+use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::ExitStatus;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::deadline::{self, Failed};
 use crate::clock::{Clock, ManualClock};
 
+/// The `Call.deadline` of a process that has none (pi in a retitle, `cpd watch --ensure`, `date`): a `Duration` the real runner never reaches.
+pub const NO_DEADLINE: Duration = Duration::from_secs(60 * 60 * 24 * 365 * 100);
+
+/// The `Call.tool` of a Git hook (`git::hooks::exec`): the `SystemRunner` runs it at idle priority (hs-d528).
+pub const HOOK_TOOL: &str = "hook";
+
 pub trait Runner: Send + Sync {
     /// Runs `cmd` for at most `deadline` and returns what [`deadline::output`] returns: the same `Output`,
     /// `Failed::Io` or `Failed::Timeout(tool_timeout)`.
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed>;
+
+    /// Runs `cmd` with no deadline, in its own process group, like [`Command::output`]: for a call that returns when
+    /// the User says so (`tmux display-popup`, contract §6.3).
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output>;
+
+    /// Runs what `call` describes: like [`Runner::output`], and also writes `call.stdin` to the child's stdin
+    /// (then closes it) and sends the child's stderr to the file `call.stderr_to`, appending.
+    fn run(&self, call: &Call) -> Result<Output, Failed>;
 }
 
-/// The real runner: [`deadline::output`] and nothing else.
+/// The `Command` that `call` describes: its program, arguments, environment (a `None` value removes the variable)
+/// and working directory. Stdin and stderr are wired by the runner, not here.
+pub fn command(call: &Call) -> Command {
+    let mut cmd = Command::new(&call.program);
+    cmd.args(&call.args);
+    for (key, value) in &call.envs {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        };
+    }
+    if let Some(cwd) = &call.cwd {
+        cmd.current_dir(cwd);
+    }
+    cmd
+}
+
+/// The real runner: [`deadline::output`], plus a thread that writes `Call.stdin` and a file for `Call.stderr_to`.
 pub struct SystemRunner;
 
 impl Runner for SystemRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         deadline::output(cmd, tool, deadline)
     }
+    fn output_unbounded(&self, cmd: &mut Command, _tool: &str) -> std::io::Result<Output> {
+        cmd.process_group(0).output()
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        let mut cmd = if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) };
+        if let Some(path) = &call.stderr_to {
+            let file = OpenOptions::new().create(true).append(true).open(path).map_err(Failed::Io)?;
+            cmd.stderr(file);
+        }
+        deadline::output_fed(&mut cmd, &call.tool, call.deadline, call.stdin.clone(), call.stderr_to.is_some(), call.tool == HOOK_TOOL)
+    }
+}
+
+/// `call` behind the idle priority prefix (hs-d528): its environment and working directory are the same.
+fn idle(call: &Call) -> Call {
+    let prefix = super::priority::idle_prefix();
+    let args = prefix[1..].iter().map(|s| (*s).to_owned()).chain([call.program.clone()]).chain(call.args.clone()).collect();
+    Call { program: prefix[0].to_owned(), args, ..call.clone() }
 }
 
 /// What a `Command` carries, as the fake saw it.
@@ -37,6 +87,10 @@ pub struct Call {
     pub envs: Vec<(String, Option<String>)>,
     pub cwd: Option<PathBuf>,
     pub deadline: Duration,
+    /// Bytes written to the child's stdin, which is then closed; `None` is a null stdin.
+    pub stdin: Option<Vec<u8>>,
+    /// The file the child's stderr is appended to; `None` is captured in the `Output`.
+    pub stderr_to: Option<PathBuf>,
 }
 
 /// How a scripted call ends.
@@ -97,6 +151,39 @@ pub struct FakeRunner {
     script: Arc<Mutex<Script>>,
 }
 
+/// A [`FakeRunner`] held weakly: for a route that lives in the runner's own script and calls it back.
+struct WeakRunner {
+    clock: ManualClock,
+    script: Weak<Mutex<Script>>,
+}
+
+impl WeakRunner {
+    fn upgrade(&self) -> Option<FakeRunner> {
+        self.script.upgrade().map(|script| FakeRunner { clock: self.clock.clone(), script })
+    }
+}
+
+impl Runner for WeakRunner {
+    fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
+        match self.upgrade() {
+            Some(runner) => runner.output(cmd, tool, deadline),
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+        }
+    }
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output> {
+        match self.upgrade() {
+            Some(runner) => runner.output_unbounded(cmd, tool),
+            None => Err(ErrorKind::NotFound.into()),
+        }
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        match self.upgrade() {
+            Some(runner) => runner.run(call),
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+        }
+    }
+}
+
 /// The program's file name: `/x/bin/tmux` is `tmux`.
 fn file_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
@@ -126,6 +213,10 @@ impl FakeRunner {
     pub fn route(self, program: &str, handler: Arc<dyn Handler>) -> FakeRunner {
         self.script().routes.push((program.to_owned(), handler));
         self
+    }
+    /// This runner as a [`Runner`] that does not keep the script alive.
+    pub fn weak(&self) -> Arc<dyn Runner> {
+        Arc::new(WeakRunner { clock: self.clock.clone(), script: Arc::downgrade(&self.script) })
     }
     /// Every call in order, answered or not.
     pub fn calls(&self) -> Vec<Call> {
@@ -157,6 +248,29 @@ impl FakeRunner {
     }
 }
 
+impl FakeRunner {
+    /// Answers `call` like [`deadline::output`]: its `Output`, `Failed::Io` or `Failed::Timeout`, on virtual time.
+    fn reply(&self, call: Call) -> Result<Output, Failed> {
+        let deadline = call.deadline;
+        match self.answer(&call) {
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+            Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
+            Some(Reply::Exit { takes, .. }) if takes >= deadline => {
+                self.clock.sleep(deadline);
+                let argv = std::iter::once(call.program).chain(call.args).collect();
+                Err(Failed::Timeout(deadline::timeout(&call.tool, argv, deadline)))
+            }
+            Some(Reply::Exit { code, stdout, stderr, takes }) => {
+                // A reply that takes no time is no nap: `ManualClock::naps` lists only what a caller waited on.
+                if !takes.is_zero() {
+                    self.clock.sleep(takes);
+                }
+                Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
+            }
+        }
+    }
+}
+
 impl Runner for FakeRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         let program = cmd.get_program().to_string_lossy().into_owned();
@@ -165,28 +279,26 @@ impl Runner for FakeRunner {
             .get_envs()
             .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
             .collect();
-        let call = Call {
+        self.reply(Call {
             tool: tool.to_owned(),
             program,
             args,
             envs,
             cwd: cmd.get_current_dir().map(PathBuf::from),
             deadline,
-        };
-        match self.answer(&call) {
-            None => Err(Failed::Io(ErrorKind::NotFound.into())),
-            Some(Reply::Io(kind)) => Err(Failed::Io(kind.into())),
-            Some(Reply::Exit { takes, .. }) if takes >= deadline => {
-                self.clock.sleep(deadline);
-                let argv = std::iter::once(call.program).chain(call.args).collect();
-                Err(Failed::Timeout(deadline::timeout(tool, argv, deadline)))
-            }
-            Some(Reply::Exit { code, stdout, stderr, takes }) => {
-                if !takes.is_zero() {
-                    self.clock.sleep(takes);
-                }
-                Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
-            }
+            stdin: None,
+            stderr_to: None,
+        })
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        self.reply(call.clone())
+    }
+    /// No deadline: the call is recorded with the longest one, which no reply reaches.
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output> {
+        match self.output(cmd, tool, Duration::MAX) {
+            Ok(out) => Ok(out),
+            Err(Failed::Io(e)) => Err(e),
+            Err(Failed::Timeout(e)) => Err(std::io::Error::other(e.message().to_owned())),
         }
     }
 }

@@ -103,7 +103,7 @@ fn tick_e3_e4(fx: &mut Fx) {
     tick(fx);
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S1),
+/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (H3),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
 /// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
 #[test]
@@ -126,13 +126,13 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
             )?)
         })
         .unwrap();
-    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S1".into(), "repo".into(), 1, 0, false));
+    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "H3".into(), "repo".into(), 1, 0, false));
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0, "its needs are derived");
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!((&added[0].0, &added[0].1), (&Some("pay".to_owned()), &Some("open-repo".to_owned())));
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S1")));
+    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("H3")));
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"), None);
@@ -156,7 +156,7 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
             Ok(conn.query_row("SELECT tier, appended, fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
         })
         .unwrap();
-    assert_eq!(row, ("S1".into(), 1, true));
+    assert_eq!(row, ("H3".into(), 1, true));
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");

@@ -20,12 +20,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
@@ -475,7 +475,33 @@ pub struct Tmux {
     program: Option<PathBuf>,
     /// What starts the processes: how a call runs, not which server it is, so it takes no part in equality.
     runner: Handle,
+    /// What `kill-server` reads and naps on: the time, not which server it is, so it takes no part in equality.
+    clock: Time,
 }
+
+/// The [`Clock`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Time(Arc<dyn Clock>);
+
+impl Default for Time {
+    fn default() -> Time {
+        Time(Arc::new(SystemClock))
+    }
+}
+
+impl fmt::Debug for Time {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+impl PartialEq for Time {
+    fn eq(&self, _: &Time) -> bool {
+        true
+    }
+}
+
+impl Eq for Time {}
 
 /// The [`Runner`] of a [`Tmux`]: always equal to another, printed by name.
 #[derive(Clone)]
@@ -504,18 +530,24 @@ impl Eq for Handle {}
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default() }
+        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default() }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default() }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default() }
     }
 
     /// This server, with every call run by `runner` instead of the real processes.
     pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> Tmux {
         self.runner = Handle(runner);
+        self
+    }
+
+    /// This server, whose `kill-server` waits on `clock` instead of the real time.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Tmux {
+        self.clock = Time(clock);
         self
     }
 
@@ -572,8 +604,8 @@ impl Tmux {
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
             Some(limit) => self.runner.0.output(&mut cmd, "tmux", limit),
-            // In its own process group, as every other call.
-            None => cmd.process_group(0).output().map_err(Failed::Io),
+            // No deadline; the runner starts it in its own process group, as every other call.
+            None => self.runner.0.output_unbounded(&mut cmd, "tmux").map_err(Failed::Io),
         };
         ran.map_err(|e| match e {
             Failed::Io(e) => CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
@@ -849,15 +881,16 @@ impl Tmux {
         if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
             return Err(self.failed(&args, &out));
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let clock = &self.clock.0;
+        let deadline = clock.now() + Duration::from_secs(10);
         loop {
             if self.program_gone() {
                 return Ok(());
             }
             match self.liveness()? {
                 Liveness::Gone => return Ok(()),
-                Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
+                Liveness::Answering | Liveness::Dying if clock.now() < deadline => {
+                    clock.sleep(Duration::from_millis(50));
                 }
                 // Its connection closed on us: the server is dead, only its cleanup is left.
                 Liveness::Dying => return Ok(()),
@@ -975,18 +1008,28 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
+    installed_version_with(&SystemRunner)
+}
+
+/// [`installed_version`], the call run by `runner`.
+pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
     let argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-V".to_owned()];
-    let out = client(PROGRAM).arg("-V").output().map_err(|e| {
+    let cannot = |e: std::io::Error| {
         CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
             .with("argv", argv.clone())
             .with("exit", serde_json::Value::Null)
             .with("stderr", e.to_string())
-    })?;
+    };
+    let out = match runner.output(client(PROGRAM).arg("-V"), "tmux", DEADLINE) {
+        Ok(out) => out,
+        Err(Failed::Io(e)) => return Err(cannot(e)),
+        Err(Failed::Timeout(e)) => return Err(e),
+    };
     let text = String::from_utf8_lossy(&out.stdout);
     match (out.status.success(), text.trim().strip_prefix("tmux ")) {
         (true, Some(version)) => Ok(version.to_owned()),
         _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
-            .with("argv", argv)
+            .with("argv", argv.clone())
             .with("exit", out.status.code())
             .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
@@ -1468,53 +1511,6 @@ mod tests {
         assert_eq!(cmd.get_args().next().unwrap(), "-u");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
         assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
-    }
-
-    /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
-    /// first answers to `list-sessions` are `server exited unexpectedly`, then a refused connection,
-    /// then `no server running`. Returns the script and the calls it logs.
-    fn dying_server(dir: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("tmux");
-        let script = format!(
-            "#!/bin/sh\n\
-             d='{d}'\n\
-             echo \"$*\" >> \"$d/calls\"\n\
-             case \" $* \" in\n\
-               *' kill-server '*) touch \"$d/killed\"; echo 'server exited unexpectedly' >&2; exit 1;;\n\
-               *' list-sessions '*)\n\
-                 [ -e \"$d/killed\" ] || exit 0\n\
-                 n=$(cat \"$d/n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/n\"\n\
-                 case $n in\n\
-                   1|2) echo 'server exited unexpectedly' >&2;;\n\
-                   3) echo 'lost server' >&2;;\n\
-                   4) echo 'error connecting to /tmp/x (Connection refused)' >&2;;\n\
-                   *) echo 'no server running on /tmp/x' >&2;;\n\
-                 esac; exit 1;;\n\
-             esac\n",
-            d = dir.display()
-        );
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Another test's `fork` may hold the script's write descriptor for a moment: run it until it can be.
-        for _ in 0..100 {
-            match Command::new(&path).arg("warm-up").status() {
-                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(20)),
-                _ => break,
-            }
-        }
-        path
-    }
-
-    #[test]
-    fn a_dying_server_answering_server_exited_unexpectedly_does_not_fail_kill_server() {
-        let dir = tempfile::tempdir().unwrap();
-        let tmux = Tmux::new("dying").with_program(dying_server(dir.path()));
-        tmux.kill_server().unwrap();
-        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
-        let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
-        assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
-        assert!(calls.lines().any(|l| l == "-u -L dying -f /dev/null kill-server"), "{calls}");
     }
 
     #[test]

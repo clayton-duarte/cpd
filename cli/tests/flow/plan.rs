@@ -72,9 +72,11 @@ fn new_plan_only(env: &TestEnv, id: &str) -> Value {
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
     let out = new_plan_only(env, id);
     env.github_origin(repo);
-    // `--shape config`: one stub draft, `pay-config`, which these tests do not use: it is cancelled, as a Lead cancels a stub it does not need.
+    // `--shape config`: the template's stub drafts, `pay-config` and its opener, which these tests do not use:
+    // they are cancelled, as a Lead cancels a stub it does not need.
     env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", id]).ok();
     env.cpd(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", id]).ok();
+    env.cpd(&["job", "cancel", "open-pay", "--reason", "a stub of the template", "--plan", id]).ok();
     env.drop_unreachable_origin(repo);
     out
 }
@@ -152,6 +154,14 @@ fn planned(env: &TestEnv, repo: &Path, id: &str) {
 
 fn sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// The `## PR <key>` section of a render: from its heading to the next `## ` one.
+fn section<'a>(text: &'a str, pr: &str) -> &'a str {
+    let start = text.find(&format!("\n## PR {pr}\n")).unwrap_or_else(|| panic!("no PR {pr} section:\n{text}"));
+    let rest = &text[start..];
+    let end = rest[1..].find("\n## ").map_or(rest.len(), |i| i + 1);
+    &rest[..end]
 }
 
 // ---------- plan new ----------
@@ -626,8 +636,8 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     assert_eq!(plans.len(), 2);
     let pay = &plans[0];
     assert_eq!((&pay["id"], &pay["context"], &pay["phase"]), (&json!("pay"), &json!("ctx"), &json!("plan")));
-    // The one cancelled is the stub of the template `new_plan` cancels.
-    assert_eq!(pay["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 1}));
+    // The two cancelled are the stubs of the template `new_plan` cancels (`pay-config` and its opener).
+    assert_eq!(pay["counts"], json!({"draft": 2, "queued": 0, "running": 0, "merged": 0, "failed": 0, "cancelled": 2}));
     assert_eq!(pay["prs"][0]["repo"], repo.canonicalize().unwrap().display().to_string());
     assert_eq!((&pay["prs"][0]["key"], &pay["prs"][0]["pr"]), (&json!("pay"), &Value::Null));
     let ids = |args: &[&str]| -> Vec<String> {
@@ -739,6 +749,50 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     assert_eq!(fs::read_to_string(&path).unwrap(), text);
     refused(&env.cpd(&["plan", "render"]), "plan_required", 2);
     refused(&env.cpd(&["plan", "render", "--plan", "nope"]), "plan_not_found", 4);
+}
+
+#[test]
+fn render_shows_the_planned_opener_and_no_placeholder() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    new_plan_only(&env, "pay");
+    // A template PR: `pr add` lays out its opener stub beside the shape's stubs; its other Job is merged away.
+    env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    env.cpd(&["job", "cancel", "pay-config", "--reason", "not needed", "--plan", "pay"]).ok();
+    // An older PR, one whose Plan holds no open Job: it predates the template's opener stub, so its row is written
+    // directly (the store is append-only: a Job row is never deleted).
+    let old = env.keyed_repo("old");
+    store(&env)
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
+                     VALUES ('pay', 'old', '{}', 'old', 'main', 'Old change', 'docs', 'waiting', 'cpd/pay/old', cpd_txn(), 't');",
+                    old.display()
+                ),
+            )
+        })
+        .unwrap();
+    env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
+
+    let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+
+    // The template PR holds its planned opener: the render shows the Job's own row and section, with no placeholder.
+    let pay = section(&text, "pay");
+    assert!(pay.lines().any(|l| l.starts_with("| `open-pay` |") && l.contains("Open the pull request: Change the PR") && l.contains("| open |") && l.contains("| draft |")), "{pay}");
+    assert!(pay.contains("\n### `open-pay`: Open the pull request: Change the PR\n"), "{pay}");
+    assert!(pay.contains("Status: `draft` · Kind: `open`"), "{pay}");
+    assert!(!pay.contains("Added by cpd when the PR starts"), "no placeholder for a PR whose Plan holds an open Job:\n{pay}");
+    assert!(!pay.contains("every other Job of the PR"), "no placeholder `Needs` cell:\n{pay}");
+
+    // An older PR with no open Job still shows the placeholder, as before the template laid one out.
+    let old = section(&text, "old");
+    assert!(old.contains("| `open-old` | Open the pull request: Old change | open |") && old.contains("every other Job of the PR"), "{old}");
+    assert!(old.contains("\n### `open-old`: Open the pull request: Old change\n"), "{old}");
+    assert!(old.contains("Status: — · Kind: `open`"), "{old}");
+    assert!(old.contains("Added by cpd when the PR starts"), "{old}");
 }
 
 // ---------- plan review, plan decide ----------
@@ -898,9 +952,10 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = env.keyed_repo("web");
     env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--plan", "pay"]).ok();
-    // Its stub draft is a draft of the review's kind: cancelled, it is not one, and the review stays current.
+    // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
     assert_eq!(show(&env, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
     env.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    env.cpd(&["job", "cancel", "open-web", "--reason", "a stub of the template", "--plan", "pay"]).ok();
     assert_eq!(show(&env, "pay")["review"]["current"], true);
 
     // Rejected: the drafts stay drafts, editable.
@@ -947,6 +1002,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 }
 
 /// A `draft` `open` Job of PR `pr` as engine E4 inserts it while a draft of the PR remains (hs-d573 B1): `appended`, no fingerprint.
+/// The template lays one out (`open-pay`), cancelled by `new_plan`: this adds the draft E4 would insert under the next free key.
 fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
     store(env)
         .write("fixture", |tx| {
@@ -979,7 +1035,7 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     assert_eq!(out["review"]["fingerprint"], fingerprint);
     let review = out["review"]["id"].as_str().unwrap().to_owned();
 
-    add_draft_open(&env, "pay", "open-pay");
+    add_draft_open(&env, "pay", "open-pay-2");
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"], fingerprint, "the open Job is not in the fingerprint");
     assert_eq!(show(&env, "pay")["review"]["current"], true);
 
@@ -987,12 +1043,12 @@ fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_wit
     assert_eq!((&out["review"]["status"], &out["current"]), (&json!("approved"), &json!(true)));
     let mut queued: Vec<String> = out["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     queued.sort();
-    assert_eq!(queued, ["c", "open-pay"]);
+    assert_eq!(queued, ["c", "open-pay-2"]);
     let decided = events(&env, "plan-review").last().unwrap().clone();
     let mut listed: Vec<String> = decided["data"]["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
     listed.sort();
-    assert_eq!(listed, ["c", "open-pay"]);
-    for key in ["c", "open-pay"] {
+    assert_eq!(listed, ["c", "open-pay-2"]);
+    for key in ["c", "open-pay-2"] {
         assert_eq!(job_status(&env, key), "queued", "{key}");
         assert_eq!(env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
     }
@@ -1007,7 +1063,7 @@ fn a_draft_open_job_is_no_job_under_review() {
     env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
 
     // The only draft is the open Job: nothing to review.
-    add_draft_open(&env, "pay", "open-pay");
+    add_draft_open(&env, "pay", "open-pay-2");
     refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 0);
 
@@ -1016,7 +1072,7 @@ fn a_draft_open_job_is_no_job_under_review() {
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
     let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
-    let row = text.lines().find(|l| l.starts_with("| `open-pay` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
+    let row = text.lines().find(|l| l.starts_with("| `open-pay-2` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
     assert!(!row.contains("**under review**"), "{row}");
     assert!(text.lines().any(|l| l.starts_with("| `c` |") && l.contains("**under review**")), "{text}");
 }
@@ -1057,7 +1113,7 @@ fn lock_creates_the_lead_worktree_queues_the_drafts_and_starts_the_engine() {
     let shown = show(&env, "pay");
     assert_eq!((&shown["plan"]["phase"], &shown["prs"][0]["lead_worktree"]), (&json!("dispatch"), &json!(worktree.display().to_string())));
     assert!(shown["plan"]["locked_at"].is_string());
-    for job in shown["jobs"].as_array().unwrap().iter().filter(|j| j["key"] != "pay-config") {
+    for job in shown["jobs"].as_array().unwrap().iter().filter(|j| ["a", "b"].contains(&j["key"].as_str().unwrap())) {
         assert_eq!(job["status"], "queued");
         let needs: Vec<String> = job["needs"].as_array().unwrap().iter().map(|n| format!("\"{}\"", n.as_str().unwrap())).collect();
         let key = job["key"].as_str().unwrap();

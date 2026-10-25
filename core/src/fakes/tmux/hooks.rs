@@ -8,6 +8,7 @@
 use super::target::{resolve, Kind, Loc};
 use super::{dispatch, format, variable, Cx, Opts, R};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// A hook waiting to run: its name, its target and the format variables of the event.
 pub struct Pending {
@@ -137,27 +138,29 @@ pub fn if_cmd(cx: &mut Cx, args: &[String]) -> R<()> {
     }
 }
 
-/// `run-shell [-b] command`: `sh -c` in the foreground with the caller's environment, and the call goes on
-/// when it ends (`-b` is the same; no thread, no sleep). The child may call the fake again, so the
-/// transaction is committed before it starts and a new one opened after it ends, otherwise the child's
-/// call would wait on the lock. Its output and exit status are not modelled.
+/// How long a `run-shell` command may run: the fake waits for it (`-b` too), the real tmux does not.
+const RUN_SHELL_DEADLINE: Duration = Duration::from_secs(60);
+
+/// `run-shell [-b] command`: `/bin/sh -c command`, handed to the `Runner` with the caller's directory and
+/// environment, and the call goes on when it ends (`-b` is the same; no thread, no sleep). The child may
+/// call the fake again, so the transaction is committed before it starts and a new one opened after it
+/// ends, otherwise the child's call would wait on the lock. Its output, its exit status and a `Runner`
+/// that could not run it are not modelled: tmux ignores them too.
 pub fn run_shell(cx: &mut Cx, args: &[String]) -> R<()> {
     let o = Opts::parse("run-shell", args, "bCEc:d:t:")?;
     let cmd = o.rest.first().ok_or("usage: run-shell [-bC] [-c start-directory] [-d delay] [-t target-pane] [shell-command]")?;
+    let runner = cx.runner.ok_or("run-shell: this fake tmux has no Runner (FakeTmux::with_runner)")?;
     let fail = |e: rusqlite::Error| e.to_string();
     cx.db.execute_batch("COMMIT").map_err(fail)?;
-    let status = Command::new("/bin/sh")
-        .arg("-c")
+    let mut sh = Command::new("/bin/sh");
+    sh.arg("-c")
         .arg(cmd)
         .current_dir(&cx.inv.cwd)
         .env_clear()
         .envs(cx.inv.env.iter().cloned())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    cx.db.execute_batch("BEGIN IMMEDIATE").map_err(fail)?;
-    status.map(|_| ()).map_err(|e| format!("run-shell: {e}"))
+        .stdin(Stdio::null());
+    let _ = runner.output(&mut sh, "sh", RUN_SHELL_DEADLINE);
+    cx.db.execute_batch("BEGIN IMMEDIATE").map_err(fail)
 }
 
 pub fn set_hook(cx: &mut Cx, args: &[String]) -> R<()> {

@@ -26,7 +26,13 @@ pub mod runner;
 pub mod tmux;
 
 #[cfg(test)]
+mod exe_runner_tests;
+#[cfg(test)]
+mod runner_stdin_tests;
+#[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod tmux_adapter_tests;
 #[cfg(test)]
 mod tmux_runner_tests;
 
