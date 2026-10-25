@@ -23,7 +23,7 @@
 use std::cell::{Cell, OnceCell};
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -662,6 +662,11 @@ impl Fx {
 
     // ---- the git fixtures (the names of `TestEnv`'s), over the git route of the `FakeRunner`
 
+    /// [`Fx::git`] that does not assert: the `Output` of a `git` that may fail (a merge that conflicts).
+    pub fn git_try(&self, dir: &Path, args: &[&str]) -> Output {
+        self.run_tool("git", Some(dir), &[], args)
+    }
+
     /// `git` with `dir` as the cwd, through the route; panics unless it exits 0; returns trimmed stdout.
     pub fn git(&self, dir: &Path, args: &[&str]) -> String {
         let out = self.run_tool("git", Some(dir), &[], args);
@@ -932,6 +937,17 @@ impl Fx {
         let mut stdout = Vec::new();
         let code = cpd::main_with(argv, &mut stdout);
         finish(args, code, stdout)
+    }
+
+    /// Runs `cpd <args>` from this env's root with the process's stderr pointing at a file for the call, and `Run::stderr`
+    /// is what the product wrote there (a note it prints with `eprintln!`). The descriptor is put back after, also on a
+    /// panic. It reads fd 2, so it needs a run without libtest's output capture, which nextest never has (a plain libtest
+    /// run needs `--nocapture`).
+    pub fn cpd_capturing_stderr(&self, args: &[&str]) -> Run {
+        let capture = StderrCapture::enter();
+        let mut run = self.cpd(args);
+        run.stderr = capture.read();
+        run
     }
 
     /// The `cpd` children the engine starts on this `Fx`'s `FakeSpawn`, which the test runs itself: [`Children`].
@@ -1285,5 +1301,36 @@ impl Drop for Scope {
             }
         }
         let _ = std::env::set_current_dir(&self.cwd);
+    }
+}
+
+/// Stderr of the process pointing at a temporary file, put back on drop.
+struct StderrCapture {
+    saved: OwnedFd,
+    file: File,
+}
+
+impl StderrCapture {
+    fn enter() -> StderrCapture {
+        let file = tempfile::tempfile().expect("a temporary file for stderr");
+        let saved = dup(std::io::stderr()).expect("dup stderr");
+        dup2_stderr(&file).expect("point stderr at the file");
+        StderrCapture { saved, file }
+    }
+
+    /// What was written to stderr since `enter`.
+    fn read(&self) -> String {
+        let mut file = &self.file;
+        file.flush().expect("flush");
+        file.seek(SeekFrom::Start(0)).expect("rewind");
+        let mut text = String::new();
+        file.read_to_string(&mut text).expect("stderr is UTF-8");
+        text
+    }
+}
+
+impl Drop for StderrCapture {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
     }
 }
