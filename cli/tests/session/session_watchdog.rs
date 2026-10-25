@@ -124,12 +124,17 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
 
 #[test]
 fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
-    // The adapter reported `idle` (here before the wrapper starts): the watchdog's polls see it, not `stopped`.
-    let mut f = start("idle");
-    // Past the limit and a few polls of the watchdog: the claim is that nothing happened, a count of what the wrapper
-    // did to pi (nothing signalled, nothing started), not a wait for nothing.
-    f.fx.advance(LIMIT + POLL * 6);
+    let mut f = start("stopped");
+    // Up to the last poll of the watchdog within the limit (59.5 s of virtual time): nothing yet.
+    f.fx.advance(LIMIT - Duration::from_secs(3));
+    f.wrapper.steps(4);
+    assert!(f.elapsed() < LIMIT);
+    // The adapter reports `idle` now; the limit passes at the next polls of the watchdog, which see `idle`, not `stopped`.
+    f.fx.env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = '{LEAD}'"));
+    f.fx.advance(Duration::from_secs(5));
     f.wrapper.steps(12);
+    assert!(f.elapsed() > LIMIT + Duration::from_secs(5));
+    // The claim is a count of what the wrapper did to pi (nothing signalled, nothing started), not a wait for nothing.
     assert_eq!(f.pis(), 1);
     assert!(f.pane.spawn.signals().is_empty(), "pi was signalled");
     assert_eq!(f.errors(), 0);

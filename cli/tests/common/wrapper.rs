@@ -300,6 +300,10 @@ impl Drop for Pane {
         let _ = dup2_stdin(stdin);
         let _ = dup2_stdout(stdout);
         let _ = dup2_stderr(stderr);
+        // A failed test's own message went to the screen file with the rest of stderr: say it where it is read.
+        if std::thread::panicking() {
+            eprintln!("--- the pane's screen (the wrapper's output and the test's panic message) ---\n{}", self.screen());
+        }
     }
 }
 
@@ -399,12 +403,16 @@ impl Wrapper {
         }
     }
 
-    /// Steps until `cond` holds (looked at before the first step too); panics when the wrapper ends first, or when
+    /// Steps until `cond` holds (looked at before the first step too); panics when the wrapper ends without it, or when
     /// [`LIMIT`] of virtual time passes.
     pub fn until(&mut self, what: &str, mut cond: impl FnMut() -> bool) {
         let start = self.clock.elapsed();
         while !cond() {
-            assert!(self.step(), "the wrapper ended ({:?}) before {what}", self.ended);
+            // A step that ends the wrapper may be the one that made `cond` true.
+            if !self.step() {
+                assert!(cond(), "the wrapper ended ({:?}) before {what}", self.ended);
+                return;
+            }
             assert!(self.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} of virtual time for {what}");
         }
     }
