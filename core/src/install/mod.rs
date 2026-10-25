@@ -2,7 +2,7 @@
 //!
 //! The steps, in order: the preflight, the migration check, the verdict of the built binary, the binary, the
 //! adapter swap, the follow-ups, the tag. Only the migration check, the verdict and the binary exist so far as
-//! tests (`migration_tests`); `run` stops after the binary until the Jobs that implement the rest.
+//! tests (`migration_tests`, `adapter_tests`).
 
 use std::fs;
 use std::io::Write;
@@ -10,6 +10,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::Duration;
+
+mod adapter;
+mod follow_up;
 
 use crate::git::run::{Out, run_with};
 use crate::home::CpdHome;
@@ -45,7 +48,7 @@ mod adapter_tests;
 /// for a refusal, a failure or a follow-up that failed.
 pub fn run(ports: &Ports, install: &Install, err: &mut dyn Write) -> i32 {
     match steps(ports, install, err) {
-        Ok(()) => 0,
+        Ok(exit) => exit,
         Err(Stop(text)) => {
             let _ = writeln!(err, "{text}");
             1
@@ -57,12 +60,18 @@ fn refused(text: impl std::fmt::Display) -> Stop {
     Stop(format!("cpd install refused: {text}"))
 }
 
-fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<(), Stop> {
+fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, Stop> {
     check_migrations(ports, install)?;
+    adapter::preflight(install)?;
     check_verdict(ports, install)?;
     let dest = replace_binary(install)?;
-    let _ = writeln!(err, "installed {} and {}", dest.display(), install.home.join(".local/share/cpd/pi").display());
-    Ok(())
+    let displaced = adapter::swap(ports, install)?;
+    adapter::verify(install)?;
+    adapter::cleanup(ports, install, displaced.as_deref(), err);
+    let _ = writeln!(err, "installed {} and {}", dest.display(), adapter::link_of(install).display());
+    let failed = follow_up::run(ports, install, &dest, err);
+    follow_up::tag(ports, install, err);
+    Ok(i32::from(failed))
 }
 
 /// The branch check (contract §3.7): refuses a build that carries a migration file that is not, byte for byte, on
