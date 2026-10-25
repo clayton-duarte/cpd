@@ -31,18 +31,19 @@ use std::path::Path;
 use cpd_core::host::runner::Runner;
 use std::time::{Duration, Instant};
 
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
 use super::pace::{self, Reads};
 use super::popup;
-use super::pump::{self, Pump, Schedule, Signal};
+use super::pump::{self, Feed, Schedule, Signal};
 use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
 use super::runner::{ViewError, kept};
-use super::view_ports::{frame_now, wall_ms};
+use super::view_ports::{Ctx, frame_now, wall_ms};
 use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -69,28 +70,49 @@ pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdE
         ports,
         "widgets",
         Capture::Mouse,
-        || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let mut sampler = Sampler::default();
-            let machine = Machine { name: hostname(), usage: sampler.sample_with(ports) };
-            let (mut prs, cursor) = read::open_prs(&mut store)?;
-            // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
-            let open = read::open_pulls(&mut store)?;
-            mark_merging(&mut prs, &crate::merge::marker::live(&home, &open));
-            let follow = read::Follow::new(&mut store, KINDS, cursor)?;
-            // the reads after them run on the reader thread, with a store of its own
-            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-            Ok((reader, home, config, prs, machine, sampler))
-        },
-        |ctx, (reader, home, config, prs, machine, sampler)| {
-            let tmux = Tmux::new(config.tmux.socket.clone());
-            let log = ViewLog::of(&home, "widgets");
-            let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
-            show(ctx.ports, &mut ctx.terminal, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
+        || prepare(ports, CpdHome::from_env()?),
+        |ctx, prepared| {
+            let feed = Feed::real(prepared.home.root());
+            show_with(ctx, feed, prepared, run_command)
         },
     )
+}
+
+/// What the view starts from: the home and its config, the first snapshot of the PRs and of the machine, and the follow's reader.
+pub struct Prepared {
+    reader: Arc<Mutex<pace::Owned<read::Follow>>>,
+    home: CpdHome,
+    config: Config,
+    prs: Vec<OpenPr>,
+    machine: Machine,
+    sampler: Sampler,
+}
+
+/// The first snapshot of `home`, and the first sample of the machine.
+pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let mut sampler = Sampler::default();
+    let machine = Machine { name: hostname(ports), usage: sampler.sample_with(ports) };
+    let (mut prs, cursor) = read::open_prs(&mut store)?;
+    // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
+    let open = read::open_pulls(&mut store)?;
+    mark_merging(&mut prs, &crate::merge::marker::live(&home, &open));
+    let follow = read::Follow::new(&mut store, KINDS, cursor)?;
+    // the reads after them run on the reader thread, with a store of its own
+    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+    Ok(Prepared { reader, home, config, prs, machine, sampler })
+}
+
+/// [`show`] on what [`prepare`] made: the tmux of the config's socket, `run_command` for what a click runs, and `feed`'s pump
+/// for the one wait. A test's `feed` is scripted (signals, the `ManualClock` of `ctx.ports`, reads inline, no watcher) and
+/// `ctx.input` is not read; the end of a script is `Signal::InputFailed`.
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, run_command: RunCommand) -> Result<(), ViewError> {
+    let Prepared { reader, home, config, prs, machine, sampler } = prepared;
+    let tmux = Tmux::new(config.tmux.socket.clone());
+    let log = ViewLog::of(&home, "widgets");
+    let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
+    show(ctx, feed, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
 }
 
 /// The Events that change what the column draws besides the pull request rows (whose changes have no Event): a pull
@@ -169,9 +191,9 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(),
 /// PR row (not on its `󱆭` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
 /// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
 /// opens its menu, which takes every key and click until it closes.
-fn show(
-    ports: &Ports,
-    terminal: &mut ratatui::DefaultTerminal,
+fn show<B: Backend>(
+    ctx: &mut Ctx<B>,
+    feed: Feed,
     reader: &Arc<Mutex<pace::Owned<read::Follow>>>,
     mut prs: Vec<OpenPr>,
     mut machine: Machine,
@@ -179,9 +201,9 @@ fn show(
     opener: &Opener,
     poll_ms: u32,
 ) -> Result<(), ViewError> {
-    let pump = Pump::new(ratatui::crossterm::event::read);
-    let mut reads = Reads::<Read>::with_waker(pump.waker());
-    let watch = read::watch::Watch::start(opener.home.root(), pump.waker());
+    let ports = ctx.ports;
+    let Feed { pump, watch } = feed;
+    let mut reads = Reads::<Read>::on(&pump);
     let (every, watch_failure) = match &watch {
         Ok(_) => (pump::SAFETY, None),
         Err(e) => (
@@ -203,7 +225,7 @@ fn show(
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let frame = frame_now(ports);
         if redraw || (spins(&prs) && Some(frame) != drawn_frame) {
-            terminal.draw(|f| {
+            ctx.draw(|f| {
                 pane = f.area();
                 last = Some(draw(f, pane, &prs, &machine, scroll, frame));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
@@ -459,8 +481,8 @@ const UNKNOWN: &str = "?";
 
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
-fn hostname() -> String {
-    hostname_with(&*Ports::current().runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+fn hostname(ports: &Ports) -> String {
+    hostname_with(&*ports.runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
@@ -529,6 +551,6 @@ mod tests {
         assert_eq!(read_hostname(&file), None, "an empty one");
         std::fs::write(&file, "homeserver\n").unwrap();
         assert_eq!(read_hostname(&file).as_deref(), Some("homeserver"));
-        assert!(!hostname().is_empty());
+        assert!(!hostname(&Ports::current()).is_empty());
     }
 }

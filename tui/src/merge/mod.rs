@@ -61,7 +61,7 @@ impl Pull {
         Pull::parse(subject.strip_prefix("pr:")?).ok()
     }
 
-    pub(crate) fn parse(text: &str) -> Result<Pull, String> {
+    pub fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
         let number = number.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(bad)?;
@@ -91,7 +91,7 @@ pub struct Args {
 
 /// What the User's key or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Action {
+pub enum Action {
     Merge,
     Cancel,
 }
@@ -239,7 +239,7 @@ fn show<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::
 }
 
 /// [`show`] on a [`Ctx`]: input and frames are the context's.
-pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
     loop {
         let mut area = Rect::default();
         ctx.draw(|f| {

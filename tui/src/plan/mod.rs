@@ -417,7 +417,7 @@ pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdE
         "plan",
         Capture::Mouse,
         || {
-            prepare(ports, run_command, || {
+            prepare(ports, CpdHome::from_env()?, run_command, || {
                 Ok(ratatui::crossterm::terminal::size()
                     .map_err(|e| {
                         CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
@@ -442,14 +442,14 @@ pub struct Prepared {
     actions: Arc<Actions>,
 }
 
-/// The first snapshot of the home in the environment (`CPD_HOME`) for a pane `width` columns wide (`width` is asked after the
-/// store opened, as `run` does), and the rest `show_with` starts from.
+/// The first snapshot of `home` for a pane `width` columns wide (`width` is asked after the store opened, as `run` does), and
+/// the rest `show_with` starts from.
 pub fn prepare(
     ports: &Ports,
+    home: CpdHome,
     run_command: RunCommand,
     width: impl FnOnce() -> Result<u16, CpdError>,
 ) -> Result<Prepared, CpdError> {
-    let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let snap = snapshot_timed(ports, &mut store, width()?, now_ms(ports), false)?;

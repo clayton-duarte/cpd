@@ -31,7 +31,7 @@ pub(crate) const REFUSAL_ROWS: usize = 2;
 
 /// What kind of dialog this is, with the state that kind has.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
+pub enum Mode {
     /// A question, with the `<yes>` and `Cancel` buttons.
     Confirm { yes: String },
     /// A line of text: the prompt above it, the `OK` and `Cancel` buttons. `refused` is why the last accept was refused.
@@ -48,7 +48,7 @@ pub(crate) enum Mode {
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Row {
+pub struct Row {
     pub(crate) id: String,
     pub(crate) text: String,
     pub(crate) detail: String,
@@ -80,7 +80,7 @@ pub(crate) const APPROVE: &str = "Approve";
 
 /// The one line of an `input`, with its cursor (a character index).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Field {
+pub struct Field {
     chars: Vec<char>,
     cursor: usize,
 }
@@ -228,7 +228,7 @@ fn cut(text: &str, width: usize) -> String {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Dialog {
+pub struct Dialog {
     title: String,
     /// The question of `confirm`, the prompt of `input`, the body of `text`.
     text: String,
@@ -239,7 +239,7 @@ pub(crate) struct Dialog {
 }
 
 impl Dialog {
-    pub(crate) fn new(title: String, text: String, mode: Mode) -> Dialog {
+    pub fn new(title: String, text: String, mode: Mode) -> Dialog {
         Dialog { title, text, mode, scroll: Scroll::default(), area: Rect::default() }
     }
 
