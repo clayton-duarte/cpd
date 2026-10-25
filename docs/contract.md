@@ -550,7 +550,7 @@ Only `pr-ready` reads the `pull_requests` row the poll last wrote (§7.6): `url`
 
 #### Incident
 
-Machine-wide incident mode (hs-d634): when on, the engine pauses most scheduling, and every running Attempt is requeued when it ends. One row in the machine store `incident` table when on, none when off.
+Plan-scoped incident mode (hs-d643, supersedes hs-d634): when on, the engine holds most scheduling for Plans not in the incident. One row in the machine store `incident` table when on, none when off. The incident table has a companion `incident_plans` table that tracks which Plans are in the incident.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -559,6 +559,17 @@ Machine-wide incident mode (hs-d634): when on, the engine pauses most scheduling
 | `started_by` | text | the Session id of the Manager who started it |
 | `reason` | text | explanation: 1 or more characters |
 | `started_txn` | integer | the transaction id of the insert (for history) |
+| `until_plan` | text | the Plan id of the `until_pr`'s Plan (nullable) |
+| `until_pr` | text | the PR key (format `<plan>/<key>`) that triggers auto-end when merged (nullable) |
+
+**The `incident_plans` table:** holds the set of Plans currently under incident. One row per Plan in the incident, with foreign key to `plans(id)`. Additive migration creates it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `plan` | text | PRIMARY KEY, REFERENCES `plans(id)` |
+| `started_txn` | integer | the transaction id of the incident start (for history) |
+
+**Predicates:** `is_on(conn)` is true when one `incident` row exists. The new predicate `is_held(conn, plan)` is true only while the incident is on AND the `plan` is not in `incident_plans` (i.e., the Plan is held by the incident).
 
 ### 2.3 Fingerprints
 
