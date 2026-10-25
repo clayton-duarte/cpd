@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
-use nix::unistd::{dup, dup2_stdin, dup2_stdout};
+use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
 
 use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
@@ -506,6 +506,20 @@ impl Fx {
         self.cpd(args)
     }
 
+    /// Runs `f` with the process's stderr pointing at a file of the env's, and gives its result and what was written there:
+    /// the lines the product prints with `eprintln!` (a `Run`'s `stderr` is empty). The descriptor is put back after, also
+    /// on a panic. A harness that captures the output itself (the libtest default) takes `eprintln!` first and leaves the
+    /// file empty: nextest, the Gate's runner, does not.
+    pub fn with_stderr<T>(&self, f: impl FnOnce() -> T) -> (T, String) {
+        let path = self.env.root().join("stderr-capture");
+        let file = std::fs::File::create(&path).expect("create the stderr file");
+        let result = {
+            let _saved = Stderr::enter(&file);
+            f()
+        };
+        (result, std::fs::read_to_string(&path).expect("read the stderr file"))
+    }
+
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
         self.cpd_with(cwd, args, &[])
@@ -666,6 +680,25 @@ impl Drop for NoTerminal {
     fn drop(&mut self) {
         let _ = dup2_stdin(&self.stdin);
         let _ = dup2_stdout(&self.stdout);
+    }
+}
+
+/// The process's stderr pointing at a file, put back on drop.
+struct Stderr {
+    saved: OwnedFd,
+}
+
+impl Stderr {
+    fn enter(file: &std::fs::File) -> Stderr {
+        let saved = Stderr { saved: dup(std::io::stderr()).expect("dup stderr") };
+        dup2_stderr(file).expect("point stderr at the file");
+        saved
+    }
+}
+
+impl Drop for Stderr {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
     }
 }
 
