@@ -1,5 +1,5 @@
 //! Engine step E14, the archive of an asleep Lead (contract §3.7, §2.2 "Archived", §8.2
-//! `timeouts.archive_sleep_seconds`; hs-d630, hs-d633), on a prepared database with a private tmux server.
+//! `timeouts.archive_sleep_seconds`; hs-d630, hs-d633), on a prepared database with the fake tmux.
 //! E14 archives a Lead (or Manager) Session whose `asleep_at` is older than the configured threshold, taking its
 //! whole Plan through the `plan archive` cascade, and leaves a Lead asleep inside the threshold alone. Every test
 //! has a control: a Lead that E14 does archive, so that "the recent one stays" is asserted after E14 showed it can
@@ -39,7 +39,7 @@ impl Drop for Engine {
 }
 
 /// Context `ctx`, a tick of `common::TICK_SECONDS`, `timeouts.archive_sleep_seconds` as given (the default when
-/// `None`), a private tmux server with one live pane (session `x`) and a fake `gh` that finds no pull requests.
+/// `None`), the fake tmux with one session `x` and a fake `gh` that finds no pull requests.
 struct Fx {
     env: TestEnv,
 }
@@ -58,6 +58,7 @@ fn fx(archive_sleep_seconds: Option<u32>) -> Fx {
     .unwrap();
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
+    env.fake_tmux();
     let out = env.tmux(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let fx = Fx { env };
