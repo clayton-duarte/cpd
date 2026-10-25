@@ -222,6 +222,13 @@ impl Fx {
         }
     }
 
+    /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
+    /// wrapper reads the ambient ports (`git::run`, `tamper`, `sync_lead`, the gate). A thread `f` spawns captures
+    /// `fx.fakes.ports.clone()` and scopes it itself.
+    pub fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
+        Ports::scope(&self.fakes.ports, f)
+    }
+
     /// Makes a process migrate the store, as `Store::open` of another `cpd` does (contract §1.4): `locks/store.lock` is
     /// held (a real `flock` on a file of the env, which conflicts with the product's own open of it in this process) with
     /// the marker of a live migrating pid (running in the `FakeSpawn`), until `hold` of the `ManualClock`'s time has
@@ -371,6 +378,32 @@ let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false,
     pub fn local_origin(&self, repo: &Path, bare: &Path) {
         let url = self.git(repo, &["config", "--get", "remote.origin.url"]);
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
+    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches.
+        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
+    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.

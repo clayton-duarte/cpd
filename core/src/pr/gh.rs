@@ -15,7 +15,8 @@ use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecisio
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
 use crate::host::deadline::Failed;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -162,7 +163,7 @@ pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], tim
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
 /// and a timeout (60 s) are `gh_failed`.
 fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    run_on(&SystemRunner, cwd, args)
+    run_on(&*Ports::current().runner, cwd, args)
 }
 
 /// [`run`] on `runner`.

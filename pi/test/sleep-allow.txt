@@ -5,7 +5,6 @@ cli/tests/engine/watch.rs 2  # m-engine: sleep or wall-clock wait
 cli/tests/flow/driver_reload.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/flow/driver.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/flow/review_job.rs 1  # m-flow: sleep or wall-clock wait
-cli/tests/pr/git.rs 3  # m-pr-b: sleep or wall-clock wait
 cli/tests/pr/pr.rs 1  # m-pr-a: sleep or wall-clock wait
 cli/tests/session/session_reload.rs 11  # m-session: sleep or wall-clock wait
 cli/tests/session/session_watchdog.rs 1  # m-session: sleep or wall-clock wait
