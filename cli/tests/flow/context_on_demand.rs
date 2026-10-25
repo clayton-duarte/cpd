@@ -53,8 +53,18 @@ fn new_plan_with_brief(env: &TestEnv, id: &str, brief: &str) {
     env.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
 }
 
-/// A fake `pi` that creates its session file and sleeps; the cockpit is the one `plan new` made.
+/// The cockpit `context manager` needs: session `cpd`, window `main` with a tree pane and the placeholder in the
+/// chat slot. Then a fake `pi` that creates its session file and sleeps.
 fn manager_cockpit(env: &TestEnv) {
+    let ok = |args: &[&str]| {
+        let out = env.tmux(args);
+        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
+    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
     env.fake_cpd_views();
     env.fake_pi(&format!(
         "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
