@@ -28,7 +28,7 @@ pub mod legend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::path::Path;
-use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::host::runner::Runner;
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
@@ -74,7 +74,7 @@ pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdE
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let mut sampler = Sampler::default();
-            let machine = Machine { name: hostname(), usage: sampler.sample_with(ports) };
+            let machine = Machine { name: hostname(&*ports.runner), usage: sampler.sample_with(ports) };
             let (mut prs, cursor) = read::open_prs(&mut store)?;
             // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
             let open = read::open_pulls(&mut store)?;
@@ -459,8 +459,8 @@ const UNKNOWN: &str = "?";
 
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
 /// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
-fn hostname() -> String {
-    hostname_with(&SystemRunner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
+fn hostname(runner: &dyn Runner) -> String {
+    hostname_with(runner, Path::new("/proc/sys/kernel/hostname"), std::env::var("HOSTNAME").ok().as_deref())
 }
 
 /// [`hostname`] with its three sources given: the kernel's file at `file`, `$HOSTNAME` as `env`, and the `hostname` program on `runner`.
@@ -489,6 +489,8 @@ pub(crate) fn open_legend(tmux: &Tmux) -> Result<(), CpdError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cpd_core::clock::ManualClock;
+    use cpd_core::host::runner::{FakeRunner, Reply};
 
     fn pr(working: bool) -> read::OpenPr {
         read::OpenPr {
@@ -529,6 +531,10 @@ mod tests {
         assert_eq!(read_hostname(&file), None, "an empty one");
         std::fs::write(&file, "homeserver\n").unwrap();
         assert_eq!(read_hostname(&file).as_deref(), Some("homeserver"));
-        assert!(!hostname().is_empty());
+        // the `hostname` program is the runner's: a fake, never the machine's
+        let fake = FakeRunner::new(ManualClock::new()).on("hostname", |_| true, Reply::ok("mac-mini.local\n"));
+        assert_eq!(hostname_with(&fake, &file, None), "homeserver", "the kernel's file comes first");
+        assert_eq!(hostname_with(&fake, &dir.path().join("none"), Some("")), "mac-mini.local");
+        assert!(!hostname(&fake).is_empty());
     }
 }

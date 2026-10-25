@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::io::BufRead;
 use std::sync::{Arc, Mutex};
 
-use cpd_core::host::runner::{Call, NO_DEADLINE, Runner, SystemRunner};
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner};
 use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
 use cpd_core::ports::Ports;
 
@@ -42,7 +42,7 @@ impl Sampler {
     /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
     pub fn sample_with(&mut self, ports: &Ports) -> Usage {
         if cfg!(target_os = "macos") {
-            macos_usage_with(&SystemRunner)
+            macos_usage_with(&*ports.runner)
         } else {
             let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
