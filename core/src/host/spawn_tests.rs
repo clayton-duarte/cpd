@@ -63,6 +63,7 @@ fn launches_records_every_field_of_a_launch() {
         stdout_to: Some(PathBuf::from("/log/a1.log")),
         hand_over: Some(3),
         idle: true,
+        foreground: true,
     };
     spawn.spawn(&l).unwrap();
     assert_eq!(spawn.launches(), vec![l]);
@@ -229,4 +230,20 @@ fn cmdline_is_what_the_test_configured_for_that_pid() {
     spawn.set_cmdline(one, "cpd attempt run a1");
     assert_eq!(spawn.cmdline(one).as_deref(), Some("cpd attempt run a1"));
     assert_eq!(spawn.cmdline(two), None);
+}
+
+#[test]
+fn descendants_are_the_live_processes_below_the_root_at_any_depth_and_the_root_is_not_one() {
+    let spawn = FakeSpawn::new();
+    let (pane, other) = (Pid(10001), Pid(10002));
+    let child = spawn.add_process(pane, "sh -c build");
+    let grandchild = spawn.add_process(child, "sleep 60");
+    let stranger = spawn.add_process(other, "sleep 61");
+
+    assert_eq!(spawn.descendants(pane), [child, grandchild]);
+    assert_eq!(spawn.descendants(other), [stranger]);
+    assert_eq!(spawn.cmdline(grandchild).as_deref(), Some("sleep 60"));
+
+    spawn.signal(child, Signal::Term).unwrap();
+    assert_eq!(spawn.descendants(pane), [grandchild], "an exited process is no descendant");
 }

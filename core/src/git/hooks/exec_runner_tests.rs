@@ -58,6 +58,13 @@ fn a_hook_is_one_call_of_sh_with_c_and_the_command() {
 }
 
 #[test]
+fn a_hook_call_is_of_the_hook_tool_so_the_system_runner_runs_it_at_idle_priority() {
+    let runner = runner().on("sh", |_| true, Reply::ok(""));
+    one(&runner, "cargo test");
+    assert_eq!(runner.calls()[0].tool, crate::host::runner::HOOK_TOOL);
+}
+
+#[test]
 fn a_hook_runs_in_the_given_working_directory() {
     let runner = runner().on("sh", |_| true, Reply::ok(""));
     one(&runner, "true");

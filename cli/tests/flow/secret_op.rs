@@ -1,21 +1,87 @@
 //! The op calls, the use of the grants and the output of `cpd secret` (commands.md §24.1-§24.7, contract §8.4),
 //! driving the built `cpd` against a fake `op`. Real op output is unverified: the shapes are those of the docs.
 
+use crate::common::fx::{bare_with_store, Fx};
 use crate::common::Run;
-use crate::secret::{approve_args, args, denied, strs, Fx, Who};
+use crate::secret::{approve_args, args, denied, strs, Who};
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use cpd_core::host::runner::Reply;
+use rusqlite::types::ValueRef;
 use serde_json::{json, Value};
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
 
 const ACCOUNT: &str = "--account my.1password.com";
 const NO_ITEM: &str = "[ERROR] 2026/10/22 10:00:00 \"deployment\" isn't an item in the \"cpd\" vault\n";
 
+/// Context `ctx`; Plan `pl` (Lead `lead1`, Manager `mgr1`) with the Jobs `a` (Attempt `a-a1`, running, Worker `w-a`)
+/// and `e` (Attempt `e-a1`, ended); Plan `pl2` (Lead `lead2`) with Job `b` (Attempt `b-a1`, running): what
+/// `secret::Fx::new` seeds (secret.rs, not this Job's file), over an env that starts no process. `op` is the
+/// scripted route of the `FakeRunner` (`Fx::op_says`): no `op` binary, no script.
+fn fixture() -> Fx {
+    let env = bare_with_store();
+    env.write_config("version = 1\nmachine = \"m1\"\n");
+    let fp = "0".repeat(64);
+    let job = |plan: &str, key: &str, pr: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('{plan}', '{pr}', '{key}', 'J', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 0, NULL, cpd_txn(), 't');
+             UPDATE jobs SET status = 'queued', fingerprint = '{fp}' WHERE key = '{key}';
+             UPDATE jobs SET status = 'running' WHERE key = '{key}';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+               VALUES ('{plan}', '{key}-a1', '{key}', 1, 'S2', 'ladder', 'running', 'cpd/{plan}--{key}-a1', '/w', 'w-{key}', 't');
+             INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+               VALUES ('w-{key}', 'worker', 'ctx', '{plan}', '{key}-a1', '{key}-a1', '/w', 'S2', 'working', 't', 't');"
+        )
+    };
+    env.sql(&format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'C', NULL, 't', 'm1');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('pl', 'ctx', 'P', 'grounding', 'lead1', 't'), ('pl2', 'ctx', 'P2', 'grounding', 'lead2', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'L', '/', 'O3', 'idle', 't', 't'),
+                  ('lead2', 'lead', 'ctx', 'pl2', 'L2', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+           VALUES ('mgr1', 'manager', 'ctx', 'M', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, name, created_txn, created_at)
+           VALUES ('pl', 'p1', '/r', 'main', 'waiting', 'cpd/pl/p1', NULL, cpd_txn(), 't'),
+                  ('pl2', 'p2', '/r', 'main', 'waiting', 'cpd/pl2/p2', NULL, cpd_txn(), 't');
+         {} {} {}",
+        job("pl", "a", "p1"),
+        job("pl", "e", "p1"),
+        job("pl2", "b", "p2")
+    ));
+    env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'e-a1';");
+    let fx = Fx::with_ports_over(env);
+    fx.op();
+    fx
+}
+
+/// `cpd <args>` as `who`, with `stdin` (none: nothing is read).
+fn run(fx: &Fx, who: Who, args: &[&str], stdin: Option<&str>) -> Run {
+    let vars: &[(&str, &str)] = match who {
+        Who::Nobody => &[],
+        Who::Empty => &[("CPD_SESSION", "")],
+        Who::Unknown => &[("CPD_SESSION", "no-such-session")],
+        Who::Lead => &[("CPD_SESSION", "lead1")],
+        Who::Manager => &[("CPD_SESSION", "mgr1")],
+        Who::Worker => &[("CPD_SESSION", "w-a"), ("CPD_ATTEMPT", "a-a1"), ("CPD_PLAN", "pl")],
+    };
+    match stdin {
+        None => fx.cpd_with(fx.env.root(), args, vars),
+        Some(text) => fx.cpd_stdin(args, vars, text),
+    }
+}
+
 fn secret(fx: &Fx, who: Who, command: &str, vault: &str, item: &str, field: &str, stdin: Option<&str>) -> Run {
-    fx.run(who, &strs(&args(command, vault, item, field)), stdin)
+    run(fx, who, &strs(&args(command, vault, item, field)), stdin)
+}
+
+fn assert_op_not_called(fx: &Fx, r: &Run) {
+    assert_eq!(fx.op_log(), Vec::<String>::new(), "op was called: {r:?}");
 }
 
 fn item_json() -> Value {
@@ -39,7 +105,7 @@ fn approvals(fx: &Fx) -> Vec<PathBuf> {
 
 #[test]
 fn get_reads_one_field_and_pins_the_account() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "hunter2\n\n", "", 0);
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     let out = r.ok();
@@ -57,7 +123,7 @@ fn get_reads_one_field_and_pins_the_account() {
 
 #[test]
 fn list_returns_ids_and_titles_only() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says(
         "list",
         r#"[{"id":"abc123","title":"deployment","version":2,"vault":{"id":"v1","name":"cpd"},"category":"SECURE_NOTE","fields":[{"value":"leak"}]},
@@ -65,7 +131,7 @@ fn list_returns_ids_and_titles_only() {
         "",
         0,
     );
-    let r = fx.run(Who::Lead, &strs(&args("list", "cpd", "", "")), None);
+    let r = run(&fx, Who::Lead, &strs(&args("list", "cpd", "", "")), None);
     let out = r.ok();
     assert_eq!(
         out["items"],
@@ -82,7 +148,7 @@ fn list_returns_ids_and_titles_only() {
 
 #[test]
 fn create_sends_a_template_on_stdin_and_never_the_value_in_argv() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "", NO_ITEM, 1);
     fx.op_says("create", "{\"id\":\"new1\"}\n", "", 0);
     let value = "pa ss\"word";
@@ -111,7 +177,7 @@ fn create_sends_a_template_on_stdin_and_never_the_value_in_argv() {
 
 #[test]
 fn create_refuses_an_existing_item() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
     let r = secret(&fx, Who::Lead, "create", "cpd", "deployment", "password", Some("v\n"));
     denied(&r, "secret_exists", 3);
@@ -122,7 +188,7 @@ fn create_refuses_an_existing_item() {
 
 #[test]
 fn edit_updates_the_field_in_a_template_on_stdin() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
     fx.op_says("edit", "", "", 0);
     let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "password", Some("brand new\n"));
@@ -142,7 +208,7 @@ fn edit_updates_the_field_in_a_template_on_stdin() {
 
 #[test]
 fn edit_adds_a_missing_field() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", &item_json().to_string(), "", 0);
     fx.op_says("edit", "", "", 0);
     let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "token", Some("t0k\n"));
@@ -159,7 +225,7 @@ fn edit_adds_a_missing_field() {
 
 #[test]
 fn edit_of_a_missing_item_is_not_found() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "", NO_ITEM, 1);
     let r = secret(&fx, Who::Lead, "edit", "cpd", "deployment", "password", Some("v\n"));
     denied(&r, "secret_not_found", 4);
@@ -170,8 +236,8 @@ fn edit_of_a_missing_item_is_not_found() {
 
 #[test]
 fn delete_archives_the_item() {
-    let fx = Fx::new();
-    let r = fx.run(Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None);
+    let fx = fixture();
+    let r = run(&fx, Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None);
     assert_eq!(r.ok()["archived"], true, "{r:?}");
     let log = fx.op_log();
     assert_eq!(log.len(), 1, "{log:?}");
@@ -182,7 +248,7 @@ fn delete_archives_the_item() {
 
 #[test]
 fn a_missing_item_is_not_found() {
-    let fx = Fx::new();
+    let fx = fixture();
     for stderr in [NO_ITEM, "[ERROR] 2026/10/22 10:00:00 \"password\" isn't a field in the \"deployment\" item\n"] {
         fx.op_says("get", "", stderr, 1);
         let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
@@ -192,7 +258,7 @@ fn a_missing_item_is_not_found() {
 
 #[test]
 fn not_signed_in_is_its_own_code() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "", "[ERROR] 2026/10/22 10:00:00 account is not signed in\n", 1);
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     let error = denied(&r, "secret_not_signed_in", 3);
@@ -202,7 +268,7 @@ fn not_signed_in_is_its_own_code() {
 
 #[test]
 fn another_op_failure_keeps_its_stderr() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "", "[ERROR] something odd happened\n", 7);
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     let error = denied(&r, "secret_op_failed", 1);
@@ -212,21 +278,17 @@ fn another_op_failure_keeps_its_stderr() {
 
 #[test]
 fn a_missing_op_is_secret_op_missing() {
-    let fx = Fx::new();
-    let empty = fx.env.root().join("empty-bin");
-    fs::create_dir_all(&empty).unwrap();
-    // an empty directory first, then what cpd needs: the inherited PATH without any directory that holds an `op`
-    let mut dirs = vec![empty];
-    dirs.extend(std::env::split_paths(crate::common::inherited_path()).filter(|d| !d.join("op").exists()));
-    let path = std::env::join_paths(dirs).unwrap();
-    let r = fx.run_with_path(Who::Lead, &strs(&args("get", "cpd", "deployment", "password")), None, Some(&path));
+    let fx = fixture();
+    // No `op` on PATH: the runner cannot start the program, as the system's does not find it.
+    fx.fake_op(Reply::io(ErrorKind::NotFound));
+    let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     denied(&r, "secret_op_missing", 1);
-    fx.assert_op_not_called(&r);
+    assert_op_not_called(&fx, &r);
 }
 
 #[test]
 fn a_manager_writes_in_homeserver() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "", NO_ITEM, 1);
     let r = secret(&fx, Who::Manager, "create", "homeserver", "token", "password", Some("v1\n"));
     assert_eq!(r.ok()["created"], true, "{r:?}");
@@ -237,22 +299,22 @@ fn a_manager_writes_in_homeserver() {
     assert_eq!(r.ok()["edited"], true, "{r:?}");
     assert!(fx.op_log().last().unwrap().contains("item edit token --vault homeserver"), "{:?}", fx.op_log());
 
-    let r = fx.run(Who::Manager, &strs(&args("delete", "homeserver", "token", "")), None);
+    let r = run(&fx, Who::Manager, &strs(&args("delete", "homeserver", "token", "")), None);
     assert_eq!(r.ok()["archived"], true, "{r:?}");
     assert!(fx.op_log().last().unwrap().contains("item delete token --vault homeserver --archive"), "{:?}", fx.op_log());
 }
 
 #[test]
 fn an_approval_runs_one_command_once() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "v\n", "", 0);
     let get = || secret(&fx, Who::Lead, "get", "other", "deployment", "password", None);
     let r = get();
     denied(&r, "secret_grant_required", 3);
-    fx.assert_op_not_called(&r);
+    assert_op_not_called(&fx, &r);
 
     let a = approve_args("get", "other", Some("deployment"), Some("password"));
-    fx.run(Who::Lead, &strs(&a), None).ok();
+    run(&fx, Who::Lead, &strs(&a), None).ok();
     assert_eq!(approvals(&fx).len(), 1);
 
     let r = get();
@@ -267,18 +329,18 @@ fn an_approval_runs_one_command_once() {
 
 #[test]
 fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "v\n", "", 0);
     let a = approve_args("get", "other", Some("deployment"), Some("password"));
-    fx.run(Who::Lead, &strs(&a), None).ok();
+    run(&fx, Who::Lead, &strs(&a), None).ok();
     let files = approvals(&fx);
     assert_eq!(files.len(), 1);
 
     let refused = |who: Who, command: &str, vault: &str, item: &str, field: &str| {
-        let r = fx.run(who, &strs(&args(command, vault, item, field)), if command == "get" { None } else { Some("v\n") });
+        let r = run(&fx, who, &strs(&args(command, vault, item, field)), if command == "get" { None } else { Some("v\n") });
         denied(&r, "secret_grant_required", 3);
         assert_eq!(approvals(&fx), files, "the approval was used or removed: {r:?}");
-        fx.assert_op_not_called(&r);
+        assert_op_not_called(&fx, &r);
     };
     refused(Who::Manager, "get", "other", "deployment", "password");
     refused(Who::Lead, "get", "other", "another-item", "password");
@@ -287,21 +349,19 @@ fn an_approval_is_bound_to_its_session_and_arguments_and_expires() {
     refused(Who::Lead, "list", "other", "", "");
     refused(Who::Lead, "delete", "other", "deployment", "");
 
-    let mut held: Value = serde_json::from_str(&fs::read_to_string(&files[0]).unwrap()).unwrap();
-    let old = OffsetDateTime::now_utc() - time::Duration::minutes(11);
-    held["at"] = json!(old.format(&Rfc3339).unwrap());
-    fs::write(&files[0], held.to_string()).unwrap();
+    // The approval is old: virtual time passes the lifetime of an approval (10 minutes; it was written at the clock's time).
+    fx.advance(Duration::from_secs(11 * 60));
     let r = secret(&fx, Who::Lead, "get", "other", "deployment", "password", None);
     denied(&r, "secret_grant_required", 3);
     assert!(approvals(&fx).is_empty(), "the expired approval stays");
-    fx.assert_op_not_called(&r);
+    assert_op_not_called(&fx, &r);
 }
 
 #[test]
 fn an_allowance_lasts_until_the_attempt_ends() {
-    let fx = Fx::new();
+    let fx = fixture();
     fx.op_says("get", "v\n", "", 0);
-    fx.run(Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
+    run(&fx, Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
     let file = fx.env.cpd_home().join("run/secret/allow/a-a1.json");
 
     for _ in 0..2 {
@@ -325,7 +385,7 @@ fn an_allowance_lasts_until_the_attempt_ends() {
 
 #[test]
 fn secret_commands_write_nothing_to_the_store() {
-    let fx = Fx::new();
+    let fx = fixture();
     let count = |t: &str| fx.env.query::<i64>(&format!("SELECT count(*) FROM {t}"));
     let before: Vec<i64> = ["events", "txns", "history"].iter().map(|t| count(t)).collect();
     let value = "sup3r-s3cret-value";
@@ -339,14 +399,37 @@ fn secret_commands_write_nothing_to_the_store() {
     let r = secret(&fx, Who::Lead, "get", "cpd", "deployment", "password", None);
     assert_eq!(r.ok()["value"], value, "{r:?}");
     fx.op_says("list", "[{\"id\":\"a\",\"title\":\"deployment\"}]", "", 0);
-    fx.run(Who::Lead, &strs(&args("list", "cpd", "", "")), None).ok();
-    fx.run(Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None).ok();
-    fx.run(Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
-    fx.run(Who::Lead, &strs(&approve_args("get", "other", Some("deployment"), Some("password"))), None).ok();
+    run(&fx, Who::Lead, &strs(&args("list", "cpd", "", "")), None).ok();
+    run(&fx, Who::Lead, &strs(&args("delete", "cpd", "deployment", "")), None).ok();
+    run(&fx, Who::Lead, &strs(&args("allow", "cpd", "deployment", "password")), None).ok();
+    run(&fx, Who::Lead, &strs(&approve_args("get", "other", Some("deployment"), Some("password"))), None).ok();
 
     let after: Vec<i64> = ["events", "txns", "history"].iter().map(|t| count(t)).collect();
     assert_eq!(before, after);
-    let dump = std::process::Command::new("sqlite3").arg(fx.env.cpd_home().join("cpd.db")).arg(".dump").output().expect("sqlite3");
-    assert!(dump.status.success());
-    assert!(!String::from_utf8_lossy(&dump.stdout).contains(value));
+    // Every table of the store, through the test's own read handle: the secret is in no row of any of them.
+    let leaked = fx.env.read(|conn| {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        let mut leaked = Vec::new();
+        for table in tables {
+            let mut statement = conn.prepare(&format!("SELECT * FROM \"{table}\""))?;
+            let columns = statement.column_count();
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                for column in 0..columns {
+                    let text = match row.get_ref(column)? {
+                        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                        other => format!("{other:?}"),
+                    };
+                    if text.contains(value) {
+                        leaked.push(format!("{table}.{column}"));
+                    }
+                }
+            }
+        }
+        Ok(leaked)
+    });
+    assert!(leaked.is_empty(), "the secret is in the store: {leaked:?}");
 }

@@ -38,6 +38,11 @@ impl<T: Send + 'static> Background<T> {
         Some(result)
     }
 
+    /// Whether a job is running or waits: its result is still to be taken.
+    pub(crate) fn busy(&self) -> bool {
+        self.running
+    }
+
     fn start(&mut self) {
         if self.running {
             return;

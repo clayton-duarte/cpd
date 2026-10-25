@@ -77,15 +77,21 @@ enum Step {
 struct FakeInput {
     clock: Arc<ManualClock>,
     steps: VecDeque<Step>,
+    /// The snapshots the loop told it of ([`Input::snapshot_read`]).
+    snapshots: Rc<std::cell::Cell<usize>>,
 }
 
 impl FakeInput {
     fn new(fakes: &Fakes, steps: Vec<Step>) -> FakeInput {
-        FakeInput { clock: Arc::clone(&fakes.clock), steps: steps.into() }
+        FakeInput { clock: Arc::clone(&fakes.clock), steps: steps.into(), snapshots: Rc::default() }
     }
 }
 
 impl Input for FakeInput {
+    fn snapshot_read(&mut self) {
+        self.snapshots.set(self.snapshots.get() + 1);
+    }
+
     fn poll(&mut self, wait: Duration) -> io::Result<bool> {
         loop {
             match self.steps.front_mut() {
@@ -509,8 +515,8 @@ fn a_view_that_ended_well_does_not_wait() {
 #[test]
 fn a_pump_with_nothing_signalled_naps_to_its_deadline_on_the_clock_and_is_due() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
-    let signal = pump.wait_with(&*fakes.clock, Some(fakes.clock.now() + ms(500)));
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
+    let signal = pump.wait(Some(fakes.clock.now() + ms(500)));
     assert!(matches!(signal, Signal::Due));
     assert_eq!(fakes.clock.naps(), [ms(500)]);
 }
@@ -518,50 +524,50 @@ fn a_pump_with_nothing_signalled_naps_to_its_deadline_on_the_clock_and_is_due() 
 #[test]
 fn a_pump_naps_only_what_is_left_of_the_interval() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let until = fakes.clock.now() + ms(500);
     fakes.clock.advance(ms(200));
-    pump.wait_with(&*fakes.clock, Some(until));
+    pump.wait(Some(until));
     assert_eq!(fakes.clock.naps(), [ms(300)]);
 }
 
 #[test]
 fn a_pump_whose_deadline_has_passed_does_not_nap() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let until = fakes.clock.now() + ms(100);
     fakes.clock.advance(ms(150));
-    assert!(matches!(pump.wait_with(&*fakes.clock, Some(until)), Signal::Due));
+    assert!(matches!(pump.wait(Some(until)), Signal::Due));
     assert_eq!(fakes.clock.naps(), Vec::<Duration>::new());
 }
 
 #[test]
 fn a_signalled_pump_returns_its_signals_in_order_without_a_nap() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(vec![Signal::Commit, Signal::Read]);
+    let pump = Pump::scripted(fakes.ports.clock.clone(), vec![Signal::Commit, Signal::Read]);
     let until = Some(fakes.clock.now() + ms(500));
-    assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Commit));
-    assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Read));
+    assert!(matches!(pump.wait(until), Signal::Commit));
+    assert!(matches!(pump.wait(until), Signal::Read));
     assert_eq!(fakes.clock.naps(), Vec::<Duration>::new());
 }
 
 #[test]
 fn a_failed_input_reaches_the_loop_as_a_signal() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(vec![Signal::InputFailed(io::Error::other("gone"))]);
-    let Signal::InputFailed(e) = pump.wait_with(&*fakes.clock, None) else { panic!("the failure") };
+    let pump = Pump::scripted(fakes.ports.clock.clone(), vec![Signal::InputFailed(io::Error::other("gone"))]);
+    let Signal::InputFailed(e) = pump.wait(None) else { panic!("the failure") };
     assert_eq!(e.to_string(), "gone");
 }
 
 #[test]
 fn an_idle_pump_reads_once_per_safety_interval_of_virtual_time() {
     let fakes = Fakes::new();
-    let pump = Pump::scripted(Vec::new());
+    let pump = Pump::scripted(fakes.ports.clock.clone(), Vec::new());
     let mut schedule = Schedule::new(fakes.clock.now(), crate::pump::SAFETY);
     let mut reads = 0;
     for _ in 0..3 {
         let until = schedule.deadline(fakes.clock.now());
-        assert!(matches!(pump.wait_with(&*fakes.clock, until), Signal::Due));
+        assert!(matches!(pump.wait(until), Signal::Due));
         if schedule.take(fakes.clock.now()).is_some() {
             reads += 1;
             schedule.done();
@@ -868,15 +874,23 @@ const WORKER_FIXTURE: &str = "INSERT INTO contexts (id, title, jira, created_at,
 
 /// The worker of Attempt `api-a1` over a store, run on `steps`; the result, the draws, the naps and the last screen.
 fn run_worker(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String) {
+    let (result, draws, naps, shown, _) = run_worker_counting(fakes, home, steps);
+    (result, draws, naps, shown)
+}
+
+/// [`run_worker`], and the snapshots the loop told its input it took.
+fn run_worker_counting(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (io::Result<()>, usize, Vec<Duration>, String, usize) {
     let mut store = home.store();
     sql(&mut store, WORKER_FIXTURE);
     let (plan, target) = (PlanId::parse("ship").unwrap(), Target::Attempt(AttemptId::parse("api-a1").unwrap()));
     let first = read::worker(&mut store, &plan, &target).unwrap();
     let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
     let mut input = FakeInput::new(fakes, steps);
+    let snapshots = Rc::clone(&input.snapshots);
     let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
     let result = worker::event_loop_with(&mut ctx, &mut store, follow, &plan, &target, first);
-    (result, ctx.draws(), fakes.clock.naps(), screen(&ctx))
+    let snapshots = snapshots.get();
+    (result, ctx.draws(), fakes.clock.naps(), screen(&ctx), snapshots)
 }
 
 /// Another process: the Worker's Session goes idle, and says so with an Event.
@@ -921,6 +935,39 @@ fn worker_a_change_in_the_store_is_not_looked_for_before_the_check_interval_is_o
     result.unwrap();
     assert_eq!(draws, 1);
     assert!(shown.contains("api-a1 running · working"), "{shown}");
+}
+
+#[test]
+fn worker_an_idle_store_reads_no_snapshot() {
+    let (fakes, home) = (Fakes::new(), home());
+    let mut steps = idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize);
+    steps.push(key(KeyCode::Char('q')));
+    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
+    result.unwrap();
+    assert_eq!(snapshots, 0, "two checks over a store with no Event");
+}
+
+#[test]
+fn worker_an_event_of_the_store_reads_one_snapshot_at_the_first_check_and_none_at_the_next() {
+    let (fakes, home) = (Fakes::new(), home());
+    let mut steps = worker_goes_idle(&home);
+    steps.extend(idle(2 * (CHECK.as_millis() / TICK.as_millis()) as usize));
+    steps.push(key(KeyCode::Char('q')));
+    let (result, _, _, _, snapshots) = run_worker_counting(&fakes, &home, steps);
+    result.unwrap();
+    assert_eq!(snapshots, 1, "one Event, read at the first check; the second check finds none");
+}
+
+#[test]
+fn a_context_tells_its_input_of_each_snapshot_and_a_real_input_ignores_it() {
+    let fakes = Fakes::new();
+    let mut input = FakeInput::new(&fakes, Vec::new());
+    let snapshots = Rc::clone(&input.snapshots);
+    let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
+    ctx.snapshot_read();
+    ctx.snapshot_read();
+    assert_eq!((snapshots.get(), ctx.draws()), (2, 0), "a snapshot is told, and is no frame");
+    crate::view_ports::CrosstermInput.snapshot_read(); // the default: nothing to count, nothing to fail
 }
 
 #[test]

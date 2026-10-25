@@ -5,12 +5,16 @@ use crate::common;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::home::{HasCpdHome, Home};
+use crate::scripted::ScriptedClock;
 use common::TestEnv;
+use cpd_core::clock::ManualClock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::store::{APPLICATION_ID, ORPHAN_HISTORY_SQL, Persist, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash, is_transient};
@@ -1232,156 +1236,93 @@ fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_r
     assert!(sqlite_message(&err).contains("must be cpd_txn()"), "{err:?}");
 }
 
-// ---------- §4.2 two writers in separate processes ----------
+// ---------- §4.2 two writers ----------
 
-/// Not a test on its own: the body of the child processes below. Without
-/// `STORE_CHILD_OUT` it does nothing.
-#[test]
-fn child_writer() {
-    let Some(out) = std::env::var_os("STORE_CHILD_OUT") else { return };
-    let var = |name: &str| std::env::var(name).unwrap();
-    let home = CpdHome::resolve(Some(var("STORE_CHILD_HOME").into()), None).unwrap();
-    let busy_ms: u64 = var("STORE_CHILD_BUSY_MS").parse().unwrap();
-    let hold = Duration::from_millis(var("STORE_CHILD_HOLD_MS").parse().unwrap());
-    let started = std::env::var_os("STORE_CHILD_STARTED").map(PathBuf::from);
-    let begun = now_ms();
-    let result = Store::open(&home, busy_ms).and_then(|mut store| {
-        store.write("test writer", |tx| {
-            let entered = now_ms();
-            if let Some(started) = &started {
-                fs::write(started, "").unwrap();
-            }
-            match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
-                // Holds the lock until the test says so, not for a time.
-                Some(release) => {
-                    common::wait_until_for(&format!("{}", release.display()), Duration::from_secs(60), || release.exists());
-                }
-                None => std::thread::sleep(hold),
-            }
-            Ok(json!({"txn": tx.id(), "entered": entered, "left": now_ms()}))
-        })
-    });
-    let value = match result {
-        Ok(v) => json!({"ok": true, "begun": begun, "result": v}),
-        Err(e) => json!({"ok": false, "begun": begun, "ended": now_ms(), "error": e.to_json()}),
-    };
-    fs::write(out, value.to_string()).unwrap();
-}
-
+/// The wall time in milliseconds since the epoch, as a record of the store writes it.
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
 }
 
-/// Kills and reaps its child on drop, so a panicking test leaves no process.
-struct KillOnDrop(Option<Child>);
+/// The order in which the writers enter and leave their write transactions: a number from one counter, so "B entered
+/// after A left" needs no clock.
+static ORDER: AtomicU64 = AtomicU64::new(0);
 
-impl KillOnDrop {
-    fn new(child: Child) -> Self {
-        KillOnDrop(Some(child))
-    }
-}
-
-impl std::ops::Deref for KillOnDrop {
-    type Target = Child;
-    fn deref(&self) -> &Child {
-        self.0.as_ref().unwrap()
-    }
-}
-
-impl std::ops::DerefMut for KillOnDrop {
-    fn deref_mut(&mut self) -> &mut Child {
-        self.0.as_mut().unwrap()
-    }
-}
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-#[test]
-fn a_guarded_child_is_gone_after_a_panic() {
-    let pid = std::cell::Cell::new(0);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let child = KillOnDrop::new(std::process::Command::new("sleep").arg("60").spawn().unwrap());
-        pid.set(child.id());
-        panic!("boom");
-    }));
-    assert!(result.is_err());
-    let alive = std::process::Command::new("kill").args(["-0", &pid.get().to_string()]).output().unwrap().status.success();
-    assert!(!alive, "child {} survived the panic", pid.get());
-}
-
+/// A writer: a thread of this test that opens a `Store` of its own on the home and writes once, as another `cpd`
+/// process would (SQLite's lock is the file's, not the process's). A holding writer keeps the write lock until the
+/// test sends `release`, not for a time.
 struct Writer {
-    child: KillOnDrop,
-    out: PathBuf,
+    thread: Option<std::thread::JoinHandle<Value>>,
+    /// Lets a holding writer finish its transaction. Dropping every sender does too, so a test that panics holds nothing.
+    release: mpsc::Sender<()>,
+    /// One message once the writer is inside its write transaction.
+    started: mpsc::Receiver<()>,
 }
 
 impl Writer {
-    fn spawn(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>) -> Writer {
-        Writer::spawn_with(env, name, busy_ms, hold_ms, started, None)
+    /// A writer that writes at once.
+    fn spawn(env: &Home, busy_ms: u64) -> Writer {
+        Writer::spawn_with(env, busy_ms, false)
     }
 
-    /// A writer that holds the write lock until the file `release` exists.
-    fn spawn_holding(env: &TestEnv, name: &str, busy_ms: u64, started: &Path, release: &Path) -> Writer {
-        Writer::spawn_with(env, name, busy_ms, 0, Some(started), Some(release))
+    /// A writer that holds the write lock until [`Writer::release`].
+    fn spawn_holding(env: &Home, busy_ms: u64) -> Writer {
+        Writer::spawn_with(env, busy_ms, true)
     }
 
-    fn spawn_with(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>, release: Option<&Path>) -> Writer {
-        let out = env.root().join(format!("{name}.json"));
-        let mut cmd = env.command(std::env::current_exe().unwrap());
-        cmd.args(["store::child_writer", "--exact", "--test-threads=1", "--quiet"])
-            .env("STORE_CHILD_OUT", &out)
-            .env("STORE_CHILD_HOME", env.cpd_home())
-            .env("STORE_CHILD_BUSY_MS", busy_ms.to_string())
-            .env("STORE_CHILD_HOLD_MS", hold_ms.to_string())
-            .stdout(std::process::Stdio::null());
-        if let Some(started) = started {
-            cmd.env("STORE_CHILD_STARTED", started);
-        }
-        if let Some(release) = release {
-            cmd.env("STORE_CHILD_RELEASE", release);
-        }
-        Writer { child: KillOnDrop::new(cmd.spawn().unwrap()), out }
-    }
-
-    fn wait(mut self) -> Value {
-        assert!(self.child.wait().unwrap().success());
-        serde_json::from_str(&fs::read_to_string(&self.out).unwrap()).unwrap()
-    }
-}
-
-impl Writer {
-    /// Waits until the writer is inside its write transaction.
-    fn wait_started(&mut self, started: &Path) {
-        common::wait_until(&format!("{}", started.display()), || {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                panic!("the writer exited ({status}) before starting: {}", fs::read_to_string(&self.out).unwrap_or_default());
+    fn spawn_with(env: &Home, busy_ms: u64, holds: bool) -> Writer {
+        let home = home(env);
+        let (release, released) = mpsc::channel();
+        let (started_tx, started) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let result = Store::open(&home, busy_ms).and_then(|mut store| {
+                store.write("test writer", |tx| {
+                    let entered = ORDER.fetch_add(1, Ordering::SeqCst);
+                    let _ = started_tx.send(());
+                    if holds {
+                        let _ = released.recv();
+                    }
+                    Ok(json!({"txn": tx.id(), "entered": entered, "left": ORDER.fetch_add(1, Ordering::SeqCst)}))
+                })
+            });
+            match result {
+                Ok(v) => json!({"ok": true, "result": v}),
+                Err(e) => json!({"ok": false, "error": e.to_json()}),
             }
-            started.exists()
         });
+        Writer { thread: Some(thread), release, started }
+    }
+
+    /// Lets the writer finish its transaction.
+    fn release(&self) {
+        let _ = self.release.send(());
+    }
+
+    /// Waits until the writer is inside its write transaction.
+    fn wait_started(&mut self) {
+        if self.started.recv().is_err() {
+            let ended = self.thread.take().expect("the writer is joined once").join().expect("the writer thread");
+            panic!("the writer ended before it was inside its write transaction: {ended}");
+        }
+    }
+
+    /// The writer's result: `{"ok": true, "result": {"txn", "entered", "left"}}` or `{"ok": false, "error"}`.
+    fn wait(mut self) -> Value {
+        self.thread.take().expect("the writer is joined once").join().expect("the writer thread")
     }
 }
 
 #[test]
 fn a_second_writer_waits_for_the_first_and_reads_do_not() {
-    let env = TestEnv::new();
-    drop(open(&env));
-    let started = env.root().join("a.started");
-    let release = env.root().join("a.release");
-    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
-    a.wait_started(&started);
-    let b = Writer::spawn(&env, "b", 20_000, 0, None);
+    let env = Home::new();
+    let mut a = Writer::spawn_holding(&env, 5000);
+    a.wait_started();
+    let b = Writer::spawn(&env, 20_000);
     // While A holds the write lock (until this test lets go of it), a reader opens and reads: had it to wait for A,
     // it would wait for ever.
     let mut reader = open(&env);
     let txns: i64 = reader.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 1, "A has not committed yet");
-    fs::write(&release, "").unwrap();
+    a.release();
     let (a, b) = (a.wait(), b.wait());
     assert_eq!(a["ok"], true, "{a}");
     assert_eq!(b["ok"], true, "{b}");
@@ -1392,28 +1333,28 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
 
 #[test]
 fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
-    let env = TestEnv::new();
-    drop(open(&env));
-    let started = env.root().join("a.started");
-    let release = env.root().join("a.release");
-    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
-    a.wait_started(&started);
-    let a_pid = a.child.id();
-    let b = Writer::spawn(&env, "b", 200, 0, None).wait();
-    assert_eq!(b["ok"], false, "{b}");
-    assert_eq!(b["error"]["code"], "store_busy", "{b}");
-    assert_eq!(b["error"]["details"]["busy_ms"], 200);
+    let env = Home::new();
+    let mut a = Writer::spawn_holding(&env, 5000);
+    a.wait_started();
+    let a_pid = std::process::id();
+    // B waits `busy_ms` in SQLite's own busy handler, a short real wait inside the library.
+    let begun = Instant::now();
+    let b = Store::open(&home(&env), 200).and_then(|mut store| store.write("test writer", |_| Ok(())));
+    let waited = begun.elapsed();
+    let error = b.expect_err("B cannot get the lock").to_json();
+    assert_eq!(error["code"], "store_busy", "{error}");
+    assert_eq!(error["details"]["busy_ms"], 200);
     // §4.2: the error names the holder, A: its pid, its command and for how long.
-    let holder = &b["error"]["details"]["holder"];
-    assert_eq!(holder["pid"], a_pid, "{b}");
-    assert_eq!(holder["command"], "test writer", "{b}");
-    assert!(holder["since_ms"].as_u64().unwrap() >= 200, "{b}");
-    assert!(holder["argv"].as_str().unwrap().contains("child_writer"), "{b}");
-    let message = b["error"]["message"].as_str().unwrap();
+    let holder = &error["details"]["holder"];
+    assert_eq!(holder["pid"], a_pid, "{error}");
+    assert_eq!(holder["command"], "test writer", "{error}");
+    assert!(holder["since_ms"].as_u64().unwrap() >= 200, "{error}");
+    // A is a thread of this process: its argv is the process's.
+    assert_eq!(holder["argv"].as_str().unwrap(), std::env::args().collect::<Vec<_>>().join(" "), "{error}");
+    let message = error["message"].as_str().unwrap();
     assert!(message.contains(&format!("pid {a_pid} (`test writer`")), "{message}");
-    let waited = b["ended"].as_u64().unwrap() - b["begun"].as_u64().unwrap();
-    assert!(waited >= 200, "gave up after {waited} ms");
-    fs::write(&release, "").unwrap();
+    assert!(waited >= Duration::from_millis(200), "gave up after {waited:?}");
+    a.release();
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
     let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
@@ -1439,11 +1380,13 @@ fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
 /// A transaction that holds the lock for a second or more says where the time went, in `run/store-slow.log`.
 #[test]
 fn a_slow_write_is_logged_with_where_its_time_went() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let mut store = open(&env);
-    // time-claim: a write that holds the lock 1.1 s, past the 1 s threshold, is logged with a closure at least that
-    // long; the sleep is the slow work itself, not a wait for a signal.
-    store.write("slow", |_| Ok(std::thread::sleep(Duration::from_millis(1100)))).unwrap();
+    // The slow work is virtual time: the store reads its clock (`use_clock`), and the closure advances it 1.1 s, past
+    // the 1 s threshold.
+    let clock = ManualClock::new();
+    store.use_clock(Arc::new(clock.clone()));
+    store.write("slow", |_| Ok(clock.advance(Duration::from_millis(1100)))).unwrap();
     let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
     // Other writes of a loaded machine may be in it too: find this one.
     let line = text
@@ -1489,38 +1432,46 @@ fn a_record_of_a_dead_process_is_not_the_holder() {
 type Lines = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
 fn persisting(lines: &Lines, give_up: fn() -> bool) -> Persist {
+    persisting_then(lines, give_up, || {})
+}
+
+/// [`persisting`] that also runs `then` after each line it logs.
+fn persisting_then(lines: &Lines, give_up: fn() -> bool, then: impl Fn() + 'static) -> Persist {
     let lines = lines.clone();
-    Persist::new(move |line| lines.lock().unwrap().push(line.to_owned()), give_up)
+    Persist::new(
+        move |line| {
+            lines.lock().unwrap().push(line.to_owned());
+            then();
+        },
+        give_up,
+    )
 }
 
 /// §4.2: a persisting store waits out a lock held for longer than `store_busy_ms`, logs one line for
 /// the error and one when it clears, and the write then completes; a plain store gives up.
 #[test]
 fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
-    let env = TestEnv::new();
-    drop(open(&env));
-    let started = env.root().join("a.started");
-    let release = env.root().join("a.release");
-    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
-    a.wait_started(&started);
-    let a_pid = a.child.id();
+    let env = Home::new();
+    let mut a = Writer::spawn_holding(&env, 5000);
+    a.wait_started();
+    let a_pid = std::process::id();
 
     let mut plain = Store::open(&home(&env), 100).unwrap();
     assert_eq!(plain.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
 
+    // The back-off between two tries is virtual time (the store reads and sleeps on `clock`); each try waits
+    // `store_busy_ms` in SQLite's busy handler, a short real wait inside the library.
+    let clock = ManualClock::new();
     let lines = Lines::default();
-    let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || false)).unwrap();
     // A holds the lock until the persisting store has met it and said so: the store waits past `store_busy_ms` for
     // as long as A holds it.
-    let (txn, waited) = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            common::wait_until("the persisting store to report the held lock", || !lines.lock().unwrap().is_empty());
-            fs::write(&release, "").unwrap();
-        });
-        let t = Instant::now();
-        (store.write("persisted", |tx| Ok(tx.id())).unwrap(), t.elapsed())
+    let release = a.release.clone();
+    let persist = persisting_then(&lines, || false, move || {
+        let _ = release.send(());
     });
-    assert!(waited >= Duration::from_millis(100), "it did not wait past store_busy_ms: {waited:?}");
+    let mut store = Store::open_persistent_with(Arc::new(clock.clone()), &home(&env), 100, persist).unwrap();
+    let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
+    assert!(clock.elapsed() >= Duration::from_millis(100), "it did not wait past store_busy_ms: {:?}", clock.elapsed());
     assert_eq!(a.wait()["ok"], true);
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), 2, "{lines:?}");
@@ -1560,8 +1511,8 @@ fn only_busy_and_locked_are_transient() {
 
 #[test]
 fn processes_opening_a_new_database_at_once_migrate_it_once() {
-    let env = TestEnv::empty();
-    let writers: Vec<Writer> = (0..4).map(|i| Writer::spawn(&env, &format!("w{i}"), 20_000, 0, None)).collect();
+    let env = Home::empty();
+    let writers: Vec<Writer> = (0..4).map(|_| Writer::spawn(&env, 20_000)).collect();
     let mut ids: Vec<u64> = writers
         .into_iter()
         .map(|w| {
@@ -1578,7 +1529,6 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
         .unwrap();
     assert_eq!(migrations, 1);
 }
-
 
 #[test]
 fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
@@ -1677,25 +1627,18 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
 #[test]
 fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
     use nix::fcntl::{Flock, FlockArg};
-    let env = TestEnv::empty();
+    let env = Home::empty();
     let h = home(&env);
     fs::create_dir_all(h.locks_dir()).unwrap();
     let path = h.locks_dir().join("store.lock");
     let file = fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
-    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let _held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let opener = std::thread::spawn(move || {
-        let start = Instant::now();
-        let result = Store::open(&h, 300).map(drop);
-        tx.send((result, start.elapsed())).unwrap();
-    });
-    let received = rx.recv_timeout(Duration::from_secs(10));
-    drop(held); // lets a still-waiting opener finish
-    opener.join().unwrap();
-    let (result, waited) = received.expect("Store::open still waited for the lock after 10 s");
+    // The wait is the open's own retry, on virtual time.
+    let clock = ManualClock::new();
+    let err = Store::open_with(&clock, &h, 300, None).map(drop).unwrap_err();
+    let waited = clock.elapsed();
 
-    let err = result.unwrap_err();
     assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
     assert!(waited >= Duration::from_millis(300), "gave up after {waited:?}");
     assert!(waited < Duration::from_secs(5), "waited {waited:?}");
@@ -1732,50 +1675,39 @@ impl Holder {
 }
 
 fn migrating_marker(pid: u32) -> Value {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-    json!({"migrating": true, "pid": pid, "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd test-migration"})
+    json!({"migrating": true, "pid": pid, "started_unix_ms": now_ms(), "from": 3, "to": 20, "command": "cpd test-migration"})
 }
 
 /// hs-n278: a holder that migrates is waited out for longer than `store_busy_ms`, then the open succeeds.
 #[test]
 fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let h = home(&env);
     let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
-    // time-claim: the open outlasts store_busy_ms (300 ms) while a migration holds the lock; no per-poll signal from the waiter.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        drop(holder);
-    });
-    let start = Instant::now();
-    let store = Store::open(&h, 300);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
+    // while a migration holds the lock.
+    let clock = ScriptedClock::new().at(Duration::from_millis(1500), move || drop(holder));
+    let store = Store::open_with(&clock, &h, 300, None);
     store.expect("the open waits for the migration");
-    assert!(waited >= Duration::from_millis(1400), "did not wait for the migration: {waited:?}");
+    assert!(clock.elapsed() >= Duration::from_millis(1400), "did not wait for the migration: {:?}", clock.elapsed());
 }
 
 /// hs-n278, contract §4.2: a waiter that saw the migrating holder's marker keeps waiting while the same holder
 /// holds the lock after the marker is gone, until the release, whatever its own `busy_ms`.
 #[test]
 fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let h = home(&env);
-    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
-    // time-claim: the waiter (1 ms bound) polls every 20 ms, so it reads the marker within the first 300 ms, then the
-    // lock stays held for 300 ms more without a marker; no per-poll signal from the waiter.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
-        holder.clear_marker();
-        std::thread::sleep(Duration::from_millis(300));
-        drop(holder);
-    });
-    let start = Instant::now();
-    let store = Store::open(&h, 1);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    let holder = std::sync::Arc::new(std::sync::Mutex::new(Some(hold_setup_lock(&h, Some(migrating_marker(std::process::id()))))));
+    let (clearing, releasing) = (holder.clone(), holder);
+    // The waiter (1 ms bound) polls every 20 ms, so it reads the marker in its first poll, then the lock stays held
+    // for 300 ms more without a marker.
+    let clock = ScriptedClock::new()
+        .at(Duration::from_millis(300), move || clearing.lock().unwrap().as_ref().expect("held").clear_marker())
+        .at(Duration::from_millis(600), move || drop(releasing.lock().unwrap().take()));
+    let store = Store::open_with(&clock, &h, 1, None);
     store.expect("the waiter outlasts the marker, until the release");
-    assert!(waited >= Duration::from_millis(550), "did not wait for the release: {waited:?}");
+    assert!(clock.elapsed() >= Duration::from_millis(550), "did not wait for the release: {:?}", clock.elapsed());
 }
 
 /// hs-n278, contract §4.2: an opener that waited out a migration waits for SQLite in its own setup at least
@@ -1783,7 +1715,7 @@ fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone()
 /// connection holds the database's exclusive lock a while longer).
 #[test]
 fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let h = home(&env);
     Store::open(&h, 5000).map(drop).unwrap();
     // A rollback-journal database, so that an exclusive lock blocks a reader at once.
@@ -1791,30 +1723,38 @@ fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
     finishing.pragma_update(None, "journal_mode", "DELETE").unwrap();
     finishing.execute_batch("BEGIN EXCLUSIVE").unwrap();
     let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
-    // time-claim: the waiter (1 ms bound) reads the marker within the first 300 ms, gets the lock after that, and finds
-    // the database locked for 300 ms more; no per-poll signal from the waiter.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+    // The waiter (1 ms bound) reads the marker in its first poll. The holder lets go of the setup lock 300 ms of
+    // virtual time on, and the connection finishes after 300 ms more: SQLite's own busy handler is that second wait,
+    // a short real wait inside the library (a reader of the database that gives up after its `busy_timeout` of
+    // 300 ms, then the commit).
+    let (db, finisher) = (h.db(), std::sync::Mutex::new(None));
+    let clock = ScriptedClock::new().at(Duration::from_millis(300), || {
         drop(holder);
-        std::thread::sleep(Duration::from_millis(300));
-        finishing.execute_batch("COMMIT").unwrap();
+        *finisher.lock().unwrap() = Some(std::thread::spawn(move || {
+            let reader = Connection::open(db).unwrap();
+            reader.busy_timeout(Duration::from_millis(300)).unwrap();
+            let blocked = reader.query_row("SELECT count(*) FROM sqlite_schema", [], |r| r.get::<_, i64>(0));
+            assert!(blocked.is_err(), "the finishing connection holds the database");
+            finishing.execute_batch("COMMIT").unwrap();
+        }));
     });
-    let start = Instant::now();
-    let store = Store::open(&h, 1);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    let begun = Instant::now();
+    let store = Store::open_with(&clock, &h, 1, None);
+    let waited = begun.elapsed();
+    finisher.lock().unwrap().take().expect("the holder let go of the setup lock").join().unwrap();
     store.expect("the waiter waits for SQLite in its setup");
-    assert!(waited >= Duration::from_millis(550), "did not wait for the database: {waited:?}");
+    assert!(clock.elapsed() >= Duration::from_millis(300), "did not wait for the setup lock: {:?}", clock.elapsed());
+    assert!(waited >= Duration::from_millis(250), "did not wait for the database: {waited:?}");
 }
 
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
 #[test]
 fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let h = home(&env);
     for marker in [None, Some(json!({"migrating": false, "pid": std::process::id(), "started_unix_ms": 0, "from": 1, "to": 2, "command": "x"}))] {
         let _holder = hold_setup_lock(&h, marker);
-        let err = Store::open(&h, 300).map(drop).unwrap_err();
+        let err = Store::open_with(&ManualClock::new(), &h, 300, None).map(drop).unwrap_err();
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
     }
 }
@@ -1822,59 +1762,64 @@ fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
 /// hs-n278: a marker of a process that is gone does not make anyone wait.
 #[test]
 fn a_marker_of_a_dead_process_does_not_block() {
-    let env = TestEnv::new();
+    let env = Home::new();
     let h = home(&env);
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let dead = child.id();
-    child.wait().unwrap();
+    // A pid no process has: above every system's `pid_max` (no child to spawn and reap).
+    let dead = i32::MAX as u32;
     let _holder = hold_setup_lock(&h, Some(migrating_marker(dead)));
-    let err = Store::open(&h, 300).map(drop).unwrap_err();
+    let err = Store::open_with(&ManualClock::new(), &h, 300, None).map(drop).unwrap_err();
     assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
 }
 
 /// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file
 /// when it is done; a second opener that finds the lock held waits it out, whatever its own `busy_ms`.
 ///
-/// The test, not the clock, keeps the migration in progress: it holds the database's write lock (`BEGIN IMMEDIATE`)
-/// until the second opener has started, so the first opener, which has taken `store.lock` and written its marker,
-/// waits on SQLite for its own write transaction (its `busy_ms` is long enough for that).
+/// The test, not the clock, keeps the migration in progress: the manifest of an old Context store (migration 0007 reads
+/// it, after the opener has written its marker) is a FIFO, which blocks the read until the test has a writer on it. The
+/// writer's open returns when the migration is there, so the test needs no poll to know it.
 #[test]
 fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
-    // An env with no store (TestEnv::new copies a migrated one in): this opener migrates from 0.
-    let env = TestEnv::empty();
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    // A home with no store: this opener migrates from 0.
+    let env = Home::empty();
     let h = home(&env);
     let lock = h.locks_dir().join("store.lock");
-    fs::create_dir_all(h.db().parent().unwrap()).unwrap();
-    // An empty database in WAL mode, as the opener leaves it before it migrates, with its write lock held.
-    let blocker = Connection::open(h.db()).unwrap();
-    blocker.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get::<_, String>(0)).unwrap();
-    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let folder = h.old_contexts_dir().join("c1");
+    fs::create_dir_all(folder.join("records")).unwrap();
+    let manifest = folder.join("context.json");
+    nix::unistd::mkfifo(&manifest, nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).unwrap();
     let first = {
-        let h = h.clone();
-        std::thread::spawn(move || Store::open(&h, 60_000).map(drop))
+        let (h, manifest) = (h.clone(), manifest.clone());
+        std::thread::spawn(move || {
+            let opened = Store::open(&h, 60_000).map(drop);
+            // An open that ended without reading the manifest lets the test's writer through, to fail on what it finds.
+            let _ = fs::OpenOptions::new().read(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(&manifest);
+            opened
+        })
     };
-    let seen: Value = common::poll(Duration::from_secs(60), || {
-        assert!(!first.is_finished(), "no marker while the store migrated");
-        fs::read_to_string(&lock).ok().and_then(|text| serde_json::from_str(&text).ok())
-    })
-    .expect("no marker while the store migrated");
+    let mut writer = fs::OpenOptions::new().write(true).open(&manifest).unwrap();
+    let seen: Value = serde_json::from_str(&fs::read_to_string(&lock).unwrap()).expect("no marker while the store migrated");
     assert_eq!(seen["migrating"], true, "{seen}");
     assert_eq!(seen["pid"], std::process::id(), "{seen}");
     assert_eq!(seen["from"], 0, "{seen}");
     assert!(seen["to"].as_u64().unwrap() > 0, "{seen}");
     assert!(seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(), "{seen}");
-    // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up.
+    // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up. The migration cannot end
+    // until the test writes the manifest, which it does 100 ms of the second opener's virtual time on.
     let second = {
-        let h = h.clone();
-        std::thread::spawn(move || Store::open(&h, 1).map(drop))
+        let clock = ScriptedClock::new().at(Duration::from_millis(100), || {
+            assert!(!first.is_finished(), "an opener returned while the migration was held");
+            assert!(!fs::read_to_string(&lock).unwrap().is_empty(), "the marker was cleared while the migration was held");
+            writer
+                .write_all(br#"{"v":1,"id":"c1","title":"Old","jira":null,"created_at":"2026-01-01T00:00:00.000Z","created_on":"m1"}"#)
+                .unwrap();
+            drop(writer);
+        });
+        Store::open_with(&clock, &h, 1, None).map(drop)
     };
-    // The migration cannot end while the test holds the write lock: both openers are still waiting.
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(!first.is_finished() && !second.is_finished(), "an opener returned while the migration was held");
-    assert!(!fs::read_to_string(&lock).unwrap().is_empty(), "the marker was cleared while the migration was held");
-    blocker.execute_batch("ROLLBACK").unwrap();
     first.join().unwrap().unwrap();
-    second.join().unwrap().expect("the second opener waits for the migration");
+    second.expect("the second opener waits for the migration");
     assert_eq!(fs::read_to_string(&lock).unwrap(), "", "the marker outlived the migration");
 }
 

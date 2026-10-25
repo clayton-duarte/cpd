@@ -3,20 +3,21 @@
 use crate::common;
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::TestEnv;
 use common::fx::Fx;
 use cpd_core::error::ErrorCode;
-use cpd_core::fakes::git::{GitRoute, Repo, Universe};
+use cpd_core::fakes::git::{GitRoute, Head, Oid, Repo, Universe};
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook, run_hook_with};
 use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::host::spawn::{Launch, Pid, Spawn};
+use cpd_core::ports::Ports;
 use cpd_core::git::{
     Operation, Push, Setup, Synced, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
-    discard_worktree, push_commit, lead_branch, lead_worktree_path, tamper_check,
+    discard_worktree, push_commit, remove_merged_attempt, lead_branch, lead_worktree_path, tamper_check,
     touched_protected,
 };
 use cpd_core::home::Hook;
@@ -243,34 +244,90 @@ fn branch_config(env: &TestEnv, repo: &Path) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// Scripts the next `n` calls of git that `is` accepts: each exits 128 with `stderr`.
+fn fail_git(fx: &Fx, n: usize, is: fn(&Call) -> bool, stderr: &str) {
+    let mut runner = (*fx.fakes.runner).clone();
+    for _ in 0..n {
+        runner = runner.once("git", is, Reply::exit(128, "", stderr));
+    }
+}
+
+fn is_fetch(call: &Call) -> bool {
+    call.args.iter().any(|a| a == "fetch")
+}
+
+fn is_worktree_add(call: &Call) -> bool {
+    call.args.windows(2).any(|w| w == ["worktree", "add"])
+}
+
+fn is_worktree_list(call: &Call) -> bool {
+    call.args.windows(2).any(|w| w == ["worktree", "list"])
+}
+
+/// The calls of git `is` accepts, in order.
+fn git_calls(fx: &Fx, is: fn(&Call) -> bool) -> Vec<Call> {
+    fx.calls("git").into_iter().filter(is).collect()
+}
+
+/// Every nap of `fx`'s clock is one retry round's pause: 100-500 ms (contract §7).
+fn assert_retry_naps(fx: &Fx, rounds: usize) {
+    let naps = fx.fakes.clock.naps();
+    assert_eq!(naps.len(), rounds, "{naps:?}");
+    assert!(naps.iter().all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)), "{naps:?}");
+}
+
 #[test]
 fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let origin = with_origin(&env, &repo);
-    env.git(&repo, &["fetch", "-q", "origin"]);
-    // The remote moves; another git process holds the lock of the repo's tracking ref.
-    let other = env.root().join("other");
-    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
-    commit_file(&env, &other, "new.txt", "new\n");
-    env.git(&other, &["push", "-q", "origin", "main"]);
-    let moved = env.git(&other, &["rev-parse", "HEAD"]);
-    let lock = repo.join(".git/refs/remotes/origin/main.lock");
-    fs::write(&lock, "").unwrap();
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    // Another git process holds the lock of the repo's tracking ref: git waits it out inside the one call (the wait
+    // is git's, bounded by the `core.filesRefLockTimeout` that every call of ours carries), so the call takes a second.
+    let _ = (*fx.fakes.runner).clone().once("git", is_fetch, Reply::ok("").takes(Duration::from_secs(1)));
 
-    let started = Instant::now();
-    let fetched = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: git waits out a ref lock held for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_file(&lock).unwrap();
-        });
-        cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"])
-    });
+    let fetched = fx.scoped(|| cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"]));
 
     fetched.unwrap();
-    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
-    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), moved);
+    assert!(fx.fakes.clock.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    // One call: a held lock is not a race to retry, and the call is allowed the ten seconds of the lock timeouts.
+    let fetches = git_calls(&fx, is_fetch);
+    assert_eq!(fetches.len(), 1);
+    assert_eq!(fetches[0].args, ["-C", repo.to_str().unwrap(), "fetch", "origin", "main"]);
+    assert_eq!(fx.fakes.clock.naps(), [Duration::from_secs(1)], "the one wait is git's own, no retry pause");
+    let has = |k: &str, v: &str| fetches[0].envs.contains(&(k.to_owned(), Some(v.to_owned())));
+    assert!(has("GIT_CONFIG_COUNT", "2"));
+    assert!(has("GIT_CONFIG_KEY_0", "core.filesRefLockTimeout") && has("GIT_CONFIG_VALUE_0", "10000"));
+    assert!(has("GIT_CONFIG_KEY_1", "core.packedRefsTimeout") && has("GIT_CONFIG_VALUE_1", "10000"));
+}
+
+#[test]
+fn a_fetch_outlasts_a_worktree_add_in_progress() {
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    let origin = fx.env.root().join("origins").join("pay.git");
+    fs::create_dir_all(&origin).unwrap();
+    fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    fx.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    let other = fx.env.root().join("other");
+    fx.git(fx.env.root(), &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    fx.commit_file(&other, "new.txt", "new\n", "edit new.txt");
+    fx.git(&other, &["push", "-q", "origin", "main"]);
+    // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder, on which the
+    // fetch's connectivity check dies, until the entry is whole.
+    fail_git(&fx, 3, is_fetch, "fatal: bad object worktrees/adding/HEAD\nerror: https://example.invalid did not send all necessary objects\n");
+
+    let fetched = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "main"]));
+
+    fetched.unwrap();
+    assert_eq!(git_calls(&fx, is_fetch).len(), 4, "three rounds on the race, the fourth fetched");
+    assert_retry_naps(&fx, 3);
+    assert_eq!(fx.git(&repo, &["rev-parse", "origin/main"]), fx.git(&other, &["rev-parse", "HEAD"]));
+    // Any other failure is not retried.
+    let before = (git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps());
+    let err = fx.scoped(|| cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"])).unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    // time-claim replaced: a failure that is not the race returns at once, with no nap (20 retries would nap 19 times).
+    assert_eq!((git_calls(&fx, is_fetch).len(), fx.fakes.clock.naps()), (before.0 + 1, before.1));
 }
 
 #[test]
@@ -305,7 +362,8 @@ fn rule_p_without_origin_is_git_failed() {
 // ---------------------------------------------------------------- hooks
 
 struct Hooks {
-    env: TestEnv,
+    /// Holds the temporary directory of `repo`.
+    _env: TestEnv,
     repo: PathBuf,
     log: PathBuf,
     /// The hooks, written as a `.config/wt.toml` was and read as the `[hooks]` of a repo policy file.
@@ -316,7 +374,7 @@ fn hooks(wt: &str) -> Hooks {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
     let log = env.root().join("logs").join("h.log");
-    Hooks { env, repo, log, wt: wt.to_owned() }
+    Hooks { _env: env, repo, log, wt: wt.to_owned() }
 }
 
 impl Hooks {
@@ -359,14 +417,9 @@ struct Hooked {
 /// A repo `pay` on `main` with one commit, in the fake git of an `Fx` on fake ports.
 fn hooked(wt: &str) -> Hooked {
     let fx = Fx::with_ports();
-    let mut universe = Universe::new(fx.fakes.clock.clone());
-    universe.set_global("user.name", "cpd test");
-    universe.set_global("user.email", "test@cpd.invalid");
-    let universe = Arc::new(Mutex::new(universe));
-    let route = Arc::new(GitRoute::new(universe.clone()));
-    let _ = (*fx.fakes.runner).clone().with_git(&route);
+    let route = fx.git_route.clone();
     let root = fx.env.root().canonicalize().unwrap();
-    let repo = Repo::init(&universe, &root.join("pay"));
+    let repo = Repo::init(&fx.universe, &root.join("pay"));
     repo.write("README.md", "pay\n");
     repo.commit("init");
     let log = root.join("logs").join("h.log");
@@ -603,15 +656,21 @@ fn the_commands_of_a_hook_can_be_listed_in_file_order() {
 
 #[test]
 fn commands_get_the_variables_as_a_template_and_as_json_on_stdin() {
-    let h = hooks(
+    let h = hooked(
         "[pre-merge]\necho = \"echo {{ hook_type }} {{ hook_name }} {{ branch }} {{ target }} {{ target_worktree_path }} > echo.txt\"\njson = \"cat > ctx.json\"\n",
     );
-    let sha = h.env.git(&h.repo, &["rev-parse", "HEAD"]);
+    h.sh(Reply::ok(""));
+    let sha = h.fx.git(h.repo.dir(), &["rev-parse", "HEAD"]);
     assert_eq!(h.run(Hook::PreMerge).outcome, HookOutcome::Passed);
 
-    let repo = h.repo.canonicalize().unwrap();
-    assert_eq!(h.file("echo.txt"), format!("pre-merge echo main main {}\n", repo.display()));
-    let ctx: serde_json::Value = serde_json::from_str(&h.file("ctx.json")).unwrap();
+    let repo = h.repo.dir().canonicalize().unwrap();
+    let calls = h.fx.calls("sh");
+    let by = |command: &str| calls.iter().find(|call| call.args[1] == command).unwrap_or_else(|| panic!("no call of {command:?}: {calls:?}"));
+    // The template is rendered with the variables before `sh` gets it.
+    assert_eq!(by(&format!("echo pre-merge echo main main {} > echo.txt", repo.display())).args[0], "-c");
+    // The same variables, as JSON, on the stdin of every command.
+    let stdin = by("cat > ctx.json").stdin.clone().expect("the command has the context on its stdin");
+    let ctx: serde_json::Value = serde_json::from_slice(&stdin).unwrap();
     assert_eq!(ctx["branch"], "main");
     assert_eq!(ctx["hook_type"], "pre-merge");
     assert_eq!(ctx["hook_name"], "json");
@@ -632,18 +691,25 @@ fn commands_get_the_variables_as_a_template_and_as_json_on_stdin() {
 
 #[test]
 fn the_command_runs_with_sh_in_the_worktree_root() {
-    let h = hooks("pre-commit = \"pwd > pwd.txt; echo $0 > shell.txt\"\n");
+    let h = hooked("pre-commit = \"pwd > pwd.txt; echo $0 > shell.txt\"\n");
+    h.sh(Reply::ok(""));
     assert_eq!(h.run(Hook::PreCommit).outcome, HookOutcome::Passed);
-    assert_eq!(h.file("pwd.txt").trim(), h.repo.canonicalize().unwrap().to_str().unwrap());
-    assert_eq!(h.file("shell.txt").trim(), "sh");
+    let calls = h.fx.calls("sh");
+    assert_eq!(calls.len(), 1);
+    // `sh -c <command>` in the worktree root.
+    assert_eq!(calls[0].program.rsplit('/').next(), Some("sh"));
+    assert_eq!(calls[0].args, ["-c", "pwd > pwd.txt; echo $0 > shell.txt"]);
+    assert_eq!(calls[0].cwd.as_deref(), Some(h.repo.dir().canonicalize().unwrap().as_path()));
 }
 
 #[test]
 fn target_worktree_path_is_undefined_when_no_worktree_has_the_target() {
-    let h = hooks("pre-merge = \"echo {{ target_worktree_path }}\"\n");
-    let op = Operation { branch: "no-such-branch" };
-    let result = run_hook(Hook::PreMerge, &pipeline(&h.wt, Hook::PreMerge), &h.repo, Some(&op), Duration::from_secs(5), &h.log).unwrap();
+    let h = hooked("pre-merge = \"echo {{ target_worktree_path }}\"\n");
+    let operation = Operation { branch: "no-such-branch" };
+    let ports = &h.fx.fakes.ports;
+    let result = run_hook_with(ports, Hook::PreMerge, &pipeline(&h.wt, Hook::PreMerge), h.repo.dir(), Some(&operation), Duration::from_secs(5), &h.log).unwrap();
     assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))));
+    assert!(h.fx.calls("sh").is_empty(), "nothing ran: the command did not render");
 }
 
 /// Dead means no such process or state Z. The hook's sh is gone, so a background child is
@@ -667,17 +733,19 @@ fn a_background_child_of_a_finished_hook_is_killed_when_the_hook_returns() {
 
 // --------------------------------------------------------------- tamper
 
+// In-process: the repos are those of the fake git of an `Fx`, the library is called on its ports (`Fx::scoped`).
+
 /// A repo on `main` with `verify.sh` and `scripts/ci/run.sh` committed (the protected paths of [`list`]),
 /// and the branches `cpd/pay-4521` (the Lead Branch) and `att`, both at `main`.
-fn tamper_repo() -> (TestEnv, PathBuf) {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    commit_file(&env, &repo, "verify.sh", "#!/bin/sh\n");
-    commit_file(&env, &repo, "scripts/ci/run.sh", "ci\n");
-    commit_file(&env, &repo, "src/a.rs", "a\n");
-    env.git(&repo, &["branch", "cpd/pay-4521"]);
-    env.git(&repo, &["branch", "att"]);
-    (env, repo)
+fn tamper_repo() -> (Fx, PathBuf) {
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    fx.commit_file(&repo, "verify.sh", "#!/bin/sh\n", "edit verify.sh");
+    fx.commit_file(&repo, "scripts/ci/run.sh", "ci\n", "edit scripts/ci/run.sh");
+    fx.commit_file(&repo, "src/a.rs", "a\n", "edit src/a.rs");
+    fx.git(&repo, &["branch", "cpd/pay-4521"]);
+    fx.git(&repo, &["branch", "att"]);
+    (fx, repo)
 }
 
 /// The PR's `protected.paths`, from its policy.
@@ -686,68 +754,93 @@ fn list() -> Vec<String> {
 }
 
 /// Commits `edit` on branch `att` (changing the tree), then returns to `main`.
-fn on_att(env: &TestEnv, repo: &Path, edit: impl FnOnce(&Path)) {
-    env.git(repo, &["switch", "-q", "att"]);
+fn on_att(fx: &Fx, repo: &Path, edit: impl FnOnce(&Path)) {
+    fx.git(repo, &["switch", "-q", "att"]);
     edit(repo);
-    env.git(repo, &["add", "-A"]);
-    env.git(repo, &["commit", "-q", "-m", "attempt"]);
-    env.git(repo, &["switch", "-q", "main"]);
+    fx.git(repo, &["add", "-A"]);
+    fx.git(repo, &["commit", "-q", "-m", "attempt"]);
+    fx.git(repo, &["switch", "-q", "main"]);
 }
 
-fn touched(repo: &Path) -> Vec<String> {
-    touched_protected(repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap()
+fn touched(fx: &Fx, repo: &Path) -> Vec<String> {
+    fx.scoped(|| touched_protected(repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap())
 }
 
 #[test]
 fn deleting_a_protected_path_is_refused() {
-    let (env, repo) = tamper_repo();
-    on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
-    assert_eq!(touched(&repo), vec!["verify.sh"]);
+    let (fx, repo) = tamper_repo();
+    on_att(&fx, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
+    assert_eq!(touched(&fx, &repo), vec!["verify.sh"]);
 }
 
 #[test]
 fn renaming_a_protected_path_away_is_refused() {
-    let (env, repo) = tamper_repo();
-    env.git(&repo, &["switch", "-q", "att"]);
-    env.git(&repo, &["mv", "verify.sh", "src/not-protected.sh"]);
-    env.git(&repo, &["mv", "scripts/ci/run.sh", "scripts/run.sh"]);
-    env.git(&repo, &["commit", "-q", "-m", "rename away"]);
-    env.git(&repo, &["switch", "-q", "main"]);
+    let (fx, repo) = tamper_repo();
+    fx.git(&repo, &["switch", "-q", "att"]);
+    fx.git(&repo, &["mv", "verify.sh", "src/not-protected.sh"]);
+    fx.git(&repo, &["mv", "scripts/ci/run.sh", "scripts/run.sh"]);
+    fx.git(&repo, &["commit", "-q", "-m", "rename away"]);
+    fx.git(&repo, &["switch", "-q", "main"]);
     // The new names are not protected; the old paths still show (--no-renames).
-    assert_eq!(touched(&repo), vec!["scripts/ci/run.sh", "verify.sh"]);
+    assert_eq!(touched(&fx, &repo), vec!["scripts/ci/run.sh", "verify.sh"]);
+}
+
+#[test]
+fn each_protected_path_is_refused() {
+    let paths = [
+        ".cpd/anything",
+        ".cpd/deep/er/file",
+        "verify.sh",
+        "scripts/ci/run.sh",
+        "scripts/ci/new/nested.sh",
+    ];
+    // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
+    let (fx, repo) = tamper_repo();
+    for path in paths {
+        fx.git(&repo, &["update-ref", "refs/heads/att", "cpd/pay-4521"]);
+        on_att(&fx, &repo, |r| {
+            let full = r.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, "changed\n").unwrap();
+        });
+        assert_eq!(touched(&fx, &repo), vec![path.to_owned()], "{path}");
+        let err = fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::GateTampered, "{path}");
+        assert_eq!(err.details()["paths"], serde_json::json!([path]));
+    }
 }
 
 #[test]
 fn unprotected_paths_pass() {
-    let (env, repo) = tamper_repo();
-    on_att(&env, &repo, |r| {
+    let (fx, repo) = tamper_repo();
+    on_att(&fx, &repo, |r| {
         for p in ["src/a.rs", "scripts/cix.sh", "verify.sh.bak", ".cpdx/y", ".config/other.toml"] {
             let full = r.join(p);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
             fs::write(full, "x\n").unwrap();
         }
     });
-    assert_eq!(touched(&repo), Vec::<String>::new());
-    tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap();
+    assert_eq!(touched(&fx, &repo), Vec::<String>::new());
+    fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap();
 }
 
 #[test]
 fn the_list_is_the_policys_never_the_attempts() {
-    let (env, repo) = tamper_repo();
+    let (fx, repo) = tamper_repo();
     // The Attempt edits verify.sh and also "protects" its own file by writing a list in its tree.
-    on_att(&env, &repo, |r| {
+    on_att(&fx, &repo, |r| {
         fs::create_dir_all(r.join(".config")).unwrap();
         fs::write(r.join(".config/cpd.toml"), "protected = [\"mine.txt\"]\n").unwrap();
         fs::write(r.join("verify.sh"), "weakened\n").unwrap();
         fs::write(r.join("mine.txt"), "mine\n").unwrap();
     });
-    assert_eq!(touched(&repo), vec!["verify.sh"]);
+    assert_eq!(touched(&fx, &repo), vec!["verify.sh"]);
 }
 
 #[test]
 fn no_list_means_only_the_cpd_directory() {
-    let (env, repo) = tamper_repo();
-    on_att(&env, &repo, |r| {
+    let (fx, repo) = tamper_repo();
+    on_att(&fx, &repo, |r| {
         fs::write(r.join("verify.sh"), "changed\n").unwrap();
         fs::create_dir_all(r.join(".config")).unwrap();
         fs::write(r.join(".config/wt.toml"), "x = 1\n").unwrap();
@@ -755,7 +848,8 @@ fn no_list_means_only_the_cpd_directory() {
         fs::create_dir_all(r.join(".cpd")).unwrap();
         fs::write(r.join(".cpd/x"), "x\n").unwrap();
     });
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", &[], "main", "cpd/pay-4521", "att").unwrap(), vec![".cpd/x"]);
+    let found = fx.scoped(|| touched_protected(&repo, "cpd/pay-4521", &[], "main", "cpd/pay-4521", "att").unwrap());
+    assert_eq!(found, vec![".cpd/x"]);
 }
 
 // A base merge (§7.5): a protected path whose version on the Attempt is the Lead tip's or the
@@ -763,87 +857,102 @@ fn no_list_means_only_the_cpd_directory() {
 
 /// `tamper_repo` plus a commit on `main` writing `path` = `content` (`None`: removing it),
 /// which `att` merges; `cpd/pay-4521` stays where it was, so the base is ahead of the Lead tip.
-fn base_merge_repo(path: &str, content: Option<&str>) -> (TestEnv, PathBuf) {
-    let (env, repo) = tamper_repo();
+fn base_merge_repo(path: &str, content: Option<&str>) -> (Fx, PathBuf) {
+    let (fx, repo) = tamper_repo();
     match content {
-        Some(content) => {
-            commit_file(&env, &repo, path, content);
-        }
+        Some(content) => fx.commit_file(&repo, path, content, &format!("edit {path}")),
         None => {
-            env.git(&repo, &["rm", "-q", path]);
-            env.git(&repo, &["commit", "-q", "-m", "remove"]);
+            fx.git(&repo, &["rm", "-q", path]);
+            fx.git(&repo, &["commit", "-q", "-m", "remove"]);
         }
     }
-    env.git(&repo, &["switch", "-q", "att"]);
-    env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the base", "main"]);
-    env.git(&repo, &["switch", "-q", "main"]);
-    (env, repo)
+    fx.git(&repo, &["switch", "-q", "att"]);
+    fx.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the base", "main"]);
+    fx.git(&repo, &["switch", "-q", "main"]);
+    (fx, repo)
+}
+
+#[test]
+fn a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed() {
+    for path in [".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
+        let (fx, repo) = base_merge_repo(path, Some("from the base\n"));
+        assert_eq!(touched(&fx, &repo), Vec::<String>::new(), "{path}");
+        fx.scoped(|| tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att")).unwrap();
+    }
 }
 
 #[test]
 fn a_protected_path_changed_to_anything_but_the_bases_or_the_lead_tips_is_tampered() {
-    let (env, repo) = base_merge_repo(".cpd/x", Some("from the base\n"));
-    env.git(&repo, &["switch", "-q", "att"]);
-    commit_file(&env, &repo, ".cpd/x", "mine\n");
-    env.git(&repo, &["switch", "-q", "main"]);
-    assert_eq!(touched(&repo), vec![".cpd/x"]);
+    let (fx, repo) = base_merge_repo(".cpd/x", Some("from the base\n"));
+    fx.git(&repo, &["switch", "-q", "att"]);
+    fx.commit_file(&repo, ".cpd/x", "mine\n", "edit .cpd/x");
+    fx.git(&repo, &["switch", "-q", "main"]);
+    assert_eq!(touched(&fx, &repo), vec![".cpd/x"]);
 }
 
 #[test]
 fn a_protected_path_that_matches_the_lead_tip_is_allowed() {
     // The Lead tip gained the file and the Attempt, cut earlier, has the same version.
-    let (env, repo) = tamper_repo();
-    env.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
-    commit_file(&env, &repo, ".cpd/x", "lead\n");
-    env.git(&repo, &["switch", "-q", "att"]);
-    env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay-4521"]);
-    env.git(&repo, &["switch", "-q", "main"]);
-    let base = env.git(&repo, &["merge-base", "main", "att"]);
-    assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", &base, "att").unwrap(), Vec::<String>::new());
+    let (fx, repo) = tamper_repo();
+    fx.git(&repo, &["switch", "-q", "cpd/pay-4521"]);
+    fx.commit_file(&repo, ".cpd/x", "lead\n", "edit .cpd/x");
+    fx.git(&repo, &["switch", "-q", "att"]);
+    fx.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the lead", "cpd/pay-4521"]);
+    fx.git(&repo, &["switch", "-q", "main"]);
+    let base = fx.git(&repo, &["merge-base", "main", "att"]);
+    let found = fx.scoped(|| touched_protected(&repo, "cpd/pay-4521", &list(), "main", &base, "att").unwrap());
+    assert_eq!(found, Vec::<String>::new());
 }
 
 #[test]
 fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_allowed() {
     for path in ["verify.sh", "scripts/ci/run.sh"] {
-        let (_env, repo) = base_merge_repo(path, None);
-        assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
+        let (fx, repo) = base_merge_repo(path, None);
+        assert_eq!(touched(&fx, &repo), Vec::<String>::new(), "{path}");
     }
 }
 
 #[test]
 fn a_protected_file_deleted_in_the_attempt_alone_is_tampered() {
-    let (env, repo) = tamper_repo();
-    on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
-    assert_eq!(touched(&repo), vec!["verify.sh"]);
+    let (fx, repo) = tamper_repo();
+    on_att(&fx, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
+    assert_eq!(touched(&fx, &repo), vec!["verify.sh"]);
 }
 
 #[test]
 fn base_ref_is_origin_slash_base_only_with_an_origin() {
-    let (env, repo) = tamper_repo();
-    assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "main");
-    env.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
-    assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "origin/main");
+    let (fx, repo) = tamper_repo();
+    assert_eq!(fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main")).unwrap(), "main");
+    fx.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
+    assert_eq!(fx.scoped(|| cpd_core::git::tamper::base_ref(&repo, "main")).unwrap(), "origin/main");
 }
 
 // ---------------------------------------------------------------- rule S
 
+// In-process: the git calls are the fake git's, the nap between two rounds is a nap of the `ManualClock`.
+
 /// A Lead worktree on `cpd/pay-4521` and a scratch worktree that makes the
 /// commits a merge would fast-forward the Lead Branch to.
 struct Moving {
-    env: TestEnv,
+    fx: Fx,
     repo: PathBuf,
     lead: PathBuf,
     branch: String,
     scratch: PathBuf,
 }
 
+/// The `Setup` of a worktree's hooks, its log `name` under the `Fx`'s root.
+fn setup_in(fx: &Fx, name: &str) -> Setup {
+    Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("logs").join(name) }
+}
+
 fn moving() -> Moving {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-    let scratch = env.root().join("scratch");
-    env.git(&repo, &["worktree", "add", "-q", "--detach", scratch.to_str().unwrap(), &made.branch]);
-    Moving { env, repo, lead: made.path, branch: made.branch, scratch }
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    let made = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup_in(&fx, "lead.log"))).unwrap();
+    let scratch = fx.env.root().join("scratch");
+    fx.git(&repo, &["worktree", "add", "-q", "--detach", scratch.to_str().unwrap(), &made.branch]);
+    Moving { fx, repo, lead: made.path, branch: made.branch, scratch }
 }
 
 impl Moving {
@@ -851,37 +960,77 @@ impl Moving {
     /// then the compare-and-swap of the ref. The Lead worktree is not touched.
     fn merge(&self, path: &str, content: &str) -> String {
         let reference = format!("refs/heads/{}", self.branch);
-        let old = self.env.git(&self.repo, &["rev-parse", &reference]);
-        self.env.git(&self.scratch, &["checkout", "-q", "--detach", &old]);
-        commit_file(&self.env, &self.scratch, path, content);
-        let new = self.env.git(&self.scratch, &["rev-parse", "HEAD"]);
-        self.env.git(&self.repo, &["update-ref", "-m", "cpd: merge test", &reference, &new, &old]);
+        let old = self.fx.git(&self.repo, &["rev-parse", &reference]);
+        self.fx.git(&self.scratch, &["checkout", "-q", "--detach", &old]);
+        self.fx.commit_file(&self.scratch, path, content, &format!("edit {path}"));
+        let new = self.fx.git(&self.scratch, &["rev-parse", "HEAD"]);
+        self.fx.git(&self.repo, &["update-ref", "-m", "cpd: merge test", &reference, &new, &old]);
         new
     }
 
-    fn assert_at_tip_and_clean(&self, tip: &str) {
-        assert_eq!(self.env.git(&self.lead, &["rev-parse", "HEAD"]), tip);
-        assert_eq!(self.env.git(&self.lead, &["status", "--porcelain"]), "", "the Lead worktree holds the tip's tree");
+    fn sync(&self) -> Result<Synced, cpd_core::error::CpdError> {
+        self.fx.scoped(|| sync_lead(&self.lead, &self.branch))
     }
+
+    fn assert_at_tip_and_clean(&self, tip: &str) {
+        assert_eq!(self.fx.git(&self.lead, &["rev-parse", "HEAD"]), tip);
+        assert_eq!(self.fx.git(&self.lead, &["status", "--porcelain"]), "", "the Lead worktree holds the tip's tree");
+    }
+}
+
+#[test]
+fn rule_s_two_merges_synced_in_the_reverse_order_end_at_the_tip_and_clean() {
+    let m = moving();
+    let _first = m.merge("a.txt", "a\n");
+    let second = m.merge("b.txt", "b\n");
+
+    // The second merge's sync runs first, then the first merge's.
+    assert_eq!(m.sync().unwrap(), Synced::Done);
+    assert_eq!(m.sync().unwrap(), Synced::Done);
+
+    m.assert_at_tip_and_clean(&second);
+    assert_eq!(fs::read_to_string(m.lead.join("a.txt")).unwrap(), "a\n");
+    assert_eq!(fs::read_to_string(m.lead.join("b.txt")).unwrap(), "b\n");
+}
+
+#[test]
+fn rule_s_two_syncs_at_once_both_end_with_the_lead_worktree_at_the_tip() {
+    let m = moving();
+    m.merge("a.txt", "a\n");
+    let tip = m.merge("b.txt", "b\n");
+    // Two threads on the route's mutex: a thread does not see the scope of this one, so it scopes the ports itself.
+    let ports = m.fx.fakes.ports.clone();
+
+    let results = std::thread::scope(|s| {
+        let sync = || Ports::scope(&ports, || sync_lead(&m.lead, &m.branch));
+        let one = s.spawn(sync);
+        let two = s.spawn(sync);
+        [one.join().unwrap(), two.join().unwrap()]
+    });
+
+    for result in results {
+        assert_eq!(result.unwrap(), Synced::Done);
+    }
+    m.assert_at_tip_and_clean(&tip);
 }
 
 #[test]
 fn rule_s_keeps_a_staged_edit_and_reports_it_stale() {
     let m = moving();
     fs::write(m.lead.join("README.md"), "staged by the Lead\n").unwrap();
-    m.env.git(&m.lead, &["add", "README.md"]);
+    m.fx.git(&m.lead, &["add", "README.md"]);
     let tip = m.merge("a.txt", "a\n");
 
-    let err = sync_lead(&m.lead, &m.branch).unwrap_err();
+    let err = m.sync().unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
     assert_eq!(err.details()["worktree"], m.lead.display().to_string());
     // Nothing was overwritten: the edit is still staged and on disk, and the tip's file is not checked out.
-    assert_eq!(m.env.git(&m.lead, &["diff", "--cached", "--name-only"]), "README.md\na.txt");
-    assert_eq!(m.env.git(&m.lead, &["show", ":README.md"]), "staged by the Lead");
+    assert_eq!(m.fx.git(&m.lead, &["diff", "--cached", "--name-only"]), "README.md\na.txt");
+    assert_eq!(m.fx.git(&m.lead, &["show", ":README.md"]), "staged by the Lead");
     assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "staged by the Lead\n");
     assert!(!m.lead.join("a.txt").exists());
-    assert_eq!(m.env.git(&m.lead, &["rev-parse", "HEAD"]), tip, "the ref move stands");
+    assert_eq!(m.fx.git(&m.lead, &["rev-parse", "HEAD"]), tip, "the ref move stands");
 }
 
 #[test]
@@ -890,7 +1039,7 @@ fn rule_s_keeps_an_unstaged_edit_and_reports_it_stale() {
     fs::write(m.lead.join("README.md"), "edited by the Lead\n").unwrap();
     m.merge("a.txt", "a\n");
 
-    let err = sync_lead(&m.lead, &m.branch).unwrap_err();
+    let err = m.sync().unwrap_err();
 
     assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
     assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "edited by the Lead\n");
@@ -898,10 +1047,34 @@ fn rule_s_keeps_an_unstaged_edit_and_reports_it_stale() {
 }
 
 #[test]
+fn rule_s_waits_out_an_index_lock_held_for_one_second() {
+    let m = moving();
+    let tip = m.merge("a.txt", "a\n");
+    // Another git process holds the index lock for one second of virtual time: `write-tree` finds it held until then.
+    let lock = PathBuf::from(m.fx.git(&m.lead, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]));
+    let held = format!("fatal: Unable to create '{}': File exists.\n", lock.display());
+    let clock = m.fx.fakes.clock.clone();
+    let _ = (*m.fx.fakes.runner).clone().on(
+        "git",
+        move |call| call.args.iter().any(|a| a == "write-tree") && clock.elapsed() < Duration::from_secs(1),
+        Reply::exit(128, "", &held),
+    );
+
+    let synced = m.sync();
+
+    assert_eq!(synced.unwrap(), Synced::Done);
+    let naps = m.fx.fakes.clock.naps();
+    assert!(m.fx.fakes.clock.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    assert!(naps.len() >= 2 && naps.len() < 20, "a nap per round that found the lock: {naps:?}");
+    assert!(naps.iter().all(|n| (Duration::from_millis(100)..=Duration::from_millis(500)).contains(n)), "{naps:?}");
+    m.assert_at_tip_and_clean(&tip);
+}
+
+#[test]
 fn rule_s_on_an_up_to_date_lead_worktree_is_done_and_touches_nothing() {
     let m = moving();
-    let tip = m.env.git(&m.lead, &["rev-parse", "HEAD"]);
-    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
+    let tip = m.fx.git(&m.lead, &["rev-parse", "HEAD"]);
+    assert_eq!(m.sync().unwrap(), Synced::Done);
     m.assert_at_tip_and_clean(&tip);
 }
 
@@ -912,91 +1085,94 @@ fn strerror_zero() -> &'static str {
     if cfg!(target_os = "macos") { "Undefined error: 0" } else { "Success" }
 }
 
+#[test]
+fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
+    let fx = Fx::with_ports();
+    let repo = fx.git_repo("pay");
+    let setup = setup_in(&fx, "attempt.log");
+    let lead = fx.scoped(|| create_lead_worktree(&repo, &plan(), "main", &setup)).unwrap();
+    let made = fx.scoped(|| create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup)).unwrap();
+    fx.commit_file(&made.path, "work.txt", "work\n", "edit work.txt");
+
+    // Unmerged: git's own guard refuses the branch deletion.
+    let err = fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert_eq!(err.details()["argv"][3], "branch");
+    assert_eq!(fx.git(&repo, &["branch", "--list", &made.branch]).trim(), made.branch);
+
+    fx.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+    assert!(!made.path.exists());
+    assert_eq!(fx.git(&repo, &["branch", "--list", &made.branch]), "");
+    // Rerunning is safe.
+    fx.scoped(|| remove_merged_attempt(&lead.path, &made.path, &made.branch)).unwrap();
+}
+
 // ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
 //
 // `git worktree list --porcelain` reads `.git/worktrees/<id>/commondir` of every linked worktree. Another cpd operation
 // in the same repo adding a worktree (git creates `commondir` empty, then writes it) or removing one (git deletes its
 // files one after another) leaves an admin dir half-written for a moment, and git dies on it: exit 128, `fatal: failed
-// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below holds that file as a
-// FIFO (`common::answer_reads`): the read of it is observed, answered with an empty file, and the dir is completed or
-// removed before the read ends, so what the second read finds does not depend on timing.
+// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below scripts that
+// answer to the first `worktree list` call(s) of the route, so the rounds of `worktree::list` and the pauses between
+// them are ours and on the virtual clock.
 
-/// A repo with one linked worktree, `held` on branch `held`: returns the repo, the worktree and its admin dir.
-fn repo_with_a_linked_worktree(env: &TestEnv) -> (PathBuf, PathBuf, PathBuf) {
-    let repo = env.git_repo("pay");
-    let worktree = env.root().join("pay.held");
-    env.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
-    let admin = repo.join(".git/worktrees/pay.held");
-    assert!(admin.join("commondir").is_file(), "git writes commondir in {}", admin.display());
-    (repo, worktree, admin)
+/// A repo with one linked worktree, `held` on branch `held`: returns the repo and the worktree.
+fn repo_with_a_linked_worktree(fx: &Fx) -> (PathBuf, PathBuf) {
+    let repo = fx.git_repo("pay");
+    let worktree = fx.env.root().join("pay.held");
+    fx.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
+    (repo, worktree)
 }
 
 /// The paths `worktree::list` found, symlinks resolved.
-fn listed(repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
-    Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect())
+fn listed(fx: &Fx, repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
+    fx.scoped(|| Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect()))
 }
 
 #[test]
 fn list_reads_again_when_the_admin_dir_it_read_half_written_is_completed() {
-    let env = TestEnv::new();
-    let (repo, worktree, admin) = repo_with_a_linked_worktree(&env);
-    let commondir = admin.join("commondir");
-    let whole = admin.join("commondir.whole");
-    fs::copy(&commondir, &whole).unwrap();
+    let fx = Fx::with_ports();
+    let (repo, worktree) = repo_with_a_linked_worktree(&fx);
+    // The first read got an empty `commondir`; the writer has finished before the second.
+    fail_git(&fx, 1, is_worktree_list, &format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero()));
 
-    let (found, reads) = common::answer_reads(
-        &commondir,
-        4,
-        |_, _| {
-            // The first read got an empty `commondir`; the writer has finished before the read ends.
-            fs::rename(&whole, &commondir).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "the first read of commondir");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is complete at the second read");
-    assert_eq!(found, [repo.canonicalize().unwrap(), worktree.canonicalize().unwrap()]);
+    assert_eq!(found, [repo.canonicalize().unwrap_or(repo), worktree.canonicalize().unwrap_or(worktree)]);
 }
 
 #[test]
 fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
-    let env = TestEnv::new();
-    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+    let fx = Fx::with_ports();
+    let (repo, worktree) = repo_with_a_linked_worktree(&fx);
+    // `git worktree remove` deleted the dir while the first read was in it: the second read lists the main one only.
+    fail_git(&fx, 1, is_worktree_list, "fatal: failed to read .git/worktrees/pay.held/commondir: No such file or directory\n");
+    fx.git(&repo, &["worktree", "remove", "--force", worktree.to_str().unwrap()]);
 
-    let (found, reads) = common::answer_reads(
-        &admin.join("commondir"),
-        4,
-        |_, _| {
-            // `git worktree remove` deleted the dir while the first read was in it.
-            fs::remove_dir_all(&admin).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "the first read of commondir");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 2, "the failed read, then the second");
+    assert_retry_naps(&fx, 1);
     let found = found.expect("list reads again: the admin dir is gone at the second read");
-    assert_eq!(found, [repo.canonicalize().unwrap()]);
+    assert_eq!(found, [repo.canonicalize().unwrap_or(repo)]);
 }
 
 #[test]
 fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
-    let env = TestEnv::new();
-    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+    let fx = Fx::with_ports();
+    let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
+    let stderr = format!("fatal: failed to read .git/worktrees/pay.held/commondir: {}\n", strerror_zero());
+    let _ = (*fx.fakes.runner).clone().on("git", is_worktree_list, Reply::exit(128, "", &stderr));
 
-    let (found, reads) = common::answer_reads(&admin.join("commondir"), 40, |_, _| common::Next::Hold, || listed(&repo));
+    let found = listed(&fx, &repo);
 
-    // The bound is the one of `worktree add` (§7): 20 rounds; the 20th failure is the error. The runs are not counted
-    // (that needed GIT_TRACE in the process environment, which a test must not set): each run reads the half-written
-    // commondir, so the reads count the runs. On Linux that is once per run. Apple's git sometimes opens it twice in
-    // one run, so there the reads are only at least 20.
-    if cfg!(target_os = "linux") {
-        assert_eq!(reads, 20, "each run read the half-written commondir");
-    } else {
-        assert!(reads >= 20, "each run read the half-written commondir: {reads} reads");
-    }
+    // The bound is the one of `worktree add` (§7): 20 rounds, 19 pauses between them; the 20th failure is the error.
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 20, "each round ran git once");
+    assert_retry_naps(&fx, 19);
     let error = found.unwrap_err();
     assert_eq!(error.code(), ErrorCode::GitFailed);
     let details = error.details();
@@ -1011,26 +1187,16 @@ fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
 
 #[test]
 fn any_other_worktree_list_failure_is_git_failed_at_once() {
-    let env = TestEnv::new();
-    let (repo, _worktree, _admin) = repo_with_a_linked_worktree(&env);
-    let config = repo.join(".git/config");
-    let whole = repo.join(".git/config.whole");
-    fs::copy(&config, &whole).unwrap();
+    let fx = Fx::with_ports();
+    let (repo, _worktree) = repo_with_a_linked_worktree(&fx);
+    // The first read of the config finds a line git cannot parse: not the half-written admin dir. The next read
+    // would succeed (the script is used up), so a retry would show.
+    fail_git(&fx, 1, is_worktree_list, "fatal: bad config line 1 in file .git/config\n");
 
-    let (found, reads) = common::answer_reads(
-        &config,
-        4,
-        |_, file| {
-            // The first read of the config finds a line git cannot parse: not the half-written admin dir. Then the
-            // config is whole again, so a read after it would succeed.
-            file.write_all(b"[broken\n").unwrap();
-            fs::rename(&whole, &config).unwrap();
-            common::Next::Done
-        },
-        || listed(&repo),
-    );
+    let found = listed(&fx, &repo);
 
-    assert_eq!(reads, 1, "git read the config once");
+    assert_eq!(git_calls(&fx, is_worktree_list).len(), 1, "no second read");
+    assert!(fx.fakes.clock.naps().is_empty());
     let error = found.expect_err("no second read: the failure is not the half-written admin dir");
     assert_eq!(error.code(), ErrorCode::GitFailed);
     assert_eq!(error.details()["exit"], 128);

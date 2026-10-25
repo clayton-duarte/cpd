@@ -101,6 +101,7 @@ impl FoldsFile {
 
     /// Writes `folds` when they differ from the file and a second has passed since the last write. A failure is
     /// returned and leaves the folds unsaved, so the next call retries.
+    #[cfg(test)]
     pub fn save(&mut self, folds: &Folds) -> Result<(), String> {
         self.save_with(&Ports::current(), folds)
     }

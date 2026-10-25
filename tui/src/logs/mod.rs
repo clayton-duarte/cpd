@@ -17,8 +17,10 @@ mod popup_tests;
 pub(crate) use view::layout_sample;
 mod view;
 
+use std::io::Write;
 use std::time::Duration;
 
+use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
@@ -27,7 +29,7 @@ use super::popup;
 use super::read;
 use super::runner::{ViewError, kept};
 use super::widgets::legend;
-use super::view_ports::Ctx;
+use super::view_ports::{Ctx, Input, Tty, run_view_with};
 use super::{Capture, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
@@ -74,26 +76,43 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
     })
 }
 
+/// What the view reads before it draws: the store, the poll, the follow and the log.
+type Opened = (Store, Duration, read::Follow, Log);
+
+/// The first read: a failure is the command's error, with the screen untouched.
+fn open(args: Args) -> Result<Opened, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let first = read::logs(&mut store, RECENT)?;
+    let log = match args.event {
+        Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
+        None => Log::new(first.events),
+    };
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+    Ok((store, poll, follow, log))
+}
+
 pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
-    run_view_on(
-        ports,
-        "logs",
-        Capture::Mouse,
-        || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let first = read::logs(&mut store, RECENT)?;
-            let log = match args.event {
-                Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
-                None => Log::new(first.events),
-            };
-            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
-            Ok((store, poll, follow, log))
-        },
-        |ctx, (mut store, poll, follow, log)| show_with(ctx, &mut store, poll, follow, log),
-    )
+    run_view_on(ports, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+        show_with(ctx, &mut store, poll, follow, log)
+    })
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn.
+pub fn run_on<B: Backend, W: Write>(
+    ports: &Ports,
+    args: Args,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    run_view_with(ports, tty, out, terminal, input, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+        show_with(ctx, &mut store, poll, follow, log)
+    })
 }
 
 /// The keys that close the view.
@@ -103,7 +122,7 @@ fn closes(code: KeyCode) -> bool {
 
 /// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
 /// until a read succeeds ([`kept`]). Input, the wait and frames are the [`Ctx`]'s.
-pub(crate) fn show_with<B: Backend>(
+pub fn show_with<B: Backend>(
     ctx: &mut Ctx<B>,
     store: &mut Store,
     poll: Duration,
@@ -140,7 +159,7 @@ pub(crate) fn show_with<B: Backend>(
 
 /// `events` (the latest, oldest first), with the Event `id` before them when it is older than all of them. An `id`
 /// that no Event has leaves them as they are.
-fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
+pub fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
     if events.first().is_some_and(|e| e.id <= id) {
         return Ok(events);
     }

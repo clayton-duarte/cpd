@@ -11,7 +11,7 @@ use super::lead::{self, Lead};
 use super::row::{self, PlanRow};
 use super::{Env, NewArgs, read_text_file, write_file};
 use crate::args::Text;
-use crate::context::{By, ContextRow, Contexts, Draft, PlanRef, digest};
+use crate::context::{By, ContextRow, Contexts, Draft, PlanRef};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, SessionId};
@@ -225,31 +225,29 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
     std::env::var_os(name).filter(|v| !v.is_empty()).map(|v| parse(&v.to_string_lossy())).transpose()
 }
 
-/// Step 3: `run/<plan>/lead-message.md`: the header, the brief, then the
-/// Context as the first message gives it (§4.6 "Consumers": its digest and the
-/// records after it, or every record; the Lead is always fresh).
+/// Step 3: `run/<plan>/lead-message.md`: the header, the brief when one exists, then the pointer line
+/// (docs/research/context-retrieval-design.md "First messages").
 fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<(), CpdError> {
-    let message = env.store.read(|conn| lead_message(conn, &env.config, plan, brief.map(Text::as_str)))?;
+    let message = lead_message(plan, brief.map(Text::as_str));
     write_file(&env.home.lead_message(&plan.id), &message)
 }
 
-/// The Lead's first message: the header, the brief, then the Context as the first message gives it (§4.6
-/// "Consumers": its digest and the records after it, or every record). The one rendering `plan new` and
-/// `session first-message` share.
-pub(crate) fn lead_message(
-    conn: &Connection,
-    config: &crate::config::Config,
-    plan: &PlanRow,
-    brief: Option<&str>,
-) -> Result<String, CpdError> {
-    let context = digest::first_message(conn, config, &plan.context, Some(&plan.id))?;
+/// The Lead's first message: the header, the brief when one exists, then the pointer line, no store read
+/// (docs/research/context-retrieval-design.md "First messages"). The one rendering `plan new`, the `already`
+/// rerun and `session first-message` share.
+pub(crate) fn lead_message(plan: &PlanRow, brief: Option<&str>) -> String {
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.trim_end().to_owned());
     }
-    message.push(context);
-    Ok(message.join("\n\n") + "\n")
+    message.push(LEAD_POINTER.to_owned());
+    message.join("\n\n") + "\n"
 }
+
+/// The on-demand reads a Lead's first message points at; its pane has `CPD_PLAN`, so `--context` is omitted
+/// (docs/research/context-retrieval-design.md "First messages").
+const LEAD_POINTER: &str =
+    "Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>";
 
 fn header(plan: &PlanRow) -> String {
     format!(

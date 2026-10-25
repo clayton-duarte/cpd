@@ -1,6 +1,8 @@
-//! Red tests for the pill and line colours of contract §6.1.1 (hs-d530, hs-d531), written from the docs: the exact formats and server options.
+//! The pill and line colours of contract §6.1.1 (hs-d530, hs-d531), written from the docs: the exact formats and server
+//! options; and the static facts of `host.rs` of the `session` tests, which read these constants and start no tmux.
 
-use cpd_core::host::tmux::{BORDER_FORMAT, SERVER_OPTIONS, STATUS_FORMAT};
+use super::{BORDER_FORMAT, SERVER_OPTIONS, STATUS_FORMAT, STATUS_CLICK};
+use crate::host::layout::View;
 
 /// The value of the server option `name` (set with `set -g` or `set -gq`).
 fn option(name: &str) -> &'static str {
@@ -60,9 +62,9 @@ fn status_line_pills_follow_the_rule() {
          {}\
          #{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2500}#[range=user|host]{}#[norange],#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}}}\
          {JOIN}",
-        button("reset", "colour13", cpd_core::host::tmux::RESET_GLYPH),
-        button("legend", "colour15", cpd_core::host::tmux::LEGEND_GLYPH),
-        button("logs", "colour10", cpd_core::host::tmux::LOGS_GLYPH),
+        button("reset", "colour13", super::RESET_GLYPH),
+        button("legend", "colour15", super::LEGEND_GLYPH),
+        button("logs", "colour10", super::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
         italic_pill("colour9", "Incident Mode: #{@cpd_incident}"),
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
@@ -116,6 +118,86 @@ fn no_tmux_format_or_option_names_colour_0_or_black_as_text() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut offenders = Vec::new();
     scan(&root.join("src"), &forbidden, &mut offenders);
-    scan(&root.join("../core/src"), &forbidden, &mut offenders);
+    scan(&root.join("../cli/src"), &forbidden, &mut offenders);
     assert!(offenders.is_empty(), "colour 0 or black named as text:\n{}", offenders.join("\n"));
+}
+
+/// Contract §6.1 (hs-d489): the borders of unfocused panes are grey, `pane-border-style fg=colour7` set right before
+/// `pane-active-border-style`.
+#[test]
+fn the_pane_border_style_is_a_server_option_set_right_before_the_active_border_style() {
+    let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
+    assert_eq!(SERVER_OPTIONS[at.checked_sub(1).unwrap()], ["set", "-g", "pane-border-style", "fg=colour7"]);
+}
+
+/// Contract §6.1 (hs-d353): tmux 3.8 defaults the popup, popup border and menu styles to a grey background, so
+/// cpd sets each to `default`, with `-gq`, right after `pane-active-border-style`.
+#[test]
+fn the_popup_and_menu_styles_are_server_options_set_to_default_after_the_active_border() {
+    let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
+    let want: [&[&str]; 3] = [
+        &["set", "-gq", "popup-style", "default"],
+        &["set", "-gq", "popup-border-style", "fg=colour7"],
+        &["set", "-gq", "menu-style", "fg=colour15"],
+    ];
+    assert_eq!(&SERVER_OPTIONS[at + 1..at + 4], &want);
+}
+
+/// How a right click reaches the tree (commands.md §13.2): cpd adds no `MouseDown3Pane` binding, so on a server it
+/// configured the key is tmux's own default (which selects the pane and passes the click on to an app that captures
+/// the mouse), and cpd's own bindings are the left-click pair, `MouseDown1Pane` and the status line's `cpd tui action`.
+/// (Replaces the host.rs test that read tmux 3.4's own default back with `list-keys`: that is tmux's, this is ours.)
+#[test]
+fn a_right_click_is_left_to_tmuxs_default_binding_and_the_status_click_runs_cpd_tui_action() {
+    let binds: Vec<&Vec<String>> = SERVER_OPTIONS.iter().filter(|o| o[0] == "bind").collect();
+    assert!(binds.iter().all(|o| o[3] != "MouseDown3Pane"), "cpd adds no MouseDown3Pane binding: {binds:?}");
+    let status: Vec<&&Vec<String>> = binds.iter().filter(|o| o[3] == "MouseDown1Status").collect();
+    assert_eq!(status.len(), 1, "{binds:?}");
+    assert_eq!(status[0][..], ["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK]);
+    assert!(STATUS_CLICK.starts_with("cpd tui action "), "{STATUS_CLICK}");
+}
+
+/// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
+/// three button pills each in its own range, joined by a single `─` outside the ranges; the optional unpadded
+/// preview pill after a join; the fill; then the workers' pill and the closing `─`
+/// (long form from `#{w:@cpd_workers}` plus its two caps and 14: the left group's 12, the closing `─` and a fill of 1).
+#[test]
+fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
+    let prefix = format!(
+            "#[fg=colour8]\u{2500}#[default]\
+             #[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2500}#[default]\
+             #[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2500}#[default]\
+             #[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+            super::RESET_GLYPH,
+            super::LEGEND_GLYPH,
+            super::LOGS_GLYPH
+        );
+    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
+         #[fg=colour8]";
+    let suffix = "#[default]\
+         #{?@cpd_incident,#[fg=colour9]\u{e0b6}#[reverse]#[italics]Incident Mode: #{@cpd_incident}#[noitalics]#[noreverse]\u{e0b4}#[default]#[fg=colour8]\u{2500}#[default],}\
+         #[fg=colour8]\u{e0b6}#[reverse]\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #[noreverse]\u{e0b4}#[default]\
+         #{?#{@cpd_host_alert},#[fg=colour8]\u{2500}#[range=user|host]#[fg=colour9]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default]#[norange],#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[reverse]#{@cpd_version}#[noreverse]\u{e0b4}#[default],}}\
+         #[fg=colour8]\u{2500}#[default]";
+    let format = STATUS_FORMAT.as_str();
+    assert!(format.starts_with(&prefix), "{format}");
+    assert!(format.ends_with(suffix), "{format}");
+}
+
+/// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).
+#[test]
+fn the_button_glyphs_are_the_hs_d235_code_points() {
+    use super::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+    assert_eq!([RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH], ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}"]);
+}
+
+#[test]
+fn the_statusbar_is_no_view() {
+    assert_eq!(View::parse("statusbar"), None);
+    assert!(View::ALL.iter().all(|v| v.as_str() != "statusbar"));
+    assert_eq!(View::parse("nope"), None);
 }

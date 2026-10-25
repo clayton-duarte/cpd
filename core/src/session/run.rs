@@ -3,15 +3,13 @@
 //! exits it offers to resume it.
 
 use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::time::Duration;
 
 use nix::errno::Errno;
-#[cfg(test)]
-use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
@@ -28,7 +26,7 @@ use crate::host::limit::limit;
 use crate::host::git_guard;
 use crate::clock::Clock;
 use crate::ports::Ports;
-use crate::host::spawn::{Pid as SpawnPid, Signal as SpawnSignal, Spawn};
+use crate::host::spawn::{Launch, Pid as SpawnPid, Signal as SpawnSignal, Spawn};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::SessionId;
@@ -59,7 +57,9 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         return Err(not_a_lead(&row.id, row.role));
     }
     check_pane(&ports, &env.tmux(), &row.id)?;
-    let exe = Exe::current()?;
+    // The path `spawn` recorded at start (the real one: `current_exe` at process start, which an install does not
+    // change under it).
+    let exe = Exe::at(ports.spawn.self_exe()?)?;
     let dirs = PiDirs::from_env()?;
     // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
     let pi_stop = Duration::from_secs(u64::from(env.config.timeouts.pi_stop_seconds));
@@ -155,7 +155,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
         let _ = std::io::stdout().flush();
         let mut line = String::new();
-        match std::io::stdin().lock().read_line(&mut line) {
+        match crate::host::input::read_line(&mut line) {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
         }
@@ -186,18 +186,29 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
         start,
     });
     let pi_install = dirs.watch_install();
-    let mut pi = Command::new(&launch.argv[0]);
-    pi.args(&launch.argv[1..]);
-    // A Context's Manager has no plannotator variable but the one cpd sets (§6.5), whatever its caller holds.
-    if row.plan.is_none() {
-        for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("PLANNOTATOR_")) {
-            pi.env_remove(key);
-        }
-    }
-    let child = pi.envs(&launch.env).current_dir(&row.cwd).spawn().map_err(|e| {
+    // pi owns the pane's terminal (`foreground`) and is this process's child, which the loop waits for by pid.
+    // Inherited `PLANNOTATOR_*` variables go, but a Context's Manager has no plannotator variable but the ones cpd sets
+    // (§6.5), whatever its caller holds.
+    let env_remove = match row.plan {
+        Some(_) => Vec::new(),
+        None => std::env::vars_os()
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .filter(|key| key.starts_with("PLANNOTATOR_") && !launch.env.contains_key(key))
+            .collect(),
+    };
+    let spawn = Launch {
+        program: launch.argv[0].clone(),
+        args: launch.argv[1..].to_vec(),
+        env_set: launch.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect(),
+        env_remove,
+        cwd: Some(PathBuf::from(&row.cwd)),
+        foreground: true,
+        ..Launch::default()
+    };
+    let pid = env.ports.spawn.spawn(&spawn).map_err(|e| {
         CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start pi: {e}.")).with("argv", launch.argv.clone())
     })?;
-    Ok(Some((PiProc::adopt(Pid::from_raw(child.id() as i32)), pi_install)))
+    Ok(Some((PiProc::adopt(Pid::from_raw(pid.0 as i32)), pi_install)))
 }
 
 /// pi, a child of this process: started by it, or adopted from the wrapper
@@ -259,14 +270,6 @@ impl PiProc {
         };
         self.status = Some(status);
         Ok(self.status)
-    }
-
-    /// Sends `signal` to pi if it was not waited for yet.
-    #[cfg(test)]
-    pub(super) fn signal(&self, signal: Signal) {
-        if self.status.is_none() {
-            let _ = kill(self.pid, signal);
-        }
     }
 }
 
@@ -418,78 +421,78 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
 #[cfg(test)]
 mod tests {
     use std::os::unix::process::ExitStatusExt;
-    use std::time::Instant;
 
     use super::*;
+    use crate::clock::ManualClock;
+    use crate::driver::ports_tests::process;
+    use crate::host::spawn::FakeSpawn;
 
-    /// A child of the test process, adopted by pid as the new `session run` adopts pi
-    /// (the `Child` handle is dropped: a pid is all that survives an `exec`).
-    fn adopt(script: &str) -> PiProc {
-        let child = Command::new("/bin/sh").args(["-c", script]).spawn().unwrap();
-        PiProc::adopt(Pid::from_raw(child.id() as i32))
-    }
-
-    fn wait(pi: &mut PiProc) -> ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(status) = pi.try_wait().unwrap() {
-                return status;
-            }
-            assert!(Instant::now() < deadline, "pi did not exit");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+    /// A process the `FakeSpawn` started, adopted by pid as the new `session run` adopts pi (a pid is all that survives an
+    /// `exec`). Nothing runs: the fake is the handle, and what it did is `exit` and the record of `signal`.
+    fn adopt(spawn: &FakeSpawn) -> (PiProc, SpawnPid) {
+        let pid = process(spawn);
+        (PiProc::adopt(Pid::from_raw(pid.0 as i32)), pid)
     }
 
     #[test]
     fn an_adopted_pi_running_is_not_exited_and_its_pid_is_kept() {
-        let mut pi = adopt("exec sleep 60");
-        assert_eq!(pi.try_wait().unwrap(), None);
-        assert_eq!(pi.try_wait().unwrap(), None);
+        let spawn = FakeSpawn::new();
+        let (mut pi, pid) = adopt(&spawn);
+        assert_eq!(pi.try_wait_with(&spawn).unwrap(), None);
+        assert_eq!(pi.try_wait_with(&spawn).unwrap(), None);
         assert!(pi.id() > 1);
-        pi.signal(Signal::SIGKILL);
-        wait(&mut pi);
+        assert_eq!(pi.id(), pid.0 as i32);
+        pi.signal_with(&spawn, SpawnSignal::Kill);
+        assert!(pi.try_wait_with(&spawn).unwrap().is_some());
     }
 
     #[test]
     fn an_adopted_pi_reports_its_exit_code_and_keeps_reporting_it() {
-        let mut pi = adopt("exit 3");
-        let status = wait(&mut pi);
+        let spawn = FakeSpawn::new();
+        let (mut pi, pid) = adopt(&spawn);
+        spawn.exit(pid, 3);
+        let status = pi.try_wait_with(&spawn).unwrap().expect("exited");
         assert_eq!(status.code(), Some(3));
         assert!(!status.success());
-        assert_eq!(pi.try_wait().unwrap(), Some(status), "waited for once, answered again");
-        let mut ok = adopt("exit 0");
-        assert!(wait(&mut ok).success());
+        assert_eq!(pi.try_wait_with(&spawn).unwrap(), Some(status), "waited for once, answered again");
+        let (mut ok, pid) = adopt(&spawn);
+        spawn.exit(pid, 0);
+        assert!(ok.try_wait_with(&spawn).unwrap().expect("exited").success());
     }
 
     #[test]
     fn an_adopted_pi_killed_by_a_signal_reports_it() {
-        let mut pi = adopt("exec sleep 60");
-        pi.signal(Signal::SIGTERM);
-        let status = wait(&mut pi);
-        assert_eq!(status.signal(), Some(Signal::SIGTERM as i32));
+        let spawn = FakeSpawn::new();
+        let (mut pi, pid) = adopt(&spawn);
+        pi.signal_with(&spawn, SpawnSignal::Term);
+        let status = pi.try_wait_with(&spawn).unwrap().expect("signalled");
+        assert_eq!(status.signal(), Some(nix::sys::signal::Signal::SIGTERM as i32));
         assert!(!status.success());
+        assert_eq!(spawn.signals(), [(pid, SpawnSignal::Term)]);
     }
 
     #[test]
     fn an_exited_pi_is_not_signalled_again() {
-        // After the wait the pid may be anyone's: `signal` must not reach it.
-        let mut pi = adopt("exit 0");
-        wait(&mut pi);
-        let other = Command::new("/bin/sh").args(["-c", "exec sleep 60"]).spawn();
-        let mut other = other.unwrap();
-        pi.pid = Pid::from_raw(other.id() as i32);
-        pi.signal(Signal::SIGKILL);
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(other.try_wait().unwrap().is_none(), "the pid of an exited pi was signalled");
-        other.kill().unwrap();
-        other.wait().unwrap();
+        // After the wait the pid may be anyone's: `signal_with` must not reach it.
+        let spawn = FakeSpawn::new();
+        let (mut pi, pid) = adopt(&spawn);
+        spawn.exit(pid, 0);
+        pi.try_wait_with(&spawn).unwrap();
+        let other = process(&spawn);
+        pi.pid = Pid::from_raw(other.0 as i32);
+        pi.signal_with(&spawn, SpawnSignal::Kill);
+        assert!(spawn.signals().is_empty(), "the pid of an exited pi was signalled");
+        assert!(spawn.alive(other));
     }
 
     #[test]
     fn a_pid_that_is_not_a_child_fails_at_the_first_wait() {
-        // pid 1 is nobody's child of this process.
+        // The fake knows no pid 1: it is nobody's child. The error is the handle's, reported by `try_wait_with` as it came.
+        let spawn = FakeSpawn::new();
         let mut pi = PiProc::adopt(Pid::from_raw(1));
-        assert!(pi.try_wait().is_err());
+        let err = pi.try_wait_with(&spawn).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(pi.try_wait_with(&spawn).is_err(), "still an error at the next wait: no status was made up");
     }
 
     #[test]
@@ -505,24 +508,27 @@ mod tests {
 
     #[test]
     fn patiently_tries_again_after_a_transient_error_and_returns_what_is_not() {
+        let clock = ManualClock::new();
         let mut calls = 0;
-        let got = patiently("test", || {
+        let got = patiently_with(&clock, "test", || {
             calls += 1;
             if calls < 2 { Err(CpdError::new(ErrorCode::StoreBusy, "busy.")) } else { Ok(calls) }
         });
         assert_eq!(got.unwrap(), 2);
         let mut calls = 0;
-        let got = patiently("test", || {
+        let got = patiently_with(&clock, "test", || {
             calls += 1;
             if calls < 2 { Err(CpdError::new(ErrorCode::LockTimeout, "setup lock.")) } else { Ok(calls) }
         });
         assert_eq!(got.unwrap(), 2, "the wait for the setup lock is waited out too");
+        assert_eq!(clock.naps(), [RETRY_FIRST; 2], "each wait is a nap on the clock, not the wall clock");
         let mut calls = 0;
-        let err = patiently::<()>("test", || {
+        let err = patiently_with::<()>(&clock, "test", || {
             calls += 1;
             Err(CpdError::new(ErrorCode::SessionNotFound, "gone."))
         })
         .unwrap_err();
         assert_eq!((err.code(), calls), (ErrorCode::SessionNotFound, 1), "not transient: no retry");
+        assert_eq!(clock.naps().len(), 2, "no nap for an error that is not transient");
     }
 }

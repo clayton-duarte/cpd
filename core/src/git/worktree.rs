@@ -8,10 +8,11 @@ use serde_json::json;
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
 use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_add, worktree_list_with};
 use super::{TAIL_LINES, tail};
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -69,7 +70,8 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    list_with(&SystemRunner, &SystemClock, dir)
+    let ports = Ports::current();
+    list_with(&*ports.runner, &*ports.clock, dir)
 }
 
 /// [`list`] on `runner`, the naps of its re-reads on `clock`.
@@ -95,7 +97,8 @@ pub fn list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<V
 
 /// The worktree that has `branch` checked out, if any.
 pub fn worktree_of_branch(dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
-    worktree_of_branch_with(&SystemRunner, &SystemClock, dir, branch)
+    let ports = Ports::current();
+    worktree_of_branch_with(&*ports.runner, &*ports.clock, dir, branch)
 }
 
 /// [`worktree_of_branch`] on `runner`, its naps on `clock`.
@@ -230,7 +233,7 @@ pub enum Push {
 /// when `X` is in the local object store and contains `sha`, the push is
 /// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
 pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
-    push_commit_with(&SystemRunner, lead_worktree, branch, sha)
+    push_commit_with(&*Ports::current().runner, lead_worktree, branch, sha)
 }
 
 /// [`push_commit`] on `runner` (a test passes a `FakeRunner`).
@@ -292,7 +295,7 @@ fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
 /// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
 /// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
 pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    merge_conflicts_with(&SystemRunner, repo, onto, sha)
+    merge_conflicts_with(&*Ports::current().runner, repo, onto, sha)
 }
 
 /// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`).
