@@ -377,6 +377,7 @@ mod tests {
     use ratatui::buffer::Buffer;
 
     use crate::palette::Meaning;
+    use crate::test_text::row;
 
     use super::*;
     fn drawn(width: u16, height: u16, open: &[OpenPr]) -> (Buffer, Vec<Hit>) {
@@ -423,10 +424,6 @@ mod tests {
             plan_phase: None,
             merging: false,
         }
-    }
-
-    fn row(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
     }
 
     #[test]

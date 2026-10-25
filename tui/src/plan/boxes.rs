@@ -357,6 +357,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
+    use crate::test_text::rows;
     use crate::read::PrState;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
@@ -398,10 +399,7 @@ mod tests {
     }
 
     fn text(c: &Chart) -> String {
-        (0..c.buf.area.height)
-            .map(|y| (0..c.buf.area.width).map(|x| c.buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows(&c.buf).join("\n")
     }
 
     fn snap(c: &Chart, want: &str) {

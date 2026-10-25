@@ -588,6 +588,7 @@ mod flow_width_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_text::rows;
 
     static CAP_L: &str = "\u{e0b6}";
     static CAP_R: &str = "\u{e0b4}";
@@ -603,10 +604,7 @@ mod tests {
     }
 
     fn text(c: &Chart) -> String {
-        (0..c.buf.area.height)
-            .map(|y| (0..c.buf.area.width).map(|x| c.buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows(&c.buf).join("\n")
     }
 
     /// The chart's text against `want`, written below an opening newline that is not part of it.

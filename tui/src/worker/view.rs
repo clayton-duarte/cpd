@@ -104,6 +104,7 @@ mod tests {
     use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers, MouseEventKind};
 
     use super::*;
+    use crate::test_text::rows;
 
     fn lines(n: usize) -> Vec<Line<'static>> {
         (1..=n).map(|i| Line::from(format!("line {i}"))).collect()
@@ -122,12 +123,6 @@ mod tests {
         terminal.backend().buffer().clone()
     }
 
-    fn screen(buf: &Buffer) -> Vec<String> {
-        (0..buf.area.height)
-            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
-            .collect()
-    }
-
     fn press(view: &mut View, code: KeyCode) -> bool {
         view.key(KeyEvent { code, modifiers: KeyModifiers::NONE, kind: KeyEventKind::Press, state: KeyEventState::NONE })
     }
@@ -139,9 +134,9 @@ mod tests {
     #[test]
     fn it_follows_the_end_and_shows_the_status_at_the_foot() {
         let mut v = view(10);
-        assert_eq!(screen(&draw(&mut v, 24, 4)), ["line 8", "line 9", "line 10", " a-a1 running · working"]);
+        assert_eq!(rows(&draw(&mut v, 24, 4)), ["line 8", "line 9", "line 10", " a-a1 running · working"]);
         v.set_lines(lines(12));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[2], "line 12", "a new line keeps the end in view");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[2], "line 12", "a new line keeps the end in view");
     }
 
     #[test]
@@ -149,23 +144,23 @@ mod tests {
         let mut v = view(10);
         draw(&mut v, 24, 4);
         press(&mut v, KeyCode::Up);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[..3], ["line 7", "line 8", "line 9"]);
+        assert_eq!(rows(&draw(&mut v, 24, 4))[..3], ["line 7", "line 8", "line 9"]);
         v.set_lines(lines(12));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[0], "line 7", "the view stays where the User put it");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[0], "line 7", "the view stays where the User put it");
         press(&mut v, KeyCode::Char('k'));
         press(&mut v, KeyCode::PageUp);
         press(&mut v, KeyCode::PageUp);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[0], "line 1", "it stops at the top");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[0], "line 1", "it stops at the top");
         wheel(&mut v, MouseEventKind::ScrollDown);
-        assert_eq!(screen(&draw(&mut v, 24, 4))[0], "line 4");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[0], "line 4");
         press(&mut v, KeyCode::Char('G'));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[2], "line 12");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[2], "line 12");
         wheel(&mut v, MouseEventKind::ScrollUp);
         for _ in 0..3 {
             press(&mut v, KeyCode::Down);
         }
         v.set_lines(lines(14));
-        assert_eq!(screen(&draw(&mut v, 24, 4))[2], "line 14", "Down to the end follows it");
+        assert_eq!(rows(&draw(&mut v, 24, 4))[2], "line 14", "Down to the end follows it");
     }
 
     #[test]
@@ -179,15 +174,15 @@ mod tests {
     fn long_lines_wrap_and_scroll_by_rows() {
         let mut v = View::new();
         v.set_lines(vec![Line::from("0123456789abcdefghijklmnopqrstuvwxyz")]);
-        assert_eq!(screen(&draw(&mut v, 16, 4)), ["0123456789abcdef", "      ghijklmnop", "      qrstuvwxyz", ""]);
-        assert_eq!(screen(&draw(&mut v, 30, 3))[..2], ["0123456789abcdefghijklmnopqrst", "      uvwxyz"], "a new width wraps again");
+        assert_eq!(rows(&draw(&mut v, 16, 4)), ["0123456789abcdef", "      ghijklmnop", "      qrstuvwxyz", ""]);
+        assert_eq!(rows(&draw(&mut v, 30, 3))[..2], ["0123456789abcdefghijklmnopqrst", "      uvwxyz"], "a new width wraps again");
     }
 
     #[test]
     fn the_header_is_pinned_wrapped_and_stops_at_five_rows() {
         let mut v = view(10);
         v.header = "failed: crashed".to_owned();
-        assert_eq!(screen(&draw(&mut v, 24, 5)), [" failed: crashed", "", "line 9", "line 10", " a-a1 running · working"]);
+        assert_eq!(rows(&draw(&mut v, 24, 5)), [" failed: crashed", "", "line 9", "line 10", " a-a1 running · working"]);
         v.header = (1..=20).map(|i| format!("w{i:02}")).collect::<Vec<_>>().join(" ");
         let rows = wrap_header(&v.header, 12);
         assert_eq!(rows, [" w01 w02 w03", " w04 w05 w06", " w07 w08 w09", " w10 w11 w12", " w13 w14 …"]);
@@ -199,6 +194,6 @@ mod tests {
     fn a_failure_replaces_the_status() {
         let mut v = view(1);
         v.note = "The database is locked.".to_owned();
-        assert_eq!(screen(&draw(&mut v, 30, 2))[1], " The database is locked.");
+        assert_eq!(rows(&draw(&mut v, 30, 2))[1], " The database is locked.");
     }
 }

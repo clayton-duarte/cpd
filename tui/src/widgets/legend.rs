@@ -352,6 +352,7 @@ mod tests {
     use super::*;
     use crate::section;
     use crate::read::Kind;
+    use crate::test_text::row;
 
     static CAP_L: &str = "\u{e0b6}";
     static CAP_R: &str = "\u{e0b4}";
@@ -532,10 +533,6 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw_scrolled(f, f.area(), scroll)).unwrap();
         terminal.backend().buffer().clone()
-    }
-
-    fn row(buf: &Buffer, y: u16) -> String {
-        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
     }
 
     #[test]
