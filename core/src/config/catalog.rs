@@ -126,7 +126,8 @@ fn tail(bytes: &[u8]) -> String {
 /// models under the installed pi's version; otherwise computed from pi and
 /// written in one transaction, replacing what was cached.
 pub fn load(config: &Config) -> Result<Catalog, CpdError> {
-    let mut store = Store::open(&CpdHome::from_env()?, config.timeouts.store_busy_ms.into())?;
+    // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
+    let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
     load_with(config, &mut store)
 }
 
