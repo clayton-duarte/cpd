@@ -49,8 +49,10 @@ use tempfile::TempDir;
 pub mod engine;
 pub mod fx;
 pub mod healthy;
+pub mod pi;
 pub mod screen;
 pub mod session;
+pub mod tree;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
@@ -1506,6 +1508,16 @@ impl Locale {
             Locale::EmptyLang => cmd.env("LANG", ""),
             Locale::LangC => cmd.env("LANG", "C"),
             Locale::LcAllC => cmd.env("LC_ALL", "C"),
+        }
+    }
+
+    /// This locale's variables, to set on a call that runs in this process (`Fx::cpd_with`).
+    pub fn vars(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Locale::Unset => &[],
+            Locale::EmptyLang => &[("LANG", "")],
+            Locale::LangC => &[("LANG", "C")],
+            Locale::LcAllC => &[("LC_ALL", "C")],
         }
     }
 

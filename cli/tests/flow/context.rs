@@ -1,8 +1,7 @@
 //! Contexts (contract §2.2, §4.6; commands.md §3): the command tree, in this process (`Fx`). The records live only in
 //! the database: no directory, no git, no lock file.
 //!
-//! Six tests stay on `TestEnv` and the built binary, each needing something `Fx` does not do: a fake `git` on `PATH`
-//! (`no_record_write_runs_git_or_makes_a_directory`), a fake `pi` on `PATH`
+//! Five tests stay on `TestEnv` and the built binary, each needing something `Fx` does not do: a fake `pi` on `PATH`
 //! (`a_superseded_note_is_absent_from_the_batch_a_distill_run_reads`) and a private tmux server (the four archive tests).
 
 use crate::common;
@@ -19,7 +18,7 @@ use serde_json::{Value, json};
 
 const CTX: &str = "building-cpd";
 
-/// A command runner: `Fx` in this process, `TestEnv` through the binary (the six tests that stay on it).
+/// A command runner: `Fx` in this process, `TestEnv` through the binary (the five tests that stay on it).
 trait Cpd {
     fn cpd(&self, args: &[&str]) -> Run;
 }
@@ -45,6 +44,13 @@ fn write_hs(env: &TestEnv) {
 /// Machine `hs`, in this process.
 fn hs() -> Fx {
     let fx = Fx::new();
+    write_hs(&fx.env);
+    fx
+}
+
+/// Machine `hs`, in this process on the fake ports: a call of any program is recorded (`Fx::calls`).
+fn hs_ports() -> Fx {
+    let fx = Fx::with_ports();
     write_hs(&fx.env);
     fx
 }
@@ -263,18 +269,19 @@ fn sync_is_gone() {
 
 #[test]
 fn no_record_write_runs_git_or_makes_a_directory() {
-    let env = hs_binary();
-    env.fake("git", "echo 'no git here' >&2; exit 99");
-    new_context(&env);
-    env.cpd(&["context", "decide", "D.", "--context", CTX]).ok();
-    env.cpd(&["context", "ask", "Q?", "--context", CTX]).ok();
-    env.cpd(&["context", "answer", "hs-q1", "A.", "--context", CTX]).ok();
-    env.cpd(&["context", "note", "N.", "--context", CTX]).ok();
-    env.cpd(&["context", "rename", CTX, "--title", "Renamed"]).ok();
-    assert_eq!(record_ids(&env), ["hs-d1", "hs-q1", "hs-a1", "hs-n1"]);
-    assert_eq!(env.calls("git"), Vec::<Vec<String>>::new());
-    assert!(!old_dir(&env).exists(), "no contexts/ directory");
-    assert!(!env.cpd_home().join("locks").join(format!("context-{CTX}.lock")).exists(), "no lock file");
+    let fx = hs_ports();
+    new_context(&fx);
+    fx.cpd(&["context", "decide", "D.", "--context", CTX]).ok();
+    fx.cpd(&["context", "ask", "Q?", "--context", CTX]).ok();
+    fx.cpd(&["context", "answer", "hs-q1", "A.", "--context", CTX]).ok();
+    fx.cpd(&["context", "note", "N.", "--context", CTX]).ok();
+    fx.cpd(&["context", "rename", CTX, "--title", "Renamed"]).ok();
+    assert_eq!(record_ids(&fx), ["hs-d1", "hs-q1", "hs-a1", "hs-n1"]);
+    // Not one program was run: on the fake ports a `git` (or any other call) would be in the record.
+    assert_eq!(fx.calls("git"), Vec::new());
+    assert_eq!(fx.fakes.runner.calls(), Vec::new());
+    assert!(!old_dir(&fx.env).exists(), "no contexts/ directory");
+    assert!(!fx.env.cpd_home().join("locks").join(format!("context-{CTX}.lock")).exists(), "no lock file");
 }
 
 // ---- context decide, note, ask --------------------------------------------
