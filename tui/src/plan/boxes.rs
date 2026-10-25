@@ -20,6 +20,8 @@ use ratatui::{
     widgets::Widget,
 };
 
+use cpd_core::plan::Phase;
+
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, link};
@@ -126,14 +128,16 @@ fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
 /// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
-/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`.
+/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`. The dot's
+/// colour is [`Dot::working`]: `plan_failed` makes it the red loader, else `lead_phase` (the Plan's phase; `None`: cyan).
 #[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
-    title_of(pr, asked, false, frame)
+    title_of(pr, asked, false, None, frame)
 }
 
-/// [`title`] for a Plan that has a failed Job (`plan_failed`): its working Lead's dot is the red loader.
-fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'static> {
+/// [`title`] for a Plan that has a failed Job (`plan_failed`) and is in phase `lead_phase`: its working Lead's dot is
+/// the red loader when a Job failed, else the bright pair of the phase's colour.
+fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_phase: Option<Phase>, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -147,7 +151,7 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed), frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_phase), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -185,7 +189,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .collect();
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, frame)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, needs_user.lead_phase, frame)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title (the
     // corner, a dash, the title, the corner)
     let size: Vec<(u16, u16)> = charts

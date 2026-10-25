@@ -59,6 +59,10 @@ mod failed_pill_tests;
 mod landing_tests;
 #[cfg(test)]
 mod moon_tests;
+#[cfg(test)]
+mod phase_dot_tests;
+#[cfg(test)]
+mod phase_dot_views_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;
