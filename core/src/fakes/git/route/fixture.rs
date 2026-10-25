@@ -285,7 +285,7 @@ pub(super) fn add(c: &mut Ctx, args: &[String]) -> Run {
 
 /// ` 1 file changed, 2 insertions(+), 1 deletion(-)` and the `create mode` / `delete mode` lines of the change
 /// from `old` to `new`; empty when nothing changed.
-fn diffstat(u: &Universe, old: &BTreeMap<String, Oid>, new: &BTreeMap<String, Oid>) -> String {
+pub(super) fn diffstat(u: &Universe, old: &BTreeMap<String, Oid>, new: &BTreeMap<String, Oid>) -> String {
     let paths: BTreeSet<&String> = old.keys().chain(new.keys()).filter(|p| old.get(*p) != new.get(*p)).collect();
     if paths.is_empty() {
         return String::new();

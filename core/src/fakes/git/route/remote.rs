@@ -1,5 +1,6 @@
 //! `ls-remote`, `fetch` and `push`: a remote is a configured url, rewritten by `insteadOf`, that names a repo
-//! of the Universe; a url that names none cannot be reached (`Could not resolve host`).
+//! of the Universe; a url that names none cannot be reached (`Could not resolve host`, or for a path "does not
+//! appear to be a git repository").
 //!
 //! `fetch` and `push` copy the closure of the commit they move into the object set of the repo that did not
 //! have it (`Universe::copy`), and a successful one updates `refs/remotes/<remote>/<branch>` here, as the
@@ -33,6 +34,10 @@ fn open(c: &Ctx, repo: RepoId, name: &str) -> Result<Remote, Out> {
     let url = c.u.resolve_url_with(repo, &url, &c.extra);
     match c.u.repo_at(&url) {
         Some(there) => Ok(Remote { name: named.then(|| name.to_owned()), url, repo: there }),
+        None if url.starts_with('/') || url.starts_with('.') => Err(Out::fail(
+            128,
+            format!("fatal: '{url}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n"),
+        )),
         None => Err(Out::fail(128, format!("fatal: unable to access '{url}': Could not resolve host\n"))),
     }
 }
@@ -83,6 +88,7 @@ pub(super) fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
 /// Local branches, `HEAD` and the working tree are left alone.
 pub(super) fn fetch(c: &mut Ctx, args: &[String]) -> Run {
     let toks = scan("fetch", args, &["-q"], &[])?;
+    let quiet = !flags(&toks).is_empty();
     let pos = positionals(&toks);
     let (name, branches) = pos.split_first().map_or(("origin", &[][..]), |(n, b)| (*n, b));
     let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
@@ -103,11 +109,15 @@ pub(super) fn fetch(c: &mut Ctx, args: &[String]) -> Run {
         }
         tips
     };
+    let given = !branches.is_empty();
+    let mut from = format!("From {}\n", remote.url.trim_end_matches('/').trim_end_matches(".git"));
     for (reference, oid) in tips {
         c.u.copy(remote.repo, repo, &oid);
         track(c.u, repo, &remote, &reference, Some(&oid));
+        from.push_str(&format!(" * branch            {:<10} -> FETCH_HEAD\n", reference.strip_prefix("refs/heads/").unwrap_or(&reference)));
     }
-    Ok(Out::ok(""))
+    // Naming branches writes `FETCH_HEAD` and says so; fetching what the refspec says is silent here.
+    Ok(if given && !quiet { Out::fail(0, from) } else { Out::ok("") })
 }
 
 /// Points `refs/remotes/<remote>/<branch>` of `repo` at `oid` (`None`: deletes it) for a branch `reference` of
@@ -252,11 +262,12 @@ pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
     let code = i32::from(rejected);
     let tail = if rejected { failed } else { String::new() };
     if porcelain {
-        // The route's own, not recorded from git: the rejected refs are also told on stderr in the plain form
-        // (with the reason), which is what the product keeps of a rejected push (`Push::Rejected`).
+        // The route's own, not recorded from git: after git's `error:` line, the rejected refs are also told on
+        // stderr in the plain form (with the reason), which is what the product keeps of a rejected push
+        // (`Push::Rejected`).
         let rejections: String = updates.iter().filter(|u| u.flag == '!').map(|u| shown_plain(u)).collect();
         let lines: String = updates.iter().map(shown).collect();
-        return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: format!("{rejections}{tail}") });
+        return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: format!("{tail}{rejections}") });
     }
     if quiet && !rejected {
         return Ok(Out::silent(0));

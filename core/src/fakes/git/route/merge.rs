@@ -3,7 +3,7 @@
 //! (the first best base is taken), patch-id dedup, dropping a replayed commit that became empty, and
 //! `--rebase-merges`.
 
-use super::super::merge3::merge3_favoring;
+use super::super::merge3::merge3;
 use super::super::universe::RebaseState;
 use super::*;
 
@@ -24,7 +24,7 @@ pub(super) struct Merged {
     pub(super) messages: Vec<String>,
 }
 
-fn tree_map(u: &Universe, tree: &Oid) -> BTreeMap<String, Oid> {
+pub(super) fn tree_map(u: &Universe, tree: &Oid) -> BTreeMap<String, Oid> {
     u.tree_entries(tree).unwrap_or_default().into_iter().collect()
 }
 
@@ -67,7 +67,7 @@ pub(super) fn merge_trees(
                 let text = |blob: Option<&Oid>| blob.and_then(|b| u.blob_bytes(b)).unwrap_or_default();
                 let (base_text, ours_text, theirs_text) = (text(b), text(Some(ours_blob)), text(Some(theirs_blob)));
                 merged.messages.push(format!("Auto-merging {path}"));
-                let (bytes, conflicted) = merge3_favoring(&base_text, &ours_text, &theirs_text, label_ours, label_theirs, favor_ours);
+                let (bytes, conflicted) = merge3(&base_text, &ours_text, &theirs_text, label_ours, label_theirs, favor_ours);
                 merged.entries.insert(path.clone(), u.blob(repo, &bytes));
                 if conflicted {
                     let kind = if b.is_none() { "add/add" } else { "content" };
@@ -315,8 +315,13 @@ fn resume(c: &mut Ctx, repo: RepoId, wt: &Path) -> Run {
     let tree = c.u.tree(repo, &entries);
     let Head::Detached(current) = c.u.head(wt) else { return Err("rebase --continue (a HEAD on a branch)".to_owned()) };
     let data = c.u.commit_data(&state.stopped).expect("the stopped commit has data");
+    let (before, after) = (commit_tree(c.u, &current), tree_map(c.u, &tree));
     let new = c.u.commit_as(repo, &data.author, &tree, &[current], &data.message);
-    Ok(replay(c, repo, wt, state, new))
+    let subject = data.message.lines().next().unwrap_or("");
+    let committed = format!("[detached HEAD {}] {subject}\n{}", sha7(&new), super::fixture::diffstat(c.u, &before, &after));
+    let mut out = replay(c, repo, wt, state, new);
+    out.stdout.insert_str(0, &committed);
+    Ok(out)
 }
 
 /// `rebase --abort`: a `reset --hard` to `orig-head`, `HEAD` back where it was.

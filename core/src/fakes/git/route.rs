@@ -639,7 +639,7 @@ fn unmerged(index: &[(String, Oid, u8)]) -> BTreeMap<String, Vec<u8>> {
 }
 
 fn status(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("status", args, &["--porcelain"], &["--untracked-files="])?;
+    let toks = scan("status", args, &["--porcelain", "-z"], &["--untracked-files="])?;
     let flags = flags(&toks);
     let mut untracked = true;
     for flag in &flags {
@@ -666,7 +666,7 @@ fn status(c: &mut Ctx, args: &[String]) -> Run {
     let mut paths: BTreeSet<&str> = head.keys().map(String::as_str).collect();
     paths.extend(merged.keys().copied());
     paths.extend(conflicts.keys().map(String::as_str));
-    let mut out = String::new();
+    let mut lines: Vec<(String, String)> = Vec::new();
     for path in paths {
         if let Some(stages) = conflicts.get(path) {
             let code = match stages[..] {
@@ -677,7 +677,7 @@ fn status(c: &mut Ctx, args: &[String]) -> Run {
                 [2] => "AU",
                 _ => "UA",
             };
-            out.push_str(&format!("{code} {path}\n"));
+            lines.push((code.to_owned(), path.to_owned()));
             continue;
         }
         let x = match (head.get(path), merged.get(path)) {
@@ -692,24 +692,51 @@ fn status(c: &mut Ctx, args: &[String]) -> Run {
             _ => ' ',
         };
         if (x, y) != (' ', ' ') {
-            out.push_str(&format!("{x}{y} {path}\n"));
+            lines.push((format!("{x}{y}"), path.to_owned()));
         }
     }
     if untracked {
         let known: Vec<&str> = merged.keys().copied().chain(conflicts.keys().map(String::as_str)).collect();
         let ignore = fixture::ignore_of(&wt, &files, "status")?;
-        let mut lines = BTreeSet::new();
+        let mut found = BTreeSet::new();
         for path in files.keys().filter(|p| !known.contains(&p.as_str()) && !ignore.ignores(p, false)) {
             let parts: Vec<&str> = path.split('/').collect();
             let shown = (1..parts.len())
                 .map(|k| format!("{}/", parts[..k].join("/")))
                 .find(|dir| !known.iter().any(|t| t.starts_with(dir.as_str())))
                 .unwrap_or_else(|| path.clone());
-            lines.insert(shown);
+            found.insert(shown);
         }
-        out.extend(lines.into_iter().map(|l| format!("?? {l}\n")));
+        lines.extend(found.into_iter().map(|l| ("??".to_owned(), l)));
     }
-    Ok(Out::ok(out))
+    let z = flags.contains(&"-z");
+    Ok(Out::ok(
+        lines
+            .into_iter()
+            .map(|(code, path)| if z { format!("{code} {path}\0") } else { format!("{code} {}\n", quoted(&path)) })
+            .collect::<String>(),
+    ))
+}
+
+/// A path as `status --porcelain` shows it: in double quotes, with C escapes, when it has a space, a quote, a
+/// backslash, a control character or a byte above ASCII.
+fn quoted(path: &str) -> String {
+    if !path.chars().any(|c| c == ' ' || c == '"' || c == '\\' || c.is_control() || !c.is_ascii()) {
+        return path.to_owned();
+    }
+    let mut out = String::from("\"");
+    for byte in path.bytes() {
+        match byte {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\t' => out.push_str("\\t"),
+            0x20..=0x7e => out.push(byte as char),
+            other => out.push_str(&format!("\\{other:03o}")),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The paths where the working tree differs from `tree`, among the paths of the tree and the index.
@@ -730,7 +757,7 @@ fn work_against(u: &Universe, wt: &Path, tree: &BTreeMap<String, Oid>) -> BTreeS
 }
 
 fn diff(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("diff", args, &["--quiet", "--name-only", "--no-renames", "-z"], &["--diff-filter="])?;
+    let toks = scan("diff", args, &["--quiet", "--name-only", "--no-renames", "-z", "--cached"], &["--diff-filter="])?;
     let flags = flags(&toks);
     let mut only_unmerged = false;
     for flag in &flags {
@@ -752,6 +779,13 @@ fn diff(c: &mut Ctx, args: &[String]) -> Run {
     let index = c.u.effective_index(&wt);
     let names: BTreeSet<String> = if only_unmerged {
         unmerged(&index).into_keys().collect()
+    } else if flags.contains(&"--cached") {
+        if !pos.is_empty() {
+            return Err("diff --cached (with a revision)".to_owned());
+        }
+        let head: BTreeMap<String, Oid> = c.u.head_tree(&wt).into_iter().collect();
+        let staged: BTreeMap<String, Oid> = index.iter().filter(|(_, _, s)| *s == 0).map(|(p, o, _)| (p.clone(), o.clone())).collect();
+        changed_between(&head, &staged).into_iter().chain(unmerged(&index).into_keys()).collect()
     } else {
         match pos[..] {
             [] => {
@@ -963,12 +997,13 @@ fn given(c: &Ctx, path: &str) -> PathBuf {
 
 fn worktree_add(c: &mut Ctx, args: &[String]) -> Run {
     let (mut branch, mut reason): (Option<&str>, Option<&str>) = (None, None);
-    let (mut detach, mut lock) = (false, false);
+    let (mut detach, mut lock, mut quiet) = (false, false, false);
     let mut pos: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--no-track" => {}
+            "-q" => quiet = true,
             "--detach" => detach = true,
             "--lock" => lock = true,
             "-b" => branch = Some(it.next().ok_or("worktree add -b")?),
@@ -1018,7 +1053,10 @@ fn worktree_add(c: &mut Ctx, args: &[String]) -> Run {
         None => format!("detached HEAD {}", &commit.as_str()[..7]),
     };
     let first = data.message.lines().next().unwrap_or("");
-    Ok(Out { code: 0, stdout: String::new(), stderr: format!("Preparing worktree ({what})\nHEAD is now at {} {first}\n", &commit.as_str()[..7]) })
+    if quiet {
+        return Ok(Out::ok(""));
+    }
+    Ok(Out { code: 0, stdout: format!("HEAD is now at {} {first}\n", &commit.as_str()[..7]), stderr: format!("Preparing worktree ({what})\n") })
 }
 
 /// Writes the blobs of `entries` as files under `root` (parents made).
@@ -1044,7 +1082,12 @@ fn worktree_list(c: &mut Ctx, args: &[String]) -> Run {
         return Ok(Out::ok(format!("worktree {}\nbare\n\n", c.u.git_dir(repo).display())));
     }
     let mut out = String::new();
-    for wt in c.u.worktrees(repo) {
+    let mut wts = c.u.worktrees(repo);
+    // The main worktree first, then the linked ones by the name of their admin directory.
+    if let Some((_, linked)) = wts.split_first_mut() {
+        linked.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    for (i, wt) in wts.iter().enumerate() {
         let head = c.u.head(&wt.path);
         let oid = match &head {
             Head::Branch(b) => c.u.ref_oid(repo, &format!("refs/heads/{b}")),
@@ -1058,6 +1101,7 @@ fn worktree_list(c: &mut Ctx, args: &[String]) -> Run {
         match c.u.lock_reason(&wt.path) {
             Some(reason) if reason.is_empty() => out.push_str("locked\n"),
             Some(reason) => out.push_str(&format!("locked {reason}\n")),
+            None if i > 0 && !wt.path.exists() => out.push_str("prunable gitdir file points to non-existent location\n"),
             None => {}
         }
         out.push('\n');

@@ -435,9 +435,9 @@ fn branch_capital_d_of_the_branch_checked_out_in_the_main_worktree_is_exit_1() {
 fn branch_with_a_flag_it_does_not_model_is_unsupported_exit_1_and_recorded() {
     let mut w = world();
     let repo = w.repo();
-    let out = w.git(repo.dir(), &["branch", "--list"]);
-    assert_eq!((out.code, out.stderr.as_str()), (1, "fake-git: unsupported: branch --list\n"));
-    assert_eq!(w.route.unsupported(), vec!["branch --list".to_owned()]);
+    let out = w.git(repo.dir(), &["branch", "--contains"]);
+    assert_eq!((out.code, out.stderr.as_str()), (1, "fake-git: unsupported: branch --contains\n"));
+    assert_eq!(w.route.unsupported(), vec!["branch --contains".to_owned()]);
 }
 
 // ---- worktree add ------------------------------------------------------------------------------------
@@ -448,8 +448,8 @@ fn worktree_add_b_makes_a_directory_with_a_dot_git_file_pointing_at_its_admin_di
     let repo = w.repo();
     let wt = w.root().join("lead");
     let out = w.git(repo.dir(), &["worktree", "add", "--no-track", "-b", "lead", p(&wt), "main"]);
-    assert_eq!((out.code, out.stdout.as_str()), (0, ""));
-    // recorded: the first line git prints for a new branch
+    // recorded (twin `worktree_round_trip`): `HEAD is now at` is on stdout, the first line for a new branch on stderr
+    assert_eq!((out.code, out.stdout.as_str()), (0, format!("HEAD is now at {} one\n", &w.rev(repo.dir(), "main")[..7]).as_str()));
     assert_eq!(out.stderr.lines().next(), Some("Preparing worktree (new branch 'lead')"));
     let admin = repo.dir().join(".git/worktrees/lead");
     assert_eq!(std::fs::read_to_string(wt.join(".git")).unwrap(), format!("gitdir: {}\n", admin.display()));
@@ -590,16 +590,16 @@ fn worktree_list_porcelain_of_one_worktree_is_one_block_ending_in_a_blank_line()
 }
 
 #[test]
-fn worktree_list_porcelain_puts_the_main_worktree_first_then_the_linked_ones_in_the_order_added() {
+fn worktree_list_porcelain_puts_the_main_worktree_first_then_the_linked_ones_by_the_name_of_their_admin_dir() {
     let mut w = world();
     let repo = w.repo();
     let c1 = w.rev(repo.dir(), "main");
     let (b, a) = (w.add(&repo, "b", "feat-b"), w.add(&repo, "a", "feat-a"));
     let expected = format!(
-        "worktree {}\nHEAD {c1}\nbranch refs/heads/main\n\nworktree {}\nHEAD {c1}\nbranch refs/heads/feat-b\n\nworktree {}\nHEAD {c1}\nbranch refs/heads/feat-a\n\n",
+        "worktree {}\nHEAD {c1}\nbranch refs/heads/main\n\nworktree {}\nHEAD {c1}\nbranch refs/heads/feat-a\n\nworktree {}\nHEAD {c1}\nbranch refs/heads/feat-b\n\n",
         repo.dir().display(),
-        b.display(),
-        a.display()
+        a.display(),
+        b.display()
     );
     assert_eq!(w.ok(repo.dir(), &["worktree", "list", "--porcelain"]), expected);
     assert_eq!(w.ok(&a, &["worktree", "list", "--porcelain"]), expected, "from a linked worktree");

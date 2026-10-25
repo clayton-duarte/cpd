@@ -635,7 +635,7 @@ pub(super) fn grep_hits_with(runner: &dyn Runner, repos: &[String], batch: &[&In
     for (_, record) in batch {
         let mut found = Vec::new();
         for repo in repos {
-            let mut cmd = Command::new("git");
+            let mut cmd = Command::new(GIT);
             cmd.args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"]).stdin(Stdio::null());
             let out = runner.output(&mut cmd, "git", GREP_DEADLINE).map_err(|e| match e {
                 RunFailed::Io(e) => git_failed(repo, &e.to_string()),
@@ -651,6 +651,9 @@ pub(super) fn grep_hits_with(runner: &dyn Runner, repos: &[String], batch: &[&In
     }
     Ok(hits)
 }
+
+/// The program of the grep; the runner picks the real or the fake one.
+const GIT: &str = "git";
 
 /// How long one `git grep` of a repo may take.
 const GREP_DEADLINE: Duration = Duration::from_secs(60);

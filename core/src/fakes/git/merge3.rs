@@ -55,19 +55,15 @@ fn diff(base: &[&[u8]], side: &[&[u8]]) -> Vec<Hunk> {
     hunks
 }
 
-/// The merge of `ours` and `theirs` over `base`: the text, and whether it holds conflict blocks, which are
-/// `<<<<<<< <label_ours>`, ours, `=======`, theirs, `>>>>>>> <label_theirs>`.
-pub(super) fn merge3(base: &[u8], ours: &[u8], theirs: &[u8], label_ours: &str, label_theirs: &str) -> (Vec<u8>, bool) {
-    merge3_favoring(base, ours, theirs, label_ours, label_theirs, false)
-}
-
 /// `(inserted, deleted)` lines of the change from `old` to `new`.
 pub(super) fn line_changes(old: &[u8], new: &[u8]) -> (usize, usize) {
     diff(&split(old), &split(new)).iter().fold((0, 0), |(ins, del), h| (ins + h.with_end - h.with_start, del + h.end - h.start))
 }
 
-/// [`merge3`]; with `favor_ours` a conflicting hunk takes our side (`-X ours`) instead of a conflict block.
-pub(super) fn merge3_favoring(
+/// The merge of `ours` and `theirs` over `base`: the text, and whether it holds conflict blocks, which are
+/// `<<<<<<< <label_ours>`, ours, `=======`, theirs, `>>>>>>> <label_theirs>`. With `favor_ours` a conflicting
+/// hunk takes our side (`-X ours`) instead of a conflict block.
+pub(super) fn merge3(
     base: &[u8],
     ours: &[u8],
     theirs: &[u8],
