@@ -2,6 +2,7 @@
 # `<binary_id> <test-name-prefix>  # <tag>: <reason>`. Generated from the inventories
 # docs/research/tests-mock-*.md (over-approximate on purpose); a migration Job deletes its lines.
 # Never add a line for a hit: migrate the test to the fake tmux instead.
+# Exception: a test that landed after the inventory may be listed in an urgent PR, by its full name, and is migrated later.
 cpd::engine doctor::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_curate_inbox::  # m-engine: engine tests on a real tmux server
 cpd::engine watch_distill_inbox::  # m-engine: engine tests on a real tmux server
@@ -61,6 +62,9 @@ cpd::flow plan_show::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
+cpd::flow repo_cmds::a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
+cpd::flow repo_cmds::pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
+cpd::flow repo_config::pr_add_of_a_repo_without_a_file_is_repo_unconfigured  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
 cpd::flow review_close::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tmux
@@ -83,6 +87,7 @@ cpd::pr pr_merge::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_push::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_view::  # m-pr-a: pr commands that may reach a real tmux
+cpd::pr repo_hooks::the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file  # m-pr-a: real tmux (new-session cpd-work); came with #302 after the inventory; migrate to the fake tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
