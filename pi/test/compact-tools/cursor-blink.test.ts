@@ -21,6 +21,9 @@ const MAGENTA = "\x1b[35m";
 const WHITE = "\x1b[37m";
 const GREEN = "\x1b[32m";
 const DEFAULT = "\x1b[39m";
+/** The SGR that opens and closes the inverse-video highlight trail (hs-d673). */
+const REVERSE = "\x1b[7m";
+const UNREVERSE = "\x1b[27m";
 const readable = (value: string) => value.replace(/\x1b/gu, "\\e");
 
 type Handler = (event: unknown, ctx?: unknown) => void;
@@ -90,6 +93,10 @@ function cursorRow(rows: string[]): { row: string; cell: string } {
 
 /** The row with all escape sequences (including the cursor markers) removed. */
 const plain = (row: string) => row.replace(/\x1b_pi:\/?(?:fc|c)\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "");
+
+/** The characters an inverse-video highlight covers, in order, whichever Dango colour opens it (hs-d673). */
+const highlighted = (row: string): string =>
+	[...row.matchAll(/\x1b\[(?:35|37|32)m\x1b\[7m([^\x1b]*)\x1b\[27m/gu)].map((match) => match[1]!).join("");
 
 test("the focused cursor is a base-5 block", async () => {
 	const clock = install({ toFake: ["setInterval", "clearInterval"] });
@@ -184,4 +191,58 @@ test("showHardwareCursor leaves the cursor to pi", async () => {
 		assert.ok(!after.some((row) => row.includes(MAGENTA) || row.includes(WHITE) || row.includes(GREEN)), `no Dango cursor colour: ${readable(after.join("\n"))}`);
 		assert.ok(!after.some((row) => row.includes(CURSOR_MARKER)), `the extension adds no hardware marker of its own: ${readable(after.join("\n"))}`);
 	} finally { normal.dispose(); hardware.dispose(); clock.uninstall(); }
+});
+
+test("a keystroke pauses the blink and highlights the typed character", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	const s = await session({ text: "hi" });
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		s.editor.handleInput("a");
+		const { row } = cursorRow(s.editor.render(40));
+		assert.equal(highlighted(row), "a", `the typed character is highlighted in reverse video: ${readable(row)}`);
+		assert.ok(row.includes(`${MAGENTA}${REVERSE}a${UNREVERSE}${DEFAULT}`), `the highlight holds the cursor's magenta and closes before the cursor cell: ${readable(row)}`);
+		assert.ok(row.includes(`${MAGENTA}${START}`), `the cursor still paints its held colour: ${readable(row)}`);
+		clock.tick(500);
+		cursorRow(s.editor.render(40)); // still drawn: the keystroke paused the 500 ms blink
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("the highlight trail grows with each keystroke and holds the cursor's colour", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	const s = await session();
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		let typed = "";
+		for (const character of ["a", "b", "c"]) {
+			s.editor.handleInput(character);
+			typed += character;
+			const { row } = cursorRow(s.editor.render(40));
+			assert.ok(row.includes(`${MAGENTA}${REVERSE}${typed}${UNREVERSE}${DEFAULT}`), `the trail grew to ${typed} in the cursor's held magenta: ${readable(row)}`);
+		}
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "every typed character stays in the trail");
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("the trail shrinks one character per tick after 500 ms idle and the blink resumes when it collapses", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	const s = await session();
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the trail starts three characters long");
+		clock.tick(500);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "bc", "after 500 ms idle the trail drops its left character");
+		clock.tick(50);
+		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "c", "the next 50 ms tick drops one more");
+		clock.tick(50);
+		const collapsed = s.editor.render(40);
+		assert.equal(highlighted(cursorRow(collapsed).row), "", "the trail has collapsed and the cursor is drawn again");
+		clock.tick(500);
+		const off = s.editor.render(40);
+		assert.ok(!off.some((row) => row.includes(START) || row.includes(END)), `the resumed blink goes off 500 ms later: ${readable(off.join("\n"))}`);
+	} finally { s.dispose(); clock.uninstall(); }
 });
