@@ -1,6 +1,7 @@
 //! Asleep Sessions (contract §2.2 "Asleep", §4.5; commands.md §10.4, §10.10, §10.11, session list §10.x;
 //! hs-d515, hs-d520), run as the built binary against a private tmux server with a fake `pi`.
 
+use crate::common::fx::Fx;
 use crate::common::{SLEEP_SECONDS, TestEnv};
 use crate::session::{cockpit, events, fake_pi, home, setup, show};
 
@@ -42,10 +43,11 @@ fn open_clears_asleep_at() {
 
 #[test]
 fn list_shows_asleep_at() {
-    let env = TestEnv::new();
-    setup(&env);
-    put_to_sleep(&env, LEAD2);
-    let list = env.cpd(&["session", "list"]).ok();
+    // Store only: the command tree runs in this process (`Fx`); the other two tests need tmux and stay on `TestEnv`.
+    let fx = Fx::new();
+    setup(&fx.env);
+    put_to_sleep(&fx.env, LEAD2);
+    let list = fx.cpd(&["session", "list"]).ok();
     let at = |id: &str| list["sessions"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap()["asleep_at"].clone();
     assert_eq!(at(LEAD2), json!(ASLEEP));
     assert_eq!(at(LEAD1), Value::Null);

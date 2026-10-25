@@ -1,12 +1,14 @@
 //! `cpd session retitle <session> --width <cols>` as hs-d543 amends it (commands.md §10.14): the input is the last 2
 //! turns, the limit is N = cols - 8 characters (never cut, no word cap) and a width below 9 is a usage refusal. Run as
-//! the built binary with a fake `pi` install whose Tier catalog is seeded in the cache. The helpers are copies of
+//! the built binary with a fake `pi` install whose Tier catalog is seeded in the cache (`a_width_below_9_is_refused`, which starts no
+//! process, runs the command tree in this process: `Fx`). The helpers are copies of
 //! those of `session_titles.rs`, cut down to one Lead.
 
 use crate::common;
 
 use std::fs;
 
+use common::fx::Fx;
 use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
@@ -104,9 +106,8 @@ fn pi_stdin(env: &TestEnv) -> String {
     fs::read_to_string(env.root().join("stdin.txt")).unwrap()
 }
 
-/// Nothing was written: no title and no `titled_at`.
-fn nothing_written(env: &TestEnv) {
-    let row = show(env);
+/// Nothing was written to the Session `row`: no title and no `titled_at`.
+fn nothing_written(row: &Value) {
     assert_eq!((&row["title"], &row["titled_at"]), (&Value::Null, &Value::Null), "{row}");
 }
 
@@ -151,7 +152,7 @@ fn the_limit_is_the_width_less_8() {
     answer(&env, &format!("TITLE: {}\n", "a".repeat(43)));
     let error = refused(&retitle(&env, "50"), "title_failed", 1);
     assert_eq!(error["details"]["reason"], "malformed");
-    nothing_written(&env);
+    nothing_written(&show(&env));
 }
 
 #[test]
@@ -171,11 +172,12 @@ fn a_title_may_have_more_than_ten_words() {
 
 #[test]
 fn a_width_below_9_is_refused() {
-    let env = TestEnv::new();
-    setup(&env);
+    // The one test of this file that starts no process (the others run a fake `pi`): the command tree runs in this process.
+    let fx = Fx::new();
+    setup(&fx.env);
     for width in ["8", "1", "0"] {
-        refused(&retitle(&env, width), "usage", 2);
+        refused(&fx.cpd(&["session", "retitle", LEAD, "--width", width]), "usage", 2);
     }
-    assert!(env.calls("pi").is_empty(), "refused before pi");
-    nothing_written(&env);
+    assert!(fx.env.calls("pi").is_empty(), "refused before pi");
+    nothing_written(&fx.cpd(&["session", "show", LEAD]).ok()["session"]);
 }
