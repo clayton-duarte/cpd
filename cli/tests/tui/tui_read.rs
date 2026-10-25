@@ -7,7 +7,6 @@ use crate::common;
 
 use std::fs::{self, File};
 use std::sync::Mutex;
-use std::time::Instant;
 
 use common::fx::Fx;
 use common::{TestEnv, sql};
@@ -1471,12 +1470,7 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let run_all = |store: &mut Store, large: bool| -> Vec<Vec<String>> {
         reads
             .iter()
-            .map(|(name, read)| {
-                let start = Instant::now();
-                let run = statements_run(store, |s| read(s, large));
-                eprintln!("{name}: {:?} (information only; large: {large})", start.elapsed());
-                run
-            })
+            .map(|(_, read)| statements_run(store, |s| read(s, large)))
             .collect()
     };
     let small = run_all(&mut store, false);
