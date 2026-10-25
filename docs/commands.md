@@ -3349,7 +3349,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `plan-outlined` | ignored: **no message, no turn** (the Lead wrote the outline itself, §4.13); it only **learns the kind** (`pi/lib/event.ts`, delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` to 10 (contract §5.2) | ignored |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
-| `session-message` (`session` = itself) | message, `followUp`, **a turn always, whatever `data.wake`** (hs-d514, hs-n406); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted | |
+| `session-message` (`session` = itself) | message, `followUp`, **a turn always, whatever `data.wake`** (hs-d514, hs-n406); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender> (HH:MM): <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. The time (HH:MM, 24-hour, zero-padded, no seconds) is the absolute machine-local time when the message was sent, rendered from the stored `at` (UTC, ISO 8601) by the helper pi/lib/time.ts; the pi adapter renders it in the machine's local timezone with no hardcoded offset. An idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted | |
 | `session-resumed` (`session` = itself) | for its own Session while tripped by the loop guard: the adapter clears the trip (L5), appends the pi session entry `{tripped: false}`, and delivers **one message** with a turn (the Event's text from `session resume`, `followUp`). While not tripped, does nothing (no message, no turn). For every Lead and a Manager. When the Session reloads, the trip survives (L7) | same | **the switch** (hs-d506, §10.15): no message, no turn. The adapter notes that its Session's Tier changed; at its next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) it reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once. Not while `working`, `waiting` or `blocked`. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1, delivered as every adapter error is, with a turn: the Session tells the User; code `model_unavailable`, `details: {model, thinking}`) and sets nothing, not even the level; the next `session-retiered` tries again. The same for a failed `session show`. The adapter names no record id and reads no config: the mapping is `session show`'s. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` | same |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | `session-titled` | ignored: **no message, no turn** (hs-d257): the pane header is set by `session retitle` itself, through tmux (§10.14), so the adapter has nothing to do; it only **learns the kind** (the list of kinds in `pi/lib/event.ts`, with delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` (contract §5.2, "The protocol number") | ignored |
@@ -3496,7 +3496,7 @@ Context building-cpd: 2 decisions · 1 board post · 1 PR opened
 - hs-d514: Quiet agents, the design in full.
 
 Board:
-- Manager (2026-10-21T15:30:00Z): PR #207 opened
+- Manager (2026-10-21 15:30): PR #207 opened
 
 PRs:
 - PR rebase opened: https://github.com/earendil-works/cpd/pull/211
@@ -3513,7 +3513,7 @@ Context building-cpd: 2 new records since your last turn.
 - hs-d514 decision (2026-10-21): Quiet agents, the design in full.
 
 Board:
-- User (2026-10-21T15:30:00Z): Inbox item closed
+- User (2026-10-21 15:30): Inbox item closed
 
 Plans:
 - cross-repo: 1 PR opened (#212), 1 Job failed, done
