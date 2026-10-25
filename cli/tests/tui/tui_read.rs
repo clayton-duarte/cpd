@@ -429,15 +429,15 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: None },
         "a fork's dialog is not the Lead's"
     );
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false });
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_phase: None });
     assert_eq!(needs(&mut store, "rel"), read::NeedsUser::default(), "another Plan's items are not its own");
 
     // a hidden item needs nobody: the item is snoozed
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false });
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_phase: None });
 }
 
 #[test]

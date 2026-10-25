@@ -55,6 +55,8 @@ mod landing_tests;
 mod moon_tests;
 #[cfg(test)]
 mod phase_dot_tests;
+#[cfg(test)]
+mod phase_dot_views_tests;
 pub mod trace;
 #[cfg(test)]
 mod trace_tests;

@@ -420,6 +420,7 @@ mod tests {
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
             plan_failed: false,
+            plan_phase: None,
             merging: false,
         }
     }

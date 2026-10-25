@@ -15,7 +15,7 @@ use cpd_core::job::open::shown_needs;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
-use cpd_core::plan::{jobs, plan_fingerprint};
+use cpd_core::plan::{jobs, plan_fingerprint, Phase};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
@@ -65,6 +65,8 @@ pub struct NeedsUser {
     pub lead_dialog: bool,
     /// The Plan's Lead is working (`sessions.state = 'working'`, hs-d586): every failed pill turns while it does.
     pub lead_working: bool,
+    /// The phase of the Plan its Lead works in (`None`: no Plan, or not a Lead). Read from the Plan by dot-impl-views.
+    pub lead_phase: Option<Phase>,
 }
 
 impl NeedsUser {
@@ -78,6 +80,7 @@ impl NeedsUser {
                 .collect(),
             lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
             lead_working,
+            lead_phase: None,
         }
     }
 }

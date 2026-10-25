@@ -14,6 +14,7 @@ use serde_json::Value;
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::plan::Phase;
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
@@ -100,6 +101,9 @@ pub struct OpenPr {
     pub lead_working: bool,
     /// The Plan of the owner has a failed Job (the tree's `failed` rule).
     pub plan_failed: bool,
+    /// The phase of the Plan that owns the pull request (`None` when no Plan owns it). Read from the Plan by
+    /// dot-impl-views, by the same subquery that reads `plan_failed`.
+    pub plan_phase: Option<Phase>,
     /// A merge of this pull request is running (a live merge marker, `crate::merge::marker`, hs-d495): the merge
     /// button shows the spinner instead and cannot be clicked. Not in the store: the view sets it from the markers.
     pub merging: bool,
@@ -253,6 +257,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             lead_working: r.get(11)?,
             plan_failed: r.get(13)?,
+            plan_phase: None,
             merging: false,
             repo,
             number,

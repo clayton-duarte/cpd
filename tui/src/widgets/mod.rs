@@ -511,6 +511,7 @@ mod tests {
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
             plan_failed: false,
+            plan_phase: None,
             merging: false,
         }
     }

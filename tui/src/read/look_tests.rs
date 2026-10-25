@@ -134,6 +134,7 @@ fn open_pr() -> OpenPr {
         lead: Some(SessionId::parse("l-a").unwrap()),
         lead_working: false,
         plan_failed: false,
+        plan_phase: None,
         merging: false,
     }
 }
