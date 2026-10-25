@@ -18,7 +18,6 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
-use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
@@ -136,7 +135,7 @@ pub(crate) fn sections() -> Vec<Section> {
     let sample = JobCounts { queued: 1, running: 1, merging: 2, failed: 0, merged: 3, ..JobCounts::default() };
     let slots = [0, 1, 2, 4, 3].map(|i| palette::JOB_LEGEND[i]);
     let mut counters = Vec::new();
-    for (i, ((_, status, merging), n)) in slots.iter().zip(sample.counters(Phase::Dispatch)).enumerate() {
+    for (i, ((_, status, merging), n)) in slots.iter().zip(sample.counters()).enumerate() {
         if i > 0 {
             counters.push(palette::separator());
         }

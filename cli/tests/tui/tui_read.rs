@@ -752,9 +752,9 @@ fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
     let c = ship.head.counts;
     assert_eq!((c.draft, c.queued, c.running, c.merging, c.failed, c.merged, c.cancelled), (1, 1, 1, 1, 1, 1, 1));
     assert_eq!(c.total(), 7);
-    assert_eq!(c.counters(ship.head.phase), [1, 1, 1, 1, 1], "queued, running, merging, failed, merged; cancelled is not shown");
+    assert_eq!(c.counters(), [1, 1, 1, 1, 1], "queued, running, merging, failed, merged; cancelled is not shown");
     let sketch = &tree.contexts[0].plans[1];
-    assert_eq!(sketch.head.counts.counters(sketch.head.phase), [2, 0, 0, 0, 0], "in phase plan the first counter is the drafts");
+    assert_eq!(sketch.head.counts.counters(), [2, 0, 0, 0, 0], "the first counter is the drafts when there are any");
     assert_eq!((ship.head.open_escalations, ship.head.review_pending, sketch.head.review_pending), (1, true, false));
 }
 

@@ -61,7 +61,6 @@ cpd::flow plan_show::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
-cpd::flow repo_config::pr_add_of_a_repo_without_a_file_is_repo_unconfigured  # m-flow: real tmux through pr_env()'s plan new; came with #302 after the inventory; migrate to the fake tmux
 cpd::flow review_close::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tmux
@@ -84,7 +83,6 @@ cpd::pr pr_merge::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_push::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr_view::  # m-pr-a: pr commands that may reach a real tmux
-cpd::pr repo_hooks::the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file  # m-pr-a: real tmux (new-session cpd-work); came with #302 after the inventory; migrate to the fake tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
