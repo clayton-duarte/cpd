@@ -153,19 +153,23 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         return Ok(());
     }
     let cancel = engine.store.read(|conn| ledger::cancel_request(conn, plan, &target.job))?;
+    // Incident mode asked the Attempt to stop but the Job carries no cancel request: it ends `Interrupted`,
+    // which requeues the Job at the same Tier (contract §3.7).
+    let incident_stop = cancel.is_none() && active.stop_request.as_deref() == Some("cancelled");
     // An install or a store migration ended the driver, not the Worker (hs-n278): no `driver_pid`, so the
     // ladder keeps the Tier and `retry_cap` does not count the Attempt, as for a driver that never started.
-    let infra = match cancel {
-        Some(_) => None,
-        None => engine.home.infra(plan, id)?,
+    let infra = match (cancel.is_some(), incident_stop) {
+        (true, _) | (false, true) => None,
+        (false, false) => engine.home.infra(plan, id)?,
     };
-    let end = match (&cancel, &infra) {
-        (Some(_), _) => End::Cancelled,
-        (None, Some((why, message))) => End::Failed {
+    let end = match (&cancel, incident_stop, &infra) {
+        (Some(_), _, _) => End::Cancelled,
+        (None, true, _) => End::Interrupted,
+        (None, false, Some((why, message))) => End::Failed {
             cause: Cause::Crashed,
             detail: format!("Its driver ended on {} ({message}), not through its Worker.", why.code()),
         },
-        (None, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
+        (None, false, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
     };
     let catalog = engine.catalog()?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };

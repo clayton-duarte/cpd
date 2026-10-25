@@ -207,22 +207,25 @@ pub const LOGS_GLYPH: &str = logs_glyph!();
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
 // Whether the long workers form fits: the right group's long width (the engine's, whose one space is the join),
-// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), and the preview.
+// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), the preview, the version pill and
+// the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
 macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
+// The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and `Incident Mode` (13 cells).
+macro_rules! incident_width { () => { "#{?@cpd_incident,16,0}" }; }
 // The fill's first column, F0: the left group's 12 cells and the preview pill.
 macro_rules! fill_start { () => { concat!("#{e|+:12,", preview_width!(), "}") }; }
-// The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill and the
-// right group's workers pill in the form drawn plus the closing `─`.
+// The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill, the incident
+// pill and the right group's workers pill in the form drawn plus the closing `─`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
             "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}"
         )
     };
@@ -281,6 +284,12 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
+/// While `@cpd_incident` is set (incident mode is on, hs-d634), the incident pill, the literal
+/// ` Incident Mode` (a leading space and the label) in colour 9 with reverse video and the `italics`
+/// attribute, stands between the workers pill and the version pill, joined by a single `\u{2500}`; the
+/// fill and the long-form test are shorter by its width (a join, two caps and the 13-cell label, 16
+/// cells) and it has no click range.
+///
 /// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
 pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
@@ -289,8 +298,11 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.plain)), "", glyph)))
     };
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
+    // The incident pill is red on a red block even though it is not clickable: the contract (§6.1.1) gives it the
+    // `Meaning::Failed` bright pair (index 9).
+    let incident = format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", " Incident Mode"));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?@cpd_incident,#[fg=colour8]\u{2500}{incident},}}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
         join = join!(),
         reset = button("reset", reset_glyph!()),
         legend = button("legend", legend_glyph!()),
@@ -298,6 +310,7 @@ pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
+        incident = incident,
         version = status(m.nothing, "#{@cpd_version}"),
     )
 });
@@ -1069,6 +1082,9 @@ pub mod pill;
 
 #[cfg(test)]
 mod pill_tests;
+
+#[cfg(test)]
+mod incident_tests;
 
 #[cfg(test)]
 mod no_inbox;

@@ -19,6 +19,12 @@ pub fn pill(fg: &str, lead: &str, text: &str) -> String {
     format!("{fg}{lead}{}#[reverse]{text}#[noreverse]{}", caps.left, caps.right)
 }
 
+/// `pill`, its reversed text also carrying the `italics` attribute (the incident pill, contract §6.1).
+pub fn italic_pill(fg: &str, lead: &str, text: &str) -> String {
+    let caps = &spec().caps;
+    format!("{fg}{lead}{}#[reverse]#[italics]{text}#[noitalics]#[noreverse]{}", caps.left, caps.right)
+}
+
 /// `#[range=user|name]` + `inner` + `#[norange]`.
 pub fn range(name: &str, inner: &str) -> String {
     format!("#[range=user|{name}]{inner}#[norange]")
