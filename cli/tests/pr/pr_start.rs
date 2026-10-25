@@ -273,7 +273,7 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(worktree.file_name().unwrap().to_str().unwrap(), "api.pay.api");
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["schema", "ui"],
+        json!({"ok": true, "plan": "pay", "phase": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"],
                "prs": [{"key": "api", "status": "dispatch", "needs": [], "lead_branch": "cpd/pay/api",
                         "lead_worktree": worktree.display().to_string(), "base_sha": base, "reused": false, "pushed": true},
                        {"key": "web", "status": "waiting", "needs": ["api"], "lead_branch": "cpd/pay/web",
@@ -292,11 +292,11 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(fx.env.git(&web.path, &["branch", "--list", "cpd/pay/*"]), "");
     assert_eq!(remote_branch(&fx, &web.path, "cpd/pay/web"), "");
     // Every Job is queued at once.
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 4);
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
 
     let phase = fx.events("plan-phase");
-    assert_eq!(phase.last().unwrap()["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["schema", "ui"], "prs": ["api"]}));
+    assert_eq!(phase.last().unwrap()["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["open-api", "open-web", "schema", "ui"], "prs": ["api"]}));
     let started = fx.events("pr-started");
     assert_eq!(started.len(), 1, "{started:?}");
     assert_eq!(
@@ -339,7 +339,7 @@ fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
     }
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs WHERE status <> 'waiting'"), 0);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"), 4);
     assert!(fx.events("pr-started").is_empty());
     assert!(fx.env.calls("cpd").iter().all(|c| c[0] != "watch"));
 }
@@ -350,6 +350,8 @@ fn lock_refuses_a_pr_without_a_draft_job() {
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("api", &api.path, &[]);
     fx.add("web", &web.path, &[]);
+    // As a Lead cancels a stub it does not need: the opener stub too, so `api` has no draft Job left.
+    fx.env.cpd(&["job", "cancel", "open-api", "--reason", "a stub of the template", "--plan", "pay"]).ok();
     fx.job("ui", "web");
     fx.approve();
 

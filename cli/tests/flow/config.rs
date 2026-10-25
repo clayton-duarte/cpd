@@ -52,7 +52,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "context_recent_days": 1,
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
-            "open_tier": "S1",
+            "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
             "plannotator_ports": "19432-19456",

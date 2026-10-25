@@ -272,6 +272,7 @@ impl Config {
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
+        // The default is the Tier `docs/research/opener-tier.md` recommends.
         let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
         let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
         let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
@@ -284,7 +285,7 @@ impl Config {
         let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
         let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
-        let open_tier = r.get("open_tier", Tier::parse("S1").expect("a valid Tier"), |v| {
+        let open_tier = r.get("open_tier", Tier::parse("H3").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             tier.check_worker().map_err(|e| e.message().to_owned())?;
             Ok(tier)
