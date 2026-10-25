@@ -82,6 +82,18 @@ impl Spec {
         Ok(())
     }
 
+    /// `test_files` are repo-relative: no leading `/` (commands.md §5, the rule of the `protected` list,
+    /// contract §7.5). Checked after [`Spec::check_primary_roots`], which reports a primary checkout first.
+    pub fn check_files_relative(&self) -> Result<(), CpdError> {
+        let Some(files) = &self.test_files else { return Ok(()) };
+        for (i, file) in files.iter().enumerate() {
+            if file.starts_with('/') {
+                return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
+            }
+        }
+        Ok(())
+    }
+
     /// The Spec as a Job holds it.
     pub fn stored(&self) -> JobSpec {
         JobSpec {
@@ -183,14 +195,12 @@ fn tests_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError>
     Ok(tests)
 }
 
-/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`, no leading `/`
-/// (the rule of the `protected` list, contract §7.5).
+/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`
+/// (the rule of the `protected` list, contract §7.5). The leading-`/` rule runs after
+/// [`Spec::check_primary_roots`] ([`Spec::check_files_relative`]).
 fn test_files_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
     let files = list_field(fields, "test_files", true)?;
     for (i, file) in files.iter().enumerate() {
-        if file.starts_with('/') {
-            return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
-        }
         if file.split('/').any(|part| part == "..") {
             return Err(invalid(&format!("$.test_files[{i}]"), "must not contain .."));
         }
@@ -304,7 +314,9 @@ mod tests {
         assert_eq!(path_of(&with(r#"["a\nb"]"#, r#"["f"]"#)), "$.tests[0]");
         assert_eq!(path_of(&with(r#"[1]"#, r#"["f"]"#)), "$.tests[0]");
         assert_eq!(path_of(&with(r#"["a"]"#, "[]")), "$.test_files");
-        assert_eq!(path_of(&with(r#"["a"]"#, r#"["f", "/abs"]"#)), "$.test_files[1]");
+        let absolute = with(r#"["a"]"#, r#"["f", "/abs"]"#);
+        let err = parse(&absolute).unwrap().check_files_relative().unwrap_err();
+        assert_eq!(err.details()["path"], "$.test_files[1]");
         assert_eq!(path_of(&with(r#"["a"]"#, r#"["../f"]"#)), "$.test_files[0]");
         assert_eq!(path_of(&with(r#"["a"]"#, r#"["d/../f"]"#)), "$.test_files[0]");
         parse(&with(r#"["a"]"#, r#"["d/", "f..g"]"#)).unwrap();

@@ -196,6 +196,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     // The Spec names no primary checkout of a PR of the Plan (commands.md §5.1 "A Spec names no primary checkout", §5.2).
     if let Some(spec) = &wanted.spec {
         spec.check_primary_roots(&primary_roots(&prs), &std::env::home_dir().unwrap_or_default())?;
+        spec.check_files_relative()?;
     }
     // A review Job's `touches` is informational (commands.md §5.1).
     if let (Some(spec), false) = (&wanted.spec, wanted.review) {
