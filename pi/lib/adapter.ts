@@ -8,6 +8,7 @@ import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -60,6 +61,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
       const secret = secretBypass((event.input as { command: string }).command);
       if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const hostApprove = hostApproveBypass((event.input as { command: string }).command);
+      if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
