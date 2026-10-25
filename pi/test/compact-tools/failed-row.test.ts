@@ -5,13 +5,17 @@
 import "./pinned-themes.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { announce, loadExtension, makeRow, restoreClocks, shutdown, text } from "./indicator-harness.ts";
+import { announce, loadExtension, makeRow, restoreClocks, setNow, shutdown, text } from "./indicator-harness.ts";
 import { Container, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG } from "../../compact-tools/extensions/compact-tools-config.ts";
 import { ToolGroupController } from "../../compact-tools/extensions/compact-tools-grouping.ts";
 import { ToolRuntime } from "../../compact-tools/extensions/compact-tools-runtime.ts";
 import { theme as piTheme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+
+// The machine-local time is the process timezone's: pin it, so `03:11` is the same on every machine.
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const REFUSAL = "cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: 1789 characters (limit 1500)";
@@ -28,6 +32,7 @@ async function failedRow(name: string, args: object, error: string, options: { e
 	announce(harness, id, name, args);
 	const row = makeRow(name, id, args, harness.definitions.get(name));
 	row.setArgsComplete();
+	setNow(TIME_MS);
 	harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: name, args });
 	row.markExecutionStarted();
 	harness.handlers.get("tool_execution_end")!({ toolCallId: id, isError: true });
@@ -78,7 +83,7 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 			const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
 			const line = closing(row.render(80));
 			assert.ok(line.startsWith(" \u2570"), line);
-			assert.match(line, /^ \u2570\S+ expand \u00B7 Failed in [0-9.]+m?s \u00B7 cpd: ask_user_question is for a few sh\u2026$/u);
+			assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 cpd: ask_user_question is for a few sh\u2026$/u);
 			shutdown(harness);
 		}
 		{
@@ -161,7 +166,7 @@ test("the full error is inside the fold: collapsed cuts it, expanded shows it wh
 		row.setExpanded(true);
 		const body = row.render(100).map(plain).filter((line) => line.trim() !== "");
 		const last = body.at(-1)!;
-		assert.match(last, /^ \u2570\S+ collapse \u00B7 Failed in [0-9.]+m?s$/u, last);
+		assert.match(last, /^ \u2570\S+ collapse \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s$/u, last);
 		const joined = body.slice(0, -1).map((line) => line.replace(/^\s*\u2502 ?/u, "").trim()).join(" ");
 		assert.ok(joined.replace(/\s+/gu, " ").includes(REFUSAL), `the body holds the whole error: ${JSON.stringify(joined)}`);
 		shutdown(harness);
