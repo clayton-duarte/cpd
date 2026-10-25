@@ -44,6 +44,8 @@ mod inbox_tests;
 #[cfg(test)]
 mod open_tests;
 #[cfg(test)]
+mod schedule_tests;
+#[cfg(test)]
 mod testkit;
 #[cfg(test)]
 mod pill_texts;

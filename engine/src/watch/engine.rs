@@ -97,6 +97,12 @@ impl Engine {
         }
     }
 
+    /// The catalog a step test gives the engine, so E3 never runs pi's Node or opens the real home for it.
+    #[cfg(test)]
+    pub(super) fn set_catalog(&mut self, catalog: Catalog) {
+        self.catalog = Some(catalog);
+    }
+
     /// Reports a failure of `step` for `about` (once until it clears).
     pub(super) fn fail(&mut self, step: Step, about: About, failure: impl Into<Failure>) {
         self.report.fail(&mut self.store, &mut self.log, step, about, failure);

@@ -6,6 +6,7 @@
 //! starting one. Time: steps read `OffsetDateTime::now_utc()`, so a fixture dated with [`ago`] needs no clock.
 
 use cpd_core::clock::timestamp;
+use cpd_core::config::{Catalog, TierModel};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::ids::PlanId;
@@ -22,6 +23,22 @@ pub(super) const PR_TITLE: &str = "Charge the card at checkout";
 /// A time `minutes` ago, as cpd writes times (contract §1.3).
 pub(super) fn ago(minutes: i64) -> String {
     timestamp(OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+}
+
+/// A time `seconds` ago, as cpd writes times.
+pub(super) fn ago_seconds(seconds: i64) -> String {
+    timestamp(OffsetDateTime::now_utc() - time::Duration::seconds(seconds))
+}
+
+/// The catalog pi would give (contract §9): O1-O5, S0-S5, H0-H3.
+fn catalog() -> Catalog {
+    Catalog {
+        pi_version: "1.0.0".into(),
+        o: TierModel { model: "p/opus".into(), efforts: vec![1, 2, 3, 4, 5] },
+        s: TierModel { model: "p/sonnet".into(), efforts: vec![0, 1, 2, 3, 4, 5] },
+        h: TierModel { model: "p/haiku".into(), efforts: vec![0, 1, 2, 3] },
+        g: TierModel { model: "p/gemini".into(), efforts: vec![] },
+    }
 }
 
 /// An engine on a temporary home, and the home's directory kept for as long as the test runs.
@@ -42,7 +59,9 @@ impl Fx {
         )
         .unwrap();
         let home = CpdHome::resolve(Some(root.into()), None).unwrap();
-        let mut fx = Fx { engine: Engine::for_test(home, no_tmux()), dir };
+        let mut engine = Engine::for_test(home, no_tmux());
+        engine.set_catalog(catalog());
+        let mut fx = Fx { engine, dir };
         fx.fixture("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
         fx
     }
@@ -73,7 +92,9 @@ impl Fx {
 
     /// A second engine on the same home: the engine after a restart.
     pub(super) fn restarted(&self) -> Engine {
-        Engine::for_test(self.engine.home.clone(), no_tmux())
+        let mut engine = Engine::for_test(self.engine.home.clone(), no_tmux());
+        engine.set_catalog(catalog());
+        engine
     }
 
     /// Runs `sql` in one transaction.
