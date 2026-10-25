@@ -6,11 +6,12 @@
 //! -w 0 -c IOAccelerator` and tested on a captured sample only.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::io::BufRead;
 use std::sync::{Arc, Mutex};
 
 use cpd_core::host::runner::{Call, NO_DEADLINE, Runner, SystemRunner};
+use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
+use cpd_core::ports::Ports;
 
 /// CPU %, GPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and any
 /// is `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10). `gpus` has one entry per GPU,
@@ -38,7 +39,8 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn sample(&mut self) -> Usage {
+    /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
+    pub fn sample_with(&mut self, ports: &Ports) -> Usage {
         if cfg!(target_os = "macos") {
             macos_usage_with(&SystemRunner)
         } else {
@@ -47,7 +49,7 @@ impl Sampler {
             if times.is_some() {
                 self.previous = times;
             }
-            let gpus = self.gpus.get_or_insert_with(Gpus::start).now();
+            let gpus = self.gpus.get_or_insert_with(|| Gpus::start(&ports.spawn)).now();
             Usage { cpu, gpus, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
@@ -88,28 +90,38 @@ pub(crate) fn macos_usage_with(runner: &dyn Runner) -> Usage {
 /// adds a reaped child's I/O to its parent's: tui-F1, tui-F2, `cli/tests/it/tui_idle.rs`). A missing tool, or one that fails
 /// or stops, is no GPU: an empty list, never an error. When the view dies without dropping it, the tool's next write finds
 /// no reader and it ends (SIGPIPE).
-#[derive(Debug)]
 struct Gpus {
     /// The latest % of each GPU, by index.
     latest: Arc<Mutex<Vec<Option<u8>>>>,
-    child: Option<Child>,
+    /// The tool's process, and the `Spawn` that started it and kills it when this is dropped.
+    child: Option<(Pid, Arc<dyn Spawn>)>,
+}
+
+impl std::fmt::Debug for Gpus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gpus").field("latest", &self.latest).field("pid", &self.child.as_ref().map(|c| c.0)).finish()
+    }
 }
 
 impl Gpus {
-    fn start() -> Gpus {
+    /// The tool is streamed through `spawn`: stdin from `/dev/null`, stdout piped to the reader, stderr discarded.
+    fn start(spawn: &Arc<dyn Spawn>) -> Gpus {
         let latest = Arc::new(Mutex::new(Vec::new()));
-        let mut child = Command::new("nvidia-smi")
-            .args(["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok();
-        if let Some(out) = child.as_mut().and_then(|c| c.stdout.take()) {
+        let launch = Launch {
+            program: "nvidia-smi".into(),
+            args: ["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"].map(String::from).to_vec(),
+            ..Launch::default()
+        };
+        let streamed = spawn.stream(&launch).ok();
+        let (child, out) = match streamed {
+            Some((pid, out)) => (Some((pid, Arc::clone(spawn))), Some(out)),
+            None => (None, None),
+        };
+        if let Some(out) = out {
             let latest = Arc::clone(&latest);
             std::thread::spawn(move || {
                 let mut by_index = BTreeMap::new();
-                for line in BufReader::new(out).lines() {
+                for line in out.lines() {
                     let Ok(line) = line else { break };
                     if let Some((index, value)) = parse_nvidia_smi_line(&line) {
                         by_index.insert(index, value);
@@ -134,9 +146,9 @@ impl Gpus {
 
 impl Drop for Gpus {
     fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some((pid, spawn)) = self.child.take() {
+            // the reaper of `Spawn::stream` waits for it
+            let _ = spawn.signal(pid, Signal::Kill);
         }
     }
 }

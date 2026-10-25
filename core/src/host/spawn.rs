@@ -251,6 +251,8 @@ impl Spawn for ProcessSpawn {
                 Err(e) => return e,
             }
         }
+        // `exec` replaces this process: it keeps this process's terminal as its stdin (`command` starts from `/dev/null`).
+        command.stdin(Stdio::inherit());
         command.exec()
     }
 

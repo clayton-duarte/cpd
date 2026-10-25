@@ -83,7 +83,7 @@ fn needs(view: &View) -> crate::pump::Needs {
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
@@ -93,13 +93,15 @@ use time::OffsetDateTime;
 use super::background::Background;
 use super::pace::{self, Reads};
 use super::runner::kept;
-use super::{Capture, run_view};
-use super::{palette, read};
+use super::view_ports::{frame_now, snooze_over, wall_ms};
+use super::{Capture, run_view_on};
+use super::read;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use actions::{Failed, Runner};
 use folds::FoldsFile;
@@ -122,8 +124,9 @@ struct Read {
     snapshot: Option<Result<(Option<OffsetDateTime>, read::Tree), CpdError>>,
 }
 
-pub(super) fn run() -> Result<Output, CpdError> {
-    run_view(
+pub(super) fn run(ports: &Ports) -> Result<Output, CpdError> {
+    run_view_on(
+        ports,
         "tree",
         Capture::MouseAndFocus,
         || {
@@ -141,11 +144,12 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
             Ok((home, view, (reader, snooze_end), poll, runner))
         },
-        |terminal, (home, view, reader, poll, runner)| Ok(event_loop(terminal, &home, view, reader, poll, &runner)?),
+        |ctx, (home, view, reader, poll, runner)| Ok(event_loop(ctx.ports, &mut ctx.terminal, &home, view, reader, poll, &runner)?),
     )
 }
 
 fn event_loop(
+    ports: &Ports,
     terminal: &mut DefaultTerminal,
     home: &CpdHome,
     mut view: View,
@@ -155,15 +159,15 @@ fn event_loop(
 ) -> std::io::Result<()> {
     let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
     let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
-    let epoch = Instant::now();
+    let epoch = ports.clock.now();
     let pump = Pump::new(event::read);
     // the store's directory is watched once; a watcher that cannot start is said in the error row, and the schedule polls
     let (_watch, watch_error, mut schedule) = match read::watch::Watch::start(home.root(), pump.waker()) {
-        Ok(watch) => (Some(watch), None, Schedule::new(Instant::now(), pump::SAFETY)),
+        Ok(watch) => (Some(watch), None, Schedule::new(ports.clock.now(), pump::SAFETY)),
         Err(why) => (
             None,
             Some(format!("no commit watcher: {}; polling every {} ms", why.message(), poll.as_millis())),
-            Schedule::new(Instant::now(), poll),
+            Schedule::new(ports.clock.now(), poll),
         ),
     };
     // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll (of the Events or of the
@@ -172,7 +176,7 @@ fn event_loop(
     let (mut snapshot_error, mut follow_error, mut engine_error, mut open_error) = (None, None, None, None);
     // what the last draw showed of the clock (the spinner's frame, the second the Inbox items' ages were taken at), and
     // whether anything changed since: the pane is written to only then
-    let (mut redraw, mut drawn_frame, mut drawn_second) = (true, palette::frame(SystemTime::now()), unix_second());
+    let (mut redraw, mut drawn_frame, mut drawn_second) = (true, frame_now(ports), unix_second(ports));
     // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
     let mut actions = Background::<Result<String, Failed>>::with_waker(pump.waker());
@@ -221,14 +225,14 @@ fn event_loop(
                 .or_else(|| open_error.clone())
                 .or_else(|| watch_error.clone());
         }
-        if let Some(kind) = schedule.take(Instant::now()) {
+        if let Some(kind) = schedule.take(ports.clock.now()) {
             // one job does the poll, then the snapshot when something changed (a pull request's checks change with no
             // Event, §17; the Inbox changes with no Event when a snooze ends or the engine stops or starts, `engine-down`;
             // a merge starts and ends with no Event: its marker, hs-d495, is read on each poll), or on `force`, or after a
             // failed snapshot
             let (shared, home) = (Arc::clone(&reader), home.clone());
             let (engine_shown, merging_shown) = (view.tree.engine_running, view.merging().clone());
-            let retry = snapshot_error.is_some() || kind.force || snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
+            let retry = snapshot_error.is_some() || kind.force || snooze_over(ports, snooze_end);
             reads.request(move || {
                 let (changes, merging) = (
                     pace::Owned::read(&shared, |store, follow| follow.poll_changes(store)),
@@ -247,7 +251,7 @@ fn event_loop(
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
         // lines go to the log, never to the terminal or the frame; a log that cannot be written is a dialog.
-        let lines = view.watch_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers());
+        let lines = view.watch_engine(ports.clock.now(), &mut |action| actions::call(action), &mut || runner.live_managers());
         for line in lines {
             show(log.line(&line), &mut popups, runner);
         }
@@ -255,7 +259,7 @@ fn event_loop(
         if let Some(line) = view.save_folds() {
             show(log.line(&line), &mut popups, runner);
         }
-        let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
+        let (frame, second) = (frame_now(ports), unix_second(ports));
         let wants = needs(&view);
         redraw |= view.error != error || (wants.frame && frame != drawn_frame);
         // the Inbox items' ages are redrawn every second, from `opened_at`
@@ -268,8 +272,8 @@ fn event_loop(
             }
             (redraw, drawn_frame, drawn_second) = (false, frame, second);
         }
-        let wall_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        let now = Instant::now();
+        let wall_ms = wall_ms(ports);
+        let now = ports.clock.now();
         let event = match pump.wait(pump::wake(now, wall_ms, &wants, schedule.deadline(now))) {
             Signal::Input(event) => event,
             Signal::InputFailed(why) => return Err(why),
@@ -280,7 +284,7 @@ fn event_loop(
             Signal::Read | Signal::Due => continue,
         };
         redraw = true; // a key, a click, a resize, the focus
-        let frame = palette::frame(SystemTime::now());
+        let frame = frame_now(ports);
         let effect = match event {
             Event::FocusGained => {
                 view.focus(true);
@@ -389,7 +393,7 @@ fn show(effect: Effect, popups: &mut Background<Result<(), String>>, runner: &Ar
     }
 }
 
-/// The Unix second now: the Inbox items' ages change with it.
-fn unix_second() -> u64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+/// The Unix second now, on the clock of `ports`: the Inbox items' ages change with it.
+fn unix_second(ports: &Ports) -> u64 {
+    wall_ms(ports) / 1000
 }

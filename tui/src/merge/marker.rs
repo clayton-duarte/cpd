@@ -122,6 +122,7 @@ fn path_dir(home: &CpdHome) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::OffsetDateTime;
 
     fn pull(repo: &str, number: i64) -> Pull {
         Pull::parse(&format!("{repo}#{number}")).unwrap()

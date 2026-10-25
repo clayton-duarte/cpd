@@ -233,9 +233,9 @@ pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunComman
     match args.command {
         None => cockpit::run(args.attach, args.respawn, version, run_command, restart),
         Some(Command::View(view)) => backed_off(ports, match view {
-            View::Tree => tree::run(),
-            View::Plan => plan::run(run_command),
-            View::Widgets => widgets::run(run_command),
+            View::Tree => tree::run(ports),
+            View::Plan => plan::run(ports, run_command),
+            View::Widgets => widgets::run(ports, run_command),
             View::Worker(args) => worker::run(ports, args),
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(ports),
