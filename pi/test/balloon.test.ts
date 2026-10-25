@@ -10,13 +10,23 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { loadExtension, shutdown, type Harness } from "./compact-tools/indicator-harness.ts";
 
+process.env.TZ = "Asia/Kolkata";
+/** hs-d637: the one known instant every surface renders; in Asia/Kolkata (UTC+05:30) it is 03:11 the next day. */
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
+/** The time the agent balloon's bottom border carries: right after the tail, `│╭─HH:MM` then the rest of the dashes. */
+const agentTail = (box: number): string =>
+	box < 9
+		? ` \u2502\u256d${"\u2500".repeat(box - 3)}\u256f`
+		: ` \u2502\u256d\u250003:11${"\u2500".repeat(box - 9)}\u256f`;
+
 type Side = "user" | "agent";
-type Draw = (rows: string[], side: Side, width: number) => string[];
+type Draw = (rows: string[], side: Side, width: number, at?: number) => string[];
 
 // A variable specifier: the module does not exist yet, which is the red, and must not break the typecheck.
 const BALLOON = "../lib/balloon.ts";
-const draw = async (rows: string[], side: Side, width: number): Promise<string[]> =>
-	((await import(BALLOON)) as { drawBalloon: Draw }).drawBalloon(rows, side, width);
+const draw = async (rows: string[], side: Side, width: number, at?: number): Promise<string[]> =>
+	((await import(BALLOON)) as { drawBalloon: Draw }).drawBalloon(rows, side, width, at);
 
 const SGR = /\x1b\[[0-9;]*m/g;
 const OSC = /\x1b\][^\x07]*\x07/g;
@@ -34,13 +44,18 @@ test("a user balloon is the template with the tail at the bottom right", async (
 });
 
 test("an agent balloon is the mirrored template with the tail at the bottom left", async () => {
-	const rows = await draw(["agent reply"], "agent", 19);
+	const rows = await draw(["agent reply"], "agent", 19, TIME_MS);
 	assert.deepEqual(plain(rows), [
 		" ╭─────────────╮",
 		" │ agent reply │",
-		" │╭────────────╯",
+		agentTail(15),
 		" ╰╯",
 	]);
+});
+
+test("the agent balloon omits the time when the corner is too small for it", async () => {
+	const rows = await draw(["one"], "agent", 19, TIME_MS);
+	assert.deepEqual(plain(rows), [" ╭─────╮", " │ one │", " │╭────╯", " ╰╯"]);
 });
 
 test("the balloon is the longest row plus two padding columns and two borders wide", async () => {
@@ -166,7 +181,7 @@ async function withHarness<T>(body: (harness: Harness) => Promise<T> | T): Promi
 }
 
 const assistant = (content: unknown[], extra: object = {}) =>
-	new AssistantMessageComponent({ role: "assistant", content, stopReason: "stop", ...extra } as never);
+	new AssistantMessageComponent({ role: "assistant", content, stopReason: "stop", timestamp: TIME_MS, ...extra } as never);
 
 test("pi's user message component draws a user balloon with its OSC 133 zone marks", async () => {
 	await withHarness(() => {
@@ -260,7 +275,7 @@ test("silent mode draws the answer as a balloon", async () => {
 		await harness.commands.get("silent")!.handler("on", ctx);
 		try {
 			const final = assistant([{ type: "thinking", thinking: "pondering" }, { type: "text", text: "answer" }], { stopReason: "length" });
-			assert.deepEqual(plain(final.render(40)), [" ╭────────╮", " │ answer │", " │╭───────╯", " ╰╯"]);
+			assert.deepEqual(plain(final.render(40)), [" ╭────────╮", " │ answer │", agentTail(10), " ╰╯"]);
 			const handoff = assistant([{ type: "text", text: "Before call" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }]);
 			assert.deepEqual(handoff.render(40), [], "an intermediate turn is still hidden");
 		} finally {
