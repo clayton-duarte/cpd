@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cpd::cli::Cli;
+use cpd_core::clock::{Clock, SystemClock};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard;
@@ -49,8 +50,10 @@ use tempfile::TempDir;
 pub mod engine;
 pub mod fx;
 pub mod healthy;
+pub mod pi;
 pub mod screen;
 pub mod session;
+pub mod tree;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
@@ -427,6 +430,102 @@ pub fn copy_executable(from: &str, to: &Path) {
     fs::rename(&temp, to).expect("rename executable over its target");
 }
 
+/// A fake holographic bridge (docs/research/context-holographic.md `## Bridge`): a shell script
+/// cpd spawns as `<context_engine_python> <context_engine_bridge> [--db <path>]`, speaking JSON
+/// lines. It logs every request to [`FakeBridge::requests`] and answers each command with the
+/// content of `<responses>/<cmd>` (or `<responses>/<cmd>-<n>`, n from 1, for the nth call of a
+/// repeated command such as `search`). A command with no response file answers `{"ok":true}`.
+/// The caller scripts the engine's answers; a test never runs holographic.
+pub struct FakeBridge {
+    /// The directory the fake and its files live in.
+    pub root: PathBuf,
+    /// The script cpd runs as the bridge.
+    pub script: PathBuf,
+    /// `requests.jsonl`: every request line, in order.
+    pub log: PathBuf,
+    /// One file per command (and `<cmd>-<n>` per repeated call).
+    pub responses: PathBuf,
+    /// `context_engine_dir`: the fake's data directory; the fake ignores it.
+    pub data_dir: PathBuf,
+}
+
+/// The shell body of [`FakeBridge`] (see its documentation).
+const BRIDGE_SHIM: &str = r#"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
+  no_space=$(printf '%s' "$line" | tr -d ' ')
+  cmd=$(printf '%s' "$no_space" | sed -n 's/.*"cmd":"\([A-Za-z_]*\)".*/\1/p')
+  if [ "$cmd" = "search" ]; then
+    n=$(cat "$resp/count-search" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    printf '%s' "$n" > "$resp/count-search"
+    f="$resp/search-$n"
+    [ -f "$f" ] || f="$resp/search"
+  else
+    f="$resp/$cmd"
+  fi
+  if [ -f "$f" ]; then cat "$f"; else printf '%s\n' '{"ok":true}'; fi
+done
+"#;
+
+impl FakeBridge {
+    /// Writes the fake under `env.root()` and returns it.
+    pub fn new(env: &TestEnv) -> FakeBridge {
+        let root = env.root().join("fake-bridge");
+        let bridge = FakeBridge {
+            script: root.join("bridge.py"),
+            log: root.join("requests.jsonl"),
+            responses: root.join("responses"),
+            data_dir: root.join("engine"),
+            root,
+        };
+        fs::create_dir_all(&bridge.responses).expect("create the fake bridge responses");
+        fs::create_dir_all(&bridge.data_dir).expect("create the fake engine data dir");
+        bridge.install(BRIDGE_SHIM);
+        bridge
+    }
+
+    /// Writes the bridge script with `body` as its shell body (the shim, or a failing one).
+    pub fn install(&self, body: &str) {
+        write_executable(&self.script, &format!("#!/bin/sh\nlog={}\nresp={}\n{body}\n", sh_quote(&self.log.to_string_lossy()), sh_quote(&self.responses.to_string_lossy())));
+    }
+
+    /// Answers the first call of `cmd` with the one-line `json`.
+    pub fn reply(&self, cmd: &str, json: &str) {
+        fs::write(self.responses.join(cmd), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Answers the `n`th (1-based) call of `cmd` with the one-line `json`.
+    pub fn reply_n(&self, cmd: &str, n: usize, json: &str) {
+        fs::write(self.responses.join(format!("{cmd}-{n}")), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Every request line the fake answered, parsed.
+    pub fn requests(&self) -> Vec<Value> {
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("a request line is not JSON ({e}): {line}")))
+            .collect()
+    }
+
+    /// The `cmd` of every request the fake answered, in order.
+    pub fn commands(&self) -> Vec<String> {
+        self.requests().iter().map(|request| request["cmd"].as_str().unwrap_or_default().to_owned()).collect()
+    }
+
+    /// The `config.toml` keys that point cpd at this fake: the bridge, `/bin/sh` as the interpreter,
+    /// and the fake's data directory, with the engine enabled.
+    pub fn config(&self) -> String {
+        format!(
+            "context_engine_enabled = true\ncontext_engine_bridge = \"{}\"\ncontext_engine_python = \"/bin/sh\"\ncontext_engine_dir = \"{}\"\n",
+            self.script.display(),
+            self.data_dir.display()
+        )
+    }
+}
+
 /// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`
 /// returns once the child has exec'd (or failed to), so the shared lock covers
 /// the whole window in which the child holds copies of this process's descriptors.
@@ -439,6 +538,32 @@ pub fn spawn(cmd: &mut Command) -> io::Result<Child> {
 /// [`spawn`]: the lock is released before the child is waited for.
 pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
+}
+
+/// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
+/// the wait: the child is killed and reaped when it outlives `deadline`, and
+/// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],
+/// which nulls stdin.
+pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> io::Result<Output> {
+    use std::io::Write;
+    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let _ = pipe.write_all(stdin);
+        // Dropping the pipe closes it: the child sees EOF.
+    }
+    let until = Instant::now() + deadline;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 /// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
@@ -455,7 +580,7 @@ pub const WAIT: Duration = Duration::from_secs(30);
 /// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
 /// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
 /// ms (a `tmux capture-pane`).
-const POLL: Duration = Duration::from_millis(10);
+pub const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
@@ -463,24 +588,34 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 }
 
 /// [`wait_until`] with its own `timeout`.
-pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
-    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+pub fn wait_until_for(what: &str, timeout: Duration, ready: impl FnMut() -> bool) {
+    wait_until_on(&SystemClock, what, timeout, ready);
+}
+
+/// [`wait_until_for`] on `clock`: a test of the wait itself passes a `ManualClock`, whose time is virtual.
+pub fn wait_until_on(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll_on(clock, timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
 }
 
 /// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
 /// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
 /// [`wait_some`], or its own message); a check that something does not happen within a window
 /// asserts `None`.
-pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
-    let deadline = Instant::now() + timeout;
+pub fn poll<T>(timeout: Duration, ready: impl FnMut() -> Option<T>) -> Option<T> {
+    poll_on(&SystemClock, timeout, ready)
+}
+
+/// [`poll`] on `clock`: the time it reads and the naps it takes are the clock's.
+pub fn poll_on<T>(clock: &dyn Clock, timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = clock.now() + timeout;
     loop {
         if let Some(value) = ready() {
             return Some(value);
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return None;
         }
-        std::thread::sleep(POLL);
+        clock.sleep(POLL);
     }
 }
 
@@ -500,74 +635,16 @@ pub fn wait_for_flock_waiter(path: &Path) {
     });
 }
 
-/// What [`answer_reads`] does after answering a read.
-pub enum Next {
-    /// Put the next FIFO in the file's place: the next read is answered too.
-    Hold,
-    /// Stop answering: the answer has put in the file's place what later reads find.
-    Done,
-}
-
-/// Holds `target`, a file the code under test reads, so that the test is there for each read of it: the rendezvous
-/// for "after the first read failed", where a sleep would be luck. Runs `run` and returns its result with the number
-/// of reads answered.
-///
-/// `target` is replaced by a FIFO (the caller has kept a copy of what it held, to put back). A read of a FIFO blocks
-/// in `open(2)` until a writer opens it: that is the observation of the read. Then `answer(n, file)` runs for the
-/// `n`th read (from 0) with the reader still blocked in the file's other end: what it writes is what the reader
-/// reads, and the reader reads the end of the file once `answer` returns and the file is dropped. After the answer
-/// [`Next::Hold`] puts the next FIFO in place **before** the reader is released, so a retry reads a file of its own
-/// and is answered in its turn: every FIFO is read once, which is what makes the count exact. At most `rounds` reads
-/// are answered; a read after the last gets an empty regular file. The FIFOs are `<target>.held-<n>`.
-pub fn answer_reads<R: Send>(
-    target: &Path,
-    rounds: usize,
-    mut answer: impl FnMut(usize, &mut fs::File) -> Next + Send,
-    run: impl FnOnce() -> R,
-) -> (R, usize) {
-    let held = |n: usize| target.with_extension(format!("held-{n}"));
-    for n in 0..rounds {
-        nix::unistd::mkfifo(&held(n), nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).expect("make a FIFO");
-    }
-    fs::rename(held(0), target).expect("put the first FIFO in place");
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    std::thread::scope(|s| {
-        let served = s.spawn(|| {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut n = 0;
-            while n < rounds && !stop.load(Ordering::SeqCst) {
-                // O_NONBLOCK: the open of a FIFO's write end fails (ENXIO) until a reader has the other end open.
-                let open = || fs::OpenOptions::new().write(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(target).ok();
-                let Some(mut file) = poll(Duration::from_millis(100), open) else { continue };
-                let next = answer(n, &mut file);
-                n += 1;
-                if matches!(next, Next::Done) {
-                    break;
-                }
-                if n < rounds {
-                    fs::rename(held(n), target).expect("put the next FIFO in place");
-                } else {
-                    fs::write(held(n), "").expect("write the empty file");
-                    fs::rename(held(n), target).expect("put the empty file in place");
-                }
-            }
-            n
-        });
-        let result = run();
-        stop.store(true, Ordering::SeqCst);
-        let served = served.join().expect("the thread that answers the reads");
-        for n in 0..=rounds {
-            let _ = fs::remove_file(held(n));
-        }
-        (result, served)
-    })
-}
-
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
-pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
+pub fn wait_some<T>(what: &str, timeout: Duration, ready: impl FnMut() -> Result<T, String>) -> T {
+    wait_some_on(&SystemClock, what, timeout, ready)
+}
+
+/// [`wait_some`] on `clock` (see [`wait_until_on`]).
+pub fn wait_some_on<T>(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
     let mut state = String::new();
-    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
+    poll_on(clock, timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
@@ -1034,7 +1111,12 @@ impl TestEnv {
     /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
     /// (commands.md §4.6, §4.13; hs-d502). Run it right before `plan review`; the same outline twice changes nothing.
     pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        self.outline_with(plan, |args| self.cpd(args));
+    }
+
+    /// [`TestEnv::outline_for_review`] with the commands run by `cpd` (the binary, or an [`fx::Fx`]'s process).
+    pub fn outline_with(&self, plan: &str, cpd: impl Fn(&[&str]) -> Run) {
+        let shown = cpd(&["plan", "show", "--plan", plan]).ok();
         let mut done_when = serde_json::Map::new();
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
@@ -1044,7 +1126,7 @@ impl TestEnv {
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
         let path = self.root().join(format!("outline-{plan}.json"));
         fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
+        cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Runs `cpd <args>` from this env's root.
@@ -1384,6 +1466,16 @@ impl Locale {
             Locale::EmptyLang => cmd.env("LANG", ""),
             Locale::LangC => cmd.env("LANG", "C"),
             Locale::LcAllC => cmd.env("LC_ALL", "C"),
+        }
+    }
+
+    /// This locale's variables, to set on a call that runs in this process (`Fx::cpd_with`).
+    pub fn vars(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Locale::Unset => &[],
+            Locale::EmptyLang => &[("LANG", "")],
+            Locale::LangC => &[("LANG", "C")],
+            Locale::LcAllC => &[("LC_ALL", "C")],
         }
     }
 

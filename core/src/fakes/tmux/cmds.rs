@@ -3,7 +3,7 @@
 //! display-menu attach list-clients`. Rendering is not modelled (docs/implementing.md, "The fake tmux").
 
 use super::target::{resolve, Kind, Loc};
-use super::{client_vars, hooks, ids, s, say, store_env, Cx, Opts, R};
+use super::{client_vars, hooks, ids, next_id, s, say, store_env, Cx, Opts, R};
 use rusqlite::Connection;
 
 fn fail(e: rusqlite::Error) -> String {
@@ -97,7 +97,9 @@ pub fn respawn_pane(cx: &mut Cx, args: &[String]) -> R<()> {
     if let Some(cwd) = o.val('c') {
         cx.db.execute("UPDATE panes SET cwd = ?1 WHERE id = ?2", (cwd, pane)).map_err(fail)?;
     }
-    cx.db.execute("UPDATE panes SET dead = 0, dead_status = NULL WHERE id = ?1", [pane]).map_err(fail)?;
+    // A respawned pane runs a new process: a new pid, as a real server gives it.
+    let pid = 20000 + next_id(cx.db, "pid").map_err(fail)?;
+    cx.db.execute("UPDATE panes SET dead = 0, dead_status = NULL, pid = ?1 WHERE id = ?2", (pid, pane)).map_err(fail)?;
     store_env(cx.db, "pane", pane, &o.all('e')).map_err(fail)
 }
 

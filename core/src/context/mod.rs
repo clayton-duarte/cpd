@@ -16,17 +16,20 @@ mod archive;
 mod delete;
 mod contexts;
 pub mod curation;
-pub mod digest;
+pub mod curated;
 pub mod distill;
+pub mod engine;
 pub mod inforce;
 mod list;
 pub(crate) mod legacy;
-mod manager;
+pub(crate) mod manager;
 mod owner;
 mod pending;
 mod record;
+mod reindex;
 pub(crate) mod render;
 mod rename;
+mod search;
 mod show;
 mod write;
 #[cfg(test)]
@@ -57,6 +60,10 @@ pub enum Command {
     List(ListArgs),
     /// Show a Context and its records (§3.3)
     Show(ShowArgs),
+    /// Search the Context's records, ranked by the holographic engine (§3.3)
+    Search(search::SearchArgs),
+    /// Rebuild the Context's holographic engine index (§3.3)
+    Reindex(reindex::ReindexArgs),
     /// Record a decision (§3.4)
     Decide(DecideArgs),
     /// Record a note (§3.4)
@@ -193,9 +200,6 @@ pub struct ShowArgs {
     /// Print this one record in full
     #[arg(long, value_name = "id", conflicts_with = "since")]
     record: Option<RecordId>,
-    /// Print the digest cpd renders now, and no record
-    #[arg(long, conflicts_with_all = ["since", "record", "topic"])]
-    digest: bool,
     /// Print every curated record in force of this topic, oldest first
     #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
     topic: Option<String>,
@@ -276,6 +280,8 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::New(args) => new(args),
         Command::List(_) => list::list(),
         Command::Show(args) => show::show(args),
+        Command::Search(args) => search::search(args),
+        Command::Reindex(args) => reindex::reindex(args),
         Command::Decide(args) => {
             let draft = Draft::Decision { supersedes: args.supersedes };
             write::write("context decide", &args.select, &args.text, draft)

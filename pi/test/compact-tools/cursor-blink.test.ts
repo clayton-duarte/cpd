@@ -21,7 +21,7 @@ const MAGENTA = "\x1b[35m";
 const WHITE = "\x1b[37m";
 const GREEN = "\x1b[32m";
 const DEFAULT = "\x1b[39m";
-/** The SGR that opens and closes the inverse-video highlight trail (hs-d673). */
+/** The SGR pair of the removed inverse-video highlight trail (hs-d673): no row may carry it (hs-d681). */
 const REVERSE = "\x1b[7m";
 const UNREVERSE = "\x1b[27m";
 const readable = (value: string) => value.replace(/\x1b/gu, "\\e");
@@ -66,9 +66,7 @@ async function session(options: { text?: string; showHardwareCursor?: boolean } 
 	const ctx = { cwd: "/project", mode: "tui", isProjectTrusted: () => false, isIdle: () => true, ui } as unknown as ExtensionContext;
 	const emit = (name: string, event: unknown) => { for (const handler of handlers.get(name) ?? []) handler(event, ctx); };
 	emit("session_start", { reason: "startup" });
-	const keybindings = {
-		matches: (data: string, action: string) => action === "tui.editor.deleteCharBackward" && data === "\x7f",
-	} as never;
+	const keybindings = { matches: () => false } as never;
 	const editor = new CustomEditor(tui as never, { borderColor: (text: string) => text, selectList: { selectedPrefix: (t: string) => t, selectedText: (t: string) => t, description: (t: string) => t, scrollInfo: (t: string) => t, noMatch: (t: string) => t } as never }, keybindings, { embedWorkingStatus: true });
 	editor.focused = false;
 	if (options.text !== undefined) editor.setText(options.text);
@@ -95,10 +93,6 @@ function cursorRow(rows: string[]): { row: string; cell: string } {
 
 /** The row with all escape sequences (including the cursor markers) removed. */
 const plain = (row: string) => row.replace(/\x1b_pi:\/?(?:fc|c)\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "");
-
-/** The characters an inverse-video highlight covers, in order, whichever Dango colour opens it (hs-d673). */
-const highlighted = (row: string): string =>
-	[...row.matchAll(/\x1b\[(?:35|37|32)m\x1b\[7m([^\x1b]*)\x1b\[27m/gu)].map((match) => match[1]!).join("");
 
 test("the focused cursor is a base-5 block", async () => {
 	const clock = install({ toFake: ["setInterval", "clearInterval"] });
@@ -195,86 +189,39 @@ test("showHardwareCursor leaves the cursor to pi", async () => {
 	} finally { normal.dispose(); hardware.dispose(); clock.uninstall(); }
 });
 
-test("a keystroke pauses the blink and highlights the typed character", async () => {
+test("a keystroke holds the cursor solid and draws no highlight", async () => {
 	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
 	const s = await session({ text: "hi" });
 	try {
 		s.focus(true);
 		s.editor.render(40);
 		s.editor.handleInput("a");
-		const { row } = cursorRow(s.editor.render(40));
-		assert.equal(highlighted(row), "a", `the typed character is highlighted in reverse video: ${readable(row)}`);
-		assert.ok(row.includes(`${MAGENTA}${REVERSE}a${UNREVERSE}${DEFAULT}`), `the highlight holds the cursor's magenta and closes before the cursor cell: ${readable(row)}`);
-		assert.ok(row.includes(`${MAGENTA}${START}`), `the cursor still paints its held colour: ${readable(row)}`);
-		clock.tick(500);
-		cursorRow(s.editor.render(40)); // still drawn: the keystroke paused the 500 ms blink
-	} finally { s.dispose(); clock.uninstall(); }
-});
-
-test("the highlight trail grows with each keystroke and holds the cursor's colour", async () => {
-	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
-	const s = await session();
-	try {
-		s.focus(true);
-		s.editor.render(40);
-		let typed = "";
-		for (const character of ["a", "b", "c"]) {
-			s.editor.handleInput(character);
-			typed += character;
-			const { row } = cursorRow(s.editor.render(40));
-			assert.ok(row.includes(`${MAGENTA}${REVERSE}${typed}${UNREVERSE}${DEFAULT}`), `the trail grew to ${typed} in the cursor's held magenta: ${readable(row)}`);
-		}
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "every typed character stays in the trail");
-	} finally { s.dispose(); clock.uninstall(); }
-});
-
-test("the trail collapses in one step 250 ms after the last keystroke", async () => {
-	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
-	const s = await session();
-	try {
-		s.focus(true);
-		s.editor.render(40);
-		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the trail starts three characters long");
-		clock.tick(249);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "before 250 ms idle the trail is still held whole");
-		clock.tick(1);
-		const collapsed = s.editor.render(40);
-		assert.equal(highlighted(cursorRow(collapsed).row), "", "at 250 ms idle the trail collapses in one step, not one character per tick");
-		assert.ok(collapsed.some((row) => row.includes(START)), `the cursor is drawn again after the collapse: ${readable(collapsed.join("\n"))}`);
-		clock.tick(500);
-		const off = s.editor.render(40);
-		assert.ok(!off.some((row) => row.includes(START) || row.includes(END)), `the resumed blink goes off 500 ms later: ${readable(off.join("\n"))}`);
-	} finally { s.dispose(); clock.uninstall(); }
-});
-
-test("backspace shrinks the trail by the deleted character", async () => {
-	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
-	// Text before the typed characters keeps the trail shorter than the row, so a count that grew
-	// instead of shrinking would reach back over the characters the trail never covered.
-	const s = await session({ text: "xyz" });
-	try {
-		s.focus(true);
-		s.editor.render(40);
-		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the typed characters are the whole trail");
-		s.editor.handleInput("\x7f");
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "ab", "Backspace deletes the character and drops it from the trail");
-		assert.ok(plain(cursorRow(s.editor.render(40)).row).includes("xyzab"), "the deleted character is gone from the text");
-	} finally { s.dispose(); clock.uninstall(); }
-});
-
-test("a newline clears the trail", async () => {
-	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
-	const s = await session({ text: "xyz" });
-	try {
-		s.focus(true);
-		s.editor.render(40);
-		for (const character of ["a", "b", "c"]) s.editor.handleInput(character);
-		assert.equal(highlighted(cursorRow(s.editor.render(40)).row), "abc", "the typed characters are the whole trail");
-		s.editor.handleInput("\n");
 		const rows = s.editor.render(40);
-		assert.equal(highlighted(cursorRow(rows).row), "", "the newline leaves no highlighted character on the cursor row");
-		assert.ok(!rows.some((row) => row.includes(REVERSE) || row.includes(UNREVERSE)), `the newline clears the trail everywhere: ${readable(rows.join("\n"))}`);
+		const { row } = cursorRow(rows);
+		assert.ok(row.includes(`${MAGENTA}${START}`), `the cursor is drawn solid in the colour it held: ${readable(row)}`);
+		assert.ok(!rows.some((line) => line.includes(REVERSE) || line.includes(UNREVERSE)), `no inverse-video highlight anywhere: ${readable(rows.join("\n"))}`);
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("the blink resumes 500 ms after the last keystroke", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval", "Date"] });
+	const s = await session();
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		s.editor.handleInput("a");
+		s.editor.handleInput("b");
+		s.editor.handleInput("c");
+		clock.tick(499);
+		const held = s.editor.render(40);
+		const { row } = cursorRow(held);
+		assert.ok(row.includes(`${MAGENTA}${START}`), `the cursor is still solid in the held colour at 499 ms idle: ${readable(row)}`);
+		assert.ok(!held.some((line) => line.includes(REVERSE) || line.includes(UNREVERSE)), `no highlight while the cursor is held: ${readable(held.join("\n"))}`);
+		clock.tick(1);
+		const off = s.editor.render(40);
+		assert.ok(!off.some((line) => line.includes(START) || line.includes(END)), `the blink resumes off at 500 ms idle: ${readable(off.join("\n"))}`);
+		assert.ok(!off.some((line) => line.includes(REVERSE) || line.includes(UNREVERSE)), `no highlight anywhere when the blink resumes: ${readable(off.join("\n"))}`);
+		clock.tick(500);
+		cursorRow(s.editor.render(40));
 	} finally { s.dispose(); clock.uninstall(); }
 });

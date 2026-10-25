@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::fx::Fx;
-use common::{Run, TestEnv};
+use common::{FakeBridge, Run, TestEnv};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
 use cpd_core::store::Store;
@@ -18,7 +18,7 @@ use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 13] = [
+const NAMES: [&str; 14] = [
     "config",
     "store",
     "tamper",
@@ -32,6 +32,7 @@ const NAMES: [&str; 13] = [
     "pi_adapter",
     "lead_packages",
     "watch",
+    "holographic",
 ];
 
 /// The deadline of each probe (`doctor::DEADLINE`, commands.md §14.1): a probe that takes this long is `tool_timeout`.
@@ -56,9 +57,12 @@ fn write_config(fx: &Fx, extra: &str) {
     let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
+    // Every config keeps the healthy fake engine, so a test that changes another key still passes `holographic`.
+    let bridge = FakeBridge::new(&fx.env);
     let text = format!(
-        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
-        adapter.display()
+        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n{}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
+        adapter.display(),
+        bridge.config()
     );
     // `extra` holds top-level keys, so it must come before the `[tiers]` table.
     fx.env.write_config(&text);

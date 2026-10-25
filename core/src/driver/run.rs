@@ -196,7 +196,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A1: before anything opens a file, so fd 3 cannot be one of ours. Held
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
-    let exe = Exe::current()?;
+    // This executable as the ports tell it (the real ones: the path recorded at process start), so that a test can stand
+    // a file of its own for it and replace that file.
+    let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
@@ -416,7 +418,10 @@ impl Driver {
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
-        let failed = self.exe.exec_with(&*self.ports.spawn, std::env::args_os().skip(1));
+        // The argv this driver was started with (`start` makes it so), from its own fields: a driver run in a test has no process argv.
+        let id = self.id.to_string();
+        let args = ["attempt", "run", id.as_str(), "--plan", self.plan.as_str()];
+        let failed = self.exe.exec_with(&*self.ports.spawn, args);
         // Still here: the `exec` failed. Do not leak the lock to the children.
         let _ = self.lock.close_on_exec();
         Err(failed)
@@ -564,7 +569,8 @@ impl Driver {
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
             let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &stall::descendants, &file, pi, span_open)) {
+            let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
+            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, &file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).

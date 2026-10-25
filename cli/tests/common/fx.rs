@@ -20,20 +20,27 @@
 //! panics on it, as it reads nothing). stdin is the test process's own. stderr is not captured: `Run::stderr` is empty (what the
 //! product writes there goes to the test's own stderr, which nextest shows only for a failed test).
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::ffi::OsString;
-use std::os::fd::OwnedFd;
+use std::fs::File;
+use std::io::{self, BufRead, Write};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{ExitCode, Output};
+use std::process::{ExitCode, ExitStatus, Output};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
-use std::time::Duration;
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
-use nix::unistd::{dup, dup2_stdin, dup2_stdout};
+use nix::unistd::{dup, dup2_stderr, dup2_stdin, dup2_stdout};
 
+use cpd_core::clock::{Clock, ManualClock};
+use cpd_core::error::CpdError;
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
-use cpd_core::host::runner::{Call, Reply};
-use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Spawn};
+use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::{Fakes, Ports};
 
@@ -44,6 +51,227 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// The virtual time [`Fx::until`] waits at most.
 const LIMIT: Duration = Duration::from_secs(600);
+
+/// The descriptor a driver finds its lock on (`Launch::hand_over`).
+const HAND_OVER_FD: std::os::fd::RawFd = 3;
+
+/// What [`Fx::hand_over`] returns: closes fd 3 when it drops, if fd 3 still is the file it handed over (the driver closes it
+/// itself when it ends the way it should, and another file may have taken the number since).
+pub struct HandOver {
+    dev: u64,
+    ino: u64,
+}
+
+impl HandOver {
+    fn of_fd3() -> HandOver {
+        // SAFETY: fd 3 is open (the caller just made it so).
+        let file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(HAND_OVER_FD) });
+        let meta = file.metadata().expect("stat fd 3");
+        HandOver { dev: meta.dev(), ino: meta.ino() }
+    }
+}
+
+impl Drop for HandOver {
+    fn drop(&mut self) {
+        // SAFETY: only reads the descriptor, which `ManuallyDrop` never closes by itself.
+        let file = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(HAND_OVER_FD) });
+        if file.metadata().is_ok_and(|m| (m.dev(), m.ino()) == (self.dev, self.ino)) {
+            // SAFETY: closes the descriptor `hand_over` made.
+            unsafe { nix::libc::close(HAND_OVER_FD) };
+        }
+    }
+}
+
+/// What a `Spawn::exec` of an [`Fx::exec_replaces_the_process`] unwinds the driver with: the process is gone, as after `exec(2)`.
+pub struct Exec {
+    /// What was exec'd: the program and its argv.
+    pub launch: Launch,
+    /// Whether fd 3 was close-on-exec at the call: false is what keeps the driver lock across a real `exec`. `None`: fd 3 was closed.
+    pub fd3_cloexec: Option<bool>,
+    /// fd 3 as `exec` keeps it: the same open file description (so the lock), a descriptor of its own. `None`: fd 3 was closed.
+    kept: Option<OwnedFd>,
+}
+
+impl Exec {
+    /// The lock file as the new program finds it, to be handed over again ([`Fx::hand_over`]) on fd 3.
+    pub fn fd3(&mut self) -> File {
+        File::from(self.kept.take().expect("fd 3 was open at the exec"))
+    }
+}
+
+/// A `Spawn` over the `FakeSpawn` whose `exec` records the `Launch` there, keeps fd 3 and unwinds with an [`Exec`]: the code after
+/// an `exec(2)` never runs, and nor does the rest of the driver that called it. [`Fx::run_launch_until_exec`] catches it.
+struct Replacing {
+    inner: Arc<FakeSpawn>,
+}
+
+impl Spawn for Replacing {
+    fn spawn(&self, l: &Launch) -> io::Result<Pid> {
+        self.inner.spawn(l)
+    }
+    fn try_wait(&self, p: Pid) -> io::Result<Option<ExitStatus>> {
+        self.inner.try_wait(p)
+    }
+    fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
+        self.inner.signal(p, s)
+    }
+    fn alive(&self, p: Pid) -> bool {
+        self.inner.alive(p)
+    }
+    fn exe_of(&self, p: Pid) -> Option<PathBuf> {
+        self.inner.exe_of(p)
+    }
+    fn cmdline(&self, p: Pid) -> Option<String> {
+        self.inner.cmdline(p)
+    }
+    fn with_env(&self, key: &str, value: &str) -> Vec<Pid> {
+        self.inner.with_env(key, value)
+    }
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        self.inner.ppid(p)
+    }
+    fn env_of(&self, p: Pid, key: &str) -> Option<String> {
+        self.inner.env_of(p, key)
+    }
+    fn descendants(&self, root: Pid) -> Vec<Pid> {
+        self.inner.descendants(root)
+    }
+    fn exec(&self, l: &Launch) -> io::Error {
+        // Records the launch; its answer, the failure of a fake, is not one here.
+        let _ = self.inner.exec(l);
+        // SAFETY: only probes the descriptor number.
+        let fd3 = unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) };
+        let flags = nix::fcntl::fcntl(fd3, nix::fcntl::FcntlArg::F_GETFD).ok();
+        let cloexec = flags.map(|f| nix::fcntl::FdFlag::from_bits_truncate(f).contains(nix::fcntl::FdFlag::FD_CLOEXEC));
+        let kept = flags.and_then(|_| dup(fd3).ok());
+        // Not `panic!`: no message, no hook, and a driver that does not catch unwinding does not see a failure.
+        std::panic::resume_unwind(Box::new(Exec { launch: l.clone(), fd3_cloexec: cloexec, kept }))
+    }
+    fn stream(&self, l: &Launch) -> io::Result<(Pid, Box<dyn BufRead + Send>)> {
+        self.inner.stream(l)
+    }
+    fn self_exe(&self) -> Result<PathBuf, CpdError> {
+        self.inner.self_exe()
+    }
+}
+
+/// The nap hook of [`Fx::run_launch_with`], with its lifetime erased: only [`NapClock`] calls it, on the thread that installed it,
+/// while the call that borrowed it runs (the `Installed` guard takes it out before that call returns or unwinds).
+struct Erased(*mut (dyn FnMut(usize) + 'static));
+
+// SAFETY: it is called on the installing thread only (`NapSlot::owner`); the slot merely moves the pointer.
+unsafe impl Send for Erased {}
+
+#[derive(Default)]
+struct NapSlot {
+    hook: Option<Erased>,
+    owner: Option<ThreadId>,
+    /// The naps counted since the hook was installed.
+    naps: usize,
+    /// The virtual time when it was installed.
+    since: Duration,
+}
+
+/// The `Clock` of the fake ports: the `ManualClock`, and the hook of [`Fx::run_launch_with`] called after each nap of the thread
+/// that installed it. That is how a test changes the world between two polls of a loop it runs on its own thread (a Worker
+/// that submits, a cancel that arrives) with no second thread, no wait and no race: the loop naps, the hook acts, the loop goes on.
+struct NapClock {
+    inner: ManualClock,
+    slot: Mutex<NapSlot>,
+}
+
+impl NapClock {
+    fn slot(&self) -> MutexGuard<'_, NapSlot> {
+        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Clock for NapClock {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+
+    fn utc(&self) -> time::OffsetDateTime {
+        self.inner.utc()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        let taken = {
+            let mut slot = self.slot();
+            if slot.owner == Some(std::thread::current().id()) {
+                assert!(self.inner.elapsed() - slot.since < LIMIT, "the loop napped for {LIMIT:?} of virtual time: the world it waits for never came");
+                slot.naps += 1;
+                let n = slot.naps;
+                slot.hook.take().map(|hook| (hook, n))
+            } else {
+                None
+            }
+        };
+        if let Some((hook, n)) = taken {
+            // Puts the hook back when it returns or unwinds; while it runs, a nap inside it (a command the hook ran) calls none.
+            struct Back<'a>(&'a NapClock, Option<Erased>);
+            impl Drop for Back<'_> {
+                fn drop(&mut self) {
+                    let mut slot = self.0.slot();
+                    if slot.owner.is_some() {
+                        slot.hook = self.1.take();
+                    }
+                }
+            }
+            let back = Back(self, Some(hook));
+            let ptr = back.1.as_ref().map(|h| h.0).expect("just set");
+            // SAFETY: `ptr` is the `&mut dyn FnMut` that `run_launch_with` borrowed for its call, which has not returned: its
+            // `Installed` guard clears the slot first. Only this thread calls it, and the slot gave it up, so it is not called twice.
+            unsafe { (*ptr)(n) };
+            drop(back);
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        "NapClock"
+    }
+}
+
+/// Fd 2 of the process pointing at a log file (appending) for a run, put back on drop: what the driver's `eprintln!` reaches when its
+/// `Launch::stdout_to` is that file. (Under `cargo test`'s capture, `eprintln!` never reaches fd 2: nextest runs the tests with it off.)
+struct StderrTo {
+    path: PathBuf,
+    saved: OwnedFd,
+}
+
+impl StderrTo {
+    fn enter(path: &Path) -> StderrTo {
+        std::fs::create_dir_all(path.parent().expect("a log lives in a directory")).expect("create the log's directory");
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(path).expect("open the log");
+        let saved = dup(std::io::stderr()).expect("dup stderr");
+        dup2_stderr(&file).expect("point stderr at the log");
+        StderrTo { path: path.to_path_buf(), saved }
+    }
+
+    /// Puts fd 2 back and appends the result the process printed on stdout, the last line of its log.
+    fn finish(self, stdout: &str) {
+        let path = self.path.clone();
+        drop(self);
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).expect("open the log");
+        file.write_all(stdout.as_bytes()).expect("write the log");
+    }
+}
+
+impl Drop for StderrTo {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
+    }
+}
+
+/// Clears the nap hook when it drops.
+struct Installed<'a>(&'a NapClock);
+
+impl Drop for Installed<'_> {
+    fn drop(&mut self) {
+        *self.0.slot() = NapSlot::default();
+    }
+}
 
 /// Held by every [`Fx`] from its creation to its drop.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -68,6 +296,8 @@ pub struct Fx {
     /// The fake ports of [`Fx::with_ports`]: the `ManualClock`, the `FakeRunner` and the `FakeSpawn`, and the `Ports`
     /// over them. [`Fx::new`] builds them too, but its commands run on the real ports.
     pub fakes: Fakes,
+    /// The clock of `fakes.ports`: `fakes.clock`'s time, and the hook of [`Fx::run_launch_with`].
+    nap: Arc<NapClock>,
     /// The `Universe` of the git route of `fakes.runner`: the repos, refs and config of every `git` call.
     pub universe: Arc<Mutex<Universe>>,
     /// The git route of `fakes.runner`.
@@ -77,6 +307,8 @@ pub struct Fx {
     /// Whether `cpd` runs on `fakes.ports` ([`Fx::with_ports`]) or on the real ports ([`Fx::new`]).
     on_fake_ports: bool,
     allow_unscripted: Cell<bool>,
+    /// The route of the `op` program, registered by the first [`Fx::op`].
+    op_route: OnceCell<Arc<OpRoute>>,
     /// The process's environment and directory when this `Fx` took the lock.
     saved_vars: Vec<(OsString, OsString)>,
     saved_cwd: PathBuf,
@@ -95,7 +327,11 @@ impl Fx {
     /// process is started and nothing external is run. Its drop fails the test when a program was called that no
     /// `fake*` rule answered, unless [`Fx::allow_unscripted`] was called.
     pub fn with_ports() -> Fx {
-        let mut env = bare_with_store();
+        Fx::with_ports_over(bare_with_store())
+    }
+
+    /// [`Fx::with_ports`] over `env`, a [`TestEnv::bare`] one (with a store) that the test seeded.
+    pub fn with_ports_over(mut env: TestEnv) -> Fx {
         // The fake tmux has no socket: its directory is the env's own, never the shared `/tmp` a long root would give.
         env.tmux_in_root = true;
         let mut fx = Fx::with(env);
@@ -130,6 +366,36 @@ impl Fx {
         self.fake("op", reply);
     }
 
+    /// The route of the `op` program on the `FakeRunner`, registered by the first call of this: it answers by
+    /// subcommand (the word after `item`) from [`Fx::op_says`], exit 0 with nothing for a subcommand no one scripted,
+    /// and keeps every call it answered, stdin included. A rule of [`Fx::fake_op`] answers before it, so a call that
+    /// rule answers is not the route's.
+    pub fn op(&self) -> &Arc<OpRoute> {
+        self.op_route.get_or_init(|| {
+            let route = Arc::new(OpRoute::default());
+            let _ = (*self.fakes.runner).clone().route("op", route.clone());
+            route
+        })
+    }
+
+    /// The `item <sub>` of op answers with `stdout`, `stderr` and exit status `code`, until the next call of this for
+    /// the same `sub` (`get`, `list`, `create`, `edit`, `delete`).
+    pub fn op_says(&self, sub: &str, stdout: &str, stderr: &str, code: i32) {
+        self.op().says(sub, Reply::exit(code, stdout, stderr));
+    }
+
+    /// The calls the route of `op` answered, one line of argv each, in order.
+    pub fn op_log(&self) -> Vec<String> {
+        self.op().calls().iter().map(|call| call.args.join(" ")).collect()
+    }
+
+    /// What the route of `op` read on stdin in its last call of `item <sub>` that had one (`create` or `edit`).
+    pub fn op_stdin(&self, sub: &str) -> String {
+        let call = self.op().calls().into_iter().rev().find(|call| op_sub(call) == sub && call.stdin.is_some());
+        let bytes = call.unwrap_or_else(|| panic!("op got no stdin for {sub}")).stdin.expect("found by its stdin");
+        String::from_utf8(bytes).expect("the stdin is UTF-8")
+    }
+
     /// [`Fx::fake`] for `node`.
     pub fn fake_node(&self, reply: Reply) {
         self.fake("node", reply);
@@ -150,6 +416,19 @@ impl Fx {
         self.fakes.clock.advance(d);
     }
 
+    /// A second env with a migrated store, made as [`Fx::new`]'s own: starts no process. Its commands run on this `Fx`
+    /// with its `$CPD_HOME`: `fx.cpd_with(env.root(), args, &[("CPD_HOME", ..)])`.
+    pub fn another_env(&self) -> TestEnv {
+        bare_with_store()
+    }
+
+    /// Runs `f` with the variables `set` added to the process's environment, put back after it, also when `f` panics:
+    /// for code that reads the environment outside a `cpd` command (`TestEnv::bare` reads `TMPDIR`). Under this `Fx`'s lock.
+    pub fn with_vars<T>(&self, set: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let _scope = Scope::enter(&std::env::current_dir().expect("the current directory"), set, &[]);
+        f()
+    }
+
     /// Returns as soon as `cond` holds, advancing the `ManualClock` by [`TICK`] between two looks; panics
     /// `waited <limit> virtual time` when it never holds within [`LIMIT`].
     pub fn until(&self, mut cond: impl FnMut() -> bool) {
@@ -160,6 +439,65 @@ impl Fx {
         }
     }
 
+    /// The pid of a process the `FakeSpawn` runs: it is alive until [`Fx::ended_pid`] or an `exit` of the test.
+    pub fn live_pid(&self) -> u32 {
+        let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };
+        self.fakes.spawn.spawn(&launch).expect("the FakeSpawn starts nothing and cannot fail").0
+    }
+
+    /// The pid of a process the `FakeSpawn` ran and that has ended.
+    pub fn ended_pid(&self) -> u32 {
+        let pid = self.live_pid();
+        self.fakes.spawn.exit(Pid(pid), 0);
+        pid
+    }
+
+    /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
+    /// wrapper reads the ambient ports (`git::run`, `tamper`, `sync_lead`, the gate). A thread `f` spawns captures
+    /// `fx.fakes.ports.clone()` and scopes it itself.
+    pub fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
+        Ports::scope(&self.fakes.ports, f)
+    }
+
+    /// Makes a process migrate the store, as `Store::open` of another `cpd` does (contract §1.4): `locks/store.lock` is
+    /// held (a real `flock` on a file of the env, which conflicts with the product's own open of it in this process) with
+    /// the marker of a live migrating pid (running in the `FakeSpawn`), until `hold` of the `ManualClock`'s time has
+    /// passed: the first `sleep` or `now` after that releases it, so a waiter's retries are what pass the time. Replaces
+    /// the `Ports`' clock by one that does it; `fakes.clock` is still the `ManualClock` under it (`elapsed`, `naps`).
+    /// The lock drops with the `Fx`. Only on [`Fx::with_ports`]; once.
+    pub fn hold_store_migration(&mut self, hold: Duration) {
+        assert!(self.on_fake_ports && self.migration.is_none(), "hold_store_migration: on an Fx::with_ports, once");
+        let locks = self.env.cpd_home().join("locks");
+        std::fs::create_dir_all(&locks).expect("create the locks directory");
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).expect("open store.lock");
+        let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("take store.lock");
+        let pid = self.fakes.spawn.spawn(&Launch { program: "cpd".to_owned(), args: vec!["migrating-holder".to_owned()], ..Launch::default() }).expect("the FakeSpawn starts it");
+        // `started_unix_ms` at the end of time: the waiter's `migrated_for` is `now - started`, saturating, so it is 0
+        // and the ceiling (`MIGRATION_WAIT_CEILING`, tested in `store/lock.rs`) never fires while the test reads no wall clock.
+        let marker = serde_json::json!({"migrating": true, "pid": pid.0, "started_unix_ms": u64::MAX, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+        lock.write_all(marker.to_string().as_bytes()).expect("write the marker");
+        let migration = Arc::new(Migration { lock: Mutex::new(Some(lock)), release_at: hold, clock: self.fakes.clock.clone() });
+        self.fakes.ports.clock = Arc::new(MigrationClock(migration.clone()));
+        self.migration = Some(migration);
+    }
+
+    /// Runs `hook` at every `sleep` of the `Ports`' clock, on the thread that sleeps, in place of what another process
+    /// does while a command waits (an `ask` waits for its `answer`): the `ManualClock` advances by the nap as usual, then
+    /// the hook runs with a [`Nap`] that runs `cpd` on the ports as they were before the hook's clock (a `sleep` of that
+    /// command runs no hook). Replaces the hook of an earlier call; it stays until replaced. Only on [`Fx::with_ports`].
+    pub fn on_nap(&mut self, hook: impl FnMut(&Nap) + Send + 'static) {
+        assert!(self.on_fake_ports, "on_nap: on an Fx::with_ports");
+        let hook: Hook = Box::new(hook);
+        match &self.nap {
+            Some(clock) => *clock.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook),
+            None => {
+                let nap = Nap { ports: self.fakes.ports.clone() };
+                let clock = Arc::new(NapClock { inner: self.fakes.ports.clock.clone(), nap, hook: Mutex::new(Some(hook)) });
+                self.fakes.ports.clock = clock.clone();
+                self.nap = Some(clock);
+            }
+        }
+    }
     /// The `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).
     pub fn take_launch(&self, i: usize) -> Launch {
         let launches = self.fakes.spawn.launches();
@@ -176,7 +514,71 @@ impl Fx {
         let set: Vec<_> = launch.env_set.iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
         let remove: Vec<_> = launch.env_remove.iter().map(String::as_str).collect();
         let args: Vec<_> = launch.args.iter().map(String::as_str).collect();
-        self.run(&cwd, &args, &set, &remove)
+        // As the process would have it: what it writes to stderr (the driver's log lines) and then its result go to `stdout_to`.
+        let log = launch.stdout_to.as_deref().map(StderrTo::enter);
+        let run = self.run(&cwd, &args, &set, &remove);
+        if let Some(log) = log {
+            log.finish(&run.stdout);
+        }
+        run
+    }
+
+    /// [`Fx::run_launch_with`] for a program that may `exec`: `Err` is the [`Exec`] of a `Spawn::exec` the run reached (after
+    /// [`Fx::exec_replaces_the_process`]), which ends the run where `exec(2)` ends a process; the env, directory and fd 2 are put back.
+    pub fn run_launch_until_exec(&self, launch: &Launch, hook: impl FnMut(&Fx, usize)) -> Result<Run, Exec> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_launch_with(launch, hook))) {
+            Ok(run) => Ok(run),
+            Err(payload) => match payload.downcast::<Exec>() {
+                Ok(exec) => Err(*exec),
+                Err(other) => std::panic::resume_unwind(other),
+            },
+        }
+    }
+
+    /// From here a `Spawn::exec` of the product's ends the run that made it ([`Fx::run_launch_until_exec`]) instead of failing as a
+    /// fake's does: the launch is recorded on the `FakeSpawn` as before. For an `Fx` of [`Fx::with_ports`].
+    pub fn exec_replaces_the_process(&mut self) {
+        assert!(self.on_fake_ports, "exec_replaces_the_process is for an Fx::with_ports");
+        self.fakes.ports.spawn = Arc::new(Replacing { inner: self.fakes.spawn.clone() });
+    }
+
+    /// [`Fx::run_launch`] that calls `hook(self, n)` after the `n`th nap (from 1) the run takes on the fake clock, on this thread: a
+    /// loop of the run (a driver's poll) naps, the hook changes the world (a Worker commits and submits, a cancel arrives), the loop goes
+    /// on. The hook is not called by a nap inside itself (a command it runs). Panics when the run naps for [`LIMIT`] of virtual time
+    /// without ending. Only for an `Fx` of [`Fx::with_ports`].
+    pub fn run_launch_with(&self, launch: &Launch, mut hook: impl FnMut(&Fx, usize)) -> Run {
+        assert!(self.on_fake_ports, "run_launch_with is for an Fx::with_ports");
+        let mut call = |n: usize| hook(self, n);
+        let borrowed: &mut (dyn FnMut(usize) + '_) = &mut call;
+        // SAFETY: only the lifetime is erased. `Installed` takes the pointer out of the clock before `call` (borrowed here) is dropped,
+        // also when `run_launch` unwinds, and the clock calls it only on this thread during that time.
+        let erased: *mut (dyn FnMut(usize) + 'static) = unsafe { std::mem::transmute(borrowed) };
+        *self.nap.slot() = NapSlot { hook: Some(Erased(erased)), owner: Some(std::thread::current().id()), naps: 0, since: self.fakes.clock.elapsed() };
+        let _installed = Installed(&self.nap);
+        self.run_launch(launch)
+    }
+
+    /// Makes `file` this process's fd 3 until the returned guard drops, as `Launch::hand_over` makes it a driver's: an
+    /// `attempt run` of this `Fx` finds its lock there. The descriptor is not close-on-exec. Takes the `File` (its own
+    /// descriptor is closed, or is fd 3 already, the lowest a process has free) and panics when another file is fd 3.
+    /// The guard closes fd 3 (the driver closes it itself when it ends the way it should; a closed descriptor is not an
+    /// error), so a test never leaves one behind.
+    pub fn hand_over(&self, file: File) -> HandOver {
+        if file.as_raw_fd() != HAND_OVER_FD {
+            // SAFETY: only probes the descriptor number.
+            let open = nix::fcntl::fcntl(unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) }, nix::fcntl::FcntlArg::F_GETFD);
+            assert!(open.is_err(), "fd {HAND_OVER_FD} is open in the test process: nothing can be handed over on it");
+            // SAFETY: `file` is open and fd 3 is not: `dup2` makes a copy on it.
+            let made = unsafe { nix::libc::dup2(file.as_raw_fd(), HAND_OVER_FD) };
+            assert_eq!(made, HAND_OVER_FD, "dup2 onto fd {HAND_OVER_FD}: {}", std::io::Error::last_os_error());
+        } else {
+            // Owned by the guard from here (it closes it); `File::open` made it close-on-exec.
+            let _ = std::os::fd::IntoRawFd::into_raw_fd(file);
+        }
+        // SAFETY: fd 3 is open, whichever way it got here.
+        let fd3 = unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) };
+        nix::fcntl::fcntl(fd3, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty())).expect("clear close-on-exec on fd 3");
+        HandOver::of_fd3()
     }
 
     /// An `Fx` over `env`. Waits for the other `Fx` of the process, if any.
@@ -195,11 +597,15 @@ impl Fx {
     }
 
     fn enter(env: TestEnv, lock: MutexGuard<'static, ()>) -> Fx {
+        // The path a driver reads as cpd's own executable (`Spawn::self_exe` of the real ports): this test binary. The first record wins.
+        cpd_core::host::exe::record_start();
         // `isolation` reads `PATH` through `inherited_path`, cached at its first call: here, before any change.
         let (remove, set) = env.isolation();
         let saved_vars: Vec<_> = std::env::vars_os().collect();
         let saved_cwd = std::env::current_dir().expect("the current directory");
-        let fakes = Fakes::new();
+        let mut fakes = Fakes::new();
+        let nap = Arc::new(NapClock { inner: (*fakes.clock).clone(), slot: Mutex::default() });
+        fakes.ports.clock = nap.clone();
         // The test kit's global git config (`TestEnv`'s `.gitconfig`), in the Universe: no file is read.
         let mut universe = Universe::new(fakes.clock.clone());
         universe.set_global("user.name", "cpd test");
@@ -210,7 +616,7 @@ impl Fx {
         // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
         let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
         let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
-        let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes, nap, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), op_route: OnceCell::new(), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
@@ -241,6 +647,12 @@ impl Fx {
         String::from_utf8(out.stdout).expect("git's stdout is UTF-8").trim_end().to_owned()
     }
 
+    /// `git` with `dir` as the cwd, through the route, whatever its exit code: for a command whose exit 1 is an answer
+    /// (`config --get-regexp` with no match).
+    pub fn git_output(&self, dir: &Path, args: &[&str]) -> Output {
+        self.run_tool("git", Some(dir), &[], args)
+    }
+
     /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
     pub fn git_repo(&self, name: &str) -> PathBuf {
         self.repo_of_universe(name);
@@ -265,6 +677,32 @@ impl Fx {
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
     }
 
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
+    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches.
+        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
+    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
+    }
+
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
     pub fn commit_file(&self, dir: &Path, path: &str, text: &str, message: &str) {
         let file = dir.join(path);
@@ -272,6 +710,56 @@ impl Fx {
         std::fs::write(&file, text).expect("write the file");
         self.git(dir, &["add", "-A"]);
         self.git(dir, &["commit", "-q", "-m", message]);
+    }
+
+    /// The configured URL of `origin`, a GitHub one: adds `acme/<the repo's directory name>` when the repo has no
+    /// `origin`, e.g. after [`Fx::drop_unreachable_origin`] (`TestEnv::github_origin`, over the git route).
+    pub fn github_origin(&self, repo: &Path) -> String {
+        if self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            return self.git(repo, &["config", "--get", "remote.origin.url"]);
+        }
+        let name = repo.file_name().expect("a repo directory").to_string_lossy().into_owned();
+        let url = format!("https://github.com/acme/{name}.git");
+        self.git(repo, &["remote", "add", "origin", &url]);
+        self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+        if !self.env.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+            self.env.repo_policy("acme", &name, "");
+        }
+        url
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL `keyed_repo` gave it (no `local_origin`): for
+    /// what runs after `pr add` and must find no remote (`TestEnv::drop_unreachable_origin`, over the git route).
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
+        let rewritten = self.git_output(repo, &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// Kills the fake server, after unsetting the supervising hooks (`TestEnv::kill_tmux_server`, over the route).
+    pub fn kill_tmux_server(&self) {
+        for hook in ["pane-died", "window-unlinked"] {
+            self.tmux(&["set-hook", "-gu", hook]);
+        }
+        self.tmux(&["kill-server"]);
+    }
+
+    /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
+    /// (`TestEnv::outline_for_review`, on this `Fx`'s `cpd`). Run it right before `plan review`.
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// `<root>/repos/<name>` made in the `Universe` through its handle: `main`, `README.md`, one commit `initial`.
@@ -340,6 +828,29 @@ impl Fx {
             .collect()
     }
 
+    /// Ends the program of `pane` with `status`, as a crash would: the fake marks the pane dead (`remain-on-exit`, as on
+    /// cpd's server) and runs the `pane-died` hook, which leaves a Lead's pane dead and respawns a view's.
+    pub fn pane_exit(&self, pane: &str, status: i32) {
+        let out = self.tmux(&["__ctl", "pane-exit", pane, "--status", &status.to_string()]);
+        assert!(out.status.success(), "tmux __ctl pane-exit {pane}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// Whether the fake server has `pane` and its program has ended.
+    pub fn pane_dead(&self, pane: &str) -> bool {
+        let state = self.tmux_state().expect("a server");
+        state.panes().into_iter().find(|p| p.id == pane).unwrap_or_else(|| panic!("no pane {pane}")).dead
+    }
+
+    /// One tick of the engine (`cpd watch`: E1-E5, E7-E14), run in this thread on the ports of this `Fx` through
+    /// `cpd_engine::watch::run_with`: the loop ends at its first nap, which is on the `ManualClock`. Starts no process;
+    /// what a step starts is recorded by the `FakeSpawn`, what it asks of tmux, `gh` or `cpd` is the `FakeRunner`'s.
+    pub fn engine_tick(&self) {
+        let until = Arc::new(AtomicBool::new(false));
+        let clock = Arc::new(StopAtFirstNap { inner: self.fakes.clock.clone(), until: until.clone() });
+        let ports = Ports { clock, runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
+        cpd_engine::watch::run_with(&ports, &until).unwrap_or_else(|e| panic!("the engine failed: {e:?}"));
+    }
+
     /// A `cpd` reply for `tui view chat` and `tui view history` that exits at once.
     pub fn fake_cpd_views(&self) {
         let _ = (*self.fakes.runner)
@@ -375,6 +886,20 @@ impl Fx {
         self.cpd(args)
     }
 
+    /// Runs `f` with the process's stderr pointing at a file of the env's, and gives its result and what was written there:
+    /// the lines the product prints with `eprintln!` (a `Run`'s `stderr` is empty). The descriptor is put back after, also
+    /// on a panic. A harness that captures the output itself (the libtest default) takes `eprintln!` first and leaves the
+    /// file empty: nextest, the Gate's runner, does not.
+    pub fn with_stderr<T>(&self, f: impl FnOnce() -> T) -> (T, String) {
+        let path = self.env.root().join("stderr-capture");
+        let file = std::fs::File::create(&path).expect("create the stderr file");
+        let result = {
+            let _saved = Stderr::enter(&file);
+            f()
+        };
+        (result, std::fs::read_to_string(&path).expect("read the stderr file"))
+    }
+
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
         self.cpd_with(cwd, args, &[])
@@ -383,6 +908,15 @@ impl Fx {
     /// Runs `cpd <args>` from `cwd` with the variables `vars` added to its environment.
     pub fn cpd_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &str)]) -> Run {
         self.run(cwd, args, vars, &[])
+    }
+
+    /// Runs `cpd <args>` from this env's root with `vars` added and `stdin` as the process's stdin for the call (a file
+    /// of the env's, put back after, also on a panic): what a command that reads its stdin (`secret create`) sees.
+    pub fn cpd_stdin(&self, args: &[&str], vars: &[(&str, &str)], stdin: &str) -> Run {
+        let file = self.env.root().join("stdin");
+        std::fs::write(&file, stdin).expect("write the stdin file");
+        let _fed = Stdin::enter(&file);
+        self.cpd_with(self.env.root(), args, vars)
     }
 
     /// Runs `cpd <args>` in `cwd` with `set` added to and `remove` taken out of its environment, on the ports of this
@@ -497,19 +1031,77 @@ impl Drop for Fx {
     }
 }
 
+/// The clock of [`Fx::engine_tick`]: the `ManualClock`, whose first nap (the engine's wait between two ticks) ends the loop.
+struct StopAtFirstNap {
+    inner: Arc<ManualClock>,
+    until: Arc<AtomicBool>,
+}
+
+impl Clock for StopAtFirstNap {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        self.until.store(true, Ordering::SeqCst);
+    }
+    fn utc(&self) -> OffsetDateTime {
+        self.inner.utc()
+    }
+}
+
+/// The route of `op` ([`Fx::op`]): the reply of each subcommand, and the calls it answered.
+#[derive(Default)]
+pub struct OpRoute {
+    replies: Mutex<Vec<(String, Reply)>>,
+    calls: Mutex<Vec<Call>>,
+}
+
+impl OpRoute {
+    /// `reply` is the answer of `item <sub>` from now on.
+    pub fn says(&self, sub: &str, reply: Reply) {
+        let mut replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        replies.retain(|(known, _)| known != sub);
+        replies.push((sub.to_owned(), reply));
+    }
+
+    /// Every call it answered, in order.
+    pub fn calls(&self) -> Vec<Call> {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner).clone()
+    }
+}
+
+impl Handler for OpRoute {
+    fn handle(&self, call: &Call) -> Reply {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner).push(call.clone());
+        let replies = self.replies.lock().unwrap_or_else(PoisonError::into_inner);
+        let sub = op_sub(call);
+        replies.iter().find(|(known, _)| known == sub).map_or_else(|| Reply::ok(""), |(_, reply)| reply.clone())
+    }
+}
+
+/// The word after `item` in `call`'s arguments (`get`, `list`, `create`, `edit`, `delete`); empty when there is none.
+fn op_sub(call: &Call) -> &str {
+    call.args.iter().skip_while(|arg| *arg != "item").nth(1).map_or("", String::as_str)
+}
 /// The program's file name: `/usr/bin/gh` is `gh`.
 fn file_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
 }
 
-fn bare_with_store() -> TestEnv {
+/// A [`TestEnv::bare`] env with a store: a copy of the template.
+pub fn bare_with_store() -> TestEnv {
     let env = TestEnv::bare();
     std::fs::copy(super::store_template(), env.cpd_home().join("cpd.db")).expect("copy the store template");
     env
 }
 
 /// The number of `code`, which `ExitCode` does not give.
+<<<<<<< HEAD
 pub(super) fn exit_code(code: ExitCode) -> i32 {
+=======
+pub fn exit_code(code: ExitCode) -> i32 {
+>>>>>>> origin/main
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 
@@ -535,6 +1127,45 @@ impl Drop for NoTerminal {
     fn drop(&mut self) {
         let _ = dup2_stdin(&self.stdin);
         let _ = dup2_stdout(&self.stdout);
+    }
+}
+
+/// The process's stderr pointing at a file, put back on drop.
+struct Stderr {
+    saved: OwnedFd,
+}
+
+impl Stderr {
+    fn enter(file: &std::fs::File) -> Stderr {
+        let saved = Stderr { saved: dup(std::io::stderr()).expect("dup stderr") };
+        dup2_stderr(file).expect("point stderr at the file");
+        saved
+    }
+}
+
+impl Drop for Stderr {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
+    }
+}
+
+/// The process's stdin pointing at a file, put back on drop.
+struct Stdin {
+    saved: OwnedFd,
+}
+
+impl Stdin {
+    fn enter(path: &Path) -> Stdin {
+        let file = std::fs::File::open(path).expect("open the stdin file");
+        let saved = Stdin { saved: dup(std::io::stdin()).expect("dup stdin") };
+        dup2_stdin(&file).expect("point stdin at the file");
+        saved
+    }
+}
+
+impl Drop for Stdin {
+    fn drop(&mut self) {
+        let _ = dup2_stdin(&self.saved);
     }
 }
 

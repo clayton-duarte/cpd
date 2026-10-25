@@ -320,6 +320,41 @@ fn local_origin_leaves_the_configured_url_a_github_one() {
     assert_eq!(fx.git(&repo, &["config", "--get", "remote.origin.url"]), "https://github.com/acme/pay.git");
 }
 
+#[test]
+fn drop_unreachable_origin_removes_the_github_origin_of_a_keyed_repo() {
+    let fx = fx();
+    let repo = fx.keyed_repo("pay");
+
+    fx.drop_unreachable_origin(&repo);
+
+    assert_eq!(fx.git(&repo, &["remote"]), "");
+}
+
+#[test]
+fn drop_unreachable_origin_keeps_an_origin_that_local_origin_made_reachable() {
+    let fx = fx();
+    let origin = bare(&fx, "origin");
+    let repo = fx.keyed_repo("pay");
+    fx.local_origin(&repo, &origin);
+
+    fx.drop_unreachable_origin(&repo);
+
+    assert_eq!(fx.git(&repo, &["remote"]), "origin");
+}
+
+#[test]
+fn outline_for_review_outlines_the_plan_so_that_plan_review_is_not_refused_for_the_outline() {
+    let fx = fx();
+    let repo = fx.keyed_repo("pay");
+    plan_pay(&fx);
+    pr_add(&fx, &repo).ok();
+
+    fx.outline_for_review("pay-1");
+
+    let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
+    assert_eq!(shown["plan"]["outline"]["done_when"]["web"], serde_json::json!(["Done"]), "{shown}");
+}
+
 // ---- unsupported git
 
 #[test]
