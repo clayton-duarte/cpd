@@ -1035,66 +1035,6 @@ fn install_pi(env: &TestEnv) {
     env.fake("node", &format!("echo '{LEVELS}'"));
 }
 
-/// Plan `oth` on the same repo whose driver died right after its merge's
-/// compare-and-swap (§7.4 step 8): the Attempt is `merging`, its commit is on
-/// `cpd/oth`, and the Ledger knows nothing of it.
-fn orphaned_merge(fx: &Fx) -> (PathBuf, PathBuf) {
-    let oth = PlanId::parse("oth").unwrap();
-    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("oth.log") };
-    let lead = create_lead_worktree(&fx.repo, &oth, "main", &setup).unwrap().path;
-    let attempt = AttemptId::parse("x-a1").unwrap();
-    let made = create_attempt_worktree(&fx.repo, &lead, &oth, &attempt, &setup).unwrap();
-    fs::write(made.path.join("x.txt"), "x\n").unwrap();
-    fx.git(&made.path, &["add", "-A"]);
-    fx.git(&made.path, &["commit", "-q", "-m", "x"]);
-    let tip = fx.git(&made.path, &["rev-parse", "HEAD"]);
-    fx.store()
-        .write("fixture", |tx| {
-            tx.execute_batch(&format!(
-                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('lead2', 'lead', 'ctx', 'oth', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-                   VALUES ('oth', 'ctx', 'Other', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                   VALUES ('oth', 'repo', '{repo}', 'main', 'dispatch', 'cpd/oth', '{lead}', cpd_txn(), 't', 't');",
-                repo = fx.repo.display(),
-                lead = lead.display()
-            ))?;
-            tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, created_txn, created_at)
-                 VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
-                params!["f".repeat(64), tx.id()],
-            )?;
-            tx.execute(
-                "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
-                                       submitted_sha, submitted_at, started_at)
-                 VALUES ('oth', 'x-a1', 'x', 1, 'S2', 'ladder', 'merging', ?1, ?2, ?3, ?4, 't', 't')",
-                params![made.branch, made.path.to_str().unwrap(), made.base_sha, tip],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-    fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/oth", &tip, &made.base_sha]);
-    (lead, made.path)
-}
-
-#[test]
-fn open_push_and_rebase_run_no_r_for_another_prs_orphaned_merge() {
-    // Nobody but E2 and guard U runs R (hs-d243), and guard U only for its own PR's
-    // Attempts: this pi has no install, so asking it for a catalog would fail.
-    for command in ["open", "push", "rebase"] {
-        let fx = fx(if command == "open" { "dispatch" } else { "deploy" });
-        fx.env.fake_pi("exit 1");
-        orphaned_merge(&fx);
-
-        fx.pr(command).ok();
-
-        let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE id = 'x-a1'", [], |r| r.get(0))?)).unwrap();
-        assert_eq!(status, "merging", "{command}");
-    }
-}
-
 /// Job `x` of PR `repo` with Attempt `x-a1` in `merging` whose merge's compare-and-swap
 /// happened (§7.4 step 8) but not its step 10: its commit (`x.txt`) is on `cpd/pay`, the
 /// Lead worktree is stale, and the Ledger knows nothing of it. Returns its worktree and tip.

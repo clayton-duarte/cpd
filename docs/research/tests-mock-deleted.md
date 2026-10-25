@@ -212,5 +212,8 @@ The User decided, after pro-d30, that there is no Gate or test limit and that ev
 | cpd::pr | cli/tests/pr/pr.rs | open_does_not_fetch_the_base_again_after_the_gate_so_a_base_that_moves_then_refuses_nothing |
 | cpd::pr | cli/tests/pr/pr.rs | open_fails_loud_when_gh_cannot_find_the_pull_request_it_created |
 | cpd::pr | cli/tests/pr/pr.rs | open_gates_pushes_creates_the_pr_and_records_it |
+| cpd::pr | cli/tests/pr/pr.rs | open_push_and_rebase_run_no_r_for_another_prs_orphaned_merge |
 | cpd::session | cli/tests/session/session_watchdog.rs | a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event |
 | cpd::session | cli/tests/session/session_watchdog.rs | a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone |
+| cpd::tui | cli/tests/tui/bare.rs | when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches |
+| cpd::tui | cli/tests/tui/tui.rs | tui_marks_a_restart_of_an_older_tmux_server_pending_and_does_not_kill_it |

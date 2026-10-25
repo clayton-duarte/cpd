@@ -515,45 +515,6 @@ fn places() -> Vec<(String, String)> {
 }
 
 #[test]
-fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches() {
-    for (what, lead_state, attempt) in [
-        ("a starting Attempt", "idle", Some("starting")),
-        ("a running Attempt", "idle", Some("running")),
-        ("a merging Attempt", "idle", Some("merging")),
-        ("a working Lead", "working", None),
-        ("a blocked Lead", "blocked", None),
-    ] {
-        let env = env();
-        fake_cpd_with_sleeping_sessions(&env);
-        let flag = older_server(&env);
-        let _driver = fixture(&env, attempt);
-        cockpit_with_sessions(&env);
-        // The engine stops a Session that has no pane: the state is set once they have panes.
-        store_of(&env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{lead_state}', state_label = iif('{lead_state}' = 'blocked', 'a dialog', NULL) WHERE id = 'lead1'"))).unwrap();
-        let (before, panes) = (server_pid(&env), tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
-        arm(&env, &flag);
-
-        let t = run_in_terminal(&env, "hold", false, "");
-        wait_until(&format!("the attach ({what})"), || {
-            let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
-            clients.status.success() && !clients.stdout.is_empty()
-        });
-        assert_eq!(kill_server_calls(&env), 0, "{what}");
-        assert_eq!(server_pid(&env), before, "{what}");
-        assert_eq!(tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]), panes, "{what}");
-        assert!(attach_calls(&env).is_empty(), "{what}: the installed tmux must not attach");
-        let line = t.stderr();
-        assert_eq!(line.lines().count(), 1, "{what}: {line}");
-        assert!(
-            line.contains("attaching with the server's own tmux") && line.contains("the restart happens once nothing is in the way"),
-            "{what}: {line}"
-        );
-        let pending: serde_json::Value = serde_json::from_str(&fs::read_to_string(pending_file(&env)).unwrap()).unwrap();
-        assert_eq!((pending["server"].as_str(), pending["failed"].is_null()), (Some("1.0"), true), "{what}");
-    }
-}
-
-#[test]
 fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
     let env = env();
     env.cpd(&["tui"]).ok();
