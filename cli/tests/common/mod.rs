@@ -874,6 +874,8 @@ impl TestEnv {
             .env("HOME", self.home())
             .env("TMUX_TMPDIR", self.tmux_tmpdir())
             .env("FAKE_TMUX_SERVER_PID", std::process::id().to_string())
+            // E14 would run the helper at the first tick of every engine a test starts (contract §1.2 test overrides).
+            .env("CPD_TEST_MODELS_DISCOVERY", "off")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
             .env("GIT_TERMINAL_PROMPT", "0")

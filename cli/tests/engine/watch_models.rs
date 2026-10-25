@@ -109,6 +109,7 @@ impl Fx {
             .env
             .command(CPD)
             .arg("watch")
+            .env_remove("CPD_TEST_MODELS_DISCOVERY")
             .env("BIFROST_TEST_KEY", KEY)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

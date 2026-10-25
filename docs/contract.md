@@ -73,6 +73,7 @@ Exit codes (kept from cpd 1 §2):
 | `CPD_TEST_LEAD_POLL` | how often a review Job's driver looks at its Lead (2 s, §3.4) |
 | `CPD_TEST_KILL_PAUSE` | the pause between A9's `kill-window` tries (1 s, §3.4) |
 | `CPD_TEST_BACKOFF_UNIT` | the unit of E3's spawn back-off, `min(2^k, 300)` units (1 s, §3.7) |
+| `CPD_TEST_MODELS_DISCOVERY` | `off` switches engine step E14 off (§3.7): it starts no helper and reports nothing; any other value is a panic naming the variable. Not a number of seconds, unlike the others |
 | `CPD_TEST_PR_POLL` | E5's `watch.pr_poll_seconds`, the time from the end of one PR poll to the next (§3.7, §8.2) |
 
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
