@@ -21,6 +21,7 @@ use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
 use cpd_core::host::runner::{Call, FakeRunner, Reply};
+use cpd_core::host::spawn::{Launch, Pid as SpawnPid, Spawn};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -1390,28 +1391,67 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
 
 // ---------- E3 ----------
 
+/// The engine in-process for E3: Plan `pay`, one slot (`concurrency = 1`, `retry_cap = 0`) and `config_extra`. The drivers E3 starts
+/// are launches of the `FakeSpawn` (nothing runs; the driver's own tests are in flow): its `self_exe` is a file that exists, which
+/// `driver::start` checks before it spawns.
+fn engine_scheduling(config_extra: &str) -> Ip {
+    let fx = engine_with_plan(&format!("concurrency = 1\nretry_cap = 0\n{config_extra}"));
+    let exe = fx.env.root().join("cpd-installed");
+    fs::write(&exe, "").unwrap();
+    fx.fakes.spawn.set_self_exe(&exe);
+    // E5 runs `<exe> pr poll` at every tick, from the recorded path: it finds no pull request.
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
+    fx
+}
+
+/// The `Launch` of Attempt `attempt`'s driver the `FakeSpawn` recorded, with the pid the Attempt stores (a process of the
+/// `FakeSpawn`, alive until the test says it exited): `<exe> attempt run <attempt> --plan pay`, detached, with the lock as fd 3
+/// and the log of the Attempt.
+fn driver_launch(fx: &Ip, attempt: &str) -> (Launch, SpawnPid) {
+    let launch = fx
+        .fakes
+        .spawn
+        .launches()
+        .into_iter()
+        .find(|l| l.args.get(2).map(String::as_str) == Some(attempt))
+        .unwrap_or_else(|| panic!("no driver was launched for {attempt}: {:?}", fx.fakes.spawn.launches()));
+    let exe = fx.fakes.spawn.self_exe().unwrap();
+    assert_eq!((launch.program.as_str(), launch.args.as_slice()), (exe.to_str().unwrap(), ["attempt", "run", attempt, "--plan", PLAN].map(str::to_owned).as_slice()));
+    assert_eq!(launch.env_set, [("CPD_HOME".to_owned(), fx.env.cpd_home().display().to_string())]);
+    assert_eq!(launch.stdout_to, Some(fx.home().driver_log(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap())));
+    assert!(launch.setsid && launch.hand_over.is_some() && !launch.foreground, "{launch:?}");
+    let pid = SpawnPid(u32::try_from(driver_pid(fx, attempt).expect("the Attempt has a driver pid")).unwrap());
+    assert!(fx.fakes.spawn.alive(pid), "the driver of {attempt} is a running process of the FakeSpawn");
+    (launch, pid)
+}
+
+/// The pid stored as Attempt `id`'s driver.
+fn driver_pid(fx: &Ip, id: &str) -> Option<i64> {
+    fx.env.query::<Option<i64>>(&format!("SELECT driver_pid FROM attempts WHERE id = '{id}'"))
+}
+
 #[test]
 fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    // The work session as tui leaves it, with remain-on-exit (§6.1).
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
+    let fx = engine_scheduling("");
     fx.add_job("api", &[], "");
     fx.add_job("web", &[], "");
     fx.add_job("ui", &["api"], "");
 
-    let engine = fx.start();
-    wait_until("attempt-started", || fx.count("attempt-started") == 1);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
 
     let started = fx.events("attempt-started");
     assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S2", "origin": "ladder"}))]);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
-    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
-    // Its driver runs detached; the Worker exits at once, so it ends crashed.
-    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+    assert!(driver_pid(&fx, "api-a1").is_some());
+    // One driver was launched, and its pid is the one stored; it runs until the test says it ended.
+    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    let (_, pid) = driver_launch(&fx, "api-a1");
+    // Its driver exits at once with no lock held and no Event: the next tick ends the Attempt crashed.
+    fx.fakes.spawn.exit(pid, 1);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(fx.attempt("api-a1").0, "ended");
 }
 
 /// hs-n465, hs-d632: a stored Job whose Tier the catalog refuses (`S2` when `S` supports
@@ -1419,17 +1459,11 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
 /// (`S3`), never wedging with `tier_invalid`.
 #[test]
 fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
-    // The work session as tui leaves it, with remain-on-exit (§6.1).
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
-    fx.add_job_on("S2", "repo", "api", &[], "");
+    let fx = engine_scheduling("");
+    fx.env.sql("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    fx.add_job("api", &[], "");
 
-    let engine = fx.start();
-    wait_until("attempt-started", || fx.count("attempt-started") == 1);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
 
     let started = fx.events("attempt-started");
     assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S3", "origin": "ladder"}))]);
@@ -1441,8 +1475,11 @@ fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier(
         "{:?}",
         fx.texts("error")
     );
-    // Its driver runs detached; the Worker exits at once, so it ends crashed.
-    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+    // Its driver was launched; it exits at once and the next tick ends the Attempt crashed.
+    let (_, pid) = driver_launch(&fx, "api-a1");
+    fx.fakes.spawn.exit(pid, 1);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(fx.attempt("api-a1").0, "ended");
 }
 
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
@@ -1450,61 +1487,71 @@ fn urgent(key: &str) -> String {
     format!("UPDATE jobs SET urgent = 1 WHERE plan = 'pay' AND key = '{key}';")
 }
 
-/// The work session as tui leaves it, with remain-on-exit (§6.1), and a Worker that stays alive.
-fn work_session_with_a_worker_that_stays(fx: &Fx) {
-    fx.env.fake_pi(&format!("sleep {SLEEP_SECONDS}"));
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
+/// E3 starts urgent Ready Jobs first (§3.7): with every slot free, the urgent Job goes before an older non-urgent one.
+#[test]
+fn e3_starts_an_urgent_job_before_an_older_one() {
+    let fx = engine_scheduling("");
+    fx.add_job("old", &[], "");
+    fx.add_job("hot", &[], &urgent("hot"));
+
+    fx.watch_first_tick().unwrap();
+    // The Worker stays alive: its driver holds the Attempt's lock. Two more ticks: the one slot is taken, so the older Job still waits.
+    let _driver = fx.live_driver("hot-a1");
+    fx.watch_ticks(2 * OVER_ONE_TICK).unwrap();
+
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot".to_owned())]);
+    assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
+    assert_eq!(fx.fakes.spawn.launches().len(), 1);
 }
 
 /// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
 #[test]
 fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    work_session_with_a_worker_that_stays(&fx);
+    let fx = engine_scheduling("");
     // One Attempt is running: the only slot is taken.
     let _busy = fx.live_driver("busy-a1");
-    fx.add_running("busy", "running", &ago(1));
+    fx.add_running("busy", "running", &ago_in(&fx, 1));
     fx.add_job("old", &[], "");
     fx.add_job("hot1", &[], &urgent("hot1"));
     fx.add_job("hot2", &[], &urgent("hot2"));
 
-    let engine = fx.start();
-    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
-    // Two more ticks: the second urgent Job and the older one still wait.
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
+    // Its driver stays alive. Two more ticks: the second urgent Job and the older one still wait.
+    let _driver = fx.live_driver("hot1-a1");
+    fx.watch_ticks(2 * OVER_ONE_TICK).unwrap();
 
     // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
     assert_eq!(started, [Some("hot1".to_owned())]);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
+    assert_eq!(fx.fakes.spawn.launches().len(), 1);
 }
 
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
-/// (`cannot run <path> (deleted)` before).
+/// (`cannot run <path> (deleted)` before). The recorded path is `Spawn::self_exe`: the launch's program is that path, whatever
+/// the file at it became.
 #[test]
 fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
+    let fx = engine_scheduling("");
     let installed = fx.env.root().join("cpd-installed");
-    copy_executable(CPD, &installed);
-    let engine = fx.start_from(&installed);
+    assert_eq!(fx.fakes.spawn.self_exe().unwrap(), installed);
 
     let new = fx.env.root().join("cpd-new");
-    copy_executable(CPD, &new);
+    fs::write(&new, "").unwrap();
     fs::rename(&new, &installed).unwrap();
     fx.add_job("api", &[], "");
 
-    wait_until("attempt-started", || fx.count("attempt-started") == 1);
-    engine.stop();
-    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
-    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(fx.count("attempt-started"), 1);
+    let (launch, pid) = driver_launch(&fx, "api-a1");
+    assert_eq!(launch.program, installed.display().to_string(), "the driver starts from the recorded path");
+    fx.fakes.spawn.exit(pid, 1);
+    fx.watch_first_tick().unwrap();
+    assert_eq!(fx.attempt("api-a1").0, "ended");
     let texts = fx.texts("attempt-ended");
     assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
@@ -1512,31 +1559,42 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
 /// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
-/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: `2^k` units, the unit a
-/// tenth of a second here (`CPD_TEST_BACKOFF_UNIT`, contract §1.2 "Test overrides"), over 0.1 s ticks.
+/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: the engine's virtual clock is set to the
+/// instant before and at the end of each wait (the Attempt's `ended_at` is the store's own stamp, read back).
 #[test]
 fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    let unit = Duration::from_millis(50);
-    let installed = fx.env.root().join("cpd-installed");
-    copy_executable(CPD, &installed);
-    let engine = fx.start_with(&installed, &[("CPD_TEST_BACKOFF_UNIT", "0.05")]);
-    fs::remove_file(&installed).unwrap();
+    let fx = engine_scheduling("");
+    fs::remove_file(fx.env.root().join("cpd-installed")).unwrap();
     fx.add_job("api", &[], "");
+    let ended_at = |n: u32| parse_time(&fx.env.query::<String>(&format!("SELECT ended_at FROM attempts WHERE id = 'api-a{n}'")));
+    // The virtual clock reads the instant `at` (`Clock::utc` is the epoch of the `ManualClock` plus what elapsed), if it is not past it.
+    let set_clock_to = |at: OffsetDateTime| {
+        if let Ok(forward) = Duration::try_from(at - fx.fakes.clock.utc()) {
+            fx.advance(forward);
+        }
+    };
 
-    wait_until("three spawn failures", || fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
+    for k in 1..=3u32 {
+        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), i64::from(k));
+        // After the k-th failure the next start waits 2^k seconds: one millisecond short of it nothing starts,
+        let wait = time::Duration::seconds(2i64.pow(k));
+        set_clock_to(ended_at(k) + wait - time::Duration::milliseconds(1));
+        fx.watch_first_tick().unwrap();
+        assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), i64::from(k), "started within the back-off after failure {k}");
+        // and a tick later (the engine's nap passed a tenth of a second) the next Attempt starts and fails the same way.
+        set_clock_to(ended_at(k) + wait);
+        fx.watch_first_tick().unwrap();
+    }
 
     assert_ne!(fx.job_status("api"), "failed");
     assert_eq!(fx.count("job-failed"), 0);
-    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx.env.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
-        )?;
-        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
-        });
-    assert!(attempts.len() >= 3, "{attempts:?}");
-    for (id, tier, origin, pid, _, _) in &attempts {
+    let attempts: Vec<(String, String, String, Option<i64>)> = fx.env.read(|conn| {
+        let mut stmt = conn.prepare("SELECT id, tier, origin, driver_pid FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number")?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?)
+    });
+    assert_eq!(attempts.len(), 4, "{attempts:?}");
+    for (id, tier, origin, pid) in &attempts {
         assert_eq!((tier.as_str(), origin.as_str(), *pid), ("S2", "ladder", None), "{id}");
     }
     for (i, (id, ..)) in attempts.iter().enumerate() {
@@ -1544,12 +1602,7 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let retry = &fx.events("attempt-retry")[i];
         assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
     }
-    // After the k-th failure the next start waits 2^k units.
-    for (k, pair) in attempts.windows(2).enumerate() {
-        let waited = parse_time(&pair[1].4) - parse_time(&pair[0].5);
-        let k = (k + 1) as u32;
-        assert!(waited >= unit * 2u32.pow(k), "after failure {k}: waited {waited}");
-    }
+    assert_eq!(fx.fakes.spawn.launches(), [], "no driver was started");
 }
 
 /// A started driver resets the back-off, and only Attempts whose driver started use up a try: `web`
