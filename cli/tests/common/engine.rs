@@ -109,9 +109,14 @@ impl Fx {
     /// Job `key` of Plan `pay` in PR `repo`, Tier `S2`, `queued` with its Locked-Job fingerprint and its `needs`, then moved
     /// by `then` (SQL run after the fingerprint is set).
     pub fn add_job(&self, key: &str, needs: &[&str], then: &str) {
+        self.add_job_in("repo", key, needs, then);
+    }
+
+    /// [`Fx::add_job`] in PR `pr` of Plan `pay`.
+    pub fn add_job_in(&self, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('{PLAN}', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{PLAN}', '{key}', '{need}');");
@@ -144,6 +149,13 @@ impl Fx {
         cpd_engine::watch::run_with(&ports, &until)
     }
 
+    /// `cpd watch` on this `Fx`'s ports until the engine has napped `n` more times than before this call: `n` ticks, whatever
+    /// engines ran earlier on the same clock (a test that looks at the home between two runs).
+    pub fn watch_ticks(&self, n: usize) -> Result<Output, CpdError> {
+        let from = self.fakes.clock.naps().len();
+        self.watch(from + n, |_| {})
+    }
+
     /// [`Fx::watch`] until the first tick has run.
     pub fn watch_first_tick(&self) -> Result<Output, CpdError> {
         self.watch(1, |_| {})
@@ -157,5 +169,56 @@ impl Fx {
     /// The `ManualClock`'s UTC time `ms` milliseconds before now (negative: after it).
     pub fn utc_ago(&self, ms: i64) -> OffsetDateTime {
         self.fakes.clock.utc() - time::Duration::milliseconds(ms)
+    }
+}
+
+impl Fx {
+    /// PR `key` of Plan `pay` in `dispatch`, on the repo and Lead worktree of [`Fx::engine_plan`].
+    pub fn add_pr(&self, key: &str, title: &str) {
+        let repo = self.env.root().join("pay");
+        let lead = self.env.root().join("pay.pay");
+        self.env.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+               VALUES ('{PLAN}', '{key}', '{}', 'main', 'dispatch', 'cpd/{PLAN}/{key}', '{}', '{title}', 'config', cpd_txn(), 't', 't');",
+            repo.display(),
+            lead.display()
+        ));
+    }
+
+    /// Job `key` of PR `pr` a `draft`: the PR's open Job waits for it, and E3 never starts it.
+    pub fn add_draft_in(&self, pr: &str, key: &str) {
+        self.env.sql(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, cpd_txn(), 't');"
+        ));
+    }
+
+    /// Job `api` of PR `repo` merged: the PR's open Job can be Ready once nothing else of the PR is left.
+    pub fn add_merged_api(&self) {
+        self.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    }
+
+    /// Job `key` of PR `pr` as cpd adds an `open` or `update` Job (`kind`): `appended`, no Dependencies, `queued` with its
+    /// fingerprint, then moved by `then` (SQL).
+    pub fn add_cpd_job_in(&self, pr: &str, key: &str, kind: &str, then: &str) {
+        self.env.sql(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
+             VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
+        ));
+        let plan = PlanId::parse(PLAN).unwrap();
+        let all = self.env.store().read(|conn| jobs::load(conn, &plan)).unwrap();
+        let job = all.iter().find(|j| j.key == key).unwrap();
+        self.env.sql(&format!(
+            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{PLAN}' AND key = '{key}'; {then}",
+            locked_fingerprint(job)
+        ));
+    }
+
+    /// `(key, status)` of every Job of `kind`, by key.
+    pub fn jobs_of_kind(&self, kind: &str) -> Vec<(String, String)> {
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
+            Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
     }
 }

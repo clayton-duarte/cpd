@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use common::fx::Fx as Ip;
 use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
-use cpd_core::clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
@@ -385,11 +384,11 @@ fn watch_stops_on_sighup_with_one_watch_stopped() {
 
 #[test]
 fn watch_refuses_unknown_flags_and_needs_its_config() {
-    let fx = fx("");
-    let run = fx.env.cpd(&["watch", "--bogus"]);
+    let fx = engine("");
+    let run = fx.cpd(&["watch", "--bogus"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")));
     fs::remove_file(fx.env.cpd_home().join("config.toml")).unwrap();
-    let run = fx.env.cpd(&["watch"]);
+    let run = fx.cpd(&["watch"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (1, json!("config_missing")));
 }
 
@@ -434,29 +433,6 @@ fn ensure_fails_when_the_engine_does_not_start() {
 }
 
 // ---------- supervision: the engine comes back whatever stopped it (contract §6.6, hs-d328) ----------
-
-impl Fx {
-    /// A Manager Session of Context `ctx`.
-    fn manager(&self, id: &str) {
-        self.fixture(&format!(
-            "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
-               VALUES ('{id}', 'manager', 'ctx', 'Manager {id}', '/', 'O3', 'stopped', 't', 't');"
-        ));
-    }
-
-    /// The messages the engine sent: `(session, context, data)`.
-    fn messages(&self) -> Vec<(String, Option<String>, Value)> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT session, context, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
-                let rows = stmt
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.into_iter().map(|(s, c, d)| (s, c, serde_json::from_str(&d).unwrap())).collect())
-            })
-            .unwrap()
-    }
-}
 
 // ---------- the engine in-process: `watch::run_with(ports, until)` on a `ManualClock` ----------
 
@@ -1365,27 +1341,6 @@ impl Fx {
         ));
     }
 
-    /// Job `key` of PR `repo` as cpd adds an `open` or `update` Job (`kind`): `appended`, no Dependencies, `queued` with its
-    /// fingerprint, then moved by `then` (SQL).
-    fn add_cpd_job(&self, key: &str, kind: &str, then: &str) {
-        self.add_cpd_job_in("repo", key, kind, then);
-    }
-
-    /// `add_cpd_job` in PR `pr`.
-    fn add_cpd_job_in(&self, pr: &str, key: &str, kind: &str, then: &str) {
-        self.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
-        ));
-        let plan = PlanId::parse(PLAN).unwrap();
-        let all = self.store().read(|conn| jobs::load(conn, &plan)).unwrap();
-        let job = all.iter().find(|j| j.key == key).unwrap();
-        self.fixture(&format!(
-            "UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = '{key}'; {then}",
-            locked_fingerprint(job)
-        ));
-    }
-
     /// `(key, status)` of every Job of `kind`, by key.
     fn jobs_of_kind(&self, kind: &str) -> Vec<(String, String)> {
         self.env.read(|conn| {
@@ -1397,16 +1352,12 @@ impl Fx {
 
 /// PR `repo` (an `open` Job the Lead cancelled) beside PR `web`, which has none: `web`'s own `open-web` is what shows the engine has
 /// looked at both.
-fn fx_cancelled_open_job() -> Fx {
-    let fx = fx("");
+fn engine_cancelled_open_job() -> Ip {
+    let fx = engine("");
+    fx.engine_plan();
     fx.add_merged_api();
-    fx.add_cpd_job("open-repo", "open", "UPDATE jobs SET status = 'cancelled', cancel_reason = 'never to be opened', cancel_requested_at = 't' WHERE key = 'open-repo';");
-    fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
-        fx.repo.display(),
-        fx.lead.display()
-    ));
+    fx.add_cpd_job_in("repo", "open-repo", "open", "UPDATE jobs SET status = 'cancelled', cancel_reason = 'never to be opened', cancel_requested_at = 't' WHERE key = 'open-repo';");
+    fx.add_pr("web", "Show the receipt");
     fx.add_draft_in("web", "later-web");
     fx
 }
@@ -1415,44 +1366,51 @@ fn fx_cancelled_open_job() -> Fx {
 /// live); E4 still adds nothing, before or after it.
 #[test]
 fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_job_live() {
-    let fx = fx_cancelled_open_job();
-    let engine = fx.start();
-    wait_until("the open Job of PR web", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"));
-    fx.env.wait_whole_ticks(2);
+    let fx = engine_cancelled_open_job();
+    fx.watch_first_tick().unwrap();
+    assert!(fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"), "the open Job of PR web: {:?}", fx.jobs_of_kind("open"));
+    fx.watch_ticks(2).unwrap();
+    let keys = |fx: &Ip| -> Vec<String> { fx.jobs_of_kind("open").into_iter().map(|(key, _)| key).collect() };
+    assert_eq!(keys(&fx), ["open-repo", "open-web"], "E4 added no fresh open Job for PR repo");
 
-    let run = fx.env.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"]);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
+    let run = fx.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"]);
+    fx.watch_ticks(2).unwrap();
 
     let json = run.json();
     assert_ne!(json["error"]["code"], "open_job_live", "{run:?}");
-    let open: Vec<String> = fx.jobs_of_kind("open").into_iter().map(|(key, _)| key).collect();
-    assert_eq!(open, ["open-repo", "open-web"], "no fresh open Job for PR repo");
+    // `pr open` queues the PR's opener itself (#383, `pr::open`): the one fresh Job is its own, and E4 adds none after it.
+    assert_eq!((&json["job"], &json["status"]), (&json!("open-repo-2"), &json!("queued")), "{run:?}");
+    assert_eq!(keys(&fx), ["open-repo", "open-repo-2", "open-web"], "no open Job for PR repo but the one `pr open` queued");
 }
 
 /// The other way on is `pr cancel`: it cancels the PR's own queued `open` Job with the PR, and E4 re-adds nothing (the PR is no longer
 /// `dispatch`), over several ticks. PR `repo` is the one the engine is seen to look at.
 #[test]
 fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
-    let fx = fx("");
+    let fx = engine("");
+    fx.engine_plan();
     fx.add_merged_api();
-    fx.fixture(&format!(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-           VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
-        fx.repo.display(),
-        fx.lead.display()
-    ));
+    fx.add_pr("web", "Show the receipt");
     fx.add_cpd_job_in("web", "open-web", "open", "");
-    fx.env.cpd(&["pr", "cancel", "web", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "cancel", "web", "--plan", "pay"]).ok();
 
-    let engine = fx.start();
-    wait_until("the open Job of PR repo", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-repo"));
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
+    assert!(fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-repo"), "the open Job of PR repo: {:?}", fx.jobs_of_kind("open"));
+    fx.watch_ticks(3).unwrap();
 
     let web: Vec<_> = fx.jobs_of_kind("open").into_iter().filter(|(key, _)| key.starts_with("open-web")).collect();
     assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'"), "cancelled");
+}
+
+/// `watch_ticks` is `n` ticks of each run, whatever ran before it on the clock.
+#[test]
+fn the_engine_in_process_runs_n_more_ticks_after_an_earlier_run() {
+    let fx = engine("");
+    fx.watch_ticks(3).unwrap();
+    fx.watch_ticks(2).unwrap();
+    assert_eq!(fx.fakes.clock.naps().len(), 5);
+    assert_eq!(fx.events("watch-started").len(), 2);
 }
 
 // ---------- E5: the update Job on a conflict (contract §3.7 E5, §7.6 step 6; hs-d340, hs-d497) ----------
@@ -2126,46 +2084,6 @@ const PREVIOUS_ENGINE: i64 = 424_242;
 /// The sentence a planned restart adds before the final full stop.
 const PLANNED: &str = "(an install's planned restart)";
 
-fn secs_ago(secs: f64) -> String {
-    clock::timestamp(OffsetDateTime::now_utc() - time::Duration::seconds_f64(secs))
-}
-
-impl Fx {
-    /// A home whose previous engine (pid [`PREVIOUS_ENGINE`]) started an hour ago and stopped `down` seconds ago, saying so
-    /// (`watch-stopped`) when `said`, else leaving nothing (a crash: it was last alive at its start, no lock file).
-    /// The new engine's own start comes a moment after `down`.
-    fn previous_engine(&self, down: f64, said: bool) {
-        let stopped = if said {
-            format!(
-                "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-stopped', 'The engine stopped.', '{{\"pid\":{PREVIOUS_ENGINE}}}');",
-                secs_ago(down)
-            )
-        } else {
-            String::new()
-        };
-        // Without a `watch-stopped` the engine is dated by its `watch-started`.
-        let started_ago = if said { 3600.0 } else { down };
-        self.fixture(&format!(
-            "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{PREVIOUS_ENGINE}}}');{stopped}",
-            secs_ago(started_ago)
-        ));
-    }
-
-    fn marker_path(&self) -> PathBuf {
-        self.env.cpd_home().join("run/install-restart.json")
-    }
-
-    /// Starts the engine, lets it finish its start and stops it: what the Managers were told is then settled.
-    fn start_and_stop(&self) {
-        let _ = self.start().stop();
-    }
-
-    /// The `watch-started` text of the engine under test.
-    fn started_text(&self) -> String {
-        self.texts("watch-started").pop().unwrap()
-    }
-}
-
 #[test]
 fn a_planned_restart_back_within_ten_seconds_is_logged_and_tells_no_manager() {
     let fx = engine("");
@@ -2296,22 +2214,23 @@ fn a_crashed_engine_with_a_valid_marker_past_ten_seconds_tells() {
 
 #[test]
 fn mark_restart_writes_the_marker_of_the_latest_engine_and_twice_leaves_one_file() {
-    let fx = fx("");
-    fx.previous_engine(0.5, true);
-    fx.fixture(&format!(
+    let fx = engine("");
+    fx.previous_engine(500, true);
+    fx.env.sql(&format!(
         "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{}}}');",
-        secs_ago(0.1),
+        fx.stamp_ago(100),
         PREVIOUS_ENGINE + 7
     ));
-    let before = OffsetDateTime::now_utc() - time::Duration::seconds(1);
-    let out = fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    // The command reads the time of its ports: the `ManualClock`.
+    let before = fx.utc_ago(1000);
+    let out = fx.cpd(&["watch", "--mark-restart"]).ok();
     assert_eq!(out, json!({"ok": true, "marked": true, "engine_pid": PREVIOUS_ENGINE + 7}));
     let marker: Value = serde_json::from_str(&fs::read_to_string(fx.marker_path()).unwrap()).unwrap();
     assert_eq!((marker["by"].clone(), marker["engine_pid"].clone()), (json!("install-cpd.sh"), json!(PREVIOUS_ENGINE + 7)), "{marker}");
     let at = parse_time(marker["at"].as_str().unwrap());
-    assert!(at >= before && at <= OffsetDateTime::now_utc() + time::Duration::seconds(1), "{marker}");
+    assert!(at >= before && at <= fx.utc_ago(-1000), "{marker}");
 
-    fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    fx.cpd(&["watch", "--mark-restart"]).ok();
     let files: Vec<_> = fs::read_dir(fx.marker_path().parent().unwrap())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -2322,8 +2241,8 @@ fn mark_restart_writes_the_marker_of_the_latest_engine_and_twice_leaves_one_file
 
 #[test]
 fn mark_restart_with_no_watch_started_writes_nothing_and_fails_watch_not_started() {
-    let fx = fx("");
-    let run = fx.env.cpd(&["watch", "--mark-restart"]);
+    let fx = engine("");
+    let run = fx.cpd(&["watch", "--mark-restart"]);
     assert_eq!(run.exit, 3, "{run:?}");
     assert_eq!(run.error()["code"], "watch_not_started");
     assert!(!fx.marker_path().exists());
@@ -2331,11 +2250,10 @@ fn mark_restart_with_no_watch_started_writes_nothing_and_fails_watch_not_started
 
 #[test]
 fn a_marker_written_by_mark_restart_silences_the_restart_it_marks() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    let first = fx.start();
-    let _ = first.stop();
-    fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    fx.start_and_stop();
+    fx.cpd(&["watch", "--mark-restart"]).ok();
     fx.start_and_stop();
     assert_eq!(fx.messages(), [], "the engine that stopped was marked, and the next one is back within a moment");
     assert!(fx.started_text().contains(PLANNED), "{}", fx.started_text());
