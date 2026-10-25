@@ -851,7 +851,8 @@ fn rename_refusals() {
 
 #[test]
 fn rename_works_on_an_archived_context() {
-    let fx = hs();
+    // `archive` asks tmux for the cockpit: the fake route answers.
+    let fx = hs_ports();
     new_context(&fx);
     fx.cpd(&["context", "archive", CTX]).ok();
     let out = fx.cpd(&["context", "rename", CTX, "--title", "Archived and renamed"]).ok();
