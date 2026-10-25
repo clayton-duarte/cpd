@@ -22,13 +22,13 @@ mod select_tests;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use ratatui::crossterm::event::{self, Event};
 use serde::{Deserialize, Serialize};
 
 use super::cockpit::{client_size, on_client};
 use super::widgets::newest_client;
 use super::viewlog::ViewLog;
-use super::{not_a_terminal, on_a_terminal};
+use super::{Capture, run_view};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
@@ -205,21 +205,21 @@ impl Kind {
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
-    let (common, mut dialog) = args.kind.parts()?;
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view dialog"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal, &mut dialog));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    let outcome = result.map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view dialog failed: {e}."))
-            .with("command", "tui view dialog")
-    })?;
+    // The arguments are parsed (and a bad items file refused) in `prepare`, before the terminal is set up; `run_view`
+    // checks the terminal first, so a bad items file is now refused after `not_a_terminal` (it was before).
+    let mut ending: Option<(Common, Dialog, Outcome)> = None;
+    run_view(
+        "dialog",
+        Capture::Mouse,
+        || args.kind.parts(),
+        |terminal, (common, mut dialog)| {
+            let outcome = show(terminal, &mut dialog)?;
+            ending = Some((common, dialog, outcome));
+            Ok(())
+        },
+    )?;
+    // The terminal is restored; the result file is written from what the body kept.
+    let (common, dialog, outcome) = ending.expect("the body ran");
     match dialog.ticks() {
         Some((ticked, unticked)) => {
             let json = serde_json::json!({"approved": outcome.confirmed, "ticked": ticked, "unticked": unticked});

@@ -16,8 +16,7 @@ use std::fmt;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
@@ -27,7 +26,7 @@ use crate::box_widget::spacing;
 use crate::dialog::{Dialog, Mode};
 
 use super::viewlog::ViewLog;
-use super::{RunCommand, dialog, not_a_terminal, on_a_terminal};
+use super::{Capture, RunCommand, dialog, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -225,26 +224,29 @@ fn stored_title(store: &mut Store, pull: &Pull) -> Result<Option<String>, CpdErr
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view merge"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let title = stored_title(&mut store, &args.pull)?;
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal, &args.pull, title.as_deref()));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    let action = result.map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view merge failed: {e}."))
-            .with("command", "tui view merge")
-    })?;
+    // `run_view` refuses `not_a_terminal` first, then `prepare` reads the store; the same order as before.
+    let mut ending: Option<(Action, String)> = None;
+    run_view(
+        "merge",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let title = stored_title(&mut store, &args.pull)?;
+            Ok((config.tmux.socket, title))
+        },
+        |terminal, (socket, title)| {
+            let action = show(terminal, &args.pull, title.as_deref())?;
+            ending = Some((action, socket));
+            Ok(())
+        },
+    )?;
+    // The terminal is restored; the merge runs in the background, owned by the tmux server: this process ends now, and
+    // the popup closes.
+    let (action, socket) = ending.expect("the body ran");
     if action == Action::Merge {
-        // The merge runs in the background, owned by the tmux server: this process ends now, and the popup closes.
-        Tmux::new(config.tmux.socket).run(&start_args(&args.pull, &args.client))?;
+        Tmux::new(socket).run(&start_args(&args.pull, &args.client))?;
     }
     Ok(Output::Owned)
 }
