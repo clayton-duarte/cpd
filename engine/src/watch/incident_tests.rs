@@ -6,31 +6,18 @@
 //! The inc-v2-engine Job implements the two stubs these tests call
 //! ([`schedule::incident_starts`] and [`engine::incident_holds_plan`]) and wires them into the steps.
 
-use std::os::unix::fs::PermissionsExt;
-
-use cpd_core::home::CpdHome;
-use cpd_core::host::Tmux;
 use cpd_core::ids::{PlanId, PrKey};
 
 use super::engine::{self, Engine};
 use super::report::Step;
+use super::testkit::Fx;
 use super::{open, schedule};
 
-/// A test engine on a temporary home, with a tmux program that exits at once.
-fn engine_fixture() -> (Engine, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("home");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(
-        root.join("config.toml"),
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"incident-tests\"\n",
-    )
-    .unwrap();
-    let program = dir.path().join("tmux");
-    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let home = CpdHome::resolve(Some(root.into()), None).unwrap();
-    (Engine::for_test(home, Tmux::new("incident-tests").with_program(&program)), dir)
+/// A test engine on a temporary home, its tmux the in-process one (no server runs, and no step here asks it anything).
+fn engine_fixture() -> Fx {
+    let mut fx = Fx::new("");
+    fx.on_fake_tmux();
+    fx
 }
 
 /// One `incident` row: incident mode is on.
@@ -66,8 +53,7 @@ fn seed_dispatch_pr(engine: &mut Engine) {
         .store
         .write("test", |tx| {
             tx.execute_batch(
-                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
-                 INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                    VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'working', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, locked_at, created_at)
                    VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
@@ -122,9 +108,10 @@ fn held(engine: &mut Engine, plan: &str) -> bool {
 
 #[test]
 fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
-    let (mut engine, _dir) = engine_fixture();
-    seed_dispatch_pr(&mut engine);
-    seed_held_dispatch_pr(&mut engine);
+    let mut fx = engine_fixture();
+    let engine = &mut fx.engine;
+    seed_dispatch_pr(engine);
+    seed_held_dispatch_pr(engine);
     let pay = PlanId::parse("pay").unwrap();
     let ops = PlanId::parse("ops").unwrap();
 
@@ -140,8 +127,8 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
         })
         .unwrap();
 
-    incident_on(&mut engine);
-    incident_includes(&mut engine, "pay");
+    incident_on(engine);
+    incident_includes(engine, "pay");
 
     // Incident on: a Job runs when its Plan is in `incident_plans` or it is urgent; otherwise it holds.
     engine
@@ -158,22 +145,23 @@ fn incident_mode_runs_only_incident_plans_and_explicit_urgent_jobs() {
 
 #[test]
 fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
-    let (mut engine, _dir) = engine_fixture();
-    seed_dispatch_pr(&mut engine);
-    seed_held_dispatch_pr(&mut engine);
-    incident_on(&mut engine);
-    incident_includes(&mut engine, "pay");
+    let mut fx = engine_fixture();
+    let engine = &mut fx.engine;
+    seed_dispatch_pr(engine);
+    seed_held_dispatch_pr(engine);
+    incident_on(engine);
+    incident_includes(engine, "pay");
 
     // The scoping seam E4 and E7 use: `pay` is in the incident, `ops` is held.
-    assert!(!held(&mut engine, "pay"), "a Plan in the incident is not held");
-    assert!(held(&mut engine, "ops"), "a Plan outside the incident is held");
+    assert!(!held(engine, "pay"), "a Plan in the incident is not held");
+    assert!(held(engine, "ops"), "a Plan outside the incident is held");
 
     // E4 acts on the incident Plan's `dispatch` PR only: the held Plan's PR gets no `open` Job.
-    open::run(&mut engine);
-    assert_eq!(open_jobs(&mut engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's PR");
+    open::run(engine);
+    assert_eq!(open_jobs(engine), vec![("pay".to_owned(), "api".to_owned())], "E4 adds the open Job only for the incident Plan's PR");
 
     // E7 selects only the incident Plan's `waiting` PR; the held Plan's PR is left alone.
-    let startable = engine::startable_prs(&mut engine).unwrap();
+    let startable = engine::startable_prs(engine).unwrap();
     assert_eq!(
         startable,
         vec![(PlanId::parse("pay").unwrap(), PrKey::parse("ship").unwrap())],
@@ -181,10 +169,10 @@ fn incident_mode_holds_e4_and_e7_for_plans_outside_the_set() {
     );
 
     // E9, E10 and E11 still hold machine-wide; the other steps run.
-    assert!(engine::incident_holds(&mut engine, Step::E9), "E9 holds");
-    assert!(engine::incident_holds(&mut engine, Step::E10), "E10 holds");
-    assert!(engine::incident_holds(&mut engine, Step::E11), "E11 holds");
+    assert!(engine::incident_holds(engine, Step::E9), "E9 holds");
+    assert!(engine::incident_holds(engine, Step::E10), "E10 holds");
+    assert!(engine::incident_holds(engine, Step::E11), "E11 holds");
     for step in [Step::E1, Step::E2, Step::E4, Step::E5, Step::E7, Step::E8, Step::E12, Step::E13] {
-        assert!(!engine::incident_holds(&mut engine, step), "{step} is not held machine-wide");
+        assert!(!engine::incident_holds(engine, step), "{step} is not held machine-wide");
     }
 }

@@ -9,6 +9,7 @@ use cpd_core::clock::timestamp;
 use cpd_core::config::{Catalog, TierModel};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
+use cpd_core::host::runner::FakeRunner;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::{jobs, locked_fingerprint};
 use rusqlite::types::FromSql;
@@ -88,6 +89,22 @@ impl Fx {
             lead.display()
         ));
         fx
+    }
+
+    /// The engine's tmux on the in-process tmux (the `tmux` route of a fresh `FakeRunner`), no server running yet
+    /// ([`Fx::tmux_server`]). Returns the runner: a test scripts a fault on it (`once`, `on`: see the fault injections in
+    /// `cpd_core::fakes::tmux::route`) and reads what the step sent (`calls`).
+    pub(super) fn on_fake_tmux(&mut self) -> FakeRunner {
+        let runner = FakeRunner::with_tmux();
+        let tmpdir = self.dir.path().join("tmux");
+        std::fs::create_dir_all(&tmpdir).unwrap();
+        self.engine.tmux = Tmux::with_tmpdir("testkit", tmpdir).with_runner(std::sync::Arc::new(runner.clone()));
+        runner
+    }
+
+    /// A tmux server with one session, `keepalive`, on the tmux of [`Fx::on_fake_tmux`].
+    pub(super) fn tmux_server(&self) {
+        self.engine.tmux.run(&["new-session", "-d", "-s", "keepalive", "sleep", "600"].map(str::to_owned)).unwrap();
     }
 
     /// A second engine on the same home: the engine after a restart.
@@ -221,6 +238,20 @@ mod tests {
         assert_eq!(fx.events("attempt-status").len(), 1);
         fx.add_running("fresh", "starting", &started);
         assert_eq!(fx.count("attempt-status"), 1, "a starting Attempt has no starting → running Event yet");
+    }
+
+    #[test]
+    fn the_fake_tmux_has_no_server_until_one_is_made_and_the_runner_records_what_the_engine_sent() {
+        let mut fx = Fx::new("");
+        let runner = fx.on_fake_tmux();
+        assert!(!fx.engine.tmux.server_running().unwrap());
+
+        fx.tmux_server();
+        assert!(fx.engine.tmux.server_running().unwrap());
+        fx.engine.tmux.run(&["set", "-g", "@x", "1"].map(str::to_owned)).unwrap();
+
+        let sent: Vec<String> = runner.calls().iter().map(|c| c.args.join(" ")).collect();
+        assert!(sent.iter().any(|a| a.contains("set -g @x 1")), "{sent:?}");
     }
 
     #[test]
