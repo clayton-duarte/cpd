@@ -51,8 +51,7 @@ use crate::fold;
 use crate::palette;
 use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
-use cpd_core::plan::Phase;
-use crate::read::{ContextNode, Dot, JobStatus, Place, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, JobCounts, Place, PlanNode, SessionNode, Tree};
 use super::actions::{Action, Subject};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
@@ -95,6 +94,8 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
+    /// An archived Manager Session of the Context, drawn in its archived section (commands.md §17, hs-d630, hs-d633).
+    Manager(&'a ContextNode, &'a SessionNode),
     /// The closing row of a Context (`╰󰬦 expand`, `╰󰬬 collapse`, or the terminator `╰󰬪` of a Context with no row; hs-d574): the only row that folds its archived rows.
     Toggle,
 }
@@ -109,22 +110,25 @@ struct Kids<'a> {
     archived: Vec<&'a PlanNode>,
     /// The forks that are archived or of an archived Plan, listed last (every fork when the Context is archived).
     strays: Vec<(&'a PlanNode, &'a SessionNode)>,
+    /// The archived Manager Sessions, listed after the strays (hs-d630, hs-d633).
+    managers: Vec<&'a SessionNode>,
 }
 
 impl Kids<'_> {
     /// The Context has rows its toggle shows and hides.
     fn has_archived(&self) -> bool {
-        !self.archived.is_empty() || !self.strays.is_empty()
+        !self.archived.is_empty() || !self.strays.is_empty() || !self.managers.is_empty()
     }
 }
 
 fn kids(c: &ContextNode) -> Kids<'_> {
+    let managers = c.archived_managers.iter().collect();
     if c.is_archived() {
-        return Kids { direct: Vec::new(), forks: Vec::new(), archived: c.plans.iter().collect(), strays: c.forks() };
+        return Kids { direct: Vec::new(), forks: Vec::new(), archived: c.plans.iter().collect(), strays: c.forks(), managers };
     }
     let (archived, direct): (Vec<&PlanNode>, Vec<&PlanNode>) = c.plans.iter().partition(|p| p.head.is_archived());
     let (strays, forks): (Vec<_>, Vec<_>) = c.forks().into_iter().partition(|(p, s)| p.head.is_archived() || s.is_archived());
-    Kids { direct, forks, archived, strays }
+    Kids { direct, forks, archived, strays, managers }
 }
 
 /// The row at `path`, `None` when the tree has none.
@@ -142,6 +146,9 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
     if let Some(plan) = k.direct.iter().chain(&k.archived).copied().find(|p| p.head.id.as_str() == next) {
         return Some(Row::Plan(context, plan));
     }
+    if let Some(s) = k.managers.iter().copied().find(|s| s.id.as_str() == next) {
+        return Some(Row::Manager(context, s));
+    }
     k.forks.iter().chain(&k.strays).find(|(_, s)| s.id.as_str() == next).map(|(p, s)| Row::Fork(context, p, s))
 }
 
@@ -151,14 +158,14 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(_) | Row::Toggle => None,
             Row::Plan(_, p) => p.lead(),
-            Row::Fork(_, _, s) => Some(s),
+            Row::Fork(_, _, s) | Row::Manager(_, s) => Some(s),
         }
     }
 
     /// The Plan of the row; none for a Context or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::Toggle => None,
+            Row::Context(_) | Row::Toggle | Row::Manager(..) => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -170,6 +177,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.is_archived(),
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
+            Row::Manager(c, s) => c.is_archived() || s.is_archived(),
             Row::Toggle => false,
         }
     }
@@ -182,6 +190,7 @@ impl<'a> Row<'a> {
                 Row::Context(c) => c.manager_asleep,
                 Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
                 Row::Fork(_, _, s) => s.is_asleep(),
+                Row::Manager(..) => true,
                 Row::Toggle => false,
             }
     }
@@ -194,17 +203,20 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.is_archived() || (!c.plans.is_empty() && c.plans.iter().all(quiet)),
             Row::Plan(c, p) => c.is_archived() || quiet(p),
-            Row::Fork(..) | Row::Toggle => false,
+            Row::Fork(..) | Row::Manager(..) | Row::Toggle => false,
         }
     }
 
     /// What a click on an archived Session, Plan or fork row does first: `unarchive` of the outermost archived object of
     /// the row (its Context, else its Plan, else the Session), and the Open of its Session. None when the row is not archived.
     pub fn resume(&self) -> Option<(Subject, Action)> {
+        if let Row::Manager(c, s) = *self {
+            return Some((Subject::Context(c.id.clone()), Action::Open(s.id.clone())));
+        }
         let (context, plan, session) = match *self {
             Row::Plan(c, p) => (c, p, p.lead()?),
             Row::Fork(c, p, s) => (c, p, s),
-            Row::Context(_) | Row::Toggle => return None,
+            Row::Context(_) | Row::Manager(..) | Row::Toggle => return None,
         };
         let subject = if context.is_archived() {
             Subject::Context(context.id.clone())
@@ -230,6 +242,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => Some(c.id.to_string()),
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
+            Row::Manager(_, s) => Some(s.id.as_str().chars().take(8).collect()),
             Row::Toggle => None,
         }
     }
@@ -240,7 +253,7 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
-            Row::Fork(_, _, s) => session_label(s),
+            Row::Fork(_, _, s) | Row::Manager(_, s) => session_label(s),
             Row::Toggle => String::new(),
         }
     }
@@ -261,30 +274,25 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
-/// `36⋅0⋅0⋅1⋅5`: each count in its status colour (colour 8 when zero), `⋅` between. The failed count is always red.
+/// `10⋅3⋅1⋅5`: each nonzero role in its status colour, `⋅` between two drawn roles only. The failed count is always red.
 pub fn counters(plan: &PlanNode) -> Line<'static> {
-    let phase = plan.head.phase;
+    let counts = plan.head.counts;
     let mut spans = Vec::new();
-    for (i, n) in plan.head.counts.counters(phase).into_iter().enumerate() {
-        if i > 0 {
+    for (i, n) in counts.counters().into_iter().enumerate() {
+        if n == 0 {
+            continue;
+        }
+        if !spans.is_empty() {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(&counts, i, n)));
     }
     Line::from(spans)
 }
 
-/// Style of the `index`th counter of `JobCounts::counters`: its status colour, or colour 8 when the count is zero. The
-/// first counter is the queued Jobs, in phase `plan` the drafts.
-fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
-    let (status, merging) = match index {
-        0 if phase == Phase::Plan => (JobStatus::Draft, false),
-        0 => (JobStatus::Queued, false),
-        1 => (JobStatus::Running, false),
-        2 => (JobStatus::Running, true),
-        3 => (JobStatus::Failed, false),
-        _ => (JobStatus::Merged, false),
-    };
+/// Style of the `index`th counter of `JobCounts::counters`: its role's status colour (colour 8 when zero).
+fn counter_style(counts: &JobCounts, index: usize, n: usize) -> Style {
+    let (status, merging) = counts.counter_role(index);
     palette::count_style(status, merging, n)
 }
 
@@ -364,6 +372,12 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
     (s.id.to_string(), text)
 }
 
+/// An archived Manager's row text, one level under its Context: always muted, named by `session_label`.
+fn manager_row(s: &SessionNode, width: u16, frame: usize) -> (Id, Line<'static>) {
+    let text = row_text(RowText { session: Some(s), name: session_label(s), depth: 1, frame, counters_width: 0, muted: true }, width);
+    (s.id.to_string(), text)
+}
+
 /// A visible row of the tree: its identifier (a path) and what it says.
 pub struct FlatRow {
     pub path: Vec<Id>,
@@ -394,6 +408,7 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     if expanded {
         rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
+        rows.extend(k.managers.iter().map(|s| manager_row(s, width, frame)));
     }
     let last = rows.len().saturating_sub(1);
     let closes_in_a_row = !k.has_archived() && !rows.is_empty();
@@ -639,6 +654,7 @@ mod tests {
 
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
+    use cpd_core::plan::Phase;
     use cpd_core::session::State;
     use crate::palette::{IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED, color};
 
@@ -736,9 +752,9 @@ mod tests {
             lines(&buf),
             [
                 format!("╭{NEEDS_YOU} cpd"),
-                row_of(&format!("├─{IDLE} v1"), "36⋅0⋅0⋅1⋅5", 31),
-                row_of(&format!("├─{NEEDS_YOU} rust"), "0⋅1⋅0⋅0⋅1", 31),
-                row_of(&format!("╰─{IDLE} ui"), "1⋅0⋅2⋅0⋅3", 31),
+                row_of(&format!("├─{IDLE} v1"), "36⋅1⋅5", 31),
+                row_of(&format!("├─{NEEDS_YOU} rust"), "1⋅1", 31),
+                row_of(&format!("╰─{IDLE} ui"), "1⋅2⋅3", 31),
             ]
         );
         assert_eq!(buf[(4, 2)].fg, palette::selected_name().fg.unwrap(), "the name of the centre row is blue");
@@ -755,14 +771,14 @@ mod tests {
             lines(&buf),
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
-                row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44),
+                row_of(&format!("├─{IDLE} sketch"), "4", 44),
+                row_of(&format!("├─{STOPPED} old"), "1⋅36", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
                 format!("╰─{NEEDS_YOU} ship·f-bl").to_owned(),
                 String::new(),
                 format!("╭{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("╰─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                row_of(&format!("╰─{NEEDS_YOU} rel"), "3", 44),
                 String::new(),
                 format!("╭{STOPPED} gamma").to_owned(),
                 TERMINATOR.to_owned(),
@@ -813,7 +829,7 @@ mod tests {
         assert!(!state.opened().contains(&toggle_of(&["alpha"])), "folded");
         assert!(state.opened().contains(&path(&["alpha"])), "the live rows stay open");
         let folded = lines(&render(&tree, &mut state, 44, 6, false));
-        assert_eq!(folded[..5], [format!("╭{NEEDS_YOU} alpha"), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44), format!("├─{IDLE} ship·f-id"), EXPAND.to_owned()]);
+        assert_eq!(folded[..5], [format!("╭{NEEDS_YOU} alpha"), row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44), row_of(&format!("├─{IDLE} sketch"), "4", 44), format!("├─{IDLE} ship·f-id"), EXPAND.to_owned()]);
         assert!(!click_toggle(&mut state, &tree, &toggle_of(&["nope"])), "no Context, no closing row");
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["alpha"])));
         assert!(state.opened().contains(&toggle_of(&["alpha"])), "the closing row unfolds it");
@@ -834,13 +850,13 @@ mod tests {
             lines(&buf),
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44),
+                row_of(&format!("├─{IDLE} sketch"), "4", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
                 EXPAND.to_owned(),
                 String::new(),
                 format!("╭{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("╰─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                row_of(&format!("╰─{NEEDS_YOU} rel"), "3", 44),
                 String::new(),
                 format!("╭{STOPPED} gamma").to_owned(),
             ]
@@ -866,19 +882,19 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Idle)]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("╭{IDLE} cc").to_owned(), row_of(&format!("╰─{IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("╭{IDLE} cc").to_owned(), format!("╰─{IDLE} pp")]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of(&format!("╰─{NEEDS_YOU} pp"), "0⋅0⋅0⋅0⋅0", 30));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), format!("╰─{NEEDS_YOU} pp"));
     }
 
     #[test]
     fn drafts_are_counted_and_dark_grey_in_phase_plan() {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
-        assert_eq!(fg(&buf, 9, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
-        assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing), "the zero");
+        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} pp"), "4", 20));
+        assert_eq!(fg(&buf, 17, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
+        assert_eq!(buf[(16, 1)].symbol(), " ", "no separator before a lone role");
     }
 
     #[test]
@@ -886,7 +902,7 @@ mod tests {
         let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-lon…"), "36⋅0⋅0⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-long-pl…"), "36⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -972,8 +988,8 @@ mod tests {
         unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
-            let grey = (String::from(format!("{WORKING}")), color(Meaning::Nothing));
-            assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
+            let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
+            assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the hollow ring {:?}", lines(&buf));
             assert_eq!(cell(&buf, 1, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
             assert_eq!(cell(&buf, 2, 5), grey, "frame {frame}: its Plan row");
             assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
@@ -1018,7 +1034,7 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 4, false);
-        assert_eq!(lines(&buf)[1..], [row_of(&format!("├─{IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30), format!("╰─{IDLE} pp·f").to_owned(), String::new()]);
+        assert_eq!(lines(&buf)[1..], [format!("├─{IDLE} pp"), format!("╰─{IDLE} pp·f").to_owned(), String::new()]);
     }
 
     #[test]
@@ -1080,7 +1096,7 @@ mod tests {
     fn the_selected_plan_row_draws_its_name_in_blue_and_no_chat_mark_anywhere() {
         let tree = sample(); // `ship`'s Lead is in the chat slot
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "column 0 is the branch, not `{ACTIVE_MARK}`");
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44), "column 0 is the branch, not `{ACTIVE_MARK}`");
         assert!(!lines(&buf).iter().any(|l| l.contains(ACTIVE_MARK)), "{:?}", lines(&buf));
         let name = name_cells(&buf, 1, 4, "ship");
         assert_eq!(blue_cells(&buf), name, "the name, and nothing else on the screen");
@@ -1096,13 +1112,13 @@ mod tests {
         assert_eq!(text(&buf, 1).chars().next(), Some('├'), "the branch, not a mark");
         assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (grey, grey), "the branch");
         assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working), "the dot");
-        // counters "2⋅1⋅1⋅0⋅5" end `RIGHT_PAD` columns before the edge
-        let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 33 + 2 * i, 1)).collect();
+        // counters "2⋅2⋅5" end `RIGHT_PAD` columns before the edge
+        let counters: Vec<Color> = [37, 39, 41].iter().map(|&x| fg(&buf, x, 1)).collect();
         assert_eq!(
             counters,
-            [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::InProgress), palette::color_clickable(Meaning::Review), color(Meaning::Nothing), palette::color_clickable(Meaning::Done)]
+            [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::Review), palette::color_clickable(Meaning::Done)]
         );
-        assert!((0..4).all(|i| fg(&buf, 34 + 2 * i, 1) == grey), "the separators");
+        assert_eq!((fg(&buf, 38, 1), fg(&buf, 40, 1)), (grey, grey), "the separators");
     }
 
     #[test]
@@ -1274,7 +1290,7 @@ mod tests {
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 9, false);
         assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha"), "not its title `Payments`");
-        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
         assert_eq!(text(&buf, 5), format!("╰─{NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");
         // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
@@ -1336,15 +1352,15 @@ mod tests {
             lines(&buf)[..13],
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅2⋅5", 44),
+                row_of(&format!("├─{IDLE} sketch"), "4", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
-                row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                row_of(&format!("├─{STOPPED} old"), "1⋅36", 44),
                 format!("├─{NEEDS_YOU} ship·f-bl").to_owned(),
                 COLLAPSE.to_owned(),
                 String::new(),
                 format!("╭{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("╰─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                row_of(&format!("╰─{NEEDS_YOU} rel"), "3", 44),
                 String::new(),
                 format!("╭{STOPPED} gamma").to_owned(),
                 TERMINATOR.to_owned(),
@@ -1375,7 +1391,7 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
         assert_eq!(
             lines(&buf)[7..11],
-            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("├─{IDLE} rel·f-re"), COLLAPSE.to_owned()]
+            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "3", 44), format!("├─{IDLE} rel·f-re"), COLLAPSE.to_owned()]
         );
         assert_eq!(fg(&buf, 3, 9), color(Meaning::Nothing), "the archived fork is muted");
         let mut t = sample();
@@ -1389,7 +1405,7 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
         assert_eq!(
             lines(&buf)[7..11],
-            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("├─{IDLE} rel·f-re"), COLLAPSE.to_owned()],
+            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "3", 44), format!("├─{IDLE} rel·f-re"), COLLAPSE.to_owned()],
             "an archived Plan and the fork of an archived Plan are inside the block too"
         );
     }
@@ -1423,7 +1439,7 @@ mod tests {
             rows[14..],
             [
                 format!("╭{STOPPED} zeta"),
-                row_of(&format!("├─{STOPPED} zp"), "0⋅0⋅0⋅0⋅2", 44),
+                row_of(&format!("├─{STOPPED} zp"), "2", 44),
                 format!("├─{STOPPED} zp·f-zp"),
                 COLLAPSE.to_owned()
             ],

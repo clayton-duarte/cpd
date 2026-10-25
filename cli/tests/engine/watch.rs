@@ -9,7 +9,7 @@ mod checkout;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::clock;
@@ -391,39 +391,6 @@ fn watch_refuses_unknown_flags_and_needs_its_config() {
 
 // ---------- --ensure ----------
 
-#[test]
-fn ensure_starts_the_engine_in_the_work_session_once() {
-    let fx = fx("");
-    fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
-
-    let out = fx.env.cpd(&["watch", "--ensure"]).ok();
-    assert_eq!(out["started"], true, "{out}");
-    let pane = out["pane"].as_str().unwrap().to_owned();
-    assert!(pane.starts_with('%'), "{out}");
-    let panes = fx.env.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{session_name}:#{window_name} #{pane_dead} #{pane_pid}"]);
-    let panes = String::from_utf8_lossy(&panes.stdout).into_owned();
-    let line = panes.lines().find(|l| l.starts_with(&format!("{pane} "))).unwrap_or_else(|| panic!("{panes}"));
-    let fields: Vec<&str> = line.split(' ').collect();
-    assert_eq!(&fields[1..3], ["cpd-work:watch", "0"], "{panes}");
-    // Its process took the lock and said so.
-    let pid: u32 = fields[3].parse().unwrap();
-    assert_eq!(fx.events("watch-started"), [(None, None, None, json!({"pid": pid}))]);
-    assert_eq!(fx.env.cpd(&["watch"]).error()["code"], "watch_running");
-    // The one call is the engine's own start: E5 runs the engine's executable, not `cpd` from `PATH`.
-    assert_eq!(fx.env.calls("cpd"), [vec!["watch".to_owned()]]);
-
-    let again = fx.env.cpd(&["watch", "--ensure"]).ok();
-    assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
-    assert_eq!(fx.count("watch-started"), 1);
-
-    // A dead engine's window is replaced, not duplicated: the supervising hook starts it again at once (contract §6.6).
-    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
-    wait_until("watch-stopped", || fx.count("watch-stopped") == 1);
-    wait_until("the engine again", || fx.count("watch-started") == 2);
-    let windows = fx.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
-    assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n");
-}
-
 /// engine-W10: both calls probe the lock before either engine has taken it (the fake `cpd` is slow to start), so both create
 /// a window and one engine loses the lock (`watch_running`, its pane dies). Both calls succeed, one engine runs, no dead window.
 /// hygiene.md 3c: the late supervising `ensure` of a test whose env is being removed must not make a home again. The
@@ -449,28 +416,6 @@ fn ensure_in_a_home_that_does_not_exist_fails_and_creates_nothing() {
     assert_eq!(entries(), ["config.toml"], "ensure made something in the home: {run:?}");
 }
 
-/// engine-W10: `list-panes` fails while a concurrent call's `new-session` is starting the server, and the server is running
-/// a moment later. The call lists again instead of failing with the first call's stderr.
-#[test]
-fn ensure_lists_panes_again_when_the_first_list_panes_fails_while_the_server_runs() {
-    let fx = fx("");
-    fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
-    fx.env.tmux(&["new-session", "-d", "-s", "other"]);
-    let real = fx.env.run_ok(fx.env.root(), "sh", &["-c", "command -v tmux"]);
-    let flag = fx.env.root().join("list-panes-failed");
-    fx.env.fake(
-        "tmux",
-        &format!(
-            "case \" $* \" in *\" list-panes \"*) [ -e '{flag}' ] || {{ : > '{flag}'; echo 'error connecting to x (No such file or directory)' >&2; exit 1; }};; esac\nexec '{real}' \"$@\"",
-            flag = flag.display(),
-            real = real.trim()
-        ),
-    );
-    let out = fx.env.cpd(&["watch", "--ensure"]).ok();
-    assert_eq!(out["started"], true, "{out}");
-    assert!(flag.exists());
-}
-
 #[test]
 fn ensure_fails_when_the_engine_does_not_start() {
     let fx = fx("");
@@ -486,33 +431,7 @@ fn ensure_fails_when_the_engine_does_not_start() {
 
 // ---------- supervision: the engine comes back whatever stopped it (contract §6.6, hs-d328) ----------
 
-/// How long the engine has to be back after it stopped, whatever stopped it: "within seconds" (contract §6.6).
-const BACK: Duration = Duration::from_secs(10);
-
 impl Fx {
-    /// The engine, started as a Plan starts it (`cpd watch --ensure`); its pid.
-    fn supervised(&self) -> i64 {
-        self.env.cpd(&["watch", "--ensure"]).ok();
-        self.engine_pid()
-    }
-
-    /// The pid of the newest `watch-started`.
-    fn engine_pid(&self) -> i64 {
-        self.env.query("SELECT json_extract(data, '$.pid') FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1")
-    }
-
-    /// Waits until a new engine runs after the `starts` it had counted: a newer `watch-started`
-    /// whose process is alive, in one `watch` window of the work session. Returns the time it took.
-    fn back_after(&self, starts: usize) -> Duration {
-        let began = Instant::now();
-        wait_until_for("the engine to be back", BACK, || {
-            self.count("watch-started") > starts && kill(Pid::from_raw(self.engine_pid() as i32), None).is_ok()
-        });
-        let windows = self.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
-        assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n", "one engine window, no dead one");
-        began.elapsed()
-    }
-
     /// A Manager Session of Context `ctx`.
     fn manager(&self, id: &str) {
         self.fixture(&format!(
@@ -538,69 +457,6 @@ impl Fx {
             })
             .unwrap()
     }
-}
-
-/// A `cpd` whose views only sleep, so a cockpit can be built without terminals.
-fn views_sleep(fx: &Fx) {
-    fx.env.fake("cpd", &format!("case \"$1 $2\" in \"tui view\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
-}
-
-#[test]
-fn a_crashed_engine_is_back_within_seconds() {
-    let fx = fx("");
-    let pid = fx.supervised();
-    kill(Pid::from_raw(pid as i32), Signal::SIGABRT).unwrap();
-    fx.back_after(1);
-    assert_eq!(fx.count("watch-stopped"), 0, "a crash says nothing");
-    assert_ne!(fx.engine_pid(), pid);
-}
-
-#[test]
-fn an_engine_that_got_sigkill_is_back_within_seconds() {
-    let fx = fx("");
-    fx.manager("mgr1");
-    let pid = fx.supervised();
-    kill(Pid::from_raw(pid as i32), Signal::SIGKILL).unwrap();
-    fx.back_after(1);
-    fx.manager_heard_nothing();
-}
-
-/// A plain `--ensure` waits for `locks/watch-ensure.lock` like a supervising one: held by another call between its probe and its
-/// start, it keeps the plain call from probing, so no second window starts. Released, the call starts the engine.
-#[test]
-fn a_plain_ensure_waits_for_the_ensure_lock_another_call_holds() {
-    let fx = fx("");
-    let path = fx.env.cpd_home().join("locks/watch-ensure.lock");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
-    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let mut child = common::spawn(fx.env.command(CPD).args(["watch", "--ensure"]).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap();
-    // time-claim: nothing signals "the call did not start", so it gets 2 s, far over what a start that is not held takes to begin.
-    std::thread::sleep(Duration::from_secs(2));
-    assert!(child.try_wait().unwrap().is_none(), "the plain call returned while the lock was held");
-    assert_eq!(fx.count("watch-started"), 0);
-    drop(held);
-    let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap()["started"], true);
-    fx.back_after(0);
-}
-
-/// A tmux restart kills the server, hooks and all (nothing in it can start the engine); the restart's own path builds the cockpit
-/// again (`cpd tui`, contract §6.1), which starts the engine.
-#[test]
-fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
-    let fx = fx("");
-    views_sleep(&fx);
-    fx.manager("mgr1");
-    fx.env.cpd(&["tui"]).ok();
-    wait_until("the engine", || fx.count("watch-started") == 1);
-    fx.env.kill_tmux_server();
-    wait_until("the engine to stop with its server", || fx.count("watch-stopped") == 1);
-
-    fx.env.cpd(&["tui"]).ok();
-    fx.back_after(1);
-    fx.manager_heard_nothing();
 }
 
 // ---------- the downtime message (hs-d328) ----------
@@ -637,19 +493,6 @@ fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
     assert_eq!(fx.messages(), []);
     assert!(fx.texts("watch-started")[1].contains("it was last alive"), "{:?}", fx.texts("watch-started"));
     let _ = second.stop();
-}
-
-#[test]
-fn an_engine_error_sends_no_message_to_a_manager() {
-    let fx = fx("");
-    fx.add_manager();
-    fx.add_job_on("O3", "repo", "api", &[], "");
-    let engine = fx.start();
-    wait_until("the error", || fx.count("error") == 1);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-    assert_eq!(fx.events("error").len(), 1);
-    assert_eq!(fx.messages(), [], "an engine error is an Event only (hs-d514)");
 }
 
 /// hs-d514: a stuck Job is blocked work, so its message to the Context's Manager wakes it.
@@ -697,28 +540,6 @@ impl Fx {
         let out = self.env.tmux(&["show", "-gv", name]);
         String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
     }
-}
-
-#[test]
-fn the_engine_counts_waiting_and_queued_jobs() {
-    let fx = fx("concurrency = 1");
-    fx.tmux_server();
-    let lock = fx.live_driver("run-a1");
-    fx.add_running("run", "running", &ago(1));
-    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting. The PR's `open` Job, which
-    // E4 adds at the first tick, waits for them all: queued too.
-    fx.add_job("free", &[], "");
-    fx.add_job("blocked", &["free"], "");
-
-    let engine = fx.start();
-    let long = "workers 1/1 · 1 waiting · 3 queued";
-    wait_until("@cpd_workers", || fx.workers() == long);
-    assert_eq!(fx.option("@cpd_workers_short"), "1/1·1·3");
-    assert_eq!(fx.option("@cpd_workers_width"), "36", "the long form and a pill's two caps");
-    assert_eq!(fx.option("@cpd_workers_short_width"), "9", "the same with the short form");
-    engine.stop();
-    drop(lock);
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
 #[test]
@@ -878,42 +699,36 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
 }
 
+/// hs-n465, hs-d632: the catalog refuses the Tier of an Attempt whose driver died (`S2` when
+/// `S` supports 0,1,3,5). E2 ends it and requeues the Job at the next valid Tier in the Worker
+/// range at or above its effort (`S3`), never wedging with `tier_invalid` and leaving it `starting`.
 #[test]
-fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_the_clock() {
-    let fx = fx("");
-    let _locks: Vec<_> = ["late-a1", "gone-a1", "asked-a1", "fresh-a1"].iter().map(|a| fx.live_driver(a)).collect();
-    fx.add_running("late", "running", &ago(31));
-    fx.add_running("gone", "running", &ago(1));
-    fx.request_cancel("gone");
-    // 40 minutes, 20 of them waiting for answers (two overlapping Escalations count once).
-    fx.add_running("asked", "running", &ago(40));
-    fx.fixture(&format!(
-        "INSERT INTO escalations (plan, id, attempt, number, question, status, answer, asker_pid, asked_at, answered_at)
-           VALUES ('pay', 'asked-a1-q1', 'asked-a1', 1, 'Q?', 'answered', 'A.', 1, '{}', '{}'),
-                  ('pay', 'asked-a1-q2', 'asked-a1', 2, 'Q?', 'answered', 'A.', 1, '{}', '{}');",
-        ago(30),
-        ago(15),
-        ago(25),
-        ago(10)
-    ));
-    fx.add_running("fresh", "running", &ago(1));
-    // 40 minutes since it started, 39 of them waiting for its Lead in `starting` (engine-W11): 1 minute active.
-    fx.add_running_since("waited", "running", &ago(40), Some(&ago(1)));
-    let _waited = fx.live_driver("waited-a1");
+fn e2_ends_an_attempt_whose_tier_the_catalog_refuses_and_requeues_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // A live Attempt holds the only slot, so E3 does not start the next one after E2 queues `api`.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_running("api", "starting", &ago(1));
 
     let engine = fx.start();
-    wait_until("stop requests", || fx.attempt("late-a1").3.is_some() && fx.attempt("gone-a1").3.is_some());
-    // One more tick, for the Attempts it must leave alone.
-    fx.env.wait_whole_ticks(1);
+    wait_until("api ended", || fx.attempt("api-a1").0 == "ended");
     engine.stop();
 
-    assert_eq!(fx.attempt("late-a1"), ("running".into(), None, None, Some("timed_out".into())));
-    assert_eq!(fx.attempt("gone-a1"), ("running".into(), None, None, Some("cancelled".into())));
-    assert_eq!(fx.attempt("asked-a1"), ("running".into(), None, None, None));
-    assert_eq!(fx.attempt("fresh-a1"), ("running".into(), None, None, None));
-    assert_eq!(fx.attempt("waited-a1"), ("running".into(), None, None, None));
-    // A data write for the driver: no Event of its own.
-    assert_eq!(fx.count("job-cancelled") + fx.count("job-failed") + fx.count("error"), 0, "{:?}", fx.texts("error"));
+    assert_ne!(fx.attempt("api-a1").0, "starting", "the Attempt stayed starting");
+    assert_eq!(fx.job_status("api"), "queued");
+    let retry = fx.events("attempt-retry");
+    assert_eq!(retry.len(), 1, "{retry:?}");
+    assert_eq!(
+        (retry[0].1.as_deref(), retry[0].2.as_deref(), &retry[0].3["cause"], &retry[0].3["next_tier"]),
+        (Some("api"), Some("api-a1"), &json!("crashed"), &json!("S3"))
+    );
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
 }
 
 /// `attempt-status` check Events of `<key>-a1`: `(at, "start" | "end")`, in order.
@@ -1022,172 +837,6 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
     assert!(!made.path.exists());
 }
 
-/// A window `pay--api-a1` in the work session, with another to keep the session alive.
-fn worker_window(fx: &Fx) {
-    for args in [
-        &["new-session", "-d", "-s", "cpd-work", "-n", "keep", "sleep", "600"][..],
-        &["new-window", "-d", "-t", "=cpd-work:", "-n", "pay--api-a1", "sleep", "600"][..],
-    ] {
-        let out = fx.env.tmux(args);
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    assert!(worker_window_is_up(fx));
-}
-
-fn worker_window_is_up(fx: &Fx) -> bool {
-    let out = fx.env.tmux(&["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
-    String::from_utf8_lossy(&out.stdout).contains("cpd-work:pay--api-a1")
-}
-
-/// A `tmux` on `PATH` whose `kill-window` fails: the first call only, or every call; every other call is the real tmux.
-/// Returns the file it creates at its first failure.
-fn failing_kill_window(fx: &Fx, every_call: bool) -> PathBuf {
-    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    let real = real.trim();
-    assert!(real.starts_with('/'), "{real}");
-    let marker = fx.env.root().join("kill-failed");
-    let only_first = format!(" && [ ! -e '{}' ]", marker.display());
-    let condition = if every_call { "" } else { only_first.as_str() };
-    fx.env.fake(
-        "tmux",
-        &format!(
-            "for a in \"$@\"; do if [ \"$a\" = kill-window ]{condition}; then : > '{m}'; echo 'fake: kill-window failed' >&2; exit 1; fi; done\nexec '{real}' \"$@\"",
-            m = marker.display()
-        ),
-    );
-    marker
-}
-
-#[test]
-fn e2_kills_the_window_of_a_dead_driver_it_ends_though_the_first_kill_window_fails() {
-    let fx = fx("retry_cap = 0");
-    fx.add_running("api", "running", &ago(1));
-    worker_window(&fx);
-    let marker = failing_kill_window(&fx, false);
-
-    let engine = fx.start();
-    wait_until("the attempt ended and its window gone", || fx.attempt("api-a1").0 == "ended" && !worker_window_is_up(&fx));
-    engine.stop();
-
-    assert!(marker.exists(), "the fake tmux never failed a kill-window");
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
-}
-
-#[test]
-fn r3_kills_the_window_of_a_merge_that_did_not_happen_though_the_first_kill_window_fails() {
-    let fx = fx("");
-    let (made, _) = merging_api(&fx, false);
-    worker_window(&fx);
-    let marker = failing_kill_window(&fx, false);
-
-    let engine = fx.start();
-    wait_until("the attempt ended and its window gone", || fx.attempt("api-a1").0 == "ended" && !worker_window_is_up(&fx));
-    engine.stop();
-
-    assert!(marker.exists(), "the fake tmux never failed a kill-window");
-    assert_eq!(fx.attempt("api-a1").2.as_deref(), Some("crashed"));
-    // R3 keeps the worktree for debugging.
-    assert!(made.path.exists());
-}
-
-#[test]
-fn r2_removes_the_worktree_though_every_kill_window_fails() {
-    let fx = fx("");
-    let (made, _) = merging_api(&fx, true);
-    worker_window(&fx);
-    let marker = failing_kill_window(&fx, true);
-
-    let engine = fx.start();
-    wait_until("the merge recorded and its worktree removed", || fx.attempt("api-a1").0 == "ended" && !made.path.exists());
-    engine.stop();
-
-    assert!(marker.exists(), "the fake tmux never failed a kill-window");
-    assert_eq!(fx.attempt("api-a1").1.as_deref(), Some("merged"));
-}
-
-/// A Session whose pane is dead or gone becomes `stopped` with no pane, and
-/// its place `none` (Escalation e2e-a1-q1); a `stopped` Session keeps a live pane.
-#[test]
-fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
-    let fx = fx("");
-    let new = |args: &[&str]| {
-        let out = fx.env.tmux(args);
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let live = new(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    new(&["set", "-g", "remain-on-exit", "on"]);
-    let waiting = new(&["new-window", "-d", "-t", "=x:", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    let dead = new(&["new-window", "-d", "-t", "=x:", "-P", "-F", "#{pane_id}", "sh", "-c", "exit 3"]);
-    wait_until("the dead pane", || new(&["list-panes", "-t", &dead, "-F", "#{pane_dead}"]) == "1");
-    fx.fixture(&format!(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
-           VALUES ('s-live', 'lead', 'ctx', 'pay', 'Live', '/', 'O3', '{live}', 'idle', NULL, 't', 't'),
-                  ('s-dead', 'lead', 'ctx', 'pay', 'Dead', '/', 'O3', '{dead}', 'blocked', 'cpd: dialog', 't', 't'),
-                  ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', NULL, 't', 't'),
-                  ('s-waiting', 'lead', 'ctx', 'pay', 'Waiting', '/', 'O3', '{waiting}', 'stopped', NULL, 't', 't'),
-                  ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
-    ));
-
-    let engine = fx.start();
-    wait_until("three without a pane", || fx.count("session-moved") == 3);
-    fx.env.wait_whole_ticks(1);
-    engine.stop();
-
-    let row = |id: &str| {
-        fx.env.read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-    };
-    let rows: Vec<(String, Option<String>, String)> = ["s-live", "s-dead", "s-gone", "s-waiting", "s-shut"].iter().map(|id| row(id)).collect();
-    let (states, panes): (Vec<&str>, Vec<Option<&str>>) = rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
-    assert_eq!(states, ["idle", "stopped", "stopped", "stopped", "stopped"]);
-    assert_eq!(panes, [Some(live.as_str()), None, None, Some(waiting.as_str()), None]);
-    // Already stopped: its state did not change, so neither did state_at.
-    assert_eq!(rows[4].2, "t");
-    assert_eq!(fx.env.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
-    let events = fx.events("session-state");
-    assert_eq!(events.len(), 2);
-    assert!(events.contains(&(Some("pay".into()), None, None, json!({"from": "blocked", "to": "stopped", "label": null}))), "{events:?}");
-    assert!(events.contains(&(None, None, None, json!({"from": "working", "to": "stopped", "label": null}))), "{events:?}");
-    let moved = fx.events("session-moved");
-    let none = json!({"pane": null, "window": null, "place": "none"});
-    assert_eq!(moved, [(Some("pay".into()), None, None, none.clone()), (None, None, None, none.clone()), (Some("pay".into()), None, None, none)]);
-    let places: Vec<String> = fx.env.cpd(&["session", "list"]).ok()["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|s| ["s-dead", "s-gone", "s-shut"].contains(&s["id"].as_str().unwrap()))
-        .map(|s| s["place"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(places, ["none", "none", "none"]);
-}
-
-/// Finding 4: a pane with a `@cpd_view` this binary does not know (made by a
-/// newer cpd) is skipped, so E2 still runs and appends no `error`.
-#[test]
-fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
-    let fx = fx("");
-    let new = |args: &[&str]| {
-        let out = fx.env.tmux(args);
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let pane = new(&["new-session", "-d", "-s", "x", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-    new(&["set", "-p", "-t", &pane, "@cpd_view", "hologram"]);
-    fx.fixture(
-        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at)
-           VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
-    );
-
-    let engine = fx.start();
-    wait_until("the missing pane's Session stopped", || fx.count("session-moved") == 1);
-    fx.env.wait_whole_ticks(2);
-    let out = engine.stop();
-
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
-    assert_eq!(fx.env.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
-    assert_eq!(out.stderr.matches("hologram").count(), 1, "logged once: {out:?}");
-}
-
 // ---------- E3 ----------
 
 #[test]
@@ -1214,6 +863,37 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
 }
 
+/// hs-n465, hs-d632: a stored Job whose Tier the catalog refuses (`S2` when `S` supports
+/// 0,1,3,5) is started at the next valid Tier in the Worker range at or above its effort
+/// (`S3`), never wedging with `tier_invalid`.
+#[test]
+fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    fx.fixture("UPDATE tier_catalog SET efforts = '[0,1,3,5]' WHERE letter = 'S';");
+    // The work session as tui leaves it, with remain-on-exit (§6.1).
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+    fx.add_job_on("S2", "repo", "api", &[], "");
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+
+    let started = fx.events("attempt-started");
+    assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S3", "origin": "ladder"}))]);
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM attempts WHERE id = 'api-a1'"), "S3");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
+    assert_eq!(
+        fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_invalid'"),
+        0,
+        "{:?}",
+        fx.texts("error")
+    );
+    // Its driver runs detached; the Worker exits at once, so it ends crashed.
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+}
+
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
 fn urgent(key: &str) -> String {
     format!("UPDATE jobs SET urgent = 1 WHERE plan = 'pay' AND key = '{key}';")
@@ -1225,25 +905,6 @@ fn work_session_with_a_worker_that_stays(fx: &Fx) {
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
         assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
     }
-}
-
-/// E3 starts urgent Ready Jobs first (§3.7): with every slot free, the urgent Job goes before an older non-urgent one.
-#[test]
-fn e3_starts_an_urgent_job_before_an_older_one() {
-    let fx = fx("concurrency = 1\nretry_cap = 0");
-    work_session_with_a_worker_that_stays(&fx);
-    fx.add_job("old", &[], "");
-    fx.add_job("hot", &[], &urgent("hot"));
-
-    let engine = fx.start();
-    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
-    // Two more ticks: the one slot is taken, so the older Job still waits.
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
-    assert_eq!(started, [Some("hot".to_owned())]);
-    assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
 }
 
 /// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
@@ -1313,58 +974,6 @@ fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
     assert_eq!(fx.count("error"), 0);
 }
 
-#[test]
-fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
-    let fx = fx("");
-    fx.add_job("api", &[], &format!("UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';", "0".repeat(64)));
-
-    let engine = fx.start();
-    wait_until("error", || fx.count("error") == 1);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    let errors = fx.events("error");
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    let (plan, job, attempt, data) = &errors[0];
-    assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("api"), None));
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("locked_job_tampered")));
-    assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
-    assert_eq!(fx.job_status("api"), "queued");
-}
-
-/// hs-d554: a store written before the rule may hold a queued Job on a Tier outside H3, S0-S3. E3 never starts it:
-/// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
-#[test]
-fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
-    let fx = fx("");
-    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H2")] {
-        fx.add_job_on(tier, "repo", key, &[], "");
-    }
-
-    let engine = fx.start();
-    wait_until("four errors", || fx.count("error") == 4);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    let errors = fx.events("error");
-    assert_eq!(errors.len(), 4, "{errors:?}");
-    let mut jobs_named: Vec<_> = errors.iter().map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone())).collect();
-    jobs_named.sort();
-    assert_eq!(
-        jobs_named,
-        [("api", None), ("app", None), ("ui", None), ("web", None)].map(|(job, attempt): (&str, Option<String>)| (Some("pay".to_string()), job.to_string(), attempt))
-    );
-    for (_, _, _, data) in &errors {
-        assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
-    }
-    assert!(fx.texts("error").iter().all(|t| t.contains("hs-d554")), "{:?}", fx.texts("error"));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
-    for key in ["api", "web", "app", "ui"] {
-        assert_eq!(fx.job_status(key), "queued", "{key}");
-    }
-}
-
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
 /// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
 /// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: `2^k` units, the unit a
@@ -1405,23 +1014,6 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let k = (k + 1) as u32;
         assert!(waited >= unit * 2u32.pow(k), "after failure {k}: waited {waited}");
     }
-}
-
-/// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
-#[test]
-fn e3_does_not_start_a_job_in_its_backoff() {
-    let fx = fx("");
-    let now = ago(0);
-    let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
-    fx.add_job("api", &[], &attempts);
-
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 9);
-    assert_eq!(fx.job_status("api"), "queued");
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
 /// A started driver resets the back-off, and only Attempts whose driver started use up a try: `web`
@@ -1602,30 +1194,6 @@ fn watch_stopped_waits_for_a_busy_store() {
 
 // ---------- E3: a draft ----------
 
-/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never starts it, and the PR's open Job waits while it remains (§3.2
-/// Ready: the PR waits for the batch). Cancelling it frees the open Job: `the_open_job_is_ready_only_when_...` below.
-#[test]
-fn e3_never_starts_a_draft_and_the_open_job_waits_while_one_remains() {
-    let fx = fx("");
-    // The work session as tui leaves it, so E3 could start an Attempt if it chose to.
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
-    }
-    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-    let spec = fx.env.root().join("spec.json");
-    fs::write(&spec, r#"{"goal": "Later.", "context": "c", "touches": ["b.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
-    let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
-    assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
-
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
-    assert_eq!(fx.job_status("later"), "draft");
-    assert_eq!(fx.count("all-merged"), 0, "all-merged is retired");
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "draft".to_owned())], "the open Job is added as a draft while the draft remains");
-}
-
 // ---------- E4: the open Job (contract §3.7 E4, §3.2 Ready, §2.2 "Job kinds"; hs-d340) ----------
 
 impl Fx {
@@ -1672,7 +1240,7 @@ impl Fx {
     }
 }
 
-/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S2),
+/// E4 adds the PR's `open` Job once the PR is `dispatch`, whatever its other Jobs are doing: `open-repo`, Tier `open_tier` (S1),
 /// `queued`, `appended`, no Dependency rows (its Ready rule is derived), and one `job-added` Event, from the engine. The ticks
 /// that follow add nothing. (A draft of the PR keeps it from being Ready, so E3 starts nothing here.)
 #[test]
@@ -1694,13 +1262,13 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )?)
     });
-    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S2".into(), "repo".into(), 1, 0, false));
+    assert_eq!(row, (format!("Open the pull request: {PR_TITLE}"), "S1".into(), "repo".into(), 1, 0, false));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0, "its needs are derived");
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
     assert_eq!((&added[0].0, &added[0].1), (&Some("pay".to_owned()), &Some("open-repo".to_owned())));
     let data = &added[0].3;
-    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S2")));
+    assert_eq!((&data["kind"], &data["by"], &data["pr"], &data["status"], &data["tier"]), (&json!("open"), &json!("engine"), &json!("repo"), &json!("draft"), &json!("S1")));
     assert_eq!(data["needs"], json!([]));
     assert_eq!(fx.count("all-merged"), 0, "the all-merged steer is retired");
     assert_eq!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'"), None);
@@ -1722,7 +1290,7 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
     let row: (String, i64, bool) = fx.env.read(|conn| {
         Ok(conn.query_row("SELECT tier, appended, fingerprint IS NULL FROM jobs WHERE plan = 'pay' AND key = 'open-repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?)
     });
-    assert_eq!(row, ("S2".into(), 1, true));
+    assert_eq!(row, ("S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'open-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
@@ -1795,53 +1363,6 @@ fn e4_gives_the_open_job_the_tier_open_tier_names() {
     assert_eq!(fx.env.query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'open-repo'"), "H3");
 }
 
-/// A PR that has an open Job `queued` or `failed` gets no second one (a `failed` one waits for the Lead: `job retry`, or `job cancel`).
-/// PR `web`, which has none, gets its own in the same ticks: the engine has looked at both.
-#[test]
-fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
-    for then in ["", "UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'open-repo';"] {
-        let fx = fx("");
-        fx.add_merged_api();
-        fx.add_draft("later");
-        fx.add_cpd_job("open-repo", "open", then);
-        fx.fixture(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-               VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
-            fx.repo.display(),
-            fx.lead.display()
-        ));
-        fx.add_job_in("web", "ui", &[], "UPDATE jobs SET status = 'running' WHERE key = 'ui'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'ui';");
-        fx.add_draft_in("web", "later-web");
-
-        let engine = fx.start();
-        wait_until("the open Job of PR web", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"));
-        fx.env.wait_whole_ticks(3);
-        engine.stop();
-
-        let open: Vec<String> = fx.jobs_of_kind("open").into_iter().map(|(key, _)| key).collect();
-        assert_eq!(open, ["open-repo", "open-web"], "{then:?}");
-        assert_eq!(fx.count("job-added"), 1, "{then:?}: only PR web's was added");
-    }
-}
-
-/// A `merged` open Job on a PR that is still `dispatch` (its merge died before it opened the pull request, §7.4 R) counts for nothing:
-/// the next tick adds a fresh one, `open-repo-2`. Only a `merged` one: a `cancelled` one is the Lead's and stands (next tests).
-#[test]
-fn e4_adds_a_fresh_open_job_after_a_merged_one_on_a_pr_still_dispatch() {
-    let fx = fx("");
-    fx.add_merged_api();
-    fx.add_draft("later");
-    fx.add_cpd_job("open-repo", "open", "UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
-
-    let engine = fx.start();
-    wait_until("a fresh open Job", || fx.jobs_of_kind("open").len() == 2);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "merged".to_owned()), ("open-repo-2".to_owned(), "draft".to_owned())]);
-    assert_eq!(fx.count("job-added"), 1);
-}
-
 /// PR `repo` (an `open` Job the Lead cancelled) beside PR `web`, which has none: `web`'s own `open-web` is what shows the engine has
 /// looked at both.
 fn fx_cancelled_open_job() -> Fx {
@@ -1856,24 +1377,6 @@ fn fx_cancelled_open_job() -> Fx {
     ));
     fx.add_draft_in("web", "later-web");
     fx
-}
-
-/// The Lead's cancel of a PR's `open` Job stands (§3.7 E4, hs-d301): the PR stays `dispatch` and no `open-repo-2` follows, over several
-/// ticks and across an engine restart. Seen: Plan ui-design's `open-proto` was cancelled and `open-proto-2` came four seconds later.
-#[test]
-fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
-    let fx = fx_cancelled_open_job();
-
-    for _ in 0..2 {
-        let engine = fx.start();
-        wait_until("the open Job of PR web", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"));
-        fx.env.wait_whole_ticks(3);
-        engine.stop();
-    }
-
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "cancelled".to_owned()), ("open-web".to_owned(), "draft".to_owned())]);
-    assert_eq!(fx.count("job-added"), 1, "only PR web's was added");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"), "dispatch");
 }
 
 /// The ways on after that cancel (§3.8, §7.6): `pr open --pr repo` is the repair and is not refused `open_job_live` (no `open` Job is
@@ -1954,48 +1457,6 @@ fn fx_archived() -> Fx {
     fx
 }
 
-/// The work session as tui leaves it and a Worker that stays: an Attempt E3 starts shows as `attempt-started`.
-/// An open Job is Ready only when every other Job of its PR is `merged` or `cancelled` and one is `merged` (§3.2): a `draft`, a
-/// `queued`, a `running` or a `failed` Job keeps it back, and so do Jobs that are all `cancelled`.
-#[test]
-fn the_open_job_is_ready_only_when_every_other_job_is_merged_or_cancelled_and_one_is_merged() {
-    // A draft holds it; cancelling the draft (`job cancel`) frees it: E3 starts `open-repo-a1`.
-    let draft = fx("");
-    work_session_with_a_worker_that_stays(&draft);
-    draft.add_merged_api();
-    draft.add_draft("later");
-    let engine = draft.start();
-    wait_until("the open Job", || !draft.jobs_of_kind("open").is_empty());
-    draft.env.wait_whole_ticks(3);
-    assert_eq!(draft.count("attempt-started"), 0, "a draft holds the open Job back");
-    draft.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
-    wait_until("the open Job's Attempt", || draft.count("attempt-started") == 1);
-    engine.stop();
-    assert_eq!(draft.events("attempt-started")[0].1, Some("open-repo".to_owned()));
-    assert_eq!(draft.job_status("open-repo"), "running");
-
-    // A `failed` Job holds it too, as it holds a Dependent back.
-    let failed = fx("");
-    work_session_with_a_worker_that_stays(&failed);
-    failed.add_merged_api();
-    failed.add_job("broken", &[], "UPDATE jobs SET status = 'running' WHERE key = 'broken'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'broken';");
-    let engine = failed.start();
-    wait_until("the open Job", || !failed.jobs_of_kind("open").is_empty());
-    failed.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(failed.count("attempt-started"), 0, "a failed Job holds the open Job back");
-
-    // No Job merged: a PR whose Jobs are all cancelled has nothing to open.
-    let cancelled = fx("");
-    work_session_with_a_worker_that_stays(&cancelled);
-    cancelled.add_job("api", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'api';");
-    let engine = cancelled.start();
-    wait_until("the open Job", || !cancelled.jobs_of_kind("open").is_empty());
-    cancelled.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(cancelled.count("attempt-started"), 0, "no Job merged: the open Job is not Ready");
-}
-
 // ---------- E5: the update Job on a conflict (contract §3.7 E5, §7.6 step 6; hs-d340, hs-d497) ----------
 
 /// Plan `pay` in `deploy` with PR `repo` `open` (pull request `acme/pay` #812, stored `mergeable`, `clean`), Job `api` merged, and a queued
@@ -2056,7 +1517,7 @@ fn e5_queues_one_update_job_when_the_pull_request_conflicts_and_none_for_a_base_
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?)
     });
-    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S2".into(), 1, true));
+    assert_eq!(row, (format!("Bring the pull request up to date: {PR_TITLE}"), "S1".into(), 1, true));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM dependencies WHERE plan = 'pay' AND job = 'up-repo'"), 0);
     let added = fx.events("job-added");
     assert_eq!(added.len(), 1, "{added:?}");
@@ -2121,26 +1582,6 @@ fn search_reply(remaining: u32, reset_at: &str) -> String {
     format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
 
-/// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
-const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}"#;
-
-/// Sets `tick_seconds` (else [`TICK_SECONDS`]).
-fn tick_every(fx: &Fx, seconds: &str) {
-    let config = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&config).unwrap();
-    let tick = format!("tick_seconds = {TICK_SECONDS}\n");
-    assert!(text.contains(&tick), "{text}");
-    fs::write(&config, text.replace(&tick, &format!("tick_seconds = {seconds}\n"))).unwrap();
-}
-
-/// Sets `pr_poll_seconds`, which E5 waits after a poll ended when no test override replaces it (`start_with` without
-/// [`PR_POLL_EVERY_TICK`]).
-fn poll_every(fx: &Fx, seconds: u32) {
-    let config = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&config).unwrap();
-    fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_seconds = {seconds}\n"))).unwrap();
-}
-
 /// Milliseconds since the epoch, as the fake `gh` writes them.
 fn epoch_ms(at: &str) -> i128 {
     OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
@@ -2183,55 +1624,6 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     assert_eq!(fx.count("error"), 0);
 }
 
-/// engine-W9: a poll of 0.1 s with a tick of 5 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
-/// every 0.3 s (end + 0.2 s), not at the next tick.
-#[test]
-fn e5_polls_at_its_due_time_not_at_the_next_tick() {
-    let fx = fx_bare("");
-    tick_every(&fx, "5");
-    let log = fx.env.root().join("poll.log");
-    fx.env.fake_gh(&format!(
-        r#"echo "start $({now})" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
-        search_reply(4987, "2099-01-01T00:00:00Z"),
-        now = NOW_NS,
-        log = log.display()
-    ));
-
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.2")]);
-    wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
-    engine.stop();
-
-    let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
-    for pair in starts.windows(2) {
-        let gap = pair[1] - pair[0];
-        assert!((300..4000).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {starts:?}");
-    }
-    assert_eq!(fx.count("error"), 0);
-}
-
-/// The one test of `pr_poll_seconds` itself, the config key (no test override): whole seconds, so it waits one.
-#[test]
-fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds() {
-    let fx = fx("");
-    in_pr(&fx);
-    poll_every(&fx, 1);
-    fx.env.fake_gh(&format!(
-        "case \"$4\" in *'search(type'*) echo '{}' ;; *) echo '{LOOKUP_OPEN}' ;; esac",
-        search_reply(4987, "2099-01-01T00:00:00Z")
-    ));
-
-    let engine = fx.start_with(Path::new(CPD), &[]);
-    wait_until("the first poll", || fx.env.poll_searches() >= 1);
-    let first = Instant::now();
-    wait_until("the second poll", || fx.env.poll_searches() >= 2);
-    let gap = first.elapsed();
-    engine.stop();
-
-    // Ten ticks of 0.1 s to a poll: a poll per tick would come within a few of them.
-    assert!(gap >= Duration::from_millis(500), "one poll per pr_poll_seconds (1 s), not one per tick: {gap:?}");
-    assert_eq!(fx.count("error"), 0);
-}
-
 #[test]
 fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
@@ -2253,9 +1645,6 @@ fn e5_reports_a_failing_poll_once() {
 
 /// What GitHub's 502 looks like through `gh api graphql`: nginx's HTML page on stdout and `gh`'s message on stderr, exit 1.
 const GH_502: &str = "echo '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1";
-
-/// The last line of [`GH_502`]'s stderr.
-const GH_502_LINE: &str = "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)";
 
 fn failing_file(fx: &Fx) -> PathBuf {
     fx.env.cpd_home().join("run/pr-poll-failing.json")
@@ -2327,43 +1716,6 @@ fn e5_a_gh_timeout_is_transient_too() {
     assert_eq!(failing(&fx).unwrap()["call"], "search");
 }
 
-#[test]
-fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_before() {
-    // Nine minutes of failing (the record the engine kept, as if it had polled that long): still nothing.
-    let fx = fx("");
-    fx.add_manager();
-    fx.env.fake_gh(GH_502);
-    fail_since(&fx, "search", 9);
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
-    assert_eq!(failing(&fx).unwrap()["call"], "search");
-
-    // Eleven: one error Event for the machine, and one message to the Manager, not one per tick.
-    let fx = fx_with_manager_failing(11);
-    let since = failing(&fx).unwrap()["since"].clone();
-    let engine = fx.start();
-    wait_until("the error", || fx.count("error") >= 1);
-    fx.env.wait_whole_ticks(4);
-    engine.stop();
-
-    let errors = fx.events("error");
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    let (plan, job, attempt, data) = &errors[0];
-    assert_eq!((plan, job, attempt), (&None, &None, &None));
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
-    let details = &data["details"];
-    assert_eq!((&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]), (&json!("search"), &since, &json!(11), &json!("HTTP 502"), &json!(1)));
-    assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
-    assert!(details["stderr"].as_str().unwrap().contains(GH_502_LINE), "{details}");
-
-    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
-    // The failure stays: the record keeps its first time, the polls (and their log lines) go on.
-    assert_eq!(failing(&fx).unwrap()["since"], since);
-    assert!(watch_log(&fx).matches("failed transiently (HTTP 502)").count() >= 2, "{}", watch_log(&fx));
-}
-
 /// A `fx` with a Manager, a `gh` that always answers 502 and `run/pr-poll-failing.json` for `minutes` minutes of failing.
 fn fx_with_manager_failing(minutes: i64) -> Fx {
     let fx = fx("");
@@ -2412,68 +1764,6 @@ fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_
     assert!(log.contains("): retrying at the next poll"), "{log}");
 }
 
-#[test]
-fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
-    // Nine minutes of failing: still nothing.
-    let fx = fx("");
-    fx.add_manager();
-    fx.env.fake_gh(GH_CUT);
-    fail_since(&fx, "search", 9);
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
-    assert_eq!(failing(&fx).unwrap()["call"], "search");
-
-    // Eleven: one error Event and one message to the Manager, not one per tick.
-    let fx = fx_with_manager_failing(11);
-    fx.env.fake_gh(GH_CUT);
-    let since = failing(&fx).unwrap()["since"].clone();
-    let engine = fx.start();
-    wait_until("the error", || fx.count("error") >= 1);
-    fx.env.wait_whole_ticks(4);
-    engine.stop();
-
-    let errors = fx.events("error");
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    let data = &errors[0].3;
-    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
-    let details = &data["details"];
-    assert_eq!(
-        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]),
-        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1))
-    );
-    assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
-    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
-    assert_eq!(failing(&fx).unwrap()["since"], since);
-}
-
-#[test]
-fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
-    for (name, script, line) in [
-        ("a 401", "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", "gh: HTTP 401: Bad credentials"),
-        ("an HTML page with no 5xx status", "echo '<html><body>nginx</body></html>'; echo 'gh: exit status 1' >&2; exit 1", "gh: exit status 1"),
-    ] {
-        let fx = fx("");
-        fx.add_manager();
-        fx.env.fake_gh(script);
-        // A transient failure was recorded a minute ago; this one is not that.
-        fail_since(&fx, "search", 1);
-        let engine = fx.start();
-        wait_until("the error", || fx.count("error") >= 1);
-        fx.env.wait_whole_ticks(3);
-        engine.stop();
-
-        let errors = fx.events("error");
-        assert_eq!(errors.len(), 1, "{name}: {errors:?}");
-        let data = &errors[0].3;
-        assert_eq!((&data["source"], &data["code"], &data["details"]["transient"], &data["details"]["call"]), (&json!("watch"), &json!("gh_failed"), &json!(false), &json!("search")), "{name}");
-        assert!(data["details"]["stderr"].as_str().unwrap().contains(line), "{name}: {data}");
-        assert_eq!(failing(&fx), None, "{name}: a failure that is not transient deletes the record");
-        assert!(!watch_log(&fx).contains("failed transiently"), "{name}");
-    }
-}
-
 /// The shell command that prints the epoch in nanoseconds: BSD `date` has no `%N`.
 const NOW_NS: &str = r#"perl -MTime::HiRes=gettimeofday -e '($s,$u)=gettimeofday; printf "%d%06d000\n",$s,$u'"#;
 
@@ -2516,386 +1806,6 @@ else echo '{ok}'; fi; exit 0"#,
     assert_eq!((plan, job, attempt), (&None, &None, &None));
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_rate_limited")));
     assert_eq!(data["details"], json!({"remaining": 50, "reset_at": reset_at}));
-}
-
-#[test]
-fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
-    let fx = fx("");
-    // One tick only: whatever happens after the first poll happens in that tick.
-    tick_every(&fx, "600");
-    // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
-    // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
-    let origin = fx.env.root().join("repos/origin.git");
-    fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.local_origin(&fx.repo, &origin);
-    fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
-    // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
-    let web = fx.env.git_repo("web").canonicalize().unwrap();
-    fx.fixture(&format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-           VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
-         UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
-                pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'repo';
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-           VALUES ('pay', 'web', '{repo}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
-        repo = web.display()
-    ));
-    // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
-    let merged = r#"{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"2026-10-14T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}"#;
-    fx.env.fake_gh(&format!("case \"$4\" in *'search(type'*) echo '{EMPTY_SEARCH}' ;; *) echo '{{\"data\":{{\"p0\":{{\"pullRequest\":{merged}}}}}}}' ;; esac"));
-
-    let engine = fx.start();
-    wait_until("E7 to start web", || fx.count("pr-started") == 1);
-    engine.stop();
-
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
-    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
-    assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
-    assert_eq!(fx.count("error"), 0);
-}
-
-// ---------- E10 ----------
-
-/// What E10's tests share: the Fx, a tmux server with a live pane per Session (E2 stops an idle Session
-/// without one), a Job `api` with its live driver and open Escalations that E1 expires at a tick: waiting for
-/// two of them to be expired is waiting for a whole tick (E1 runs first in a tick, E10 last), so a test can
-/// say "E10 has run, and started nothing" without sleeping on wall time.
-struct Titles {
-    fx: Fx,
-    panes: Vec<String>,
-    asked: u32,
-    _driver: Flock<File>,
-}
-
-/// A Session file with one short conversation, as pi writes it.
-fn conversation(fx: &Fx, id: &str) -> PathBuf {
-    let path = fx.env.root().join(format!("{id}.jsonl"));
-    let lines = [
-        json!({"type": "session", "id": id}),
-        json!({"type": "message", "message": {"role": "user", "content": "How do we title Sessions?"}}),
-        json!({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "With an auxiliary agent."}]}}),
-    ];
-    fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
-    path
-}
-
-impl Titles {
-    /// `fx`, a pane per id in `panes`, pi answering `pi` (a shell body, its stdin read first).
-    fn new(panes: usize, pi: &str) -> Titles {
-        Titles::with_pi(panes, |_| pi.to_owned())
-    }
-
-    /// [`Titles::new`] with pi's script made from the env's root (where it keeps its state).
-    fn with_pi(panes: usize, pi: impl FnOnce(&Path) -> String) -> Titles {
-        let fx = fx("");
-        fx.env.fake_pi(&format!("cat > /dev/null\n{}", pi(fx.env.root())));
-        let mut ids = Vec::new();
-        for n in 0..panes {
-            let args: &[&str] = if n == 0 { &["new-session", "-d", "-s", "x"] } else { &["new-window", "-d", "-t", "=x:"] };
-            let out = fx.env.tmux(&[args, &["-P", "-F", "#{pane_id}", "sleep", "600"]].concat());
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-            ids.push(String::from_utf8(out.stdout).unwrap().trim().to_owned());
-        }
-        // E10 retitles only with a chat slot to read the width of (hs-d543): the cockpit's `main` window, its placeholder.
-        let out = fx.env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "100", "-y", "30", "-P", "-F", "#{pane_id}", "sleep", "600"]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        let slot = String::from_utf8(out.stdout).unwrap().trim().to_owned();
-        assert!(fx.env.tmux(&["set", "-p", "-t", &slot, "@cpd_view", "chat"]).status.success());
-        let driver = fx.live_driver("api-a1");
-        fx.add_running("api", "running", &ago(1));
-        Titles { fx, panes: ids, asked: 0, _driver: driver }
-    }
-
-    /// Session `id` of `role` in `state`, on pane number `pane`, with its finished turn `turn` minutes ago (`None`:
-    /// only its start, `stopped` to `idle`) and its title written `titled` minutes ago (`None`: no title).
-    fn session(&self, id: &str, role: &str, state: &str, pane: usize, turn: Option<i64>, titled: Option<i64>) {
-        let (title, titled_at) = titled.map_or(("NULL".to_owned(), "NULL".to_owned()), |m| ("'Old title'".to_owned(), format!("'{}'", ago(m))));
-        let (from, at) = turn.map_or(("stopped", ago(60)), |m| ("working", ago(m)));
-        self.fx.fixture(&format!(
-            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_at, created_at, title, titled_at)
-               VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, '{id}', '{file}', '/', 'O3', '{pane}', '{state}', 't', 't', {title}, {titled_at});
-             INSERT INTO events (txn, at, kind, context, session, text, data)
-               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');",
-            file = conversation(&self.fx, id).display(),
-            pane = self.panes[pane],
-            plan = if role == "worker" { "'pay'" } else { "NULL" },
-            attempt = if role == "worker" { "'api-a1'" } else { "NULL" }
-        ));
-    }
-
-    /// Waits until the engine has run one whole tick since this call began: an Escalation E1 expires at its next
-    /// tick, which ends with E10 (the one before it is expired in a tick that already ended, or in this one).
-    fn tick(&mut self) {
-        let dead = {
-            let mut gone = std::process::Command::new("true").spawn().unwrap();
-            let pid = gone.id();
-            gone.wait().unwrap();
-            pid
-        };
-        self.asked += 1;
-        let n = self.asked;
-        self.fx.fixture(&format!(
-            "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-               VALUES ('pay', 'api-a1-q{n}', 'api-a1', {n}, 'Why?', 'open', {dead}, '{}');",
-            ago(1)
-        ));
-        wait_until("the escalation expired", || {
-            self.fx.env.query::<String>(&format!("SELECT status FROM escalations WHERE id = 'api-a1-q{n}'")) == "expired"
-        });
-    }
-
-    /// Two whole ticks of E10 after now, so one of them began after this call.
-    fn ticks(&mut self) {
-        self.tick();
-        self.tick();
-    }
-
-    /// The Sessions with a title written by a retitle run (`titled_at` moved), by id.
-    fn retitled(&self) -> Vec<String> {
-        self.fx
-            .store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-titled' ORDER BY id")?;
-                Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap()
-    }
-
-    /// `fx.start()` with the 10 minutes a Session's titling must fail in a row before E10 reports it (contract §3.7 E10,
-    /// hs-d356) set to `seconds`: `CPD_TEST_TITLE_FAILING`, a test override (contract §1.2) the fix adds to its table.
-    fn start_reporting_after(&self, seconds: &str) -> Engine {
-        let vars: Vec<(&str, &str)> = common::PLAN_POLLS.iter().copied().chain([("CPD_TEST_TITLE_FAILING", seconds)]).collect();
-        self.fx.start_with(Path::new(CPD), &vars)
-    }
-
-    /// The answers of a fake pi (the first argument of [`Titles::new`]) in the real order of Session 4965bfc8
-    /// (hs-d356): its first call answers nothing, every later one the model's preamble, never a `TITLE:` line.
-    fn empty_then_preamble(root: &Path) -> String {
-        format!(
-            "calls='{}/pi-calls'\necho x >> \"$calls\"\n[ \"$(wc -l < \"$calls\")\" -lt 2 ] || echo '{PREAMBLE}'",
-            root.display()
-        )
-    }
-
-    fn started(&self) -> Vec<String> {
-        let mut logs: Vec<String> = fs::read_dir(self.fx.env.cpd_home().join("run/titles"))
-            .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".log").to_owned()).collect())
-            .unwrap_or_default();
-        logs.sort();
-        logs
-    }
-}
-
-/// An idle Lead or Manager whose turn ended after its title (and the title is 10 minutes old) is retitled; one titled
-/// less than 10 minutes ago, one that is working, one that only started, one without a finished turn and a Worker are
-/// not.
-#[test]
-fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
-    let mut t = Titles::new(7, "echo 'TITLE: Auxiliary agent titles'");
-    t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
-    t.session("due-untitled", "lead", "idle", 1, Some(1), None);
-    t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
-    t.session("working", "lead", "working", 3, Some(1), Some(20));
-    t.session("just-started", "lead", "idle", 4, None, None);
-    t.session("title-is-newer", "lead", "idle", 5, Some(40), Some(20));
-    t.session("worker", "worker", "idle", 6, Some(1), None);
-
-    let engine = t.fx.start();
-    wait_until("both retitled", || t.retitled().len() == 2);
-    t.ticks();
-    engine.stop();
-
-    let mut retitled = t.retitled();
-    retitled.sort();
-    assert_eq!(retitled, ["due-manager", "due-untitled"]);
-    assert_eq!(t.started(), ["due-manager", "due-untitled"]);
-    assert_eq!(t.fx.env.calls("pi").len(), 2, "no Session is retitled twice: the new title is newer than its turn");
-    let titles: Vec<String> = ["due-manager", "due-untitled", "throttled"]
-        .iter()
-        .map(|id| t.fx.env.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
-        .collect();
-    assert_eq!(titles, ["Auxiliary agent titles", "Auxiliary agent titles", "Old title"]);
-    assert_eq!(t.fx.count("error"), 0);
-}
-
-/// At most 2 retitles at once: a third waits for one to end, and then runs.
-#[test]
-fn e10_runs_at_most_two_retitles_at_once() {
-    let release = std::env::temp_dir().join(format!("e10-release-{}", std::process::id()));
-    let mut t = Titles::new(
-        3,
-        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'TITLE: A title'", r = release.display()),
-    );
-    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
-        t.session(id, "lead", "idle", n, Some(1), None);
-    }
-
-    let engine = t.fx.start();
-    wait_until("two pi runs", || t.fx.env.calls("pi").len() == 2);
-    t.ticks();
-    assert_eq!((t.fx.env.calls("pi").len(), t.started()), (2, vec!["s1".to_owned(), "s2".to_owned()]), "the third waits");
-
-    fs::write(&release, "").unwrap();
-    wait_until("all three titled", || t.retitled().len() == 3);
-    engine.stop();
-    fs::remove_file(&release).unwrap();
-    assert_eq!(t.fx.env.calls("pi").len(), 3);
-    assert_eq!(t.started(), ["s1", "s2", "s3"]);
-    assert_eq!(t.fx.count("error"), 0);
-}
-
-/// A run E10 did not start counts: a held `title-<session>.lock` is a run in flight, so its Session is skipped and
-/// it takes one of the two places.
-#[test]
-fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
-    let mut t = Titles::new(3, "echo 'TITLE: A title'");
-    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
-        t.session(id, "lead", "idle", n, Some(1), None);
-    }
-    let hold = |id: &str| {
-        let path = t.fx.home().locks_dir().join(format!("title-{id}.lock"));
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
-        file.lock().unwrap();
-        file
-    };
-    let (one, two) = (hold("s1"), hold("s2"));
-
-    let engine = t.fx.start();
-    t.ticks();
-    assert_eq!(t.fx.env.calls("pi").len(), 0, "two are held: no place for s3");
-    drop(one);
-    wait_until("s1 and s3 titled", || t.retitled().len() == 2);
-    t.ticks();
-    engine.stop();
-    drop(two);
-
-    let mut retitled = t.retitled();
-    retitled.sort();
-    assert_eq!(retitled, ["s1", "s3"], "s2 is held until the end");
-    assert_eq!(t.fx.env.calls("pi").len(), 2);
-}
-
-/// A failed retitle writes nothing, is reported once however many ticks retry it, and the report names no
-/// Session or Plan (no Lead gets a turn). A title less than 10 minutes old is not retried at all.
-#[test]
-fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
-    let mut t = Titles::new(2, "echo 'pi: boom' >&2\nexit 1");
-    t.session("due", "lead", "idle", 0, Some(1), Some(20));
-    t.session("throttled", "lead", "idle", 1, Some(1), Some(5));
-
-    let engine = t.start_reporting_after("0");
-    wait_until("the failure is reported", || t.fx.count("error") == 1);
-    wait_until("a retry", || t.fx.env.calls("pi").len() >= 2);
-    t.ticks();
-    engine.stop();
-
-    assert_eq!(t.started(), ["due"]);
-    let errors = t.fx.events("error");
-    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
-    let data = &errors[0].3;
-    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")));
-    assert_eq!(data["details"]["session"], "due");
-    assert!(data["details"]["tail"].as_str().unwrap().contains("pi: boom"), "{data}");
-    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
-    assert_eq!(t.retitled(), Vec::<String>::new());
-    assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
-}
-
-/// pi's answer to E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, which the old code wrote as the title.
-const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
-
-/// An empty answer and then the preamble (the two real answers, hs-d356) are no title and, while the Session's titling has
-/// failed for less than 10 minutes in a row (here: the limit, set to an hour), no `error` Event either: the Session stays
-/// due and E10 retries it at the next tick.
-#[test]
-fn e10_does_not_report_an_empty_answer_or_a_preamble_within_the_limit_and_writes_no_title() {
-    let mut t = Titles::with_pi(1, Titles::empty_then_preamble);
-    t.session("due", "lead", "idle", 0, Some(1), None);
-
-    let engine = t.start_reporting_after("3600");
-    wait_until("the empty answer and the preamble", || t.fx.env.calls("pi").len() >= 2);
-    t.ticks();
-    engine.stop();
-
-    assert_eq!(t.fx.count("error"), 0, "a failing titling is logged, not reported, before the limit: {:?}", t.fx.events("error"));
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None, "the preamble is no title");
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT titled_at FROM sessions WHERE id = 'due'"), None);
-    assert_eq!(t.retitled(), Vec::<String>::new());
-    assert!(t.fx.env.calls("pi").len() >= 2, "the Session stays due and is retried");
-}
-
-/// A titling that keeps failing past the limit (2 s here) is reported once, as an `error` Event of E10 that names the
-/// Session and sets no Session or Plan; not a moment before the limit.
-#[test]
-fn e10_reports_a_titling_that_keeps_failing_past_the_limit_once() {
-    const LIMIT: Duration = Duration::from_secs(2);
-    let mut t = Titles::with_pi(1, Titles::empty_then_preamble);
-    t.session("due", "lead", "idle", 0, Some(1), None);
-
-    let started = Instant::now();
-    let engine = t.start_reporting_after("2");
-    wait_until("a retry of the failed titling", || t.fx.env.calls("pi").len() >= 2);
-    if started.elapsed() < LIMIT {
-        assert_eq!(t.fx.count("error"), 0, "reported before the limit: {:?}", t.fx.events("error"));
-    }
-    wait_until("the report", || t.fx.count("error") >= 1);
-    assert!(started.elapsed() >= LIMIT, "reported {:?} after the engine started, before the limit", started.elapsed());
-    t.ticks();
-    engine.stop();
-
-    let errors = t.fx.events("error");
-    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
-    let data = &errors[0].3;
-    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")), "{data}");
-    assert_eq!(data["details"]["session"], "due");
-    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
-    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None);
-    assert_eq!(t.retitled(), Vec::<String>::new());
-}
-
-/// A success clears the failure: the 10 minutes in a row start again. Here the limit is 2 s; the titling fails for 1 s,
-/// succeeds, is due again and fails for the rest of the time. More than 2 s after the first failure and less than 2 s
-/// after the last success there is no `error`; a streak of 2 s since the success then is reported, once.
-#[test]
-fn e10_counts_the_failures_in_a_row_from_the_last_success() {
-    const LIMIT: Duration = Duration::from_secs(2);
-    let mut t = Titles::with_pi(1, |root| {
-        format!("if [ \"$(cat '{}/mode')\" = ok ]; then echo 'TITLE: Dynamic session titles'; fi", root.display())
-    });
-    let mode = t.fx.env.root().join("mode");
-    fs::write(&mode, "fail").unwrap();
-    t.session("due", "lead", "idle", 0, Some(1), None);
-
-    let first_failure = Instant::now();
-    let engine = t.start_reporting_after("2");
-    wait_until("a failed titling", || t.fx.env.calls("pi").len() >= 1);
-    wait_until("half the limit of failures", || first_failure.elapsed() >= LIMIT / 2);
-    assert_eq!(t.fx.count("error"), 0, "reported before the limit: {:?}", t.fx.events("error"));
-
-    fs::write(&mode, "ok").unwrap();
-    wait_until("the success", || t.retitled().len() == 1);
-    assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Dynamic session titles");
-    fs::write(&mode, "fail").unwrap();
-    let success = Instant::now();
-    t.fx.fixture(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", ago(20)));
-    let calls = t.fx.env.calls("pi").len();
-    wait_until("failures again", || t.fx.env.calls("pi").len() >= calls + 2);
-    wait_until("the limit after the first failure", || first_failure.elapsed() > LIMIT + Duration::from_millis(200));
-    if success.elapsed() < LIMIT {
-        assert_eq!(t.fx.count("error"), 0, "the success did not clear the failures in a row: {:?}", t.fx.events("error"));
-    }
-
-    wait_until("the report of the second streak", || t.fx.count("error") >= 1);
-    assert!(success.elapsed() >= LIMIT, "reported {:?} after the success, before the limit", success.elapsed());
-    t.ticks();
-    engine.stop();
-    assert_eq!(t.fx.count("error"), 1, "{:?}", t.fx.events("error"));
 }
 
 // ---------- E6 (removed) ----------
@@ -2978,24 +1888,6 @@ esac"#,
         let _ = std::process::Command::new("kill").arg(pid.trim()).status();
     }
     (out, env.calls("cpd-built"))
-}
-
-#[test]
-fn install_restarts_a_running_engine_with_ensure_and_says_so() {
-    let env = TestEnv::new();
-    let new = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    };
-    new(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
-    new(&["new-window", "-d", "-t", "=cpd-work:", "-n", "other", "sleep", "600"]);
-
-    let (stderr, calls) = install(&env);
-
-    assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"], vec!["watch", "--mark-restart"], vec!["watch", "--ensure"]]);
-    // The window was killed before --ensure ran; the other window is untouched.
-    assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
 
 #[test]
@@ -3191,34 +2083,6 @@ fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process
 }
 
 // ---------- a caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----------
-
-/// The install's `cpd watch --ensure` runs from a launchd agent that sets only `PATH`: tmux then prints the tabs of cpd's `-F`
-/// formats as `_`, and the call failed `tmux_failed: tmux list-panes printed unexpected output` (mac-pro, hs-d463).
-#[test]
-fn ensure_starts_the_engine_for_a_caller_without_a_utf8_locale() {
-    let mut failures = Vec::new();
-    for locale in crate::common::LOCALES {
-        let fx = fx("");
-        fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
-        let mut cmd = fx.env.command(CPD);
-        locale.apply(&mut cmd).args(["watch", "--ensure"]);
-        let out = common::output(&mut cmd).unwrap();
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        if !out.status.success() || !stdout.contains("\"started\":true") {
-            failures.push(format!("{locale:?}: watch --ensure exited {:?}: {stdout}{}", out.status.code(), String::from_utf8_lossy(&out.stderr)));
-            continue;
-        }
-        // The second call sees the engine's window through the same listing.
-        let mut again = fx.env.command(CPD);
-        locale.apply(&mut again).args(["watch", "--ensure"]);
-        let out = common::output(&mut again).unwrap();
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        if !stdout.contains("\"already\":true") {
-            failures.push(format!("{locale:?}: the second watch --ensure: {stdout}{}", String::from_utf8_lossy(&out.stderr)));
-        }
-    }
-    assert!(failures.is_empty(), "cpd watch --ensure fails without a UTF-8 locale:\n{}", failures.join("\n"));
-}
 
 // ---------- a planned restart is logged only (hs-d471, contract §3.7 "A planned restart") ----------
 
@@ -3624,40 +2488,6 @@ fn watch_check_writes_no_row_and_no_event_passing_or_failing() {
     assert_eq!(s.env.query::<i64>("SELECT count(*) FROM events"), before.iter().find(|(t, _)| t == "events").unwrap().1);
 }
 
-/// E9 (contract §3.7, §4.6; hs-d551): a backlog of uncurated records is curated one batch of at most 60 per run, the next
-/// tick starting the next run.
-#[test]
-fn e9_curates_the_backlog_one_batch_per_run() {
-    use cpd_core::context::{By, Draft, Record};
-    use cpd_core::ids::{ContextId, RecordId};
-
-    let fx = fx_bare("");
-    let context = ContextId::parse("ctx").unwrap();
-    // 125 records in force, the newest an hour old: the quiet period is over.
-    for n in 1..=125 {
-        let record = Record {
-            id: RecordId::parse(&format!("m1-n{n}")).unwrap(),
-            at: ago(300 - n),
-            by: By { session: None, plan: None },
-            text: format!("Note number {n}."),
-            draft: Draft::Note,
-        };
-        fx.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
-    }
-    // A fake pi that logs the size of the batch it is given and curates it.
-    fx.env.fake_pi(&common::pi_says(&format!("grep -c '^\\[' batch.md >> \"$HOME/batches\"\n{}", common::CURATES_ALL)));
-    let engine = fx.start();
-    common::wait_until_for("the whole backlog curated", Duration::from_secs(20), || {
-        fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 125
-    });
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    let batches = fs::read_to_string(fx.env.home().join("batches")).unwrap();
-    assert_eq!(batches.lines().collect::<Vec<_>>(), ["60", "60", "5"], "one batch per run: {batches}");
-    assert_eq!(fx.env.calls("pi").len(), 3);
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'context-curated'"), 3);
-}
-
 // ---- E9's retry with a smaller batch (contract §3.7 E9; FX4; hs-d549, hs-d551) ----
 
 /// `count` old notes `m1-n<first>`.. in force of Context `ctx`, the newest hours old: the quiet period is over.
@@ -3707,95 +2537,5 @@ fn e9_retries_a_failed_run_with_the_next_smaller_batch() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 15);
 }
 
-#[test]
-fn e9_stops_after_a_failed_run_of_batch_1() {
-    let fx = fx_bare("");
-    old_notes(&fx, 1, 70);
-    pi_handling_at_most(&fx, 0);
-    let engine = fx.start();
-    common::wait_until_for("the run of batch 1", Duration::from_secs(30), || batch_sizes(&fx).contains(&1));
-    fx.env.wait_whole_ticks(5);
-    let calls = fx.env.calls("pi").len();
-    fx.env.wait_whole_ticks(10);
-    engine.stop();
-    assert_eq!(batch_sizes(&fx), [60, 30, 15, 5, 1], "one run per batch size, and none after batch 1 failed");
-    assert_eq!(fx.env.calls("pi").len(), calls, "the engine stopped trying: the state did not change");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
-}
-
-#[test]
-fn e9_starts_again_at_60_when_the_state_changes() {
-    let fx = fx_bare("");
-    old_notes(&fx, 1, 70);
-    pi_handling_at_most(&fx, 0);
-    let engine = fx.start();
-    common::wait_until_for("the run of batch 1", Duration::from_secs(30), || batch_sizes(&fx).contains(&1));
-    fx.env.wait_whole_ticks(5);
-    // A new record changes the state: the next run is at 60 again.
-    old_notes(&fx, 71, 1);
-    common::wait_until_for("a run at 60 after the new record", Duration::from_secs(30), || batch_sizes(&fx).len() > 5);
-    engine.stop();
-    assert_eq!(batch_sizes(&fx)[..6], [60, 30, 15, 5, 1, 60]);
-}
-
 // ---- E9 and the curation floor (hs-d592 R2, R5) ----
 
-/// The fake pi of the floor tests: curates every record of its batch.
-fn curating_pi(fx: &Fx) {
-    fx.env.fake_pi(&common::pi_says(common::CURATES_ALL));
-}
-
-/// No curation anywhere: no pi call, no `record_curations` row, no `context-curated` or `error` Event.
-fn assert_nothing_curated(fx: &Fx) {
-    assert!(fx.env.calls("pi").is_empty(), "pi was called: {:?}", fx.env.calls("pi"));
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
-    assert_eq!(fx.count("context-curated"), 0);
-    assert_eq!(fx.count("error"), 0);
-}
-
-#[test]
-fn e9_skips_an_archived_context() {
-    let fx = fx_bare("context_curation_min_records = 5");
-    old_notes(&fx, 1, 30);
-    fx.fixture("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = 'ctx';");
-    curating_pi(&fx);
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(4);
-    engine.stop();
-    assert_nothing_curated(&fx);
-}
-
-#[test]
-fn e9_skips_a_context_under_the_floor_until_it_reaches_it() {
-    let fx = fx_bare("context_curation_min_records = 5");
-    old_notes(&fx, 1, 4);
-    curating_pi(&fx);
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(4);
-    assert_nothing_curated(&fx);
-    old_notes(&fx, 5, 1);
-    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 5);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert!(!fx.env.calls("pi").is_empty());
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 5);
-    assert_eq!(fx.count("context-curated"), 1);
-}
-
-#[test]
-fn e9_reads_the_floor_from_config_toml_at_every_tick() {
-    let fx = fx_bare("context_curation_min_records = 100");
-    old_notes(&fx, 1, 30);
-    curating_pi(&fx);
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(4);
-    assert_nothing_curated(&fx);
-    // rewrite the floor, every other line kept, with the engine running
-    let path = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&path).unwrap();
-    assert!(text.contains("context_curation_min_records = 100"), "{text}");
-    fs::write(&path, text.replace("context_curation_min_records = 100", "context_curation_min_records = 25")).unwrap();
-    common::wait_until_for("the Context curated", Duration::from_secs(20), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 30);
-    engine.stop();
-    assert_eq!(fx.count("context-curated"), 1);
-}

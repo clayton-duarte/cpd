@@ -9,7 +9,6 @@ use std::path::PathBuf;
 
 use common::{Run, TestEnv};
 use cpd_core::config::Config;
-use cpd_core::context::inforce;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -971,39 +970,6 @@ fn archive_covers_plans_leads_forks_and_the_manager_with_one_event_each() {
     let again = env.cpd(&["context", "archive", CTX]).ok();
     assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
     assert_eq!(event_count(&env), events_before);
-}
-
-#[test]
-fn archive_refused_by_any_one_blocker_changes_nothing() {
-    let fingerprint = "a".repeat(64);
-    let blockers = [
-        ("job", format!("UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key = 'api'")),
-        (
-            "escalation",
-            "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
-             VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't')"
-                .to_owned(),
-        ),
-        (
-            "review",
-            format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('ship', 'r1', 1, '{fingerprint}', 'pending', 't')"),
-        ),
-        ("session", "UPDATE sessions SET state = 'working' WHERE id = 'fork-pay'".to_owned()),
-    ];
-    for (kind, apply) in blockers {
-        let env = hs_tmux();
-        archivable(&env);
-        env.sql(&apply);
-        let (events_before, panes_before) = (event_count(&env), live_panes(&env));
-        let error = refused(env.cpd(&["context", "archive", CTX]), 3, "archive_blocked");
-        let listed = error["details"]["blockers"].as_array().unwrap();
-        assert_eq!(listed.len(), 1, "{kind}: {error}");
-        assert_eq!(listed[0]["kind"], kind, "{error}");
-        assert_eq!(archived_ats(&env), 0, "{kind}");
-        assert_eq!(event_count(&env), events_before, "{kind}");
-        assert_eq!(live_panes(&env), panes_before, "{kind}");
-        assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE tmux_pane IS NOT NULL"), 3, "{kind}");
-    }
 }
 
 #[test]

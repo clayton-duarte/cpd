@@ -246,6 +246,8 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
     ("review-opened", "cs", "p", &["pn_id", "kind", "subject", "port"], &[]),
     ("review-closed", "cs", "p", &["pn_id", "ended"], &[]),
+    ("incident-started", "", "", &["by", "reason", "started_at"], &[]),
+    ("incident-ended", "", "", &["by", "ended_at"], &[]),
 ];
 
 fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {

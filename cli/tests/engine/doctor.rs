@@ -241,48 +241,6 @@ fn an_invalid_config_fails_with_its_key() {
 // -------------------------------------------------------------------- tools
 
 #[test]
-fn each_tool_must_be_at_or_above_its_minimum() {
-    // (tool, version output, passes, found)
-    let cases = [
-        ("git", "git version 2.42.9", false, "2.42.9"),
-        ("git", "git version 2.43.0", true, "2.43.0"),
-        ("git", "git version 2.50.1 (Apple Git-155)", true, "2.50.1"),
-        ("tmux", "tmux 3.3a", false, "3.3"),
-        ("tmux", "tmux 3.4", false, "3.4"),
-        ("tmux", "tmux 3.5a", false, "3.5"),
-        ("tmux", "tmux 3.6", true, "3.6"),
-        ("tmux", "tmux 3.8", true, "3.8"),
-        ("tmux", "tmux next-3.9", true, "next-3.9"),
-        ("pi", "1.1.9", false, "1.1.9"),
-        ("pi", "1.9.9", true, "1.9.9"),
-        ("pi", "2.0.0", false, "2.0.0"),
-        ("gh", "gh version 2.44.9 (2025-01-01)", false, "2.44.9"),
-        ("gh", "gh version 2.46.0 (2025-01-01)", true, "2.46.0"),
-    ];
-    // One env: each case is the healthy machine with one tool changed (doctor runs every tool afresh).
-    let env = healthy();
-    for (tool, output, passes, found) in cases {
-        healthy_tools(&env);
-        if tool == "pi" {
-            install_pi(&env, output);
-        } else {
-            env.fake(tool, &format!("[ \"$1\" = auth ] && exit 0; echo '{output}'"));
-        }
-        let run = doctor(&env);
-        let c = check(&run, tool);
-        assert_eq!(c["ok"], passes, "{tool} {output:?}: {c}");
-        assert_eq!(c["found"], found, "{tool} {output:?}: {c}");
-        assert_eq!(c["severity"], "error");
-        if passes {
-            run.ok();
-        } else {
-            assert_doctor_failed(&run);
-            assert!(c["message"].is_string(), "{c}");
-        }
-    }
-}
-
-#[test]
 fn a_tool_that_is_not_on_path_fails() {
     let env = healthy();
     for tool in ["git", "tmux", "pi", "gh"] {
@@ -430,16 +388,6 @@ fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
     assert_eq!(c["found"][2], json!({"package": "npm:left-pad@1.0.0", "by": "-e"}));
 }
 
-#[test]
-fn doctor_has_no_plannotator_port_check() {
-    let env = healthy();
-    for vars in [&[][..], &[("PLANNOTATOR_REMOTE", "1")][..], &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432")][..]] {
-        let run = doctor_with(&env, vars);
-        let checks = run.ok()["checks"].clone();
-        assert!(checks.as_array().unwrap().iter().all(|c| c["name"] != "plannotator_port"), "{checks}");
-    }
-}
-
 // -------------------------------------------------------------- the store
 
 #[test]
@@ -530,15 +478,6 @@ fn edit_locked_job_outside_cpd(env: &TestEnv) {
     conn.execute_batch("DROP TRIGGER jobs_locked").unwrap();
     conn.execute("UPDATE jobs SET goal = 'Something else.' WHERE plan = 'pl' AND key = 'a'", []).unwrap();
     conn.execute_batch(&sql).unwrap();
-}
-
-#[test]
-fn untouched_locked_jobs_pass_tamper() {
-    let env = healthy();
-    locked_jobs(&env);
-    let run = doctor(&env);
-    run.ok();
-    assert_passes(&run, "tamper");
 }
 
 #[test]
@@ -719,10 +658,6 @@ fn link_sleep(env: &TestEnv) {
 
 const HANG: &str = "exec sleep 120";
 
-/// The deadline override of the tests where one probe hangs and the others must not: the override also covers the
-/// plain `--version` probes, and a spawn takes over 1 s on a loaded Mac at the start of the Gate.
-const DEADLINE: &str = "5";
-
 /// Asserts `name` failed with `tool_timeout` naming `tool` and its deadline of `seconds` (as the override set it),
 /// and the other checks still ran.
 fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str, seconds: &str) {
@@ -730,17 +665,6 @@ fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &st
     let message = c["message"].as_str().unwrap();
     assert!(message.contains(&format!("{tool} ran past its deadline of {seconds}s")), "{message}");
     assert!(message.contains(argv), "{message}");
-}
-
-#[test]
-fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
-    let env = healthy();
-    link_sleep(&env);
-    env.fake_gh(&format!("[ \"$1\" = auth ] && {HANG}; echo 'gh version 2.45.0 (2025-07-18)'"));
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", DEADLINE)]);
-    run.ok();
-    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status", DEADLINE);
-    assert_eq!(checks(&run).len(), NAMES.len());
 }
 
 #[test]

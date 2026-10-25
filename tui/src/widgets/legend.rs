@@ -18,7 +18,6 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
-use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
@@ -132,17 +131,17 @@ pub(crate) fn sections() -> Vec<Section> {
             Line::from(palette::SPINNER.iter().map(|m| Span::styled(*m, palette::fg_clickable(palette::Meaning::Failed))).collect::<Vec<_>>()),
         ],
     );
-    // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
-    let sample = JobCounts { queued: 1, running: 1, merging: 2, failed: 0, merged: 3, ..JobCounts::default() };
-    let slots = [0, 1, 2, 4, 3].map(|i| palette::JOB_LEGEND[i]);
+    // The counters' order is `JobCounts::counters`'s: planned, active, failed, done (the legend draws all four roles).
+    let sample = JobCounts { draft: 1, running: 1, failed: 1, merged: 1, ..JobCounts::default() };
     let mut counters = Vec::new();
-    for (i, ((_, status, merging), n)) in slots.iter().zip(sample.counters(Phase::Dispatch)).enumerate() {
+    for (i, n) in sample.counters().into_iter().enumerate() {
         if i > 0 {
             counters.push(palette::separator());
         }
-        counters.push(Span::styled(n.to_string(), palette::count_style(*status, *merging, n)));
+        let (status, merging) = sample.counter_role(i);
+        counters.push(Span::styled(n.to_string(), palette::count_style(status, merging, n)));
     }
-    let order = slots.map(|(name, _, _)| name).join("⋅");
+    let order = ["planned", "active", "failed", "done"].join("⋅");
     jobs.push(vec![
         plain("counters row"),
         Line::from(counters),

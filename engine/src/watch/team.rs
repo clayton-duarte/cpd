@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-use super::engine::Engine;
+use super::engine::{Engine, incident_holds};
 use super::pr::printed;
 use super::report::{About, Failure, Step};
 use cpd_core::clock::timestamp;
@@ -45,6 +45,10 @@ pub(super) struct State {
 }
 
 pub(super) fn run(engine: &mut Engine) {
+    if incident_holds(engine, Step::E11) {
+        engine.log.line("E11: holding: incident mode is on");
+        return;
+    }
     if engine.config.inbox.team_channel.is_empty() {
         // Switched off: nothing runs and nothing it reported stays.
         engine.clear(Step::E11, &About::Machine);

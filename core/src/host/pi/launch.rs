@@ -188,11 +188,12 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
 /// the `files` (names in its working directory, each given to pi as `@file`) and prints its JSON
 /// event stream (`--mode json`, hs-d244 D-d: the only mode that reports tokens
 /// and cost) to stdout, whose final assistant message is the digest. No
-/// session, no extension, no skill, no context file, no tool, and no `CPD_*`
-/// variable: it is no Session.
+/// session, no extension, no skill, no tool, and no `CPD_*` variable: it is no
+/// Session. It loads context files, so pi reads the global AGENTS.md, the
+/// axioms (hs-d611).
 pub fn distiller(model: &str, files: &[&str]) -> Launch {
     let argv = [
-        "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model, "--",
+        "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-tools", "--model", model, "--",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -437,7 +438,7 @@ mod tests {
         assert_eq!(
             launch.argv,
             strs(&[
-                "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools",
+                "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-tools",
                 "--model", "p/sonnet:medium", "--", "@prompt.md", "@records.md",
             ])
         );

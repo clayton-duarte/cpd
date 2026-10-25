@@ -346,6 +346,8 @@ fn the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file() {
         fs::create_dir_all(scope.join(package).join("dist")).unwrap();
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
+    // The fake tmux starts no process for a pane: the test ends the Worker's pane itself, below.
+    fx.env.fake_tmux();
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
         assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
     }
@@ -375,4 +377,16 @@ fn the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file() {
     let spec = wait_some("the Worker Spec", Duration::from_secs(60), || fs::read_to_string(&spec_path).map_err(|e| e.to_string()));
     assert!(spec.contains("make lint-from-the-repo-file"), "{spec}");
     assert!(spec.contains("make build-from-the-repo-file"), "{spec}");
+
+    // End the Worker's pane (the one that is not the `watch` window's), then wait for the driver to exit: nothing leaks.
+    let pane = wait_some("the Worker's pane", Duration::from_secs(60), || {
+        let state = fx.env.tmux_state().ok_or("no server")?;
+        state.panes().into_iter().find(|p| p.argv.first().is_some_and(|a| a != "sleep")).map(|p| p.id).ok_or_else(|| "no pane".to_owned())
+    });
+    assert!(fx.env.tmux(&["__ctl", "pane-exit", &pane, "--status", "0"]).status.success());
+    let driver: serde_json::Value = serde_json::from_slice(&out.stdout).expect("dispatch prints JSON");
+    let pid = nix::unistd::Pid::from_raw(driver["pid"].as_i64().expect("the driver's pid") as i32);
+    wait_some("the driver to exit", Duration::from_secs(60), || {
+        if nix::sys::signal::kill(pid, None).is_ok() { Err("alive".to_owned()) } else { Ok(()) }
+    });
 }

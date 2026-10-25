@@ -27,6 +27,7 @@ pub mod events;
 pub mod git;
 pub mod host;
 pub mod inbox;
+pub mod incident;
 pub mod job;
 pub mod merge;
 pub mod metrics;
@@ -42,5 +43,8 @@ pub mod store;
 
 #[cfg(test)]
 mod clock_tests;
+#[cfg(test)]
+mod incident_tests;
+
 #[cfg(test)]
 mod pill_tests;

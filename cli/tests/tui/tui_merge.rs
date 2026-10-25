@@ -148,10 +148,10 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// `cpd tui view merge o/r#7 --client <client>` in a window of the popup's inside, 58x5.
+/// `cpd tui view merge o/r#7 --client <client>` in a window of the popup, 60x8 (the dialog draws its own frame).
 fn start_on(env: &TestEnv, client: &str) -> String {
     let args = [
-        "new-session", "-d", "-s", "view", "-x", "58", "-y", "5", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", REF, "--client",
+        "new-session", "-d", "-s", "view", "-x", "60", "-y", "8", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", REF, "--client",
         client,
     ];
     tmux_out(env, &args).trim().to_owned()
@@ -170,7 +170,17 @@ fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]
 }
 
 fn wait_dialog(env: &TestEnv, pane: &str) -> Vec<String> {
-    wait_screen(env, pane, "the dialog", |r| r.iter().any(|l| l.contains("[Merge]")))
+    wait_screen(env, pane, "the dialog", |r| r.iter().any(|l| l.contains(&pill("Merge"))))
+}
+
+/// A pill: its label between the caps U+E0B6 and U+E0B4.
+fn pill(label: &str) -> String {
+    format!("\u{E0B6}{label}\u{E0B4}")
+}
+
+/// A row of the dialog's frame, 58 wide inside the bars.
+fn inside(text: &str) -> String {
+    format!("│{text:<58}│")
 }
 
 fn closed(env: &TestEnv) -> bool {
@@ -187,10 +197,10 @@ fn click(env: &TestEnv, pane: &str, column: u16, row: u16) {
     tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{column};{row}M")]);
 }
 
-/// The three ways to confirm: Enter, `y` and a click on `[Merge]` (0-based columns 2 to 8, row 4).
+/// The three ways to confirm: Enter, `y` and a click on the Merge pill (0-based columns 2 to 8, row 6).
 fn confirm(env: &TestEnv, pane: &str, how: &str) {
     match how {
-        "click" => click(env, pane, 4, 5),
+        "click" => click(env, pane, 5, 7),
         key => drop(tmux_out(env, &["send-keys", "-t", pane, key])),
     }
 }
@@ -258,7 +268,8 @@ fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
     gh(&env, "CLEAN", 0);
     let pane = start(&env);
     let rows = wait_dialog(&env, &pane);
-    assert_eq!(rows[..5], [" o/r#7", " Add the thing", " method: squash", "", "  [Merge]   [Cancel]"]);
+    assert_eq!(rows[2..5], [inside(" o/r#7"), inside(" Add the thing"), inside(" method: squash")]);
+    assert!(rows[6].starts_with(&format!("│ {}", pill("Merge"))) && rows[6].ends_with(&format!("{} │", pill("Cancel"))), "{rows:?}");
     assert!(env.calls("gh").is_empty(), "opening the dialog runs nothing");
 }
 
@@ -285,8 +296,8 @@ fn a_click_on_cancel_closes_it_and_starts_nothing() {
     fake_tmux(&env);
     let pane = start(&env);
     wait_dialog(&env, &pane);
-    // `[Cancel]` is at 0-based column 12, row 4
-    click(&env, &pane, 14, 5);
+    // the Cancel pill is at 0-based columns 50 to 57, row 6
+    click(&env, &pane, 54, 7);
     wait_closed(&env);
     assert!(tmux_calls(&env, "run-shell").is_empty(), "{:?}", env.calls("tmux"));
     assert!(env.calls("gh").is_empty());
@@ -297,12 +308,12 @@ fn a_pull_request_the_store_does_not_have_shows_no_title() {
     let env = env();
     gh(&env, "CLEAN", 0);
     let args = [
-        "new-session", "-d", "-s", "view", "-x", "58", "-y", "5", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", "o/r#8", "--client",
+        "new-session", "-d", "-s", "view", "-x", "60", "-y", "8", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", "o/r#8", "--client",
         CLIENT,
     ];
     let pane = tmux_out(&env, &args).trim().to_owned();
     let rows = wait_dialog(&env, &pane);
-    assert_eq!(rows[..3], [" o/r#8", "", " method: squash"]);
+    assert_eq!(rows[2..5], [inside(" o/r#8"), inside(""), inside(" method: squash")]);
 }
 
 #[test]
@@ -333,16 +344,16 @@ fn argv_of(env: &TestEnv, command: &str) -> Vec<String> {
 
 #[test]
 fn the_popup_opens_on_the_named_client_and_its_command_reaches_cpd_unchanged() {
-    // commands.md §13.2: `display-popup -E -c <name> -T <title> -w <width> -h <height> -- cpd tui view merge <ref> --client <name>`
+    // commands.md §13.2: `display-popup -E -B -c <name> -w <width> -h <height> -- cpd tui view merge <ref> --client <name>`
     let env = env();
     let args = merge::popup_args(CLIENT, (200, 60), REF);
     let (command, flags) = args.split_last().unwrap();
-    assert_eq!(flags, ["display-popup", "-E", "-c", CLIENT, "-T", " merge ", "-w", "60", "-h", "7", "--"]);
+    assert_eq!(flags, ["display-popup", "-E", "-B", "-c", CLIENT, "-w", "60", "-h", "8", "--"]);
     assert_eq!(argv_of(&env, command), ["tui", "view", "merge", REF, "--client", CLIENT]);
     // at most the client's size
     let small = merge::popup_args(CLIENT, (50, 6), REF);
     let after = |flag: &str| small.iter().position(|a| a == flag).map(|i| small[i + 1].as_str());
-    assert_eq!((after("-w"), after("-h")), (Some("50"), Some("6")), "{small:?}");
+    assert_eq!((after("-w"), after("-h")), (Some("48"), Some("6")), "{small:?}");
 }
 
 #[test]
@@ -357,13 +368,13 @@ fn the_popup_on_a_client_closes_at_once_on_the_confirm_while_gh_is_merging() {
     let mut open = env.command("tmux");
     open.args(["-L", env.tmux_socket()]).args(&popup).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut open = common::spawn(&mut open).unwrap();
-    outer.wait_screen("the merge popup", |r| has(r, "[Merge]") && has(r, "method: squash"));
+    outer.wait_screen("the merge popup", |r| has(r, &pill("Merge")) && has(r, "method: squash"));
     outer.keys(&["y"]);
 
     // the popup is gone while `gh pr merge` still blocks: the merge runs in the background, owned by the server
     wait_until("pr merge to start in the background", || !merges(&env).is_empty());
     common::wait_until_for("the popup's command to end", CLOSES, || open.try_wait().unwrap().is_some());
-    outer.wait_screen("the popup to be gone", |r| !has(r, "[Merge]") && !has(r, "merging"));
+    outer.wait_screen("the popup to be gone", |r| !has(r, &pill("Merge")) && !has(r, "merging"));
     assert_eq!(call_order(&env), ["pr view", "pr merge"], "the poll waits for the merge");
     assert!(!action_done(&env).exists());
 

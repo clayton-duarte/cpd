@@ -295,7 +295,7 @@ impl Dialog {
     /// The buttons' rects in `area`, in the order of [`Dialog::labels`]: the first pill flush left (its left cap at column 2),
     /// the other flush right (its right cap at column W-3). The whole pill, caps included, is the hit target. Only the
     /// buttons drawn whole are returned: when the two do not fit with one blank cell between, the accepting one alone (A13).
-    fn buttons(&self, area: Rect) -> Vec<Rect> {
+    pub(crate) fn buttons(&self, area: Rect) -> Vec<Rect> {
         let row = parts_in(area).buttons;
         let widths: Vec<u16> = self.labels().iter().map(|l| u16::try_from(l.chars().count()).unwrap_or(u16::MAX).saturating_add(pill::CAPS_COLUMNS)).collect();
         let fits = |n: usize| {
@@ -333,6 +333,11 @@ impl Dialog {
 
     pub(crate) fn draw(&mut self, f: &mut Frame) {
         let area = f.area();
+        self.draw_in(f, area);
+    }
+
+    /// Draws the dialog as a popup of `area`.
+    pub(crate) fn draw_in(&mut self, f: &mut Frame, area: Rect) {
         self.fit(area);
         let text: String = self.title.chars().take(usize::from(area.width).saturating_sub(6)).collect();
         let title = Line::from(pill::pill(text.clone(), palette::pill_static()));

@@ -61,7 +61,7 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
     let ask = match *row {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
-        Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
+        Row::Fork(_, _, s) | Row::Manager(_, s) => Ask::RenameSession(s.id.clone()),
         Row::Toggle => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
@@ -85,7 +85,7 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
     match *row {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
-        Row::Fork(_, _, s) => Some(Subject::Session(s.id.clone())),
+        Row::Fork(_, _, s) | Row::Manager(_, s) => Some(Subject::Session(s.id.clone())),
         Row::Toggle => None,
     }
 }
@@ -595,7 +595,7 @@ impl View {
         let archiving: Vec<&SessionNode> = match *row {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
-            Row::Fork(_, _, s) => vec![s],
+            Row::Fork(_, _, s) | Row::Manager(_, s) => vec![s],
             Row::Toggle => return Some(None),
         };
         let manager_in_chat = matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
@@ -1178,7 +1178,7 @@ mod tests {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
+        assert!(ship.trim_end().ends_with("2⋅2⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
         let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }

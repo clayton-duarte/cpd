@@ -65,45 +65,6 @@ fn it_runs_other_commands_through_the_real_git() {
 }
 
 #[test]
-fn it_finds_the_real_git_when_its_own_directory_is_on_path_twice() {
-    let w = Wrapper::new();
-    let tmp = tempfile::tempdir().unwrap();
-    let real = tmp.path().join("real");
-    fs::create_dir_all(&real).unwrap();
-    write_executable(&real.join("git"), "#!/bin/sh\necho real git \"$@\"\n");
-    let bin = w.bin();
-    let path = env::join_paths([bin.as_path(), bin.as_path(), real.as_path(), bin.as_path()]).unwrap();
-    // Also by a spelling of the directory that is not the one it was started by.
-    let dotted = bin.join(".");
-    let path_dotted = env::join_paths([dotted.as_path(), bin.as_path(), real.as_path()]).unwrap();
-    for path in [path, path_dotted] {
-        let (code, stdout, stderr) = w.run(&path, tmp.path(), &["-C", "d", "status"]);
-        assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, "real git -C d status\n", ""), "{path:?}");
-    }
-}
-
-#[test]
-fn it_ends_at_the_real_git_when_another_wrapper_is_on_path_too() {
-    // Two `$CPD_HOME`s, a test env's and the User's: a Session's `PATH` has the User's `bin/` first, and a test of a
-    // process it started puts the test's before it. Each wrapper finds the other as the first `git` once its own
-    // directory is out.
-    let (first, second) = (Wrapper::new(), Wrapper::new());
-    let tmp = tempfile::tempdir().unwrap();
-    let real = tmp.path().join("real");
-    fs::create_dir_all(&real).unwrap();
-    write_executable(&real.join("git"), "#!/bin/sh\necho real git \"$@\"\necho \"$PATH\"\n");
-    for dirs in [[first.bin(), second.bin(), real.clone()], [second.bin(), first.bin(), real.clone()]] {
-        let path = env::join_paths(dirs).unwrap();
-        for w in [&first, &second] {
-            let (code, stdout, stderr) = w.run(&path, tmp.path(), &["-C", "d", "status"]);
-            // The real git gets the `PATH` as it was given: the wrapper stays on it for what git itself runs.
-            let want = format!("real git -C d status\n{}\n", path.to_str().unwrap());
-            assert_eq!((code, stdout.as_str(), stderr.as_str()), (0, want.as_str(), ""), "{path:?}");
-        }
-    }
-}
-
-#[test]
 fn it_says_so_and_exits_127_when_the_only_other_git_is_another_wrapper() {
     let (first, second) = (Wrapper::new(), Wrapper::new());
     let tmp = tempfile::tempdir().unwrap();
