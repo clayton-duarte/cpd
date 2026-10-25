@@ -525,6 +525,7 @@ fn a_stuck_job_wakes_its_context_manager() {
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
 const NO_WORKERS: &str = "workers 0/3 · 0 waiting · 1 queued";
+const ONE_WORKER: &str = "workers 1/3 · 0 waiting · 1 queued";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.

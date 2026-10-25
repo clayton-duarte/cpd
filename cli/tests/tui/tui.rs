@@ -719,8 +719,6 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     for (option, value) in [
         ("@cpd_workers", "workers 6/6 · 4 waiting · 9 queued"),
         ("@cpd_workers_short", "6/6·4·9"),
-        ("@cpd_workers_width", "36"),
-        ("@cpd_workers_short_width", "9"),
     ] {
         tmux_out(&env, &["set", "-g", option, value]);
     }

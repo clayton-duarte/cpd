@@ -206,12 +206,12 @@ pub const LOGS_GLYPH: &str = logs_glyph!();
 
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
-// Whether the long workers form fits: the right group's long width (the engine's, whose one space is the join),
-// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), the preview, the version pill and
-// the incident pill.
+// Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
+// whose one space is the join), the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), the
+// preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
@@ -227,7 +227,7 @@ macro_rules! fill_count {
     () => {
         concat!(
             "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
-            "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}"
+            "#{e|+:#{?", long_fits!(), ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
         )
     };
 }
@@ -263,11 +263,12 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// the leading `\u{2500}` is outside the first range): the left group is 12 cells.
 /// Then the `\u{2500}` fill over the free width: `#{client_width}` minus
 /// the left group's 12, the preview pill and the right group in the form drawn (the
-/// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
+/// workers pill's width, `#{w:@cpd_workers}` plus its two caps, plus the closing `\u{2500}`).
+/// At the right, each its own pill on
 /// bg 8 (text 0), joined by a single `\u{2500}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
-/// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
-/// whose width is `@cpd_workers_short_width`.
+/// least `#{w:@cpd_workers}` plus the two caps and 14), else the short form in
+/// `@cpd_workers_short`, whose width is `#{w:@cpd_workers_short}`.
 ///
 /// The fill is split by a `#{P/i/:}` loop over the window's panes in index order (tmux 3.6+): each
 /// bottom-row pane adds a run of `\u{2500}` over its columns inside the fill, then a `\u{2538}` (colour 8) at
