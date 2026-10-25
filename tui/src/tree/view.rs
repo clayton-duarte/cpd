@@ -63,7 +63,7 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
         Row::Fork(_, _, s) | Row::Manager(_, s) => Ask::RenameSession(s.id.clone()),
-        Row::Toggle => return None,
+        Row::Toggle | Row::NewPlan(_) => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
 }
@@ -87,7 +87,7 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
         Row::Fork(_, _, s) | Row::Manager(_, s) => Some(Subject::Session(s.id.clone())),
-        Row::Toggle => None,
+        Row::Toggle | Row::NewPlan(_) => None,
     }
 }
 
@@ -603,7 +603,7 @@ impl View {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => vec![s],
-            Row::Toggle => return Some(None),
+            Row::Toggle | Row::NewPlan(_) => return Some(None),
         };
         let manager_in_chat = matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
         if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
@@ -652,6 +652,10 @@ impl View {
         // history
         if rows::click_toggle(&mut self.state, &self.tree, &path) {
             return Effect::None;
+        }
+        // a live empty Context's `╰󰬪 new` row opens the same New Plan popup the context menu's New Plan… does (hs-d688)
+        if let Some(Row::NewPlan(c)) = rows::row(&self.tree, &path) {
+            return Effect::Ask(self.new_plan_in(c));
         }
         if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
             let open = Action::OpenManager(c.id.clone());

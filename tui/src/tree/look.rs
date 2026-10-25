@@ -177,14 +177,14 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
     assert!(got[9].starts_with(&format!(" ╰─{IDLE} ship·f-id")), "alpha's last row ends the block: {got:#?}");
     assert!(got[2].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
-    assert_eq!(got[12], " ╰󰬪", "gamma, with no row at all, ends with the terminator: {got:#?}");
-    assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
+    assert_eq!(got[12], " ╰󰬪 new", "gamma, with no row at all, ends with the clickable new row: {got:#?}");
+    assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no arrow: {got:#?}");
     for y in [9, 2] {
         is_muted_line(&buf, y, 1, 3);
     }
-    is_muted_line(&buf, 12, 1, 4);
-    // nothing to fold: a click on the terminator changes nothing
-    assert_eq!(click(&mut view, 2, 12), Effect::None);
+    is_muted_line(&buf, 12, 1, 3);
+    // a live empty Context's new row opens the New Plan popup and folds nothing
+    assert!(matches!(click(&mut view, 2, 12), Effect::Ask(_)), "the new row asks for the New Plan title");
     assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
 
@@ -459,10 +459,13 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
 #[test]
 fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_no_word() {
     const TERMINATOR: &str = "\u{F0B2A}";
-    let empty = View::new(super::fixture::tree(vec![super::fixture::context("gamma", vec![])]), true);
+    // an ARCHIVED empty Context keeps the plain terminator (`plan new` is refused there; hs-d688)
+    let mut gamma = super::fixture::context("gamma", vec![]);
+    gamma.archived_at = Some(super::fixture::WHEN.into());
+    let empty = View::new(super::fixture::tree(vec![gamma]), true);
     let mut with_three = with_inbox(inbox_items(3));
     let mut empty = empty;
-    for (name, buf, y) in [("a Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
+    for (name, buf, y) in [("an archived Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
         let width = buf.area.width;
         let cells: Vec<(u16, &str)> = (0..width).map(|x| (x, buf[(x, y)].symbol())).filter(|(_, s)| *s != " ").collect();
         assert_eq!(cells, [(1, "╰"), (2, TERMINATOR)], "{name}: only the corner and the glyph, no word, no `─`: {:#?}", rows(&buf));
