@@ -97,7 +97,7 @@ pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
     let (mut prs, cursor) = read::open_prs(&mut store)?;
     // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
     let open = read::open_pulls(&mut store)?;
-    mark_merging(&mut prs, &crate::merge::marker::live(&home, &open));
+    mark_merging(&mut prs, &crate::merge::marker::live_with(ports, &home, &open));
     let follow = read::Follow::new(&mut store, KINDS, cursor)?;
     // the reads after them run on the reader thread, with a store of its own
     let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
@@ -323,13 +323,13 @@ fn show<B: Backend>(
             }
         }
         if let Some(kind) = schedule.take(now) {
-            let (shared, home, retry) = (Arc::clone(reader), opener.home.clone(), error.is_some());
+            let (shared, home, retry, ports) = (Arc::clone(reader), opener.home.clone(), error.is_some(), ports.clone());
             reads.request(move || {
                 pace::Owned::read(&shared, |store, follow| {
                     let moved = follow.poll_changes(store)?.any();
                     let prs = if moved || kind.force || retry { Some(read::open_prs(store)?.0) } else { None };
                     let open = read::open_pulls(store)?;
-                    Ok((prs, crate::merge::marker::live(&home, &open)))
+                    Ok((prs, crate::merge::marker::live_with(&ports, &home, &open)))
                 })
             });
         }

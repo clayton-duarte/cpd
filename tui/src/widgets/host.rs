@@ -42,7 +42,7 @@ impl Sampler {
     /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
     pub fn sample_with(&mut self, ports: &Ports) -> Usage {
         if cfg!(target_os = "macos") {
-            macos_usage_with(&*Ports::current().runner)
+            macos_usage_with(&*ports.runner)
         } else {
             let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));

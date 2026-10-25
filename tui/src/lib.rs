@@ -83,6 +83,8 @@ pub mod pump;
 #[cfg(test)]
 mod pump_tests;
 #[cfg(test)]
+mod pump_scripted_tests;
+#[cfg(test)]
 mod pace_tests;
 pub mod palette;
 pub mod pill;
