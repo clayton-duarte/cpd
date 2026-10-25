@@ -15,6 +15,8 @@ mod view;
 #[cfg(test)]
 pub(crate) use view::layout_sample;
 #[cfg(test)]
+mod scroll_width_tests;
+#[cfg(test)]
 mod input_tests;
 #[cfg(test)]
 mod select_tests;

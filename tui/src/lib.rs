@@ -54,6 +54,8 @@ pub mod link;
 pub mod logs;
 pub mod menu;
 #[cfg(test)]
+mod menu_width_tests;
+#[cfg(test)]
 mod failed_pill_tests;
 #[cfg(test)]
 mod landing_tests;
@@ -88,7 +90,11 @@ mod popup;
 pub mod read;
 mod runner;
 mod scroll;
+#[cfg(test)]
+mod scroll_width_tests;
 pub mod section;
+#[cfg(test)]
+mod section_width_tests;
 mod no_notes;
 mod terminal_writes;
 mod tree;
