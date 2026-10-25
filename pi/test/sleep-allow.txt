@@ -2,7 +2,6 @@
 cli/tests/common/mod.rs 4  # m-tooling: sleep or wall-clock wait
 cli/tests/engine/watch_distill_inbox.rs 1  # m-engine: sleep or wall-clock wait
 cli/tests/engine/watch.rs 2  # m-engine: sleep or wall-clock wait
-cli/tests/flow/config.rs 4  # m-flow: sleep or wall-clock wait
 cli/tests/flow/driver_reload.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/flow/driver.rs 1  # m-flow: sleep or wall-clock wait
 cli/tests/flow/review_job.rs 1  # m-flow: sleep or wall-clock wait
@@ -15,6 +14,7 @@ cli/tests/store/events.rs 3  # m-engine: sleep or wall-clock wait
 cli/tests/store/store.rs 15  # m-engine: sleep or wall-clock wait
 cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
 cli/tests/tooling/install_script.rs 1  # m-tooling: sleep or wall-clock wait
+cli/tests/tui/tui_idle.rs 4  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_plan.rs 6  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_plan_cancelled.rs 1  # m-tui-t: sleep or wall-clock wait
 cli/tests/tui/tui_tree_asleep.rs 1  # m-tui-t: sleep or wall-clock wait
