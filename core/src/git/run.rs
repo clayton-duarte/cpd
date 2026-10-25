@@ -9,10 +9,11 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{TAIL_LINES, tail};
-use crate::clock::{Clock, SystemClock};
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::Failed;
-use crate::host::runner::{Runner, SystemRunner};
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// A local git call's deadline (contract §7): a local repo answers in seconds.
 const LOCAL_DEADLINE: Duration = Duration::from_secs(60);
@@ -52,7 +53,7 @@ pub(super) fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i3
 /// code. Only a git that cannot start, dies from a signal (`git_failed`) or runs
 /// past its deadline (`tool_timeout`) is an error.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
-    run_with(&SystemRunner, dir, args)
+    run_with(&*Ports::current().runner, dir, args)
 }
 
 /// [`run`] on `runner`.
@@ -82,7 +83,7 @@ pub fn run_with(runner: &dyn Runner, dir: &Path, args: &[&str]) -> Result<Out, C
 /// Like [`run`], but any non-zero exit is `git_failed` (with `argv`, `exit` and
 /// the last 60 lines of `stderr` in `details`). Returns stdout unchanged.
 pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
-    ok_with(&SystemRunner, dir, args)
+    ok_with(&*Ports::current().runner, dir, args)
 }
 
 /// [`ok`] on `runner`.
@@ -108,7 +109,8 @@ fn retry_transient(
     transient: fn(&str) -> bool,
     between: impl FnMut(),
 ) -> Result<String, CpdError> {
-    retry_transient_with(&SystemRunner, &SystemClock, dir, args, transient, between)
+    let ports = Ports::current();
+    retry_transient_with(&*ports.runner, &*ports.clock, dir, args, transient, between)
 }
 
 /// [`retry_transient`] on `runner`, its naps on `clock`.
@@ -169,7 +171,8 @@ pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
 /// `git worktree list --porcelain`, as [`ok`], read again while it fails on a
 /// half-written or half-removed admin dir ([`is_admin_dir_race`], contract §7).
 pub fn worktree_list(dir: &Path) -> Result<String, CpdError> {
-    worktree_list_with(&SystemRunner, &SystemClock, dir)
+    let ports = Ports::current();
+    worktree_list_with(&*ports.runner, &*ports.clock, dir)
 }
 
 /// [`worktree_list`] on `runner`, its naps on `clock`.
@@ -230,7 +233,7 @@ mod tests {
 
 /// `git rev-parse <rev>`, trimmed.
 pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, CpdError> {
-    rev_parse_with(&SystemRunner, dir, rev)
+    rev_parse_with(&*Ports::current().runner, dir, rev)
 }
 
 /// [`rev_parse`] on `runner`.
@@ -240,7 +243,7 @@ pub fn rev_parse_with(runner: &dyn Runner, dir: &Path, rev: &str) -> Result<Stri
 
 /// Whether `refs/heads/<branch>` exists.
 pub fn branch_exists(dir: &Path, branch: &str) -> Result<bool, CpdError> {
-    branch_exists_with(&SystemRunner, dir, branch)
+    branch_exists_with(&*Ports::current().runner, dir, branch)
 }
 
 /// [`branch_exists`] on `runner`.
@@ -275,7 +278,7 @@ pub fn origin_url(dir: &Path) -> Result<Option<String>, CpdError> {
 
 /// The checked-out branch of the worktree at `dir`; `None` when detached.
 pub fn current_branch(dir: &Path) -> Result<Option<String>, CpdError> {
-    current_branch_with(&SystemRunner, dir)
+    current_branch_with(&*Ports::current().runner, dir)
 }
 
 /// [`current_branch`] on `runner`.

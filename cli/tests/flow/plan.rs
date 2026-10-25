@@ -8,9 +8,11 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use common::fx::Fx;
 use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::{PlanId, ReviewId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -164,24 +166,109 @@ fn section<'a>(text: &'a str, pr: &str) -> &'a str {
     &rest[..end]
 }
 
+/// The fixtures of the migrated tests, on `Fx::with_ports()`: every external (tmux, git, `cpd watch --ensure`) is a
+/// route or a rule of the `FakeRunner`. The tests not yet migrated use the binary and the helpers above.
+mod inproc {
+    use super::*;
+
+    /// What `cpd watch --ensure` prints when the engine starts.
+    pub const WATCH_OK: &str = r#"{"ok": true, "started": true, "pane": "%9"}"#;
+
+    /// What it prints (exit 1) when it cannot take its lock.
+    pub const WATCH_FAILS: &str = r#"{"ok": false, "error": {"code": "watch_start_failed", "message": "No lock.", "details": {}}}"#;
+
+    /// Scripts the reply of `cpd watch --ensure` (`plan lock` runs it, `plan/lock.rs`): the first rule that matches
+    /// answers, so a test that changes the reply scripts it with [`watch_once`] before this.
+    pub fn watch(fx: &Fx, reply: Reply) {
+        let _ = (*fx.fakes.runner).clone().on("cpd", is_watch, reply);
+    }
+
+    /// [`watch`] for the next call only.
+    pub fn watch_once(fx: &Fx, reply: Reply) {
+        let _ = (*fx.fakes.runner).clone().once("cpd", is_watch, reply);
+    }
+
+    fn is_watch(call: &cpd_core::host::runner::Call) -> bool {
+        call.args == ["watch", "--ensure"]
+    }
+
+    /// The env with its config, Context `ctx` and the repo `pay`.
+    pub fn setup(fx: &Fx) -> PathBuf {
+        fx.env.write_tmux_config("");
+        fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+        fx.keyed_repo("pay")
+    }
+
+    pub fn events(fx: &Fx, kind: &str) -> Vec<Value> {
+        fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    }
+
+    /// `plan new` from the test root, with no PR.
+    pub fn new_plan_only(fx: &Fx, id: &str) -> Value {
+        fx.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}")]).ok()
+    }
+
+    /// `plan new` and the Plan's one PR, keyed `pay` (R34 A12: a Plan has no repo of its own).
+    pub fn new_plan(fx: &Fx, id: &str, repo: &Path) -> Value {
+        let out = new_plan_only(fx, id);
+        fx.github_origin(repo);
+        // `--shape config`: the template's stub drafts, `pay-config` and its opener, which these tests do not use:
+        // they are cancelled, as a Lead cancels a stub it does not need.
+        fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", id]).ok();
+        fx.cpd(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", id]).ok();
+        fx.cpd(&["job", "cancel", "open-pay", "--reason", "a stub of the template", "--plan", id]).ok();
+        fx.drop_unreachable_origin(repo);
+        out
+    }
+
+    pub fn show(fx: &Fx, plan: &str) -> Value {
+        fx.cpd(&["plan", "show", "--plan", plan]).ok()
+    }
+
+    /// The panes of the fake server: `(pane, window name, @cpd_session)`.
+    pub fn panes(fx: &Fx) -> Vec<(String, String, String)> {
+        fx.panes().into_iter().map(|p| (p.pane, p.window_name, p.session)).collect()
+    }
+
+    /// A Plan `id` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
+    pub fn planned(fx: &Fx, repo: &Path, id: &str) {
+        new_plan(fx, id, repo);
+        fx.cpd(&["plan", "phase", "plan", "--plan", id]).ok();
+        add_job(&fx.env, id, "a", &[]);
+        add_job(&fx.env, id, "b", &["a"]);
+    }
+
+    /// A Plan `pay` in phase `plan` with an approved, current review.
+    pub fn approved(fx: &Fx, repo: &Path) {
+        planned(fx, repo, "pay");
+        fx.outline_for_review("pay");
+        fx.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+        fx.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
+    }
+
+    /// The argv (after `cpd`) of every `cpd watch --ensure` run so far.
+    pub fn watch_calls(fx: &Fx) -> Vec<Vec<String>> {
+        fx.calls("cpd").into_iter().map(|c| c.args).filter(|a| a[0] == "watch").collect()
+    }
+}
+
 // ---------- plan new ----------
 
 #[test]
 fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    env.cpd(&["context", "decide", "One engine per machine.", "--context", "ctx"]).ok();
-    let brief = env.root().join("brief.md");
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
+    fx.cpd(&["context", "decide", "One engine per machine.", "--context", "ctx"]).ok();
+    let brief = fx.env.root().join("brief.md");
     fs::write(&brief, "Retry the failed payouts.\n").unwrap();
     // Not the repo, not the root: the directory the User runs `plan new` from.
-    let home_dir = env.root().join("home");
+    let home_dir = fx.env.root().join("home");
     fs::create_dir_all(&home_dir).unwrap();
     let cwd = home_dir.canonicalize().unwrap().display().to_string();
 
-    let mut cmd = env.command(CPD);
     let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let out = cmd.env("PLANNOTATOR_PORT", "19432-19439").env("PLANNOTATOR_REMOTE", "0").env("PLANNOTATOR_URL_HOST", "review.test").args(args).current_dir(&home_dir).output().unwrap();
-    let out = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }.ok();
+    let vars = [("PLANNOTATOR_PORT", "19432-19439"), ("PLANNOTATOR_REMOTE", "0"), ("PLANNOTATOR_URL_HOST", "review.test")];
+    let out = fx.cpd_with(&home_dir, &args, &vars).ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
         out["plan"],
@@ -190,69 +277,72 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!((&out["lead"]["session"], &out["lead"]["name"], &out["lead"]["forked_from"]), (&json!(session), &json!("pay"), &Value::Null));
     assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM prs"), 0, "a new Plan has no PR");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs"), 0, "a new Plan has no PR");
     let (pane, window) = (out["lead"]["pane"].as_str().unwrap(), out["lead"]["window"].as_str().unwrap());
 
     // The Lead: stopped, in its parked window, with its pane recorded, in the caller's cwd.
-    let lead = env.cpd(&["session", "show", &session]).ok()["session"].clone();
+    let lead = fx.cpd(&["session", "show", &session]).ok()["session"].clone();
     assert_eq!((&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]), (&json!("lead"), &json!("pay"), &json!("stopped"), &json!("O2")));
     assert_eq!((&lead["cwd"], &lead["tmux_pane"], &lead["place"]), (&json!(cwd), &json!(pane), &json!("parked")));
-    assert_eq!(panes(&env), vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())], "the cockpit is created with the Lead's window");
-    pane_env(&env, &session);
-    let path = env.tmux(&["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
-    assert_eq!(String::from_utf8(path.stdout).unwrap().trim(), cwd, "the pane starts in the caller's cwd");
+    assert_eq!(
+        inproc::panes(&fx),
+        vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())],
+        "the cockpit is created with the Lead's window"
+    );
+    // What cpd asked tmux for (`-c` and `-e` of `new-session`), read from the route (a real pane would inherit it).
+    let state = fx.tmux_state().expect("plan new started the cockpit server");
+    let started = state.panes().into_iter().find(|p| p.id == pane).expect("the Lead's pane");
+    assert_eq!(started.cwd, cwd, "the pane starts in the caller's cwd");
 
     // The pane runs `cpd session run <id>` with the Plan's and plannotator's variables (§15.5).
-    let pane_vars = pane_env(&env, &session);
-    let pane_vars: Vec<&str> = pane_vars.lines().filter(|l| l.starts_with("CPD_") || l.starts_with("PLANNOTATOR_")).collect();
-    for var in [
-        format!("CPD_HOME={}", env.cpd_home().display()),
-        format!("CPD_SESSION={session}"),
-        "CPD_PLAN=pay".to_owned(),
-        "PLANNOTATOR_PORT=19432-19439".to_owned(),
-        "PLANNOTATOR_REMOTE=1".to_owned(),
-        "PLANNOTATOR_URL_HOST=review.test".to_owned(),
+    let pane_vars = state.pane_env(pane);
+    for (key, value) in [
+        ("CPD_HOME", fx.env.cpd_home().display().to_string()),
+        ("CPD_SESSION", session.clone()),
+        ("CPD_PLAN", "pay".to_owned()),
+        ("PLANNOTATOR_PORT", "19432-19439".to_owned()),
+        ("PLANNOTATOR_REMOTE", "1".to_owned()),
+        ("PLANNOTATOR_URL_HOST", "review.test".to_owned()),
     ] {
-        assert!(pane_vars.contains(&var.as_str()), "{var} not in {pane_vars:?}");
+        assert!(pane_vars.contains(&(key.to_owned(), value.clone())), "{key}={value} not in {pane_vars:?}");
     }
-    let run = env.calls("cpd").into_iter().find(|c| c[0] == "session").unwrap();
-    assert_eq!(run, ["session", "run", session.as_str()]);
+    assert_eq!(started.argv[started.argv.len() - 3..], ["session", "run", session.as_str()]);
 
     // Events: plan-created and session-registered together, then the record, then the window.
-    let created = &events(&env, "plan-created")[0];
+    let created = &inproc::events(&fx, "plan-created")[0];
     assert_eq!(created["data"], json!({"title": "Retry payouts", "jira": "PAY-1", "lead_session": session, "forked_from": null, "cwd": cwd}));
-    let registered = events(&env, "session-registered");
+    let registered = inproc::events(&fx, "session-registered");
     assert_eq!(registered.len(), 1);
     assert_eq!((&registered[0]["plan"], &registered[0]["session"]), (&json!("pay"), &json!(session)));
     assert_eq!(registered[0]["data"], json!({"role": "lead", "name": "pay", "forked_from": null, "tier": "O2"}));
     assert_eq!(registered[0]["id"].as_i64().unwrap(), created["id"].as_i64().unwrap() + 1);
-    let moved = events(&env, "session-moved");
+    let moved = inproc::events(&fx, "session-moved");
     assert_eq!(moved[0]["data"], json!({"pane": pane, "window": window, "place": "parked"}));
 
     // The `plan` record in the Context store: no `repo`; `context show` lists the Plan's PR repos.
-    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
     assert_eq!(record["text"], "Retry payouts");
     assert_eq!(record["plan"], json!({"id": "pay", "machine": "m1", "jira": "PAY-1"}));
     assert_eq!(record["repos"], json!([]), "no PR yet");
     assert!(!record.to_string().contains("\"repo\""), "{record}");
-    assert!(!env.cpd_home().join("contexts").exists(), "the record is in the database only");
+    assert!(!fx.env.cpd_home().join("contexts").exists(), "the record is in the database only");
     let real = repo.canonicalize().unwrap().display().to_string();
-    let other = env.keyed_repo("web");
-    env.cpd(&["pr", "add", "api", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "api2", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "gone", "--repo", env.keyed_repo("old").to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
-    env.cpd(&["job", "cancel", "gone-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
-    env.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
-    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let other = fx.keyed_repo("web");
+    fx.cpd(&["pr", "add", "api", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "add", "api2", "--repo", &real, "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "add", "gone", "--repo", fx.keyed_repo("old").to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["job", "cancel", "gone-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
+    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
     let web = other.canonicalize().unwrap().display().to_string();
     assert_eq!(record["repos"], json!([real, web]), "each repo once, in PR key order, no cancelled PR");
     assert!(shown["markdown"].as_str().unwrap().contains(&format!("pay (on m1, repos {real}, {web}, PAY-1): Retry payouts")), "{shown}");
 
     // The first message: the header, the brief, then every record (a fresh Lead).
-    let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
+    let message = fs::read_to_string(home(&fx.env).lead_message(&pid("pay"))).unwrap();
     let header = "You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n";
     assert!(message.starts_with(header), "{message}");
     assert!(message.contains("One engine per machine."), "{message}");
@@ -261,44 +351,47 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
 /// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
 #[test]
 fn new_leaves_no_window_when_a_step_after_new_window_fails() {
-    let env = TestEnv::new();
-    setup(&env);
-    new_plan_only(&env, "first");
-    let windows = || String::from_utf8(env.tmux(&["list-windows", "-a", "-F", "#{window_name}"]).stdout).unwrap();
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    inproc::new_plan_only(&fx, "first");
+    let windows = || String::from_utf8(fx.tmux(&["list-windows", "-a", "-F", "#{window_name}"]).stdout).unwrap();
     let before = windows();
     assert!(before.contains("park-first"), "{before}");
 
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
-    env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
-    let run = env.cpd(&["plan", "new", "second", "--context", "ctx", "--title", "Plan second"]);
+    // The route answers every other call; this one rule refuses `set … @cpd_session` (it comes before the route).
+    let _ = (*fx.fakes.runner).clone().on(
+        "tmux",
+        |call| call.args.iter().any(|a| a == "set") && call.args.iter().any(|a| a == "@cpd_session"),
+        Reply::exit(1, "", "refused\n"),
+    );
+    let run = fx.cpd(&["plan", "new", "second", "--context", "ctx", "--title", "Plan second"]);
 
     assert_eq!(run.error()["code"], "tmux_failed", "{run:?}");
     assert_eq!(windows(), before, "plan new left a window");
 }
 
 /// `plan new` with a brief file whose text is `text`.
-fn new_with_brief(env: &TestEnv, id: &str, text: &str) -> Run {
-    let file = env.root().join(format!("{id}-brief.md"));
+fn new_with_brief(fx: &Fx, id: &str, text: &str) -> Run {
+    let file = fx.env.root().join(format!("{id}-brief.md"));
     fs::write(&file, text).unwrap();
-    env.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()])
+    fx.cpd(&["plan", "new", id, "--context", "ctx", "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()])
 }
 
-fn briefs(env: &TestEnv) -> Vec<Value> {
-    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
+fn briefs(fx: &Fx) -> Vec<Value> {
+    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
     shown["records"].as_array().unwrap().iter().filter(|r| r["kind"] == "brief").cloned().collect()
 }
 
 #[test]
 fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
     let text = "Retry the failed payouts.\n\nMore detail, second paragraph.\n";
-    let out = new_with_brief(&env, "pay", text).ok();
+    let out = new_with_brief(&fx, "pay", text).ok();
     assert_eq!(out["record"], "m1-p1", "the output still names the plan record");
 
     // One `brief` record, letter `b`, its Plan `{id, machine}`, the file's text, one `context-record` Event.
-    let rows: Vec<(String, String, String, Option<String>)> = store(&env)
+    let rows: Vec<(String, String, String, Option<String>)> = store(&fx.env)
         .read(|conn| {
             let mut stmt = conn.prepare("SELECT id, text, plan_id || '/' || plan_machine, plan_jira FROM context_records WHERE kind = 'brief'")?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
@@ -306,196 +399,198 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
         })
         .unwrap();
     assert_eq!(rows, [("m1-b1".to_owned(), text.to_owned(), "pay/m1".to_owned(), None)]);
-    let recorded: Vec<Value> = events(&env, "context-record").into_iter().filter(|e| e["data"]["kind"] == "brief").collect();
+    let recorded: Vec<Value> = inproc::events(&fx, "context-record").into_iter().filter(|e| e["data"]["kind"] == "brief").collect();
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     assert_eq!(recorded[0]["data"]["record"], "m1-b1");
 
     // `context show` lists it short, under its Plan; `--record` prints it whole.
-    let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
-    let brief = &briefs(&env)[0];
+    let shown = fx.cpd(&["context", "show", "--context", "ctx"]).ok();
+    let brief = &briefs(&fx)[0];
     assert_eq!((&brief["text"], &brief["short"], &brief["plan"]), (&json!("Retry the failed payouts."), &json!(true), &json!({"id": "pay", "machine": "m1"})));
     let md = shown["markdown"].as_str().unwrap();
     assert!(md.contains("  - brief m1-b1 (") && md.contains("): Retry the failed payouts.\n"), "{md}");
     assert!(!md.contains("second paragraph"), "{md}");
-    let full = env.cpd(&["context", "show", "--context", "ctx", "--record", "m1-b1"]).ok();
+    let full = fx.cpd(&["context", "show", "--context", "ctx", "--record", "m1-b1"]).ok();
     assert_eq!(full["records"][0]["text"], text);
     assert!(full["records"][0].get("short").is_none());
     assert!(full["markdown"].as_str().unwrap().contains("second paragraph"));
 
     // The Lead's first message: header, the full brief, then the records; its own brief not listed twice.
-    let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
+    let message = fs::read_to_string(home(&fx.env).lead_message(&pid("pay"))).unwrap();
     let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n";
     assert!(message.starts_with(header), "{message}");
     assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "{message}");
 
     // Another Plan's Lead sees this brief short.
-    new_with_brief(&env, "web", "Build the web page.\nSecond line.\n").ok();
-    let message = fs::read_to_string(home(&env).lead_message(&pid("web"))).unwrap();
+    new_with_brief(&fx, "web", "Build the web page.\nSecond line.\n").ok();
+    let message = fs::read_to_string(home(&fx.env).lead_message(&pid("web"))).unwrap();
     assert!(message.contains("[m1-b1] brief") && message.contains("Retry the failed payouts."), "{message}");
     assert!(!message.contains("second paragraph"), "{message}");
     assert_eq!(message.matches("Build the web page.").count(), 1, "{message}");
-    assert_eq!(briefs(&env).len(), 2);
+    assert_eq!(briefs(&fx).len(), 2);
 }
 
 #[test]
 fn new_again_with_the_brief_writes_no_second_brief_record() {
-    let env = TestEnv::new();
-    setup(&env);
-    new_with_brief(&env, "pay", "The brief.\n").ok();
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
-    let again = new_with_brief(&env, "pay", "The brief.\n").ok();
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    new_with_brief(&fx, "pay", "The brief.\n").ok();
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
+    let again = new_with_brief(&fx, "pay", "The brief.\n").ok();
     assert_eq!(again["already"], true);
-    assert_eq!(briefs(&env).len(), 1);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
+    assert_eq!(briefs(&fx).len(), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
 
     // A first run that stopped before the brief record (here: run without the file): the rerun writes it, once.
-    new_plan_only(&env, "web");
-    assert_eq!(briefs(&env).len(), 1);
-    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
-    assert_eq!(new_with_brief(&env, "web", "The web brief.\n").ok()["already"], true);
-    assert_eq!(briefs(&env).len(), 2);
+    inproc::new_plan_only(&fx, "web");
+    assert_eq!(briefs(&fx).len(), 1);
+    assert_eq!(new_with_brief(&fx, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(new_with_brief(&fx, "web", "The web brief.\n").ok()["already"], true);
+    assert_eq!(briefs(&fx).len(), 2);
 
     // A Plan without a brief file has no brief record.
-    new_plan_only(&env, "api");
-    assert_eq!(briefs(&env).len(), 2);
+    inproc::new_plan_only(&fx, "api");
+    assert_eq!(briefs(&fx).len(), 2);
 }
 
 // ---------- the first message: the digest and the records after it (hs-d194 D6) ----------
 
 #[test]
 fn new_refuses_an_empty_brief_file_and_writes_nothing() {
-    let env = TestEnv::new();
-    setup(&env);
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
-    refused(&new_with_brief(&env, "pay", ""), "usage", 2);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
+    refused(&new_with_brief(&fx, "pay", ""), "usage", 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
 fn new_takes_neither_repo_nor_base() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
     let repo_arg = repo.to_str().unwrap();
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     for extra in [["--repo", repo_arg], ["--base", "main"]] {
         let mut args = vec!["plan", "new", "pay", "--context", "ctx", "--title", "T"];
         args.extend(extra);
-        refused(&env.cpd(&args), "usage", 2);
+        refused(&fx.cpd(&args), "usage", 2);
     }
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
-    assert!(panes(&env).is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 0);
+    assert!(inproc::panes(&fx).is_empty());
 }
 
 #[test]
 fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
-    let env = TestEnv::new();
-    let repo = setup(&env);
-    let first = new_plan_only(&env, "pay");
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
+    let first = inproc::new_plan_only(&fx, "pay");
     let session = first["plan"]["lead_session"].as_str().unwrap().to_owned();
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
 
     // From another directory: still `already`, and the stored cwd stays.
-    let again = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
+    let again = fx.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!((&again["plan"], &again["record"]), (&first["plan"], &first["record"]));
     assert_eq!((&again["lead"]["pane"], &again["lead"]["window"]), (&first["lead"]["pane"], &first["lead"]["window"]));
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
-    assert_eq!(panes(&env).len(), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
+    assert_eq!(inproc::panes(&fx).len(), 1);
 
     // A crash after the first transaction: no pane, no message. Rerunning redoes both.
-    store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"))).unwrap();
-    fs::remove_file(home(&env).lead_message(&pid("pay"))).unwrap();
-    env.kill_tmux_server();
-    let redone = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
+    store(&fx.env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"))).unwrap();
+    fs::remove_file(home(&fx.env).lead_message(&pid("pay"))).unwrap();
+    fx.kill_tmux_server();
+    let redone = fx.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(redone["already"], true);
     assert_eq!(redone["lead"]["cwd"], first["lead"]["cwd"]);
-    let path = env.tmux(&["display-message", "-p", "-t", redone["lead"]["pane"].as_str().unwrap(), "#{pane_current_path}"]);
-    assert_eq!(String::from_utf8(path.stdout).unwrap().trim(), first["lead"]["cwd"].as_str().unwrap(), "redone in the stored cwd");
+    let pane = redone["lead"]["pane"].as_str().unwrap();
+    let state = fx.tmux_state().expect("the rerun started the server again");
+    let redone_pane = state.panes().into_iter().find(|p| p.id == pane).expect("the redone Lead's pane");
+    assert_eq!(redone_pane.cwd, first["lead"]["cwd"].as_str().unwrap(), "redone in the stored cwd");
     assert_ne!(redone["lead"]["pane"], Value::Null);
-    assert_eq!(panes(&env).len(), 1);
-    assert!(home(&env).lead_message(&pid("pay")).exists());
-    assert_eq!(events(&env, "session-moved").len(), 2);
-    assert_eq!(events(&env, "plan-created").len(), 1);
+    assert_eq!(inproc::panes(&fx).len(), 1);
+    assert!(home(&fx.env).lead_message(&pid("pay")).exists());
+    assert_eq!(inproc::events(&fx, "session-moved").len(), 2);
+    assert_eq!(inproc::events(&fx, "plan-created").len(), 1);
 
     // Other flags: plan_exists.
-    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
+    let error = refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
     assert_eq!(error["details"]["plan"]["title"], "Plan pay");
-    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
+    refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay", "--name", "x"]), "plan_exists", 3);
 }
 
 #[test]
 fn new_again_in_an_archived_context_is_already_not_archived() {
-    let env = TestEnv::new();
-    setup(&env);
-    let first = new_plan_only(&env, "pay");
-    env.cpd(&["context", "archive", "ctx"]).ok();
-    let again = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    let first = inproc::new_plan_only(&fx, "pay");
+    fx.cpd(&["context", "archive", "ctx"]).ok();
+    let again = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["plan"], first["plan"]);
     // A new Plan, and a rerun with other flags, are still refused in this order.
-    refused(&env.cpd(&["plan", "new", "other", "--context", "ctx", "--title", "T"]), "archived", 3);
-    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
+    refused(&fx.cpd(&["plan", "new", "other", "--context", "ctx", "--title", "T"]), "archived", 3);
+    refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Other"]), "plan_exists", 3);
 }
 
 #[test]
 fn new_and_rename_titles_are_1_to_200_characters_with_no_control_characters() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
     let (long, ok) = ("a".repeat(201), "a".repeat(200));
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
     for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
-        refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", title]), "usage", 2);
-        refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", title]), "usage", 2);
+        refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", title]), "usage", 2);
+        refused(&fx.cpd(&["plan", "rename", "--plan", "nope", "--title", title]), "usage", 2);
     }
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
-    env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", &ok]).ok();
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", &ok]).ok();
     for title in [long.as_str(), "a\nb", "a\tb"] {
-        refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", title]), "usage", 2);
+        refused(&fx.cpd(&["plan", "rename", "--plan", "pay", "--title", title]), "usage", 2);
     }
-    assert!(events(&env, "plan-renamed").is_empty());
+    assert!(inproc::events(&fx, "plan-renamed").is_empty());
     let renamed = "b".repeat(200);
-    assert_eq!(env.cpd(&["plan", "rename", "--plan", "pay", "--title", &renamed]).ok()["plan"]["title"], renamed.as_str());
+    assert_eq!(fx.cpd(&["plan", "rename", "--plan", "pay", "--title", &renamed]).ok()["plan"]["title"], renamed.as_str());
 }
 
 #[test]
 fn new_refusals_write_nothing() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
     let new = |extra: &[&str]| {
         let mut args = vec!["plan", "new", "pay", "--title", "T"];
         args.extend(extra);
-        env.cpd(&args)
+        fx.cpd(&args)
     };
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
 
     refused(&new(&["--context", "nope"]), "context_not_found", 4);
     refused(&new(&["--context", "ctx", "--brief-file", "/no/such/brief"]), "file_unreadable", 2);
-    refused(&env.cpd(&["plan", "new", "Bad", "--context", "ctx", "--title", "T"]), "invalid_plan_id", 2);
-    refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx"]), "usage", 2);
+    refused(&fx.cpd(&["plan", "new", "Bad", "--context", "ctx", "--title", "T"]), "invalid_plan_id", 2);
+    refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx"]), "usage", 2);
     refused(&new(&["--context", "ctx", "--name", ""]), "invalid_name", 2);
     refused(&new(&["--context", "ctx", "--jira", "nope"]), "usage", 2);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
 fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
     // A Context made before the policy keys has no owner.
-    store(&env).write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
-    let txns: i64 = env.query("SELECT count(*) FROM txns");
-    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
+    store(&fx.env).write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
+    let txns: i64 = fx.env.query("SELECT count(*) FROM txns");
+    let error = refused(&fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
     assert_eq!(error["details"]["context"], "ctx");
     assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 0);
     // After `context owner` the Plan is created.
-    env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
-    new_plan_only(&env, "pay");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 1);
+    fx.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    inproc::new_plan_only(&fx, "pay");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans"), 1);
 }
 
 #[test]
