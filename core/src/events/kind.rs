@@ -242,10 +242,10 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10) and hs-d571 (`session-resumed`: 12) and hs-d573 (`session report`: 13).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13) and hs-d634 (the incident kinds: 14).
     #[test]
-    fn the_protocol_is_13_with_the_session_report_command() {
-        assert_eq!(PROTOCOL, 13);
+    fn the_protocol_is_14_with_the_incident_kinds() {
+        assert_eq!(PROTOCOL, 14);
     }
 
     #[test]

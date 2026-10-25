@@ -469,13 +469,13 @@ impl NewEvent {
     }
 
     /// `incident-started` (contract §5.2, commands.md §25.1).
-    pub fn incident_started(_text: impl Into<String>, _by: &str, _reason: &str, _started_at: &str) -> NewEvent {
-        unimplemented!("incident_started is implemented by the inc-core Job")
+    pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str) -> NewEvent {
+        make(Kind::IncidentStarted, text, json!({"by": by, "reason": reason, "started_at": started_at}))
     }
 
     /// `incident-ended` (contract §5.2, commands.md §25.2).
-    pub fn incident_ended(_text: impl Into<String>, _by: &str, _ended_at: &str) -> NewEvent {
-        unimplemented!("incident_ended is implemented by the inc-core Job")
+    pub fn incident_ended(text: impl Into<String>, by: &str, ended_at: &str) -> NewEvent {
+        make(Kind::IncidentEnded, text, json!({"by": by, "ended_at": ended_at}))
     }
 }
 
