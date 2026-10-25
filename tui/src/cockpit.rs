@@ -354,7 +354,7 @@ impl Action {
     }
 }
 
-/// `cpd tui action <reset|legend|logs> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|host> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge the `merge` popup confirmed, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
