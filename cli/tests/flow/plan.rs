@@ -646,6 +646,44 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     refused(&fx.cpd(&["plan", "lock", "--plan", "pay"]), "no_draft_jobs", 3);
 }
 
+/// Plans moving to phase `plan` at once all move, and none registers a Session. Six threads call `run_with` on the
+/// one store of the env behind a `Barrier` (the store is ours; the lock and the busy timeout are SQLite's, in-process).
+#[test]
+fn plans_moving_to_phase_plan_at_once_all_move() {
+    let fx = Fx::with_ports();
+    let repo = inproc::setup(&fx);
+    let plans = ["pa", "pb", "pc", "pd", "pe", "pf"];
+    for plan in plans {
+        inproc::new_plan(&fx, plan, &repo);
+    }
+    let sessions = fx.env.query::<i64>("SELECT count(*) FROM sessions");
+    let barrier = std::sync::Barrier::new(plans.len());
+    let ports = &fx.fakes.ports;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = plans
+            .iter()
+            .map(|plan| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let argv = ["cpd", "plan", "phase", "plan", "--plan", plan].map(std::ffi::OsString::from);
+                    let mut stdout = Vec::new();
+                    let code = cpd::run_with(ports, argv, &mut stdout);
+                    (code, String::from_utf8(stdout).unwrap())
+                })
+            })
+            .collect();
+        for handle in handles {
+            let (code, stdout) = handle.join().unwrap();
+            assert_eq!(code, std::process::ExitCode::SUCCESS, "{stdout}");
+        }
+    });
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(inproc::events(&fx, "context-grounded").len(), 0);
+    assert_eq!(inproc::events(&fx, "plan-phase").len(), plans.len());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
+}
+
 // ---------- plan list, plan show ----------
 
 #[test]
@@ -1246,6 +1284,21 @@ fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one
 }
 
 #[test]
+fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
+    let fx = Fx::with_ports();
+    let repo = inproc::locking(&fx);
+    with_origin(&fx, &repo);
+    inproc::approved(&fx, &repo);
+    let remote_branch = remote_lead_branch_then_main_moves(&fx, &repo, false);
+
+    let out = fx.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    assert_eq!((&out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(true), &json!(false)));
+    assert_eq!(fx.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["phase"], "dispatch");
+}
+
+#[test]
 fn lock_without_an_origin_remote_is_as_before() {
     let fx = Fx::with_ports();
     let repo = inproc::locking(&fx);
@@ -1387,6 +1440,40 @@ fn pane_title(fx: &Fx, pane: &str) -> String {
 }
 
 #[test]
+fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
+    let fx = Fx::with_ports();
+    inproc::setup(&fx);
+    let out = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
+    let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
+    assert_eq!(pane_title(&fx, &pane), "Retry Payouts");
+
+    fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(pane_title(&fx, &pane), "Retry The Payouts");
+
+    // A side fork shows its own name; renaming the Plan leaves it alone.
+    let fork = fx.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
+    let fork_pane = fork["pane"].as_str().unwrap();
+    assert_eq!(pane_title(&fx, fork_pane), "Side");
+    fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!((pane_title(&fx, &pane), pane_title(&fx, fork_pane)), ("Third".to_owned(), "Side".to_owned()));
+
+    // Renaming the Plan's Lead Session never replaces the Plan's title.
+    fx.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
+    assert_eq!(pane_title(&fx, &pane), "Third");
+
+    // A rerun with the same title repairs a header that was cleared.
+    fx.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
+    assert_eq!(pane_title(&fx, &pane), "");
+    let again = fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(pane_title(&fx, &pane), "Third");
+
+    // No pane, nothing to do.
+    fx.tmux(&["kill-pane", "-t", &pane]);
+    fx.cpd(&["plan", "rename", "--plan", "pay", "--title", "Fourth"]).ok();
+}
+
+#[test]
 fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
     let fx = Fx::with_ports();
     inproc::setup(&fx);
@@ -1510,6 +1597,28 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
 }
 
 #[test]
+fn unarchive_clears_the_cascade_with_one_event_each_and_touches_no_pane() {
+    let fx = Fx::with_ports();
+    let (lead, fork) = plan_with_fork(&fx);
+    fx.cpd(&["plan", "archive", "--plan", "pay"]).ok();
+    let events_before = event_count(&fx.env);
+
+    let out = fx.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(out["archived"].as_array().unwrap().len(), 3, "{out}");
+    assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
+    assert_eq!(out["closed"], json!([]));
+    assert_eq!(archived_ats(&fx.env), 0);
+    assert_eq!(event_count(&fx.env), events_before + 3);
+    assert!(inproc::events(&fx, "plan-archived")[1]["data"] == json!({"archived": false}));
+    assert!(!has_pane(&fx, &lead) && !has_pane(&fx, &fork), "no pane is started");
+    assert_eq!(inproc::show(&fx, "pay")["plan"]["archived_at"], Value::Null);
+
+    let again = fx.cpd(&["plan", "unarchive", "--plan", "pay"]).ok();
+    assert_eq!(again, json!({"ok": true, "archived": [], "closed": [], "already": true}));
+    assert_eq!(event_count(&fx.env), events_before + 3);
+}
+
+#[test]
 fn unarchive_inside_an_archived_context_is_refused() {
     let fx = Fx::with_ports();
     let repo = inproc::setup(&fx);
@@ -1549,6 +1658,38 @@ const JOB: &str = "INSERT INTO jobs (plan, key, pr, title, tier, goal, context, 
 fn job(status: &str) -> String {
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "a".repeat(64)) };
     JOB.replace("'$FP'", &fingerprint).replace("$STATUS", status)
+}
+
+const ATTEMPT: &str = "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+                       VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', '$STATUS', 'cpd/pay--api-a1', '/w', 't');";
+
+#[test]
+fn archive_refused_by_any_one_blocker_changes_nothing() {
+    let review = format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r1', 1, '{}', 'pending', 't');",
+        "a".repeat(64)
+    );
+    let escalation = format!(
+        "{}{}INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+         VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Which?', 'open', 1, 't');",
+        job("draft"),
+        ATTEMPT.replace("$STATUS", "running")
+    );
+    // One blocker at a time, each in its own environment: Jobs are append-only.
+    for (kind, apply) in [("job", job("queued")), ("job", job("running")), ("escalation", escalation), ("review", review), ("session", String::new())] {
+        let fx = Fx::with_ports();
+        let (_, fork) = plan_with_fork(&fx);
+        let apply = if kind == "session" { format!("UPDATE sessions SET state = 'working' WHERE id = '{fork}'") } else { apply };
+        store(&fx.env).write("fixture", |tx| exec(tx, &apply)).unwrap();
+        let (events_before, panes_before) = (event_count(&fx.env), inproc::panes(&fx));
+        let error = refused(&fx.cpd(&["plan", "archive", "--plan", "pay"]), "archive_blocked", 3);
+        let listed = error["details"]["blockers"].as_array().unwrap();
+        assert_eq!(listed.len(), 1, "{kind}: {error}");
+        assert_eq!(listed[0]["kind"], kind, "{error}");
+        assert_eq!(archived_ats(&fx.env), 0, "{kind}");
+        assert_eq!(event_count(&fx.env), events_before, "{kind}");
+        assert_eq!(inproc::panes(&fx), panes_before, "{kind}");
+    }
 }
 
 #[test]
