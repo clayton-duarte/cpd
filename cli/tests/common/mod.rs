@@ -46,6 +46,8 @@ use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
 
+pub mod fx;
+
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 
@@ -709,9 +711,9 @@ fn has_flock() -> bool {
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
-    /// The env's process group: the reaper's pid.
-    pgid: u32,
-    /// The reaper ([`TestEnv::empty`]), until the teardown stops it.
+    /// The env's process group: the reaper's pid; none for a [`TestEnv::bare`] env, which starts no process.
+    pgid: Option<u32>,
+    /// The reaper ([`TestEnv::empty`]), until the teardown stops it; none for a [`TestEnv::bare`] env.
     reaper: Mutex<Option<Child>>,
     /// The read-only connection [`TestEnv::read`] reads on, kept open across reads (a new connection parses the whole
     /// schema at its first query: ~10-15 ms a read), with the identity (device, inode) of the `cpd.db` it opened.
@@ -779,7 +781,17 @@ impl TestEnv {
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     /// Where there is no `flock` (macOS) the harness needs perl, for the shim it writes to `bin/`.
     pub fn empty() -> TestEnv {
-        let sqlite3 = sqlite3();
+        TestEnv::build(true)
+    }
+
+    /// [`TestEnv::empty`] without a process: no reaper and no teardown script, so nothing is started and `Drop` only
+    /// removes the directory. For [`fx::Fx`], whose commands run in the test process; a process a command of it starts
+    /// is not stopped by any teardown.
+    pub fn bare() -> TestEnv {
+        TestEnv::build(false)
+    }
+
+    fn build(reaped: bool) -> TestEnv {
         let envs_dir = envs_dir();
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
@@ -787,21 +799,24 @@ impl TestEnv {
             Some(run) => format!("cpdt-{run}-{}-{n}", std::process::id()),
             None => format!("cpdt-{}-{n}", std::process::id()),
         };
-        let script = dir.path().join("teardown.sh");
-        let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
-        fs::write(
-            &script,
-            format!(
-                "dir={}\nsocket={}\ntmuxdir={}\nsqlite3={}\n{TEARDOWN_SH}",
-                sh_quote(&dir.path().to_string_lossy()),
-                sh_quote(&tmux_socket),
-                sh_quote(&tmuxdir.to_string_lossy()),
-                sh_quote(&sqlite3.to_string_lossy())
-            ),
-        )
-        .expect("write teardown script");
-        let reaper = start_reaper(&script);
-        let env = TestEnv { dir, tmux_socket, pgid: reaper.id(), reaper: Mutex::new(Some(reaper)), reader: Mutex::new(None) };
+        let reaper = reaped.then(|| {
+            let sqlite3 = sqlite3();
+            let script = dir.path().join("teardown.sh");
+            let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
+            fs::write(
+                &script,
+                format!(
+                    "dir={}\nsocket={}\ntmuxdir={}\nsqlite3={}\n{TEARDOWN_SH}",
+                    sh_quote(&dir.path().to_string_lossy()),
+                    sh_quote(&tmux_socket),
+                    sh_quote(&tmuxdir.to_string_lossy()),
+                    sh_quote(&sqlite3.to_string_lossy())
+                ),
+            )
+            .expect("write teardown script");
+            start_reaper(&script)
+        });
+        let env = TestEnv { dir, tmux_socket, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -839,7 +854,7 @@ impl TestEnv {
         if self.teardown_script().exists() {
             // stderr stays the test's: a failed read of the store shows in its output.
             let mut teardown = Command::new("sh");
-            teardown.arg(self.teardown_script()).arg(self.pgid.to_string()).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null());
+            teardown.arg(self.teardown_script()).arg(self.pgid.expect("a teardown script has a reaper").to_string()).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null());
             let _ = spawn(&mut teardown).and_then(|mut child| child.wait());
         }
         let _ = fs::remove_dir_all(self.root());
@@ -911,33 +926,48 @@ impl TestEnv {
     /// stopped only when cpd records it ([`TEARDOWN_SH`]).
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
-        for (key, _) in std::env::vars_os() {
-            let k = key.to_string_lossy();
-            let drop = ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"]
-                .iter()
-                .any(|p| k.starts_with(p))
-                || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
-                || k == "TMUX"
-                || k == "TMUX_PANE"
-                || k == "ZDOTDIR";
-            if drop {
-                cmd.env_remove(&key);
-            }
+        let (remove, set) = self.isolation();
+        for key in remove {
+            cmd.env_remove(key);
         }
+        for (key, value) in set {
+            cmd.env(key, value);
+        }
+        cmd.current_dir(self.root()).stdin(Stdio::null());
+        if let Some(pgid) = self.pgid {
+            cmd.process_group(pgid as i32);
+        }
+        cmd
+    }
+
+    /// The environment of every command run here, as the variables of this process to remove (the `CPD_*`, `PI_*`, ...
+    /// of [`TestEnv::command`]) and the ones to set: the one place that says what isolated means, for the `Command` of
+    /// [`TestEnv::command`] and for the process [`fx::Fx`] runs `cpd` in.
+    pub fn isolation(&self) -> (Vec<OsString>, Vec<(&'static str, OsString)>) {
+        let remove = std::env::vars_os()
+            .map(|(key, _)| key)
+            .filter(|key| {
+                let k = key.to_string_lossy();
+                ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+                    || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
+                    || k == "TMUX"
+                    || k == "TMUX_PANE"
+                    || k == "ZDOTDIR"
+            })
+            .collect();
         let mut paths = vec![self.bin()];
         paths.extend(std::env::split_paths(inherited_path()));
-        cmd.env("PATH", std::env::join_paths(paths).expect("PATH"))
-            .env("CPD_HOME", self.cpd_home())
-            .env("HOME", self.home())
-            .env("TMUX_TMPDIR", self.tmux_tmpdir())
-            .env("FAKE_TMUX_SERVER_PID", std::process::id().to_string())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .current_dir(self.root())
-            .stdin(Stdio::null())
-            .process_group(self.pgid as i32);
-        cmd
+        let set = vec![
+            ("PATH", std::env::join_paths(paths).expect("PATH")),
+            ("CPD_HOME", self.cpd_home().into()),
+            ("HOME", self.home().into()),
+            ("TMUX_TMPDIR", self.tmux_tmpdir().into()),
+            ("FAKE_TMUX_SERVER_PID", std::process::id().to_string().into()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+            ("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig").into()),
+            ("GIT_TERMINAL_PROMPT", "0".into()),
+        ];
+        (remove, set)
     }
 
     /// The store of this env's `$CPD_HOME`, opened (migrated) now.

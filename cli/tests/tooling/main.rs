@@ -8,6 +8,7 @@ mod cargo_script;
 mod dead_code;
 mod gate_run;
 mod fake_tmux;
+mod fx;
 mod harness;
 mod install_script;
 mod interface;
