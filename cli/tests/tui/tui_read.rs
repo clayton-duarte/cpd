@@ -1,7 +1,7 @@
 //! The TUI's read model (commands.md §17), against a store prepared through the
 //! store API (`Store::write`, as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas), in this process (`Fx`: no process is started). The one test that needs a
-//! command with a fake tmux on PATH keeps `TestEnv` and the built `cpd`.
+//! and Attempts belong to their areas), in this process (`Fx`: no process is started; the one test that runs `cpd`
+//! does it through `run_with` on `Fx::with_ports`, tmux being the fake route).
 
 use crate::common;
 

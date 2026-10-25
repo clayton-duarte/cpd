@@ -385,9 +385,25 @@ impl Fx {
         self.run(cwd, args, vars, &[])
     }
 
+    /// Runs `cpd <args>` from this env's root, for a command that writes nothing to the output (`Output::Owned`: the
+    /// `tui action` commands, which print nothing whatever happens): panics unless it exits 0 with an empty output.
+    pub fn cpd_silent(&self, args: &[&str]) {
+        let (code, stdout) = self.run_raw(self.env.root(), args, &[], &[]);
+        assert!(code == 0 && stdout.is_empty(), "cpd {args:?} exited {code}, wrote {stdout:?}: expected exit 0 and nothing");
+    }
+
     /// Runs `cpd <args>` in `cwd` with `set` added to and `remove` taken out of its environment, on the ports of this
     /// `Fx`; the environment and the directory are put back after.
     fn run(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> Run {
+        let (exit, stdout) = self.run_raw(cwd, args, set, remove);
+        // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
+        // `print!` on the process's, which nobody can read back here.
+        assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
+        Run { exit, stdout, stderr: String::new() }
+    }
+
+    /// The exit code and the writer's text of one `cpd` call, as [`Fx::run`] sets it up.
+    fn run_raw(&self, cwd: &Path, args: &[&str], set: &[(&str, &str)], remove: &[&str]) -> (i32, String) {
         let _scope = Scope::enter(cwd, set, remove);
         let argv = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from);
         let mut stdout = Vec::new();
@@ -396,10 +412,7 @@ impl Fx {
         } else {
             cpd::main_with(argv, &mut stdout)
         };
-        // Every result but `Output::Owned` is one JSON line on the writer; a command that owns its stdout prints with
-        // `print!` on the process's, which nobody can read back here.
-        assert!(!stdout.is_empty(), "cpd {args:?} wrote nothing to the writer: it owns its stdout, which Fx cannot capture; run it with `env.cpd`");
-        Run { exit: exit_code(code), stdout: String::from_utf8(stdout).expect("stdout is UTF-8"), stderr: String::new() }
+        (exit_code(code), String::from_utf8(stdout).expect("stdout is UTF-8"))
     }
 }
 

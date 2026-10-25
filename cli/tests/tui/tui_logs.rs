@@ -1,7 +1,8 @@
 //! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
 //! following and scrolling with ratatui's `TestBackend` over a store in this process (`Fx`: no process), the view
 //! itself on a private tmux server, and the button's
-//! `cpd tui action logs` (`tmux` on `PATH` is a fake that answers the client's size and records `display-popup`).
+//! `cpd tui action logs`, in this process through `run_with` on `Fx::with_ports` (the fake tmux route answers the client's
+//! size and the `FakeRunner` records `display-popup`).
 
 use crate::common;
 
@@ -353,25 +354,26 @@ fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes
 
 // ---------- the button ----------
 
-/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60 (the popup is at most 48 rows), `display-popup` does nothing.
-fn fake_tmux(env: &TestEnv) {
-    env.fake(
-        "tmux",
-        "case \"$*\" in\n *'display -p -c /dev/pts/9 '*) echo '200 60';;\n *display-popup*) ;;\n *) exit 1;;\nesac",
-    );
+/// An `Fx` on fake ports with the fake tmux server of the cockpit and client `/dev/pts/9`, 200x60 (the popup is at most
+/// 48 rows).
+fn fx_with_client() -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cockpit();
+    fx.tmux_route.fake().add_client("/dev/pts/9", 200, 60);
+    fx
 }
 
-fn popups(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
+/// The `display-popup` calls of the fake tmux, as the runner saw them (the whole argv, global flags first).
+fn popups(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
 #[test]
 fn the_logs_action_opens_the_popup_on_the_clicking_client() {
-    let env = env();
-    fake_tmux(&env);
-    let run = env.cpd(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
-    let popup = popups(&env).remove(0);
+    let fx = fx_with_client();
+    fx.cpd_silent(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
+    let popup = popups(&fx).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     // `tmux -u -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
     // Sized like the legend, at most 80 % of the 200x60 client (`logs::popup_args`): 160x48.
@@ -381,13 +383,12 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
         popup[at..],
         ["display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &w.to_string(), "-h", &h.to_string(), "cpd tui view logs"]
     );
-    assert!(popup[..at].starts_with(&["-u".to_owned(), "-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
+    assert!(popup[..at].starts_with(&["-u".to_owned(), "-L".to_owned(), fx.env.tmux_socket().to_owned()]), "{popup:?}");
 
     // the legend action opens the legend, not the log
-    let run = env.cpd(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
-    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
-    assert_eq!(popups(&env).len(), 2);
-    assert!(popups(&env)[1].contains(&" legend ".to_owned()));
+    fx.cpd_silent(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
+    assert_eq!(popups(&fx).len(), 2);
+    assert!(popups(&fx)[1].contains(&" legend ".to_owned()));
 }
 
 // ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
