@@ -1,28 +1,36 @@
-//! The Attempt driver (contract §3.4; commands.md §5.5, §6.4): `job dispatch`
-//! starts the driver detached with the driver lock as fd 3, and the driver runs
-//! A1–A9 against a temporary repo, a private tmux server and a fake pi Worker.
+//! The Attempt driver (contract §3.4; commands.md §5.5, §6.4), in this process: `job dispatch` records the driver's `Launch` on the
+//! `FakeSpawn`, and the test runs it through `run_with` ([`Live::drive`]) on the fake git, the fake tmux and the `ManualClock`, with
+//! the hooks and `gh` as replies of the `FakeRunner`. The Worker is the test's own closure, called after the driver's `n`th poll: it
+//! does what pi would do in its pane (commit, `cpd attempt submit`), or its pi ends, on the same thread, with no process and no wait.
 //!
-//! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
-//! goes straight to the merge.
+//! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt goes straight to the merge.
 //!
 //! The `dispatch_refuses_*` tests refuse before any worktree, window or process exists: they run the command tree
 //! in this process (`Fx`, [`Rows`]) against rows alone, with no repo, no tmux server and no fake pi.
 
 use crate::common;
 
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use common::fx::Fx as InProcess;
-use common::{CPD, Run, TestEnv, refused, write_executable};
+use common::{Run, TestEnv, refused};
 use cpd_core::error::CpdError;
-use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::{Call, Reply, Runner};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::ports::Ports;
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
+
+use super::driver_open::{Live, live};
 
 pub(super) const PLAN: &str = "pay";
 pub(super) const JOB: &str = "api";
@@ -31,53 +39,13 @@ pub(super) const PR_TITLE: &str = "Charge the card at checkout";
 pub(super) const PR_URL: &str = "https://github.com/acme/pay/pull/812";
 const ATTEMPT: &str = "api-a1";
 
-/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
-/// (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries (`KILL_PAUSE`, 1 s).
-const POLL: Duration = Duration::from_millis(50);
-const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.05"), ("CPD_TEST_KILL_PAUSE", "0.05")];
-
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] =
     [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
 
-struct Fx {
-    env: TestEnv,
-    repo: PathBuf,
-    lead: PathBuf,
-}
-
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
-}
-
-/// A repo `pay` with the Lead worktree of Plan `pay` (phase `dispatch`), a
-/// config on this env's tmux server, a fake pi install whose Tier catalog is
-/// seeded in the cache, and Job `api` (`queued`, Tier S2, Locked).
-fn fx() -> Fx {
-    fx_with("")
-}
-
-fn fx_with(config_extra: &str) -> Fx {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    // git runs in this process too, whose environment is not the TestEnv's.
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
-    }
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let lead = create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup).unwrap().path;
-    seed_home(&env, config_extra);
-    // The work session as the engine leaves it: its `watch` window, and
-    // remain-on-exit (§6.1) so a dead Worker pane stays to be read.
-    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
-        assert!(env.tmux(args).status.success(), "tmux {args:?}");
-    }
-    seed_rows(&env, &repo, &lead);
-    let fx = Fx { env, repo, lead };
-    fx.pi("exit 0");
-    fx.add_job(JOB, &[]);
-    fx
 }
 
 /// The config on this env's tmux server (`config_extra` is more TOML), a fake pi install whose Tier catalog is
@@ -192,9 +160,9 @@ impl Rows {
         add_job_in(&self.fx.env, pr, key, needs);
     }
 
-    /// `job dispatch <key>` with [`DRIVER_ENV`], in this process.
+    /// `job dispatch <key>`, in this process.
     fn dispatch(&self, key: &str) -> Run {
-        self.fx.cpd_with(self.fx.env.root(), &["job", "dispatch", key, "--plan", PLAN], &DRIVER_ENV)
+        self.fx.cpd(&["job", "dispatch", key, "--plan", PLAN])
     }
 
     fn job_status(&self, key: &str) -> String {
@@ -236,208 +204,202 @@ impl Rows {
     }
 }
 
-impl Fx {
-    fn store(&self) -> Store {
-        store(&self.env)
+// ---------- what the Worker does, and what the tests read ----------
+
+/// What `attempt submit` answered the Worker, run as pi runs it in its window: cwd the worktree, its Plan and its Attempt.
+fn submit(live: &Live, id: &str) -> Value {
+    live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json()
+}
+
+/// A Worker that commits `api.txt` and submits, then stays (pi idles).
+fn work(live: &Live, id: &str) -> Value {
+    live.commit(&live.worktree(id), "api.txt", "api\n", "api");
+    submit(live, id)
+}
+
+/// `job cancel api --reason <reason>` as the Worker runs it in its window.
+fn cancel(live: &Live, id: &str, reason: &str) {
+    live.fx.cpd_with(&live.worktree(id), &["job", "cancel", JOB, "--reason", reason], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).ok();
+}
+
+/// The Worker's pi ends with `status`: its pane is dead (remain-on-exit keeps the window), as after `exit <status>`.
+fn worker_exits(live: &Live, id: &str, status: u8) {
+    let window = format!("{PLAN}--{id}");
+    let pane = live.fx.panes().into_iter().find(|p| p.window_name == window).unwrap_or_else(|| panic!("no pane in window {window}"));
+    let out = live.fx.tmux(&["__ctl", "pane-exit", &pane.pane, "--status", &status.to_string()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// [`Live::drive`] with what `job dispatch` printed: `(its output, what the driver printed)`.
+fn drive_with_out(live: &Live, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (Value, Run) {
+    let out = live.dispatch(key).ok();
+    let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+    let launch = live.fx.take_launch(live.fx.fakes.spawn.launches().len() - 1);
+    let home = CpdHome::resolve(Some(live.fx.env.cpd_home().into()), None).unwrap();
+    let _fd3 = live.fx.hand_over(File::open(home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap())).unwrap());
+    let ran = live.fx.run_launch_with(&launch, |_, nap| hook(live, &id, nap));
+    assert_eq!(ran.exit, 0, "{}", ran.stdout);
+    (out, ran)
+}
+
+/// The driver's log of Attempt `id`, for a failure's message.
+fn log(live: &Live, id: &str) -> String {
+    fs::read_to_string(live.fx.env.cpd_home().join(format!("run/pay/logs/attempt-{id}.log"))).unwrap_or_default()
+}
+
+/// The Events about Attempt `id` or its Worker, in order.
+fn events(live: &Live, id: &str) -> Vec<Value> {
+    let session: Option<String> = live.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
+    let all = live.fx.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
+    all.into_iter().filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref())).collect()
+}
+
+/// The kinds of [`events`], in order.
+fn kinds(live: &Live, id: &str) -> Vec<String> {
+    events(live, id).iter().map(|e| e["kind"].as_str().unwrap().to_owned()).collect()
+}
+
+fn event(live: &Live, id: &str, kind: &str) -> Value {
+    events(live, id).into_iter().find(|e| e["kind"] == kind).unwrap_or_else(|| panic!("no {kind} for {id}"))
+}
+
+/// The names of the windows of the fake tmux server, one per line.
+fn windows(live: &Live) -> String {
+    let state = live.fx.tmux_state().expect("the fake tmux server");
+    state.windows().into_iter().map(|w| w.name).collect::<Vec<_>>().join("\n")
+}
+
+/// Sets the `[hooks]` of the repo `acme/pay`'s policy file: `text` is written as a `.config/wt.toml` was
+/// (`pre-start = "cmd"`, `[pre-merge]`), and an empty commit is made on the Lead Branch, where the Attempt worktrees are cut from.
+fn set_hooks(live: &Live, text: &str) {
+    let file = format!("[hooks]\n{text}").replace("\n[", "\n[hooks.");
+    live.fx.env.repo_policy("acme", "pay", &file);
+    live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
+}
+
+/// A `Runner` over the fake one that runs `then`, once, right after the first call of `program` whose argv `when` accepts and that
+/// exited 0: what a program does by itself after its work (git's `post-rewrite` hook after a rebase) or a hook's own command (a
+/// `pre-start` hook that runs `cpd job cancel`). `then` runs on the thread that made the call, on the ports under this runner.
+struct After {
+    inner: Arc<dyn Runner>,
+    program: &'static str,
+    when: Box<dyn Fn(&[String]) -> bool + Send + Sync>,
+    then: Box<dyn Fn() + Send + Sync>,
+    fired: AtomicBool,
+}
+
+impl After {
+    /// The ports of `live` with a runner that runs `cpd <command>` after the first `program` call `when` accepts.
+    fn install(live: &mut Live, program: &'static str, when: impl Fn(&[String]) -> bool + Send + Sync + 'static, command: &'static [&'static str]) {
+        let inner = live.fx.fakes.ports.runner.clone();
+        let ports = Ports { runner: inner.clone(), ..live.fx.fakes.ports.clone() };
+        let argv: Vec<OsString> = std::iter::once("cpd").chain(command.iter().copied()).map(OsString::from).collect();
+        let then = move || {
+            let mut out = Vec::new();
+            cpd::run_with(&ports, argv.clone(), &mut out);
+            let out: Value = serde_json::from_slice(&out).expect("cpd printed JSON");
+            assert_eq!(out["ok"], true, "{out}");
+        };
+        let after = After { inner, program, when: Box::new(when), then: Box::new(then), fired: AtomicBool::new(false) };
+        live.fx.fakes.ports.runner = Arc::new(after);
     }
 
-    fn fixture(&self, sql: &str) {
-        fixture(&self.env, sql);
-    }
-
-    /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
-    fn add_job(&self, key: &str, needs: &[&str]) {
-        self.add_job_in("repo", key, needs);
-    }
-
-    /// [`Fx::add_job`] in PR `pr`.
-    fn add_job_in(&self, pr: &str, key: &str, needs: &[&str]) {
-        add_job_in(&self.env, pr, key, needs);
-    }
-
-    /// The fake `pi`: `body` runs in the Worker's pane, cwd the worktree, with
-    /// `$CPD` the binary and `$LEAD` the Lead worktree, once the Attempt is
-    /// `running` (the driver records that right after the pane starts; a real
-    /// pi takes far longer to boot than this fake).
-    fn pi(&self, body: &str) {
-        self.env.fake_pi(&format!(
-            "CPD='{CPD}'\nLEAD='{}'\n\
-             until \"$CPD\" attempt show \"$CPD_ATTEMPT\" | grep -q '\"status\":\"running\"'; do sleep 0.1; done\n{body}",
-            self.lead.display()
-        ));
-    }
-
-    /// Sets the `[hooks]` of the repo `acme/pay`'s policy file: `text` is written as a `.config/wt.toml` was
-    /// (`pre-start = "cmd"`, `[pre-merge]`), and an empty commit is made on the Lead Branch, where the Attempt worktrees are cut from.
-    fn hooks(&self, text: &str) {
-        let file = format!("[hooks]\n{text}").replace("\n[", "\n[hooks.");
-        self.env.repo_policy("acme", "pay", &file);
-        self.env.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
-    }
-
-    /// `cpd <args>` with this env's CPD_HOME, as a hook or the Worker calls it.
-    fn cpd_line(&self, args: &str) -> String {
-        format!("CPD_HOME='{}' '{CPD}' {args}", self.env.cpd_home().display())
-    }
-
-    /// `job dispatch <key>`, its driver with [`DRIVER_ENV`].
-    fn dispatch(&self, key: &str) -> Run {
-        let mut cmd = self.env.command(CPD);
-        cmd.envs(DRIVER_ENV).args(["job", "dispatch", key, "--plan", PLAN]).current_dir(self.env.root());
-        let out = common::output(&mut cmd).expect("run cpd");
-        Run {
-            exit: out.status.code().expect("cpd was killed by a signal"),
-            stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    fn after(&self, program: &str, args: &[String], result: &Result<Output, Failed>) {
+        let name = Path::new(program).file_name().and_then(|n| n.to_str());
+        let ok = result.as_ref().is_ok_and(|out| out.status.success());
+        if ok && name == Some(self.program) && (self.when)(args) && !self.fired.swap(true, Ordering::SeqCst) {
+            (self.then)();
         }
-    }
-
-    fn attempt(&self, id: &str) -> Value {
-        self.env.cpd(&["attempt", "show", id, "--plan", PLAN]).ok()["attempt"].clone()
-    }
-
-    fn job_status(&self, key: &str) -> String {
-        self.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
-    }
-
-    /// Waits until Attempt `id` is `status` in the store (at most 60 s); returns it as `attempt show` then gives it.
-    fn wait_status(&self, id: &str, status: &str) -> Value {
-        common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
-            let now: Option<String> = self.env.query(&format!("SELECT (SELECT status FROM attempts WHERE plan = '{PLAN}' AND id = '{id}')"));
-            if now.as_deref() == Some(status) { Ok(()) } else { Err(format!("status {now:?}\nlog: {}", self.log(id))) }
-        });
-        self.attempt(id)
-    }
-
-    /// Waits until the Attempt has ended and its driver has exited; returns
-    /// the Attempt and the driver's output, the last line of its log.
-    fn wait_end(&self, id: &str, pid: &Value) -> (Value, Value) {
-        let attempt = self.wait_status(id, "ended");
-        let pid = nix::unistd::Pid::from_raw(pid.as_i64().unwrap() as i32);
-        common::wait_some(&format!("the driver of {id} to exit"), Duration::from_secs(30), || {
-            if nix::sys::signal::kill(pid, None).is_ok() { Err(format!("log: {}", self.log(id))) } else { Ok(()) }
-        });
-        let log = self.log(id);
-        let last = log.lines().last().unwrap_or_else(|| panic!("empty log of {id}"));
-        let out: Value = serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {log}"));
-        (attempt, out)
-    }
-
-    fn log(&self, id: &str) -> String {
-        fs::read_to_string(self.env.cpd_home().join(format!("run/pay/logs/attempt-{id}.log"))).unwrap_or_default()
-    }
-
-    /// The kinds of the Events about Attempt `id` or its Worker, in order.
-    fn kinds(&self, id: &str) -> Vec<String> {
-        self.events(id).iter().map(|e| e["kind"].as_str().unwrap().to_owned()).collect()
-    }
-
-    fn events(&self, id: &str) -> Vec<Value> {
-        let session: Option<String> =
-            self.env.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
-        let all = self.env.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
-        all.into_iter()
-            .filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref()))
-            .collect()
-    }
-
-    fn event(&self, id: &str, kind: &str) -> Value {
-        self.events(id).into_iter().find(|e| e["kind"] == kind).unwrap_or_else(|| panic!("no {kind} for {id}"))
-    }
-
-    fn lead_sha(&self) -> String {
-        self.env.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
-    }
-
-    fn worktree(&self, id: &str) -> PathBuf {
-        self.repo.parent().unwrap().join(format!("pay.pay--{id}"))
-    }
-
-    fn windows(&self) -> String {
-        let out = self.env.tmux(&["list-windows", "-a", "-F", "#{session_name}:#{window_name}"]);
-        String::from_utf8_lossy(&out.stdout).into_owned()
     }
 }
 
-/// A Worker that does its work, commits and submits, then stays (pi idles).
-const WORKER: &str = r#"sid=""; prev=""
-for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
-mkdir -p "$HOME/.pi/agent/sessions/w"
-f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
-printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' > "$f"
-printf '%s\n' '{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","usage":{"input":10,"output":20,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.5}},"stopReason":"stop"}}' >> "$f"
-echo api > api.txt
-git add -A && git commit -qm "api"
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1
-sleep 120"#;
+impl Runner for After {
+    fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
+        let result = self.inner.output(cmd, tool, deadline);
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        self.after(&cmd.get_program().to_string_lossy(), &args, &result);
+        result
+    }
 
-// ---------- the end-to-end run ----------
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output> {
+        self.inner.output_unbounded(cmd, tool)
+    }
+
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        let result = self.inner.run(call);
+        self.after(&call.program, &call.args, &result);
+        result
+    }
+}
 
 // ---------- job-merged's data.turn (contract §5.2, hs-d514) ----------
 
-impl Fx {
-    /// A `draft` Job `key` in PR `pr` of Plan `pay`.
-    fn add_draft(&self, pr: &str, key: &str) {
-        self.fixture(&format!(
+/// A `draft` Job `key` in PR `pr` of Plan `pay`.
+fn add_draft(live: &Live, pr: &str, key: &str) {
+    fixture(
+        &live.fx.env,
+        &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
-        ));
-    }
+        ),
+    );
+}
 
-    /// `data` of the one `job-merged` Event of Job `key`.
-    fn merged_data(&self, key: &str) -> Value {
-        let all: Vec<Value> = self
-            .store()
-            .read(|c| {
-                let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND job = ?1 AND kind = 'job-merged'")?;
-                let rows = stmt.query_map([key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
-            })
-            .unwrap();
-        assert_eq!(all.len(), 1, "one job-merged for {key}: {all:?}");
-        all[0].clone()
-    }
+/// `data` of the one `job-merged` Event of Job `key`.
+fn merged_data(live: &Live, key: &str) -> Value {
+    let all: Vec<Value> = store(&live.fx.env)
+        .read(|c| {
+            let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND job = ?1 AND kind = 'job-merged'")?;
+            let rows = stmt.query_map([key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
+        })
+        .unwrap();
+    assert_eq!(all.len(), 1, "one job-merged for {key}: {all:?}");
+    all[0].clone()
 }
 
 #[test]
 fn job_merged_does_not_turn_while_other_jobs_run() {
-    let fx = fx();
-    fx.pi(WORKER);
-    fx.add_draft("repo", "later");
-    fx.add_job("web", &[]); // queued: the Plan still has work in flight
-    let attempt = run_job(&fx, JOB);
+    let live = live("");
+    add_draft(&live, "repo", "later");
+    add_job_in(&live.fx.env, "repo", "web", &[]); // queued: the Plan still has work in flight
+    let (attempt, _) = live.run_job(JOB, work);
     assert_eq!(attempt["outcome"], "merged", "{attempt}");
-    assert_eq!(fx.merged_data(JOB)["turn"], json!(false), "{}", fx.merged_data(JOB));
+    assert_eq!(merged_data(&live, JOB)["turn"], json!(false), "{}", merged_data(&live, JOB));
 }
 
 #[test]
 fn a_merged_review_job_turns() {
-    let fx = fx();
+    let live = live("");
     // A review Job's Worker is a fork of the Lead: it waits for the Lead's session file to show a finished turn.
-    let file = fx.env.home().join(".pi/agent/sessions/lead/2026_lead1.jsonl");
+    let file = live.fx.env.home().join(".pi/agent/sessions/lead/2026_lead1.jsonl");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n").unwrap();
     File::options().write(true).open(&file).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
-    fx.fixture(&format!(
-        "UPDATE sessions SET file = '{}' WHERE id = 'lead1';
-         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, review, created_txn, created_at)
-         VALUES ('pay', 'repo', 'final', 'Title of final', 'S2', 'Review it.', 'Because.', '[\"run/pay/reviews/final.md\"]', '[\"findings written\"]', '[]', 'draft', 1, 1, cpd_txn(), 't');",
-        file.display()
-    ));
-    let plan = PlanId::parse(PLAN).unwrap();
-    let all = fx.store().read(|conn| jobs::load(conn, &plan)).unwrap();
-    let job = all.iter().find(|j| j.key == "final").unwrap();
-    fx.fixture(&format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'final';", locked_fingerprint(job)));
-    fx.pi(
-        r#"mkdir -p "$CPD_HOME/run/pay/reviews"
-echo "- one finding" > "$CPD_HOME/run/pay/reviews/final.md"
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1 || exit 4
-sleep 120"#,
+    fixture(
+        &live.fx.env,
+        &format!(
+            "UPDATE sessions SET file = '{}' WHERE id = 'lead1';
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, review, created_txn, created_at)
+             VALUES ('pay', 'repo', 'final', 'Title of final', 'S2', 'Review it.', 'Because.', '[\"run/pay/reviews/final.md\"]', '[\"findings written\"]', '[]', 'draft', 1, 1, cpd_txn(), 't');",
+            file.display()
+        ),
     );
-    let attempt = run_job(&fx, "final");
+    let plan = PlanId::parse(PLAN).unwrap();
+    let all = store(&live.fx.env).read(|conn| jobs::load(conn, &plan)).unwrap();
+    let job = all.iter().find(|j| j.key == "final").unwrap();
+    fixture(&live.fx.env, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'final';", locked_fingerprint(job)));
+    // Its Worker writes the findings and submits.
+    let (attempt, submitted) = live.run_job("final", |live, id| {
+        let findings = live.fx.env.cpd_home().join("run/pay/reviews/final.md");
+        fs::create_dir_all(findings.parent().unwrap()).unwrap();
+        fs::write(findings, "- one finding\n").unwrap();
+        submit(live, id)
+    });
     assert_eq!(attempt["outcome"], "merged", "{attempt}");
+    assert_eq!(submitted["ok"], true, "{submitted}");
     // No draft Job exists and `api` is queued: only the review makes it a turn.
-    assert_eq!(fx.merged_data("final")["turn"], json!(true), "{}", fx.merged_data("final"));
+    assert_eq!(merged_data(&live, "final")["turn"], json!(true), "{}", merged_data(&live, "final"));
 }
 
 // ---------- PRs across repos (R34) ----------
@@ -470,77 +432,64 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
 
 #[test]
 fn a_merge_conflict_ends_failed_and_the_ladder_queues_the_next_attempt_with_the_files() {
-    let fx = fx();
+    let live = live("");
     // The Worker edits README.md while another Job's merge edits it on the Lead Branch.
-    fx.pi(&format!(
-        "if [ \"$CPD_ATTEMPT\" = api-a1 ]; then\n\
-           echo theirs > \"$LEAD/README.md\"; git -C \"$LEAD\" commit -qam other\n\
-           echo ours > README.md; git commit -qam ours\n\
-           \"$CPD\" attempt submit \"$CPD_ATTEMPT\"\n\
-           sleep 120\n\
-         fi\n\
-         exit 4"
-    ));
+    let (_, ran) = drive_with_out(&live, JOB, |live, id, nap| {
+        if nap == 1 {
+            live.commit(&live.lead, "README.md", "theirs\n", "other");
+            live.commit(&live.worktree(id), "README.md", "ours\n", "ours");
+            submit(live, id);
+        }
+    });
+    let attempt = live.attempt(ATTEMPT);
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
-
-    assert_eq!(driver["outcome"], "failed");
+    assert_eq!(ran.ok()["outcome"], "failed");
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("merge_conflict")));
-    assert_eq!(fx.job_status(JOB), "queued");
-    let retry = fx.event(ATTEMPT, "attempt-retry");
+    assert_eq!(live.job_status(JOB), "queued");
+    let retry = event(&live, ATTEMPT, "attempt-retry");
     assert_eq!(retry["data"]["next_tier"], "S3");
     assert!(retry["data"]["feedback"].as_str().unwrap().contains("README.md"), "{retry}");
     // Failed Attempts keep their worktree for debugging.
-    assert!(fx.worktree(ATTEMPT).exists());
+    assert!(live.worktree(ATTEMPT).exists());
 
-    // The next Attempt is at the next Tier and its Spec names the files.
-    let next = fx.dispatch(JOB).ok();
+    // The next Attempt is at the next Tier and its Spec names the files; its Worker's pi ends without submitting.
+    let (next, _) = drive_with_out(&live, JOB, |live, id, nap| {
+        if nap == 1 {
+            worker_exits(live, id, 4);
+        }
+    });
     assert_eq!((&next["attempt"], &next["tier"], &next["origin"]), (&json!("api-a2"), &json!("S3"), &json!("ladder")));
-    let (second, _) = fx.wait_end("api-a2", &next["pid"]);
-    assert_eq!(second["cause"], "crashed");
-    let spec = fs::read_to_string(fx.env.cpd_home().join("run/pay/specs/api-a2.md")).unwrap();
+    assert_eq!(live.attempt("api-a2")["cause"], "crashed");
+    let spec = fs::read_to_string(live.fx.env.cpd_home().join("run/pay/specs/api-a2.md")).unwrap();
     assert!(spec.contains("### Attempt 1 (Tier `S2`)"), "{spec}");
     assert!(spec.contains("- Cause: merge_conflict"), "{spec}");
     assert!(spec.contains("  - `README.md`"), "{spec}");
 }
 
+fn kill_window_calls(live: &Live) -> usize {
+    live.fx.calls("tmux").iter().filter(|c| c.args.iter().any(|a| a == "kill-window")).count()
+}
+
 #[test]
 fn a_failed_kill_window_is_retried_and_appends_no_error() {
-    let fx = fx();
-    fx.pi("exit 3");
-    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    let real = real.trim();
-    assert!(real.starts_with('/'), "{real}");
-    // Fails the first `kill-window` only; every other call is the real tmux.
-    let marker = fx.env.root().join("kill-failed");
-    fx.env.fake(
-        "tmux",
-        &format!(
-            "for a in \"$@\"; do if [ \"$a\" = kill-window ] && [ ! -e '{m}' ]; then : > '{m}'; echo 'fake: kill-window failed' >&2; exit 1; fi; done\nexec '{real}' \"$@\"",
-            m = marker.display()
-        ),
-    );
+    let live = live("");
+    // Fails the first `kill-window` only; every other call is the fake tmux's.
+    (*live.fx.fakes.runner).clone().once("tmux", |c| c.args.iter().any(|a| a == "kill-window"), Reply::exit(1, "", "fake: kill-window failed"));
 
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_end(ATTEMPT, &out["pid"]);
+    // The Worker's pi exits 3 at once; its pane stays, dead.
+    let (id, _) = live.drive(JOB, |live, id, nap| {
+        if nap == 1 {
+            worker_exits(live, id, 3);
+        }
+    });
 
-    assert!(marker.exists(), "the fake tmux never failed a kill-window");
-    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
-    assert!(!fx.kinds(ATTEMPT).contains(&"error".to_owned()), "{:?}", fx.kinds(ATTEMPT));
+    assert_eq!(kill_window_calls(&live), 2, "the first kill-window failed and was tried again");
+    assert!(!windows(&live).contains("pay--api-a1"), "{}", windows(&live));
+    assert!(!kinds(&live, &id).contains(&"error".to_owned()), "{:?}", kinds(&live, &id));
 }
 
-/// The real `tmux` on `PATH`, for a fake that wraps it.
-fn real_tmux(fx: &Fx) -> String {
-    let real = String::from_utf8(fx.env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    let real = real.trim().to_owned();
-    assert!(real.starts_with('/'), "{real}");
-    real
-}
-
-/// The `list-panes` calls made so far, through a fake `tmux`.
-fn list_panes_calls(fx: &Fx) -> usize {
-    fx.env.calls("tmux").iter().filter(|argv| argv.iter().any(|a| a == "list-panes")).count()
+fn list_panes_calls(live: &Live) -> usize {
+    live.fx.calls("tmux").iter().filter(|argv| argv.args.iter().any(|a| a == "list-panes")).count()
 }
 
 /// engine-W8 (§6.3 liveness): one tmux hiccup, the server answering neither the first
@@ -548,164 +497,169 @@ fn list_panes_calls(fx: &Fx) -> usize {
 /// lists again at the next poll and the Worker keeps running.
 #[test]
 fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
-    let fx = fx();
-    fx.pi("sleep 120");
-    let (fired, answered) = (fx.env.root().join("list-panes-failed"), fx.env.root().join("list-sessions-failed"));
-    fx.env.fake(
-        "tmux",
-        &format!(
-            "case \" $* \" in\n\
-               *\" list-panes \"*) [ -e '{f}' ] || {{ : > '{f}'; echo 'lost server' >&2; exit 1; }};;\n\
-               *\" list-sessions \"*) if [ -e '{f}' ] && [ ! -e '{a}' ]; then : > '{a}'; echo 'lost server' >&2; exit 1; fi;;\n\
-             esac\nexec '{real}' \"$@\"",
-            f = fired.display(),
-            a = answered.display(),
-            real = real_tmux(&fx)
-        ),
-    );
+    let live = live("");
+    let (fired, answered) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (first, second) = (fired.clone(), (fired.clone(), answered.clone()));
+    let runner = (*live.fx.fakes.runner).clone();
+    let sub = |c: &Call, name: &str| c.args.iter().any(|a| a == name);
+    runner
+        .on("tmux", move |c| sub(c, "list-panes") && !first.swap(true, Ordering::SeqCst), Reply::exit(1, "", "lost server"))
+        .on("tmux", move |c| sub(c, "list-sessions") && second.0.load(Ordering::SeqCst) && !second.1.swap(true, Ordering::SeqCst), Reply::exit(1, "", "lost server"));
 
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_status(ATTEMPT, "running");
-    common::wait_some("the hiccup", Duration::from_secs(30), || if answered.exists() { Ok(()) } else { Err(format!("log: {}", fx.log(ATTEMPT))) });
-    // The poll after the hiccup lists the panes again: the failed one judged nothing.
-    common::wait_until("the driver to list the panes again", || list_panes_calls(&fx) >= 2);
-    // time-claim: the Worker is still running two polls after the retried listing; no per-poll signal from the driver
-    // once it has the pane's pid (it forks nothing).
-    std::thread::sleep(POLL * 2);
-    let attempt = fx.attempt(ATTEMPT);
-    assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", fx.log(ATTEMPT));
+    // The Worker's pi just runs. Poll 1 is the one that fails; the next polls list again.
+    let (id, _) = live.drive(JOB, |live, id, nap| match nap {
+        2 => assert!(answered.load(Ordering::SeqCst), "the hiccup did not happen\nlog: {}", log(live, id)),
+        // The poll after the hiccup lists the panes again: the failed one judged nothing.
+        4 => {
+            assert!(list_panes_calls(live) >= 2);
+            // The Worker is still running two polls after the retried listing.
+            let attempt = live.attempt(id);
+            assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", log(live, id));
+            fixture(&live.fx.env, "UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+        }
+        _ => {}
+    });
 
-    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
-    assert_eq!(attempt["cause"], "timed_out", "log: {}", fx.log(ATTEMPT));
+    assert_eq!(live.attempt(&id)["cause"], "timed_out", "log: {}", log(&live, &id));
 }
 
 #[test]
 fn a_failing_pre_start_ends_setup_failed_and_fails_the_job() {
-    let fx = fx();
-    fx.hooks("pre-start = \"exit 7\"\n");
+    let live = live("");
+    set_hooks(&live, "pre-start = \"exit 7\"\n");
+    live.fx.fake("sh", Reply::exit(7, "", ""));
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, _) = live.drive(JOB, |_, _, _| {});
+    let attempt = live.attempt(&id);
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("setup_failed")));
-    assert_eq!(fx.job_status(JOB), "failed");
-    assert_eq!(fx.kinds(ATTEMPT), ["attempt-started", "job-failed"]);
-    assert!(fx.env.calls("pi").is_empty());
-    assert!(!fx.worktree(ATTEMPT).exists());
+    assert_eq!(live.job_status(JOB), "failed");
+    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-failed"]);
+    assert!(live.fx.calls("pi").is_empty());
+    assert!(!live.fx.calls("tmux").iter().any(|c| c.args.iter().any(|a| a == "new-window")), "no Worker window was made");
+    assert!(!live.worktree(ATTEMPT).exists());
 }
 
 #[test]
 fn a_timed_out_stop_request_ends_it_and_fails_the_job() {
-    let fx = fx();
-    fx.pi("sleep 120");
-    let out = fx.dispatch(JOB).ok();
-    fx.wait_status(ATTEMPT, "running");
+    let live = live("");
 
-    fx.fixture("UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, _) = live.drive(JOB, |live, _, nap| {
+        if nap == 1 {
+            fixture(&live.fx.env, "UPDATE attempts SET stop_request = 'timed_out' WHERE plan = 'pay' AND id = 'api-a1';");
+        }
+    });
+    let attempt = live.attempt(&id);
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("timed_out")));
-    assert_eq!(fx.job_status(JOB), "failed");
-    assert!(!fx.windows().contains("pay--api-a1"), "{}", fx.windows());
+    assert_eq!(live.job_status(JOB), "failed");
+    assert!(!windows(&live).contains("pay--api-a1"), "{}", windows(&live));
 }
 
 #[test]
 fn an_idle_worker_is_nudged_once_then_ends_no_submit() {
-    let fx = fx();
-    fx.pi(&format!(
-        r#"sid=""; prev=""
-for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
-mkdir -p "$HOME/.pi/agent/sessions/w"
-f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
-msg='{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","usage":{{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{{"total":0}}}},"stopReason":"stop"}}}}'
-printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' "$msg" > "$f"
-"$CPD" session state idle > /dev/null
-i=0
-until "$CPD" events list --kind attempt-nudge | grep -q nudge; do
-  i=$((i+1)); [ $i -gt 300 ] && exit 9; sleep 0.2
-done
-"$CPD" session state working > /dev/null
-printf '%s\n' "$msg" >> "$f"
-"$CPD" session state idle > /dev/null
-sleep 120"#
-    ));
+    let live = live("");
+    let msg = r#"{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0}},"stopReason":"stop"}}"#;
+    let state = |live: &Live, sid: &str, state: &str| {
+        live.fx.cpd(&["session", "state", state, "--session", sid]).ok();
+    };
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, _) = live.drive(JOB, |live, id, nap| {
+        let sid: String = live.query("SELECT id FROM sessions WHERE role = 'worker'");
+        let dir = live.fx.env.home().join(".pi/agent/sessions/w");
+        let file = dir.join(format!("2026_{sid}.jsonl"));
+        match nap {
+            // pi's first turn ends: its session file shows it and its state is idle.
+            1 => {
+                fs::create_dir_all(&dir).unwrap();
+                fs::write(&file, format!("{}\n{msg}\n", r#"{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}"#)).unwrap();
+                state(live, &sid, "idle");
+            }
+            // The nudge came (the poll after it); pi answers it with a second turn and is idle again.
+            2 => {
+                assert!(events(live, id).iter().any(|e| e["kind"] == "attempt-nudge"), "{:?}", kinds(live, id));
+                state(live, &sid, "working");
+                let mut text = fs::read_to_string(&file).unwrap();
+                text += &format!("{msg}\n");
+                fs::write(&file, text).unwrap();
+                state(live, &sid, "idle");
+            }
+            _ => {}
+        }
+    });
+    let attempt = live.attempt(&id);
 
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("no_submit")), "{}", fx.log(ATTEMPT));
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("no_submit")), "{}", log(&live, &id));
     assert_eq!(attempt["nudged"], true);
-    let nudge = fx.event(ATTEMPT, "attempt-nudge");
+    let nudge = event(&live, ATTEMPT, "attempt-nudge");
     assert_eq!(nudge["session"], attempt["worker_session"]);
     assert!(nudge["data"]["prompt"].as_str().unwrap().starts_with("You ended your turn without running cpd attempt submit api-a1."));
-    assert_eq!(fx.kinds(ATTEMPT).iter().filter(|k| *k == "attempt-nudge").count(), 1);
-    assert_eq!(fx.event(ATTEMPT, "attempt-retry")["data"]["cause"], "no_submit");
+    assert_eq!(kinds(&live, ATTEMPT).iter().filter(|k| *k == "attempt-nudge").count(), 1);
+    assert_eq!(event(&live, ATTEMPT, "attempt-retry")["data"]["cause"], "no_submit");
 }
 
 // ---------- cancel at each safe point ----------
 
-fn assert_cancelled(fx: &Fx, attempt: &Value, reason: &str) {
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("cancelled"), &json!("cancel_requested")), "{}", fx.log(ATTEMPT));
-    assert_eq!(fx.job_status(JOB), "cancelled");
-    assert_eq!(fx.event(ATTEMPT, "job-cancelled")["data"], json!({"reason": reason}));
+fn assert_cancelled(live: &Live, attempt: &Value, reason: &str) {
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("cancelled"), &json!("cancel_requested")), "{}", log(live, ATTEMPT));
+    assert_eq!(live.job_status(JOB), "cancelled");
+    assert_eq!(event(live, ATTEMPT, "job-cancelled")["data"], json!({"reason": reason}));
 }
 
 #[test]
 fn a_cancel_before_a3_ends_it_before_the_worker_starts() {
-    let fx = fx();
+    let mut live = live("");
     // pre-start runs in A2: the request is there at the safe point before A3.
-    fx.hooks(&format!("pre-start = \"{}\"\n", fx.cpd_line("job cancel api --reason early --plan pay > /dev/null")));
+    let hook = "cpd job cancel api --reason early --plan pay";
+    set_hooks(&live, &format!("pre-start = \"{hook}\"\n"));
+    After::install(&mut live, "sh", move |args| args.iter().any(|a| a == hook), &["job", "cancel", JOB, "--reason", "early", "--plan", PLAN]);
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, ran) = live.drive(JOB, |_, _, _| {});
+    let attempt = live.attempt(&id);
 
-    assert_eq!(driver["outcome"], "cancelled");
-    assert_cancelled(&fx, &attempt, "early");
+    assert_eq!(ran.ok()["outcome"], "cancelled");
+    assert_cancelled(&live, &attempt, "early");
     assert!(attempt["worker_session"].is_null());
-    assert!(fx.env.calls("pi").is_empty());
-    assert_eq!(fx.kinds(ATTEMPT), ["attempt-started", "job-cancel-requested", "job-cancelled"]);
+    assert!(live.fx.calls("pi").is_empty());
+    assert_eq!(kinds(&live, ATTEMPT), ["attempt-started", "job-cancel-requested", "job-cancelled"]);
 }
 
 #[test]
 fn a_cancel_before_the_rebase_ends_it_without_merging() {
-    let fx = fx();
-    let old = fx.lead_sha();
-    fx.pi(
-        "echo api > api.txt; git add -A; git commit -qm api\n\
-         \"$CPD\" job cancel api --reason mid > /dev/null\n\
-         \"$CPD\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
-         sleep 120",
-    );
+    let live = live("");
+    let old = live.lead_sha();
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, _) = live.drive(JOB, |live, id, nap| {
+        if nap == 1 {
+            live.commit(&live.worktree(id), "api.txt", "api\n", "api");
+            cancel(live, id, "mid");
+            submit(live, id);
+        }
+    });
 
-    assert_cancelled(&fx, &attempt, "mid");
-    assert_eq!(fx.lead_sha(), old);
-    assert!(fx.kinds(ATTEMPT).contains(&"attempt-status".to_owned()));
+    assert_cancelled(&live, &live.attempt(&id), "mid");
+    assert_eq!(live.lead_sha(), old);
+    assert!(kinds(&live, ATTEMPT).contains(&"attempt-status".to_owned()));
 }
 
 #[test]
 fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
-    let fx = fx();
-    // The request arrives during the rebase, after the first safe point.
-    let hook = fx.repo.join(".git/hooks/post-rewrite");
-    write_executable(&hook, &format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay")));
-    // Another Job merges first, so the rebase rewrites the Worker's commit.
-    fx.pi(
-        "git -C \"$LEAD\" commit -q --allow-empty -m other\n\
-         echo api > api.txt; git add -A; git commit -qm api\n\
-         \"$CPD\" attempt submit \"$CPD_ATTEMPT\" > /dev/null\n\
-         sleep 120",
-    );
+    let mut live = live("");
+    // The request arrives during the rebase, after the first safe point: git's `post-rewrite` hook runs `job cancel` once the rebase
+    // has rewritten the Worker's commit.
+    After::install(&mut live, "git", |args| args.iter().any(|a| a == "rebase"), &["job", "cancel", JOB, "--reason", "late", "--plan", PLAN]);
 
-    let out = fx.dispatch(JOB).ok();
-    let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
+    let (id, _) = live.drive(JOB, |live, id, nap| {
+        if nap == 1 {
+            // Another Job merges first, so the rebase rewrites the Worker's commit.
+            live.fx.git(&live.lead, &["commit", "-q", "--allow-empty", "-m", "other"]);
+            work(live, id);
+        }
+    });
 
-    assert_cancelled(&fx, &attempt, "late");
-    let lead = fx.lead_sha();
-    assert_eq!(fx.env.git(&fx.repo, &["log", "-1", "--format=%s", &lead]), "other");
+    assert_cancelled(&live, &live.attempt(&id), "late");
+    let lead = live.lead_sha();
+    assert_eq!(live.fx.git(&live.repo, &["log", "-1", "--format=%s", &lead]), "other");
 }
 
 // ---------- the driver lock ----------
@@ -834,23 +788,27 @@ fn dispatch_refuses_when_no_slot_is_free() {
 
 #[test]
 fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
-    let fx = fx();
-    fx.pi("exit 0");
-    fx.fixture(
+    let live = live("");
+    fixture(
+        &live.fx.env,
         "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'api';
          INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
            VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 't');
          UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';
          UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'api';",
     );
-    fx.env.cpd(&["job", "retry", JOB, "--tier", "S3", "--plan", PLAN]).ok();
+    live.fx.cpd(&["job", "retry", JOB, "--tier", "S3", "--plan", PLAN]).ok();
 
-    let out = fx.dispatch(JOB).ok();
+    // The Worker's pi exits 0 at once.
+    let (out, _) = drive_with_out(&live, JOB, |live, id, nap| {
+        if nap == 1 {
+            worker_exits(live, id, 0);
+        }
+    });
 
     assert_eq!((&out["attempt"], &out["tier"], &out["origin"]), (&json!("api-a2"), &json!("S3"), &json!("retry")));
-    let (attempt, _) = fx.wait_end("api-a2", &out["pid"]);
-    assert_eq!(attempt["origin"], "retry");
-    assert_eq!(fx.event("api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S3", "origin": "retry"}));
+    assert_eq!(live.attempt("api-a2")["origin"], "retry");
+    assert_eq!(event(&live, "api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S3", "origin": "retry"}));
 }
 
 // ---------- the update Job ----------
@@ -882,12 +840,6 @@ impl Rows {
             })
             .unwrap()
     }
-}
-
-/// Runs Job `key` to its end: dispatches it, waits for its Attempt `<key>-a1` and its driver, returns the Attempt.
-fn run_job(fx: &Fx, key: &str) -> Value {
-    let out = fx.dispatch(key).ok();
-    fx.wait_end(&format!("{key}-a1"), &out["pid"]).0
 }
 
 /// The approval of a review queues the update Job for the fix drafts it queues on an open PR (hs-d497 (2); the other cause of `job add`): one
