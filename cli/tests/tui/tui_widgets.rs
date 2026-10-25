@@ -22,7 +22,7 @@ use cpd_core::store::Store;
 use cpd_tui::ViewError;
 use cpd_tui::pump::{Feed, Signal};
 use cpd_tui::view_ports::Ctx;
-use crossterm::event::{Event, KeyCode, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, MouseEventKind};
 use cpd_tui::link::CUE;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Widgets};
@@ -602,6 +602,13 @@ fn show(fx: &Fx, signals: Vec<Signal>, steps: &Steps) -> SharedBackend {
     screen
 }
 
+/// An `Fx` whose config is the one a view needs (machine `m1`, the private tmux server): `Config::load` refuses a home without one.
+fn view_fx() -> Fx {
+    let fx = Fx::new();
+    fx.env.write_tmux_config("");
+    fx
+}
+
 /// Whether the screen shows the PR `name` (` acme/repo#9`) at the start of a row.
 fn shows(screen: &Screen, name: &str) -> bool {
     screen.shown_rows().iter().any(|r| r.starts_with(&format!(" {name} ")))
@@ -709,7 +716,7 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
 /// ended the program would be a restart (tui-W1).
 #[test]
 fn q_does_not_end_the_view() {
-    let fx = Fx::new();
+    let fx = view_fx();
     prs_store(&fx.env);
     let clock = fx.fakes.clock.clone();
     let steps = Steps::new()
@@ -725,7 +732,7 @@ fn q_does_not_end_the_view() {
 /// error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
 #[test]
 fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
-    let fx = Fx::new();
+    let fx = view_fx();
     prs_store(&fx.env);
     let (db, clock) = (fx.env.cpd_home().join("cpd.db"), fx.fakes.clock.clone());
     let failed = |s: &Screen| s.contains("no such table");
@@ -752,7 +759,7 @@ fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
 /// the cursor, which is what a replaced database looks like.
 #[test]
 fn a_follow_that_fails_is_shown_and_the_column_stays() {
-    let fx = Fx::new();
+    let fx = view_fx();
     prs_store(&fx.env);
     let (db, clock) = (fx.env.cpd_home().join("cpd.db"), fx.fakes.clock.clone());
     let steps = Steps::new()
@@ -796,7 +803,7 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
 
 #[test]
 fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_muted_cue_rows() {
-    let fx = Fx::new();
+    let fx = view_fx();
     let mut s = String::new();
     for n in 1..=21 {
         s += &pull_request("acme/repo", n, "A title", false, "open", "none", "passed", &format!("2026-01-03T00:{n:02}:00.000Z"));
@@ -811,21 +818,21 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_muted_cue_rows() {
         .at(
             "the first PRs and the cue below",
             move |s| {
-                rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && has(s, "acme/repo#16") && !has(s, "acme/repo#17") && !s.contains('▲')
+                rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && has(s, "acme/repo#16") && !has(s, "acme/repo#17") && !s.contains("▲")
             },
             |screen| assert_eq!(screen.cell_of("▼ 5 more").fg, palette::muted_text().fg.unwrap(), "the cue is muted, colour 8"),
         )
         // A notch outside the section does nothing: its frame is the first one
         .next("a notch outside the section", move |screen| {
-            assert!(rows(screen, cue_row('▼', 5)) && has(screen, "acme/repo#1") && !screen.contains('▲'), "{}", screen.text());
+            assert!(rows(screen, cue_row('▼', 5)) && has(screen, "acme/repo#1") && !screen.contains("▲"), "{}", screen.text());
         })
         // one inside moves by one pull request
         .at("one pull request down", move |s| rows(s, cue_row('▲', 1)) && rows(s, cue_row('▼', 4)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1"), |_| {})
         // Past the end it stops, with the last pull request at the bottom and no cue below.
-        .at("the end", move |s| rows(s, cue_row('▲', 5)) && has(s, "acme/repo#21") && has(s, "acme/repo#6") && !has(s, "acme/repo#5") && !s.contains('▼'), |_| {})
+        .at("the end", move |s| rows(s, cue_row('▲', 5)) && has(s, "acme/repo#21") && has(s, "acme/repo#6") && !has(s, "acme/repo#5") && !s.contains("▼"), |_| {})
         // And back up, one at a time.
         .at("one back up", move |s| rows(s, cue_row('▲', 4)) && rows(s, cue_row('▼', 1)) && has(s, "acme/repo#5") && !has(s, "acme/repo#21"), |_| {})
-        .at("the top", move |s| rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && !s.contains('▲'), |_| {});
+        .at("the top", move |s| rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && !s.contains("▲"), |_| {});
     let mut signals = vec![input(wheel(MouseEventKind::ScrollDown, 3, 1)), down()];
     signals.extend((0..20).map(|_| down()));
     signals.push(up());
@@ -841,8 +848,7 @@ fn widgets_log(home: &Path) -> String {
 
 #[test]
 fn a_refused_session_open_is_logged_and_draws_no_note() {
-    let fx = Fx::new();
-    fx.env.write_tmux_config("");
+    let fx = view_fx();
     prs_store(&fx.env);
     let home = fx.env.cpd_home();
     let log = move || widgets_log(&home);
@@ -1207,7 +1213,7 @@ fn menu_columns(screen: &[String]) -> (usize, usize) {
 
 #[test]
 fn the_deploy_columns_menu_keeps_one_blank_column_on_each_side_of_the_pane() {
-    let fx = Fx::new();
+    let fx = view_fx();
     clean_prs(&fx.env);
     let width = 120;
     // the row of `acme/web#4` in the 120-column pane: the first frame shows it there
