@@ -1,6 +1,6 @@
 //! The repo's policy file as its configuration (contract §8.3, commands.md §22.1): the
 //! `repo_unconfigured` refusal and the repo-only domains `hooks`, `test-commands` and `protected`,
-//! the command tree, in this process (`Fx`), against a temporary `$CPD_HOME`.
+//! the command tree, in this process (`Fx::with_ports`), against a temporary `$CPD_HOME`; the repo of `pr add` is a repo of the fake git.
 
 use crate::common;
 
@@ -11,7 +11,7 @@ use common::refused;
 use serde_json::{json, Value};
 
 fn fx() -> Fx {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     fx
 }
@@ -28,6 +28,25 @@ fn real(fx: &Fx, rel: &str) -> String {
 fn policy_show_of_a_repo_without_a_file_is_repo_unconfigured() {
     let fx = fx();
     let run = fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"]);
+    let error = refused(&run, "repo_unconfigured", 3);
+    assert_eq!(error["details"]["repo"], "acme/shop");
+    assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{run:?}");
+}
+
+#[test]
+fn pr_add_of_a_repo_without_a_file_is_repo_unconfigured() {
+    let fx = fx();
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Payments', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead1', 't');",
+    );
+    // A keyed repo whose policy file is removed: unconfigured.
+    let repo = fx.keyed_repo("shop");
+    fs::remove_file(fx.env.cpd_home().join("policy/repos/acme/shop.toml")).unwrap();
+    let run = fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]);
     let error = refused(&run, "repo_unconfigured", 3);
     assert_eq!(error["details"]["repo"], "acme/shop");
     assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{run:?}");

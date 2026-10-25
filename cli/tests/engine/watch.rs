@@ -9,19 +9,24 @@ mod checkout;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::fx::Fx as Ip;
 use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
+use cpd_core::host::runner::{Call, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::output::Output;
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::macros::format_description;
@@ -366,17 +371,16 @@ fn watch_holds_the_lock_refuses_a_second_and_stops_on_sigterm() {
     assert_eq!(fx.count("watch-stopped"), 2);
 }
 
-/// `tmux kill-window` (the install's restart of the engine) sends SIGHUP: it is a stop, not a crash.
+/// `tmux kill-window` (the install's restart of the engine) sends SIGHUP: it is a stop, not a crash. The signal's one job,
+/// setting the stop flag, is `catch_signals` (the smoke test above sends real SIGTERM and SIGINT); here the flag is `until`.
 #[test]
 fn watch_stops_on_sighup_with_one_watch_stopped() {
-    let fx = fx("");
-    let engine = fx.start();
-    let pid = engine.pid();
+    let fx = engine("");
 
-    let out = engine.stop_with(Signal::SIGHUP);
-    assert_eq!(out.json(), json!({"ok": true, "stopped": true}), "{out:?}");
-    assert_eq!(out.exit, 0);
-    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
+    let out = fx.watch_first_tick().unwrap();
+
+    assert_eq!(out, Output::success(json!({"stopped": true})), "{out:?}");
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": std::process::id()}))]);
 }
 
 #[test]
@@ -440,11 +444,6 @@ impl Fx {
         ));
     }
 
-    /// The Manager `mgr1` got no downtime message: a restart is in the `watch-started` Event and the log only (hs-d514).
-    fn manager_heard_nothing(&self) {
-        assert_eq!(self.messages(), [], "a restart sends no session-message");
-    }
-
     /// The messages the engine sent: `(session, context, data)`.
     fn messages(&self) -> Vec<(String, Option<String>, Value)> {
         self.store()
@@ -459,40 +458,221 @@ impl Fx {
     }
 }
 
+// ---------- the engine in-process: `watch::run_with(ports, until)` on a `ManualClock` ----------
+
+/// A home for the engine on fake ports ([`Fx::watch`]): its config, the routes it needs, Context `ctx`. No tmux, no git, no
+/// process, no wait: the clock is the `ManualClock`, so a time a test sets is exact.
+fn engine(config_extra: &str) -> Ip {
+    let fx = Ip::with_ports();
+    fx.engine_config(config_extra);
+    fx.engine_routes();
+    fx.env.sql("INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');");
+    fx
+}
+
+fn engine_log(fx: &Ip) -> String {
+    fs::read_to_string(fx.home().watch_log()).unwrap_or_default()
+}
+
+/// What the engine tests read of, and put in, an in-process home.
+trait Home {
+    fn home(&self) -> CpdHome;
+    /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
+    fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)>;
+    fn texts(&self, kind: &str) -> Vec<String>;
+    /// The messages the engine sent: `(session, context, data)`.
+    fn messages(&self) -> Vec<(String, Option<String>, Value)>;
+    fn manager(&self, id: &str);
+    fn marker_path(&self) -> PathBuf;
+    /// The `watch-started` text of the engine under test (the last).
+    fn started_text(&self) -> String;
+    /// A home whose previous engine (pid [`PREVIOUS_ENGINE`]) started an hour ago and stopped `down_ms` before the clock's
+    /// now, saying so (`watch-stopped`) when `said`, else leaving nothing (a crash: it was last alive at its start).
+    fn previous_engine(&self, down_ms: i64, said: bool);
+    /// The previous engine's lock file as it last marked it: `ms` before the clock's now.
+    fn last_marked_alive(&self, ms: i64);
+    /// The install's marker, written `age_ms` before the clock's now for the engine `pid`.
+    fn marker(&self, pid: i64, age_ms: i64);
+    fn raw_marker(&self, text: &str);
+    /// The engine starts, ticks once and stops: what the Managers were told is then settled.
+    fn start_and_stop(&self);
+    /// No Manager got a downtime message, and the engine's `watch-started` says `how`.
+    fn told_with(&self, how: &str);
+}
+
+impl Home for Ip {
+    fn home(&self) -> CpdHome {
+        CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap()
+    }
+
+    fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
+            let rows = stmt
+                .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
+        })
+    }
+
+    fn texts(&self, kind: &str) -> Vec<String> {
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
+            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    fn messages(&self) -> Vec<(String, Option<String>, Value)> {
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT session, context, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.into_iter().map(|(s, c, d)| (s, c, serde_json::from_str(&d).unwrap())).collect())
+        })
+    }
+
+    fn manager(&self, id: &str) {
+        self.env.sql(&format!(
+            "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', 'ctx', 'Manager {id}', '/', 'O3', 'stopped', 't', 't');"
+        ));
+    }
+
+    fn marker_path(&self) -> PathBuf {
+        self.home().run_dir().join("install-restart.json")
+    }
+
+    fn started_text(&self) -> String {
+        self.texts("watch-started").pop().unwrap()
+    }
+
+    fn previous_engine(&self, down_ms: i64, said: bool) {
+        let stopped = if said {
+            format!(
+                "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-stopped', 'The engine stopped.', '{{\"pid\":{PREVIOUS_ENGINE}}}');",
+                self.stamp_ago(down_ms)
+            )
+        } else {
+            String::new()
+        };
+        // Without a `watch-stopped` the engine is dated by its `watch-started`.
+        let started_ago = if said { 3_600_000 } else { down_ms };
+        self.env.sql(&format!(
+            "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{PREVIOUS_ENGINE}}}');{stopped}",
+            self.stamp_ago(started_ago)
+        ));
+    }
+
+    fn last_marked_alive(&self, ms: i64) {
+        let path = self.home().watch_lock();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = File::create(&path).unwrap();
+        file.set_modified(self.utc_ago(ms).into()).unwrap();
+    }
+
+    fn marker(&self, pid: i64, age_ms: i64) {
+        self.raw_marker(&json!({"by": "install-cpd.sh", "at": self.stamp_ago(age_ms), "engine_pid": pid}).to_string());
+    }
+
+    fn raw_marker(&self, text: &str) {
+        fs::create_dir_all(self.marker_path().parent().unwrap()).unwrap();
+        fs::write(self.marker_path(), text).unwrap();
+    }
+
+    fn start_and_stop(&self) {
+        self.watch_first_tick().unwrap();
+    }
+
+    fn told_with(&self, how: &str) {
+        assert_eq!(self.messages(), [], "a restart sends no session-message (hs-d514): the Managers are not told");
+        assert!(self.started_text().contains(how), "{how:?} not in {}", self.started_text());
+    }
+}
+
 // ---------- the downtime message (hs-d328) ----------
 
+/// `Fx::watch` ends the engine at the nap that follows the first tick: one tick, one nap of a tenth of a second, no wait.
 #[test]
-fn a_restart_sends_no_downtime_notice() {
-    let fx = fx("");
-    fx.manager("mgr1");
-    let first = fx.start();
-    let _ = first.stop();
-    let second = fx.start();
-    let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped'");
-    // The record is the Event's text, not a message (hs-d514: the Managers are not told of a restart).
-    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {stopped_at}")), "{:?}", fx.texts("watch-started"));
-    assert_eq!(fx.messages(), [], "no Manager is sent the downtime");
-    let _ = second.stop();
+fn the_engine_in_process_runs_until_the_first_tick_and_naps_once_on_virtual_time() {
+    let fx = engine("");
+
+    fx.watch_first_tick().unwrap();
+
+    assert_eq!(fx.fakes.clock.naps(), [Duration::from_millis(100)]);
+    assert_eq!((fx.events("watch-started").len(), fx.events("watch-stopped").len()), (1, 1));
 }
 
 #[test]
-fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
-    let fx = fx("");
+fn the_engine_in_process_runs_until_the_nap_it_is_told_and_the_hook_sees_each_nap_before_it_passes() {
+    let fx = engine("");
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+
+    fx.watch(3, move |nap| log.lock().unwrap().push(nap)).unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), [1, 2, 3]);
+    assert_eq!(fx.fakes.clock.naps(), [Duration::from_millis(100); 3]);
+}
+
+#[test]
+fn the_engine_in_process_runs_until_its_step_says_the_nap_is_the_last_and_the_step_sees_the_state_after_each_tick() {
+    let fx = engine("");
+    let clock = fx.fakes.clock.clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+
+    // The engine is quiet, so the state the step reads is the virtual time: it stops at the nap that passes the 2 s mark.
+    fx.watch_steps(move |nap| {
+        log.lock().unwrap().push((nap, clock.elapsed()));
+        clock.elapsed() >= Duration::from_secs(2)
+    })
+    .unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.first(), Some(&(1, Duration::ZERO)));
+    assert_eq!(seen.last(), Some(&(21, Duration::from_secs(2))));
+    assert_eq!(fx.fakes.clock.naps().len(), 21);
+}
+
+#[test]
+fn a_plan_and_a_queued_job_in_process_have_the_locked_fingerprint_the_engine_checks() {
+    let fx = engine("");
+    fx.engine_plan();
+    fx.add_job("api", &[], "");
+    fx.add_job("web", &["api"], "");
+
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "queued");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE plan = 'pay' AND fingerprint IS NOT NULL"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT needs FROM dependencies WHERE plan = 'pay' AND job = 'web'"), "api");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+}
+
+#[test]
+fn a_restart_sends_no_downtime_notice() {
+    let fx = engine("");
     fx.manager("mgr1");
-    let first = fx.start();
-    first.signal(Signal::SIGKILL);
-    let mut first = first;
-    let _ = first.child.take().unwrap().wait();
-    let lock = fx.env.cpd_home().join("locks/watch.lock");
-    wait_until("the killed engine's lock to be free", || {
-        let file = OpenOptions::new().read(true).write(true).open(&lock).unwrap();
-        Flock::lock(file, FlockArg::LockExclusiveNonblock).is_ok()
-    });
-    let second = fx.start();
-    fx.env.wait_whole_ticks(2);
+    fx.watch_first_tick().unwrap();
+    let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped' ORDER BY id LIMIT 1");
+    fx.watch_first_tick().unwrap();
+    // The record is the Event's text, not a message (hs-d514: the Managers are not told of a restart).
+    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {stopped_at}")), "{:?}", fx.texts("watch-started"));
+    assert_eq!(fx.messages(), [], "no Manager is sent the downtime");
+}
+
+/// A SIGKILLed engine leaves no `watch-stopped`, and its lock file as it last marked it (the engine marks it at each tick):
+/// the fixture is what the kill leaves, the engine reading it is the subject.
+#[test]
+fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
+    let fx = engine("");
+    fx.manager("mgr1");
+    fx.previous_engine(60_000, false);
+    fx.last_marked_alive(500);
+    fx.watch(2, |_| {}).unwrap();
     assert_eq!(fx.messages(), []);
-    assert!(fx.texts("watch-started")[1].contains("it was last alive"), "{:?}", fx.texts("watch-started"));
-    let _ = second.stop();
+    let text = fx.started_text();
+    assert!(text.contains("it was last alive"), "{:?}", fx.texts("watch-started"));
+    assert!(text.contains("The engine was down for 0.5 s"), "down from the lock's last mark, not from its start: {text}");
 }
 
 // ---------- @cpd_workers ----------
@@ -934,21 +1114,6 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
 }
 
-/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where `fx_bare` put a `cpd` that records its calls).
-#[test]
-fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
-    let fx = fx_bare("");
-    let installed = fx.env.root().join("cpd-installed");
-    copy_executable(CPD, &installed);
-    let engine = fx.start_from(&installed);
-
-    wait_until("a poll (the search reaches gh)", || !fx.env.calls("gh").is_empty());
-    engine.stop();
-
-    assert_eq!(fx.env.calls("cpd"), Vec::<Vec<String>>::new(), "E5 ran the cpd on PATH");
-    assert_eq!(fx.count("error"), 0);
-}
-
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
 /// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
 /// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: `2^k` units, the unit a
@@ -1147,24 +1312,39 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
 /// `watch-stopped` is appended when the engine stops while the store is busy, however long that lasts.
 #[test]
 fn watch_stopped_waits_for_a_busy_store() {
-    let fx = fx(SHORT_BUSY);
-    let mut engine = fx.start();
-    let pid = engine.pid();
+    let fx = engine(SHORT_BUSY);
+    let home = fx.home();
+    let (db, log) = (home.db(), home.watch_log());
+    let held = Arc::new(Mutex::new(None::<Connection>));
+    // What the test saw while the stop waited: (the `watch-stopped` Events, the log after "stopping on a signal").
+    let seen = Arc::new(Mutex::new(None::<(i64, String)>));
+    let (taken, looked) = (held.clone(), seen.clone());
+    let out = fx
+        .watch(1, move |nap| match nap {
+            // The stop is requested (`until`, set when this nap passes) while a connection that is not cpd's holds the write lock.
+            1 => {
+                let other = Connection::open(&db).unwrap();
+                other.busy_timeout(Duration::ZERO).unwrap();
+                other.execute_batch("BEGIN IMMEDIATE").unwrap();
+                *taken.lock().unwrap() = Some(other);
+            }
+            // The stop has met the lock for longer than `store_busy_ms`: its `store_busy` is logged after the stop. Let go.
+            3 => {
+                let count = Connection::open(&db).unwrap().query_row("SELECT count(*) FROM events WHERE kind = 'watch-stopped'", [], |r| r.get(0)).unwrap();
+                let text = fs::read_to_string(&log).unwrap_or_default();
+                *looked.lock().unwrap() = Some((count, text));
+                taken.lock().unwrap().take().expect("held").execute_batch("ROLLBACK").unwrap();
+            }
+            _ => {}
+        })
+        .unwrap();
 
-    let held = hold_write_lock(&fx);
-    engine.signal(Signal::SIGTERM);
-    // `watch-stopped` met the lock for longer than `store_busy_ms`: its `store_busy` is logged after the stop.
-    wait_until("the stopping engine to meet the lock", || {
-        watch_log(&fx).split("stopping on a signal").nth(1).is_some_and(|after| after.contains("store_busy: "))
-    });
-    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited without watch-stopped");
-    assert_eq!(fx.count("watch-stopped"), 0);
-    held.release();
-    let out = engine.child.take().unwrap().wait_with_output().unwrap();
-
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
-    assert!(!watch_log(&fx).contains("cannot append watch-stopped"), "{}", watch_log(&fx));
+    let (count, text) = seen.lock().unwrap().take().expect("the stop waited for the store");
+    assert_eq!(count, 0, "the engine exited without watch-stopped");
+    assert!(text.split("stopping on a signal").nth(1).is_some_and(|after| after.contains("store_busy: ")), "{text}");
+    assert_eq!(out, Output::success(json!({"stopped": true})));
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": std::process::id()}))]);
+    assert!(!engine_log(&fx).contains("cannot append watch-stopped"), "{}", engine_log(&fx));
 }
 
 // ---------- E3: a draft ----------
@@ -1626,11 +1806,48 @@ else echo '{ok}'; fi; exit 0"#,
     assert_eq!(data["details"], json!({"remaining": 50, "reset_at": reset_at}));
 }
 
+// ---------- E3's back-off, E5's executable and E6, in-process ----------
+
+/// A Job whose latest 9 Attempts never had a driver, the last just ended: E3 waits 300 s, so no tick starts it.
+#[test]
+fn e3_does_not_start_a_job_in_its_backoff() {
+    let fx = engine("");
+    fx.engine_plan();
+    let now = fx.stamp_ago(0);
+    let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
+    fx.add_job("api", &[], &attempts);
+
+    // Three whole ticks (a tick is ten naps of a tenth of a second).
+    fx.watch(30, |_| {}).unwrap();
+
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 9);
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'"), "queued");
+    assert_eq!(fx.texts("error"), Vec::<String>::new());
+}
+
+/// E5 runs `cpd pr poll` from the path recorded at start, not from `PATH` (where the `cpd` route of `engine_routes` stands:
+/// it must see no call).
+#[test]
+fn e5_polls_with_the_engines_recorded_executable_not_the_one_on_path() {
+    let fx = engine("");
+    let installed = fx.env.root().join("cpd-installed");
+    fx.fakes.spawn.set_self_exe(&installed);
+    let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+    fx.fake("cpd-installed", Reply::ok(&poll.to_string()));
+
+    fx.watch_first_tick().unwrap();
+
+    let polls = fx.calls("cpd-installed");
+    assert_eq!(polls.iter().map(|call| (call.program.as_str(), call.args.as_slice())).collect::<Vec<_>>(), [(installed.to_str().unwrap(), ["pr".to_owned(), "poll".to_owned()].as_slice())]);
+    assert_eq!(fx.calls("cpd"), Vec::<Call>::new(), "E5 ran the cpd on PATH");
+    assert_eq!(fx.events("error").len(), 0);
+}
+
 // ---------- E6 (removed) ----------
 
 #[test]
 fn the_engine_neither_imports_nor_syncs_a_context_store() {
-    let fx = fx("");
+    let fx = engine("");
     // An old git store the database does not hold: only migration 0007 reads those, once.
     let store = fx.env.cpd_home().join("contexts/demo");
     fs::create_dir_all(store.join("records")).unwrap();
@@ -1643,16 +1860,15 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     // Not a store at all: E6 used to log and skip it; nothing looks now.
     fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(2);
-    let run = engine.stop();
+    // Two whole ticks (a tick is ten naps of a tenth of a second) and the one that ends the run.
+    fx.watch(20, |_| {}).unwrap();
 
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM context_records"), 0);
-    assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
-    assert_eq!(fx.count("error"), 0);
+    assert_eq!(fx.events("context-created").len() + fx.events("context-record").len(), 0);
+    assert_eq!(fx.events("error").len(), 0);
     assert!(store.join("context.json").is_file(), "the folder is left alone");
-    assert!(!run.stderr.contains("E6"), "{}", run.stderr);
+    assert!(!engine_log(&fx).contains("E6"), "{}", engine_log(&fx));
 }
 
 // ---------- scripts/install-cpd.sh (Finding 5) ----------
@@ -1939,16 +2155,6 @@ impl Fx {
         self.env.cpd_home().join("run/install-restart.json")
     }
 
-    /// The install's marker, written `age` seconds ago for the engine `pid`.
-    fn marker(&self, pid: i64, age: f64) {
-        self.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(age), "engine_pid": pid}).to_string());
-    }
-
-    fn raw_marker(&self, text: &str) {
-        fs::create_dir_all(self.marker_path().parent().unwrap()).unwrap();
-        fs::write(self.marker_path(), text).unwrap();
-    }
-
     /// Starts the engine, lets it finish its start and stops it: what the Managers were told is then settled.
     fn start_and_stop(&self) {
         let _ = self.start().stop();
@@ -1958,32 +2164,27 @@ impl Fx {
     fn started_text(&self) -> String {
         self.texts("watch-started").pop().unwrap()
     }
-
-    /// No Manager got a downtime message, whatever `how` the engine stopped.
-    fn told_with(&self, _how: &str) {
-        self.manager_heard_nothing();
-    }
 }
 
 #[test]
 fn a_planned_restart_back_within_ten_seconds_is_logged_and_tells_no_manager() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
-    fx.marker(PREVIOUS_ENGINE, 1.0);
+    fx.previous_engine(500, true);
+    fx.marker(PREVIOUS_ENGINE, 1_000);
     fx.start_and_stop();
     assert_eq!(fx.messages(), [], "a quiet restart sends no session-message");
     let text = fx.started_text();
     assert!(text.contains("The engine was down for ") && text.contains(&format!("{PLANNED}.")), "{text}");
-    assert!(watch_log(&fx).contains(&format!("{PLANNED}.")), "{}", watch_log(&fx));
+    assert!(engine_log(&fx).contains(&format!("{PLANNED}.")), "{}", engine_log(&fx));
     assert!(!fx.marker_path().exists(), "the marker is consumed at the start");
 }
 
 #[test]
 fn a_stop_with_no_marker_tells_each_manager_as_before() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
+    fx.previous_engine(500, true);
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
@@ -1991,40 +2192,44 @@ fn a_stop_with_no_marker_tells_each_manager_as_before() {
 
 #[test]
 fn a_planned_restart_that_stayed_down_past_ten_seconds_tells_each_manager_it_took_longer() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(11.0, true);
-    fx.marker(PREVIOUS_ENGINE, 12.0);
+    fx.previous_engine(11_000, true);
+    fx.marker(PREVIOUS_ENGINE, 12_000);
     fx.start_and_stop();
     fx.told_with("it was an install's restart that took longer than 10 s");
     assert!(!fx.marker_path().exists(), "the marker is consumed at the start");
 }
 
-/// The bound is `downtime <= 10 s` quiet, `> 10 s` tells. The new engine starts a moment after the time the fixture sets, so the
-/// quiet side is set a little under 10 s (exactly 10.0 would be a race with the process start) and the other a little over.
+/// The bound is `downtime <= 10 s` quiet, `> 10 s` tells. On the `ManualClock` the new engine starts exactly when the
+/// fixture says: the quiet side is exactly 10.000 s, the other a millisecond over.
 #[test]
 fn the_bound_is_ten_seconds_quiet_up_to_it_and_told_past_it() {
-    let quiet = fx("");
-    quiet.manager("mgr1");
-    quiet.previous_engine(9.2, true);
-    quiet.marker(PREVIOUS_ENGINE, 9.5);
-    quiet.start_and_stop();
-    assert_eq!(quiet.messages(), [], "under 10 s is quiet");
-
-    let told = fx("");
+    {
+        let quiet = engine("");
+        quiet.manager("mgr1");
+        quiet.previous_engine(10_000, true);
+        quiet.marker(PREVIOUS_ENGINE, 10_000);
+        quiet.start_and_stop();
+        assert_eq!(quiet.messages(), [], "up to 10 s is quiet");
+        let text = quiet.started_text();
+        assert!(text.contains("The engine was down for 10.0 s") && text.contains(&format!("{PLANNED}.")), "{text}");
+    }
+    // One `Fx` at a time in a process (it holds the process's environment): the first is dropped.
+    let told = engine("");
     told.manager("mgr1");
-    told.previous_engine(10.6, true);
-    told.marker(PREVIOUS_ENGINE, 11.0);
+    told.previous_engine(10_001, true);
+    told.marker(PREVIOUS_ENGINE, 10_001);
     told.start_and_stop();
     told.told_with("took longer than 10 s");
 }
 
 #[test]
 fn a_marker_for_another_engine_does_not_silence_the_stop_and_is_deleted() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
-    fx.marker(PREVIOUS_ENGINE + 1, 1.0);
+    fx.previous_engine(500, true);
+    fx.marker(PREVIOUS_ENGINE + 1, 1_000);
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
@@ -2033,10 +2238,10 @@ fn a_marker_for_another_engine_does_not_silence_the_stop_and_is_deleted() {
 
 #[test]
 fn a_marker_older_than_120_seconds_does_not_silence_the_stop_and_is_deleted() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
-    fx.marker(PREVIOUS_ENGINE, 130.0);
+    fx.previous_engine(500, true);
+    fx.marker(PREVIOUS_ENGINE, 130_000);
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
@@ -2045,23 +2250,23 @@ fn a_marker_older_than_120_seconds_does_not_silence_the_stop_and_is_deleted() {
 
 #[test]
 fn an_unparseable_marker_does_not_silence_the_stop_is_logged_once_deleted_and_the_engine_runs() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
+    fx.previous_engine(500, true);
     fx.raw_marker("{not json");
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.marker_path().exists(), "the unreadable marker is deleted");
-    let lines = watch_log(&fx).lines().filter(|l| l.contains("install-restart.json")).count();
-    assert_eq!(lines, 1, "{}", watch_log(&fx));
+    let lines = engine_log(&fx).lines().filter(|l| l.contains("install-restart.json")).count();
+    assert_eq!(lines, 1, "{}", engine_log(&fx));
 }
 
 #[test]
 fn a_marker_with_a_field_of_another_type_is_no_marker() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, true);
-    fx.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(1.0), "engine_pid": "424242"}).to_string());
+    fx.previous_engine(500, true);
+    fx.raw_marker(&json!({"by": "install-cpd.sh", "at": fx.stamp_ago(1_000), "engine_pid": "424242"}).to_string());
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.marker_path().exists());
@@ -2069,10 +2274,10 @@ fn a_marker_with_a_field_of_another_type_is_no_marker() {
 
 #[test]
 fn a_crashed_engine_with_a_valid_marker_is_quiet_by_the_time_it_was_last_alive() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(0.5, false);
-    fx.marker(PREVIOUS_ENGINE, 1.0);
+    fx.previous_engine(500, false);
+    fx.marker(PREVIOUS_ENGINE, 1_000);
     fx.start_and_stop();
     assert_eq!(fx.messages(), []);
     let text = fx.started_text();
@@ -2081,10 +2286,10 @@ fn a_crashed_engine_with_a_valid_marker_is_quiet_by_the_time_it_was_last_alive()
 
 #[test]
 fn a_crashed_engine_with_a_valid_marker_past_ten_seconds_tells() {
-    let fx = fx("");
+    let fx = engine("");
     fx.manager("mgr1");
-    fx.previous_engine(11.0, false);
-    fx.marker(PREVIOUS_ENGINE, 12.0);
+    fx.previous_engine(11_000, false);
+    fx.marker(PREVIOUS_ENGINE, 12_000);
     fx.start_and_stop();
     fx.told_with("took longer than 10 s");
 }

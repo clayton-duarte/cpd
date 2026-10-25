@@ -35,6 +35,7 @@ mod cells;
 mod chat;
 mod cockpit;
 mod host_click;
+mod incident_click;
 pub mod dialog;
 pub mod fold;
 mod history;
@@ -189,10 +190,10 @@ pub enum Command {
     Action(ActionArgs),
 }
 
-/// `cpd tui action <reset|legend|logs> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
+/// `cpd tui action <reset|legend|logs|host|incident> --client <name>`, `cpd tui action merge <owner>/<repo>#<n> --client <name>`.
 #[derive(clap::Args, Debug)]
 pub struct ActionArgs {
-    /// `reset`, `legend` or `logs`: the button's range; or `merge`, the `merge` popup's confirm. Optional and free
+    /// `reset`, `legend`, `logs`, `host` or `incident`: the button's range; or `merge`, the `merge` popup's confirm. Optional and free
     /// text, so that any value, an empty `#{mouse_status_range}` included, reaches the command and fails with
     /// `display-message`, never a usage error on stdout
     pub action: Option<String>,

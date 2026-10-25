@@ -341,6 +341,7 @@ enum Action {
     Logs,
     Merge,
     Host,
+    Incident,
 }
 
 impl Action {
@@ -351,12 +352,13 @@ impl Action {
             "logs" => Some(Action::Logs),
             "merge" => Some(Action::Merge),
             "host" => Some(Action::Host),
+            "incident" => Some(Action::Incident),
             _ => None,
         }
     }
 }
 
-/// `cpd tui action <reset|legend|logs|host> --client <name>` and `cpd tui action
+/// `cpd tui action <reset|legend|logs|host|incident> --client <name>` and `cpd tui action
 /// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
 /// click of a StatusBar button, or the merge the `merge` popup confirmed, on
 /// client `client`. It prints nothing, on stdout or stderr, and always exits
@@ -382,7 +384,7 @@ fn action_tmux(ports: &Ports) -> Result<Tmux, CpdError> {
 
 fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand, run_on: RunOn) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
-        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs or merge.", name.unwrap_or("")))
+        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs, host or incident.", name.unwrap_or("")))
     })?;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
@@ -395,6 +397,7 @@ fn run_action(ports: &Ports, name: Option<&str>, pull: Option<&str>, client: &st
         (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
         (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
         (Action::Host, None) => return super::host_click::run(&home, &config, &tmux, client, run_command),
+        (Action::Incident, None) => return super::incident_click::run(&home, &config, &tmux, run_command),
         (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
         (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
         (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),

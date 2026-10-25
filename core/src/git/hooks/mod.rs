@@ -250,7 +250,7 @@ pub fn run_command(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    let ports = Ports::real();
+    let ports = Ports::current();
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
     let mut vars = variables(&ports, Hook::PreCommit, &cwd, None, Some(operation))?;
     for (key, value) in extra {

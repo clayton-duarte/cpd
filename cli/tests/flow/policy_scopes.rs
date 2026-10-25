@@ -151,26 +151,104 @@ fn the_repo_wins_over_the_owner_and_the_machine() {
 #[test]
 fn a_more_specific_domain_replaces_the_machines_whole_domain() {
     let fx = Scopes::new();
-    fx.write("machines/mac-pro.toml", "[pr]\ngate = \"local\"\ntext = \"Machine pr.\"\n");
+    fx.write("machines/mac-pro.toml", "[pr]\nfeedback.checks = \"none\"\ntext = \"Machine pr.\"\n");
     fx.write("owners/acme.toml", "[pr]\ntext = \"Owner pr.\"\n");
     let out = fx.owner();
     let owner = format!("owner:{}", fx.real("owners/acme.toml"));
     let pr = &out["policy"]["pr"];
     assert_eq!(pr["text"], "Owner pr.");
-    // The built-in default gate is `ci`; the machine's `local` never fills in.
-    assert_eq!(pr["keys"]["gate"], json!({"value": "ci", "source": format!("{owner} (key default)")}));
+    // The built-in default `feedback.checks` is `any`; the machine's `none` never fills in.
+    assert_eq!(pr["keys"]["feedback.checks"], json!({"value": "any", "source": format!("{owner} (key default)")}));
 }
 
 #[test]
 fn the_machines_gate_is_never_inherited_by_an_owner_domain_that_leaves_it_out() {
-    // The same rule with the machine's value `ci` and the default taken from the built-in default.
+    // The owner's `[gate]` table replaces the machine's whole domain: the left-out `pr` key is
+    // cpd's `none`, never the machine's `local`.
     let fx = Scopes::new();
-    fx.write("machines/mac-pro.toml", "[pr]\ngate = \"ci\"\ntext = \"Machine pr.\"\n");
-    fx.write("owners/acme.toml", "[pr]\ntext = \"Owner pr.\"\n");
-    let gate = &fx.owner()["policy"]["pr"]["keys"]["gate"];
-    assert_eq!(gate["value"], "ci");
-    assert!(gate["source"].as_str().unwrap().ends_with(" (key default)"), "{gate}");
-    assert!(gate["source"].as_str().unwrap().starts_with("owner:"), "{gate}");
+    fx.write("machines/mac-pro.toml", "[gate]\nmerge = \"local\"\npr = \"local\"\ntext = \"Machine gate.\"\n");
+    fx.write("owners/acme.toml", "[gate]\nmerge = \"none\"\ntext = \"Owner gate.\"\n");
+    let out = fx.owner();
+    let gate = &out["policy"]["gate"];
+    assert_eq!(gate["keys"]["pr"]["value"], "none", "{out}");
+    assert!(gate["keys"]["pr"]["source"].as_str().unwrap().ends_with(" (key default)"), "{out}");
+    assert!(gate["keys"]["pr"]["source"].as_str().unwrap().starts_with("owner:"), "{out}");
+    assert_eq!(gate["keys"]["merge"]["value"], "none", "{out}");
+}
+
+#[test]
+fn gate_defaults_to_none_for_merge_and_pr() {
+    // No scope sets `[gate]`: both keys are cpd's `none`, source `default`.
+    let fx = Scopes::new();
+    let out = fx.owner();
+    assert_eq!(out["policy"]["gate"]["keys"]["merge"], json!({"value": "none", "source": "default"}), "{out}");
+    assert_eq!(out["policy"]["gate"]["keys"]["pr"], json!({"value": "none", "source": "default"}), "{out}");
+}
+
+#[test]
+fn gate_resolves_machine_then_owner_then_repo_for_gate() {
+    let fx = Scopes::new();
+    // The machine sets `merge` only; `pr` is cpd's `none`, both from the machine file.
+    fx.write("machines/mac-pro.toml", "[gate]\nmerge = \"local\"\n");
+    let out = fx.owner();
+    let machine = format!("machine:{}", fx.real("machines/mac-pro.toml"));
+    assert_eq!(out["policy"]["gate"]["keys"]["merge"], json!({"value": "local", "source": machine}), "{out}");
+    assert_eq!(
+        out["policy"]["gate"]["keys"]["pr"],
+        json!({"value": "none", "source": format!("{machine} (key default)")}),
+        "{out}"
+    );
+    // The owner's table replaces the machine's whole gate domain: its `pr` wins and the
+    // machine's `merge` is gone (cpd's `none`, key default).
+    fx.write("owners/acme.toml", "[gate]\npr = \"local\"\n");
+    let out = fx.owner();
+    let owner = format!("owner:{}", fx.real("owners/acme.toml"));
+    assert_eq!(out["policy"]["gate"]["source"], owner, "{out}");
+    assert_eq!(out["policy"]["gate"]["keys"]["pr"], json!({"value": "local", "source": owner}), "{out}");
+    assert_eq!(
+        out["policy"]["gate"]["keys"]["merge"],
+        json!({"value": "none", "source": format!("{owner} (key default)")}),
+        "{out}"
+    );
+    // The repo sets both keys: it wins over the owner.
+    fx.write("repos/acme/r.toml", "[gate]\nmerge = \"local\"\npr = \"local\"\n");
+    let out = fx.repo();
+    let repo = format!("repo:{}", fx.real("repos/acme/r.toml"));
+    assert_eq!(out["policy"]["gate"]["source"], repo, "{out}");
+    assert_eq!(out["policy"]["gate"]["keys"]["merge"], json!({"value": "local", "source": repo}), "{out}");
+    assert_eq!(out["policy"]["gate"]["keys"]["pr"], json!({"value": "local", "source": repo}), "{out}");
+}
+
+#[test]
+fn gate_old_pr_gate_aliases_both_gates_and_explicit_gate_wins() {
+    for (value, expected) in [("local", "local"), ("ci", "none"), ("none", "none")] {
+        let fx = Scopes::new();
+        fx.write("owners/acme.toml", &format!("[pr]\ngate = \"{value}\"\n"));
+        let out = fx.owner();
+        assert_eq!(out["policy"]["gate"]["keys"]["merge"]["value"], expected, "{value}: {out}");
+        assert_eq!(out["policy"]["gate"]["keys"]["pr"]["value"], expected, "{value}: {out}");
+    }
+    // An explicit `[gate]` key wins over the deprecated alias.
+    let fx = Scopes::new();
+    fx.write("owners/acme.toml", "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n");
+    let out = fx.owner();
+    assert_eq!(out["policy"]["gate"]["keys"]["pr"]["value"], "local", "{out}");
+    assert_eq!(out["policy"]["gate"]["keys"]["merge"]["value"], "none", "{out}");
+}
+
+#[test]
+fn gate_rejects_an_unknown_gate_value() {
+    for (text, key) in [
+        ("[gate]\nmerge = \"sometimes\"\n", "gate.merge"),
+        ("[gate]\npr = \"sometimes\"\n", "gate.pr"),
+        ("[gate]\nmerge = \"ci\"\n", "gate.merge"),
+        ("[gate]\npr = \"ci\"\n", "gate.pr"),
+    ] {
+        let fx = Scopes::new();
+        fx.write("owners/acme.toml", text);
+        let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
+        assert_eq!(error["details"]["key"], key, "{text}: {error}");
+    }
 }
 
 // ---------------------------------------------------------- i5: named by the host
@@ -221,7 +299,7 @@ fn files_leaves_out_absent_files() {
 
 #[test]
 fn the_text_domains_are_accepted_in_all_three_scopes() {
-    let text = "[pr]\ngate = \"local\"\n\n[tests]\ntext = \"t\"\n\n[code]\ntext = \"c\"\n";
+    let text = "[gate]\nmerge = \"local\"\n\n[tests]\ntext = \"t\"\n\n[code]\ntext = \"c\"\n";
     for rel in ["machines/mac-pro.toml", "owners/acme.toml", "repos/acme/r.toml"] {
         let fx = Scopes::new();
         fx.write(rel, text);
@@ -252,7 +330,7 @@ fn a_machine_file_with_an_unknown_domain_a_wrong_type_or_a_bad_value_is_policy_i
     for (text, key) in [
         ("[nonsense]\n", "nonsense"),
         ("[tests]\ntext = 1\n", "tests.text"),
-        ("[pr]\ngate = \"sometimes\"\n", "pr.gate"),
+        ("[gate]\nmerge = \"sometimes\"\n", "gate.merge"),
     ] {
         let fx = Scopes::new();
         fx.write("machines/mac-pro.toml", text);
