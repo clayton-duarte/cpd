@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Margin};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
@@ -38,8 +38,10 @@ impl View {
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
-        // The pane's last row stays empty.
-        let [head, body, _last] = Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+        // The chat slot's uniform 1-cell pad insets the whole view: the title sits at the top
+        // of the inset, the body below it, and the pane's first and last row and column stay blank.
+        let area = f.area().inner(Margin { horizontal: 1, vertical: 1 });
+        let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         f.render_widget(Paragraph::new(Line::styled(self.title.as_str(), crate::palette::read_only_text().add_modifier(ratatui::style::Modifier::BOLD))), head);
         self.body.draw(f, body);
     }
@@ -89,7 +91,7 @@ mod tests {
     #[test]
     fn the_top_line_stays_while_the_body_starts_at_the_end() {
         let mut v = view(10);
-        assert_eq!(rows(&draw(&mut v, 30, 5)), ["lead (archived, read-only)", "line 8", "line 9", "line 10", ""]);
+        assert_eq!(rows(&draw(&mut v, 30, 5)), ["", " lead (archived, read-only)", " line 9", " line 10", ""]);
     }
 
     #[test]
@@ -97,8 +99,13 @@ mod tests {
         let mut v = View::new("Plan lead", true);
         v.set_lines(render(include_str!("../worker/fixtures/session.jsonl")));
         let rows = rows(&draw(&mut v, 200, 30));
-        assert_eq!(rows[0], "Plan lead (archived, read-only)");
-        assert_eq!(rows[1..=23].to_vec(), render(include_str!("../worker/fixtures/session.jsonl")).iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>());
+        assert_eq!(rows[0], "", "the pad's first row is blank");
+        assert_eq!(rows[1], " Plan lead (archived, read-only)");
+        assert_eq!(rows[2..=24].to_vec(), render(include_str!("../worker/fixtures/session.jsonl")).iter().map(|l| {
+            let content = l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+            let content = content.trim_end();
+            if content.is_empty() { String::new() } else { format!(" {content}") }
+        }).collect::<Vec<_>>());
     }
 
     #[test]
@@ -106,23 +113,24 @@ mod tests {
         let mut v = view(10);
         draw(&mut v, 24, 5);
         press(&mut v, KeyCode::Up);
-        assert_eq!(rows(&draw(&mut v, 24, 5))[1..], ["line 7", "line 8", "line 9", ""]);
+        assert_eq!(rows(&draw(&mut v, 24, 5))[2..], [" line 8", " line 9", ""]);
         press(&mut v, KeyCode::Char('k'));
         press(&mut v, KeyCode::PageUp);
         press(&mut v, KeyCode::PageUp);
-        assert_eq!(rows(&draw(&mut v, 24, 5))[1], "line 1", "it stops at the top");
+        press(&mut v, KeyCode::PageUp);
+        assert_eq!(rows(&draw(&mut v, 24, 5))[2], " line 1", "it stops at the top");
         wheel(&mut v, MouseEventKind::ScrollDown);
-        assert_eq!(rows(&draw(&mut v, 24, 5))[1], "line 4");
+        assert_eq!(rows(&draw(&mut v, 24, 5))[2], " line 4");
         press(&mut v, KeyCode::Char('G'));
-        assert_eq!(rows(&draw(&mut v, 24, 5))[3], "line 10");
+        assert_eq!(rows(&draw(&mut v, 24, 5))[3], " line 10");
         wheel(&mut v, MouseEventKind::ScrollUp);
-        assert_eq!(rows(&draw(&mut v, 24, 5))[1], "line 5", "the wheel moves 3 rows");
+        assert_eq!(rows(&draw(&mut v, 24, 5))[2], " line 6", "the wheel moves 3 rows");
         press(&mut v, KeyCode::PageDown);
         press(&mut v, KeyCode::Char('j'));
-        assert_eq!(rows(&draw(&mut v, 24, 5))[3], "line 10", "Down to the end follows it");
+        assert_eq!(rows(&draw(&mut v, 24, 5))[3], " line 10", "Down to the end follows it");
         press(&mut v, KeyCode::Char('k'));
         press(&mut v, KeyCode::End);
-        assert_eq!(rows(&draw(&mut v, 24, 5))[3], "line 10", "End follows the end");
+        assert_eq!(rows(&draw(&mut v, 24, 5))[3], " line 10", "End follows the end");
     }
 
     #[test]
