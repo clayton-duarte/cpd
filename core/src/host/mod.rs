@@ -28,6 +28,8 @@ pub mod tmux;
 #[cfg(test)]
 mod runner_tests;
 #[cfg(test)]
+mod tmux_adapter_tests;
+#[cfg(test)]
 mod tmux_runner_tests;
 
 pub use layout::{View, chat_slot, session_pane, view_pane};

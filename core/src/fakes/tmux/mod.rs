@@ -823,6 +823,8 @@ fn client_vars(db: &Connection, sql: &str, p: impl rusqlite::Params) -> Vec<Vec<
 }
 
 #[cfg(test)]
+mod conformance_tests;
+#[cfg(test)]
 mod gaps_tests;
 #[cfg(test)]
 mod kit;

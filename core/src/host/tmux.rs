@@ -1483,53 +1483,6 @@ mod tests {
         assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
     }
 
-    /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
-    /// first answers to `list-sessions` are `server exited unexpectedly`, then a refused connection,
-    /// then `no server running`. Returns the script and the calls it logs.
-    fn dying_server(dir: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("tmux");
-        let script = format!(
-            "#!/bin/sh\n\
-             d='{d}'\n\
-             echo \"$*\" >> \"$d/calls\"\n\
-             case \" $* \" in\n\
-               *' kill-server '*) touch \"$d/killed\"; echo 'server exited unexpectedly' >&2; exit 1;;\n\
-               *' list-sessions '*)\n\
-                 [ -e \"$d/killed\" ] || exit 0\n\
-                 n=$(cat \"$d/n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/n\"\n\
-                 case $n in\n\
-                   1|2) echo 'server exited unexpectedly' >&2;;\n\
-                   3) echo 'lost server' >&2;;\n\
-                   4) echo 'error connecting to /tmp/x (Connection refused)' >&2;;\n\
-                   *) echo 'no server running on /tmp/x' >&2;;\n\
-                 esac; exit 1;;\n\
-             esac\n",
-            d = dir.display()
-        );
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Another test's `fork` may hold the script's write descriptor for a moment: run it until it can be.
-        for _ in 0..100 {
-            match Command::new(&path).arg("warm-up").status() {
-                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(20)),
-                _ => break,
-            }
-        }
-        path
-    }
-
-    #[test]
-    fn a_dying_server_answering_server_exited_unexpectedly_does_not_fail_kill_server() {
-        let dir = tempfile::tempdir().unwrap();
-        let tmux = Tmux::new("dying").with_program(dying_server(dir.path()));
-        tmux.kill_server().unwrap();
-        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
-        let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
-        assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
-        assert!(calls.lines().any(|l| l == "-u -L dying -f /dev/null kill-server"), "{calls}");
-    }
-
     #[test]
     fn every_call_runs_the_program_it_was_given() {
         let tmux = Tmux::new("s").with_program("/opt/tmux-3.4");
