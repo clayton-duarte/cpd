@@ -182,7 +182,9 @@ impl Runner for FakeRunner {
                 Err(Failed::Timeout(deadline::timeout(tool, argv, deadline)))
             }
             Some(Reply::Exit { code, stdout, stderr, takes }) => {
-                self.clock.sleep(takes);
+                if !takes.is_zero() {
+                    self.clock.sleep(takes);
+                }
                 Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
             }
         }

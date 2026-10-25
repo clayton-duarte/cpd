@@ -1,12 +1,11 @@
 //! The in-process fake git (ADR 0013, docs/implementing.md "The git route"): a [`Universe`] of objects,
 //! repos, refs and worktrees, and [`GitRoute`], the `Handler` of the program `git` of a
 //! [`FakeRunner`](crate::host::runner::FakeRunner).
-//!
-//! STUB (Job port-git-tests): every body is `todo!()`; Job port-git implements it.
 
 mod repo;
 mod rev;
 mod route;
+mod sha1;
 mod universe;
 
 pub use repo::Repo;
@@ -20,8 +19,8 @@ use crate::host::runner::FakeRunner;
 
 impl FakeRunner {
     /// Routes the program `git` to `route`: scripted `on`/`once` rules still win over it.
-    pub fn with_git(self, _route: &Arc<GitRoute>) -> FakeRunner {
-        todo!("route the program `git` to the GitRoute")
+    pub fn with_git(self, route: &Arc<GitRoute>) -> FakeRunner {
+        self.route("git", route.clone())
     }
 }
 
