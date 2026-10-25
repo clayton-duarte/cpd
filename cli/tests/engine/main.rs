@@ -12,5 +12,6 @@ mod watch_loop_guard_inbox;
 mod watch_sleep;
 mod watch;
 mod watch_worker_archive;
+mod watch_models;
 mod watch_team;
 mod watch_titles_width;
