@@ -22,6 +22,7 @@ const COMMANDS: &str = "[test-commands]\nbuild = \"test ! -e BROKEN\"\nrun = \"e
 
 fn pr_env() -> TestEnv {
     let env = TestEnv::new();
+    env.fake_tmux();
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
     env.write_tmux_config("");
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();

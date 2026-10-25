@@ -1657,7 +1657,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
     assert!(popups(&env)[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", popups(&env)[0]);
-    assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
+    assert!(popups(&env)[0].contains(&"-B".to_owned()), "{:?}", popups(&env)[0]);
     // a review request: the url is copied, and the log says how to open it
     pane.click(10, row_of("acme/web#5 review requested"));
     copied(2, "https://x.io/review");

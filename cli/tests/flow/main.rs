@@ -16,11 +16,7 @@ mod context_manager_by_user;
 mod context_pending;
 mod context_pending_waiting;
 mod context;
-// Wrapped so the test names read `flow::driver_idle::...`; `#[path = "."]` keeps the file here, in this directory.
-#[path = "."]
-mod flow {
-    mod driver_idle;
-}
+mod driver_idle;
 mod driver_reload;
 mod driver;
 mod job;
