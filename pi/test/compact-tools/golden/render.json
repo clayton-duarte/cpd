@@ -4105,200 +4105,200 @@
 		"\\e[90m   ⎿  {/}\\e[31mError: fetch failed: 503{/}"
 	],
 	"codex/read/running/closed/100": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read/running/closed/44": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read/running/open/100": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read/running/open/44": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ line 23{/}",
 		"\\e[90m     line 24{/}",
 		"\\e[90m     line 25{/}",
-		"\\e[90m     + 22 lines (ctrl+o to expand){/}"
+		"\\e[90m    + 22 lines (ctrl+o to expand){/}"
 	],
 	"codex/read/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ line 23{/}",
 		"\\e[90m     line 24{/}",
 		"\\e[90m     line 25{/}",
-		"\\e[90m     + 22 lines (ctrl+o to expand){/}"
+		"\\e[90m    + 22 lines (ctrl+o to expand){/}"
 	],
 	"codex/read/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
-		" \\e[37mline 1{/}",
-		" \\e[37mline 2{/}",
-		" \\e[37mline 3{/}",
-		" \\e[37mline 4{/}",
-		" \\e[37mline 5{/}",
-		" \\e[37mline 6{/}",
-		" \\e[37mline 7{/}",
-		" \\e[37mline 8{/}",
-		" \\e[37mline 9{/}",
-		" \\e[37mline 10{/}",
-		" \\e[37mline 11{/}",
-		" \\e[37mline 12{/}",
-		" \\e[37mline 13{/}",
-		" \\e[37mline 14{/}",
-		" \\e[37mline 15{/}",
-		" \\e[37mline 16{/}",
-		" \\e[37mline 17{/}",
-		" \\e[37mline 18{/}",
-		" \\e[37mline 19{/}",
-		" \\e[37mline 20{/}",
-		" \\e[37mline 21{/}",
-		" \\e[37mline 22{/}",
-		" \\e[37mline 23{/}",
-		" \\e[37mline 24{/}",
-		" \\e[37mline 25{/}",
-		" ",
-		" \\e[37m[Showing lines 1-25 of 80. Use offset=26 to continue.]{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"\\e[37mline 1{/}",
+		"\\e[37mline 2{/}",
+		"\\e[37mline 3{/}",
+		"\\e[37mline 4{/}",
+		"\\e[37mline 5{/}",
+		"\\e[37mline 6{/}",
+		"\\e[37mline 7{/}",
+		"\\e[37mline 8{/}",
+		"\\e[37mline 9{/}",
+		"\\e[37mline 10{/}",
+		"\\e[37mline 11{/}",
+		"\\e[37mline 12{/}",
+		"\\e[37mline 13{/}",
+		"\\e[37mline 14{/}",
+		"\\e[37mline 15{/}",
+		"\\e[37mline 16{/}",
+		"\\e[37mline 17{/}",
+		"\\e[37mline 18{/}",
+		"\\e[37mline 19{/}",
+		"\\e[37mline 20{/}",
+		"\\e[37mline 21{/}",
+		"\\e[37mline 22{/}",
+		"\\e[37mline 23{/}",
+		"\\e[37mline 24{/}",
+		"\\e[37mline 25{/}",
+		"",
+		"\\e[37m[Showing lines 1-25 of 80. Use offset=26 to continue.]{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/read/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
-		" \\e[37mline 1{/}",
-		" \\e[37mline 2{/}",
-		" \\e[37mline 3{/}",
-		" \\e[37mline 4{/}",
-		" \\e[37mline 5{/}",
-		" \\e[37mline 6{/}",
-		" \\e[37mline 7{/}",
-		" \\e[37mline 8{/}",
-		" \\e[37mline 9{/}",
-		" \\e[37mline 10{/}",
-		" \\e[37mline 11{/}",
-		" \\e[37mline 12{/}",
-		" \\e[37mline 13{/}",
-		" \\e[37mline 14{/}",
-		" \\e[37mline 15{/}",
-		" \\e[37mline 16{/}",
-		" \\e[37mline 17{/}",
-		" \\e[37mline 18{/}",
-		" \\e[37mline 19{/}",
-		" \\e[37mline 20{/}",
-		" \\e[37mline 21{/}",
-		" \\e[37mline 22{/}",
-		" \\e[37mline 23{/}",
-		" \\e[37mline 24{/}",
-		" \\e[37mline 25{/}",
-		" ",
-		" \\e[37m[Showing lines 1-25 of 80. Use offset=26 to{/}",
-		" \\e[37mcontinue.]{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"\\e[37mline 1{/}",
+		"\\e[37mline 2{/}",
+		"\\e[37mline 3{/}",
+		"\\e[37mline 4{/}",
+		"\\e[37mline 5{/}",
+		"\\e[37mline 6{/}",
+		"\\e[37mline 7{/}",
+		"\\e[37mline 8{/}",
+		"\\e[37mline 9{/}",
+		"\\e[37mline 10{/}",
+		"\\e[37mline 11{/}",
+		"\\e[37mline 12{/}",
+		"\\e[37mline 13{/}",
+		"\\e[37mline 14{/}",
+		"\\e[37mline 15{/}",
+		"\\e[37mline 16{/}",
+		"\\e[37mline 17{/}",
+		"\\e[37mline 18{/}",
+		"\\e[37mline 19{/}",
+		"\\e[37mline 20{/}",
+		"\\e[37mline 21{/}",
+		"\\e[37mline 22{/}",
+		"\\e[37mline 23{/}",
+		"\\e[37mline 24{/}",
+		"\\e[37mline 25{/}",
+		"",
+		"\\e[37m[Showing lines 1-25 of 80. Use offset=26 to{/}",
+		"\\e[37mcontinue.]{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/read/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ ENOENT: no such file or directory, access 'src/app.ts'{/}"
 	],
 	"codex/read/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ ENOENT: no such file or directory, acc{0}\\e[90m…{/}{0}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/read/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ ENOENT: no such file or directory, access 'src/app.ts'{/}"
 	],
 	"codex/read/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
-		" \\e[37mENOENT: no such file or directory, access{/}",
-		" \\e[37m'src/app.ts'{/}",
-		" {b}\\e[31m✗{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"\\e[37mENOENT: no such file or directory, access{/}",
+		"\\e[37m'src/app.ts'{/}",
+		"{b}\\e[31m✗{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/read@offset/running/closed/100": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read@offset/running/closed/44": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read@offset/running/open/100": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read@offset/running/open/44": [
-		" \\e[36m•{/} {b}Read{/b} src/app.ts"
+		"\\e[36m•{/} {b}Read{/b} src/app.ts"
 	],
 	"codex/read@offset/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ const a = 1;{/}",
 		"\\e[90m     const b = 2;{/}",
 		"\\e[90m     export { a, b };{/}"
 	],
 	"codex/read@offset/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ const a = 1;{/}",
 		"\\e[90m     const b = 2;{/}",
 		"\\e[90m     export { a, b };{/}"
 	],
 	"codex/read@offset/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ const a = 1;{/}",
 		"\\e[90m     const b = 2;{/}",
 		"\\e[90m     export { a, b };{/}"
 	],
 	"codex/read@offset/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[32m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ const a = 1;{/}",
 		"\\e[90m     const b = 2;{/}",
 		"\\e[90m     export { a, b };{/}"
 	],
 	"codex/read@offset/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ Offset 40 is beyond end of file (12 lines total){/}"
 	],
 	"codex/read@offset/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ Offset 40 is beyond end of file (12 li{0}\\e[90m…{/}{0}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/read@offset/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
 		"\\e[90m   └ Offset 40 is beyond end of file (12 lines total){/}"
 	],
 	"codex/read@offset/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
-		" \\e[37mOffset 40 is beyond end of file (12 lines{/}",
-		" \\e[37mtotal){/}",
-		" {b}\\e[31m✗{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"{b}\\e[31m•{/}{/b} {b}Read{/b} src/app.ts",
+		"\\e[37mOffset 40 is beyond end of file (12 lines{/}",
+		"\\e[37mtotal){/}",
+		"{b}\\e[31m✗{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/write/running/closed/100": [
-		" \\e[36m•{/} {b}Writing{/b} notes.md"
+		"\\e[36m•{/} {b}Writing{/b} notes.md"
 	],
 	"codex/write/running/closed/44": [
-		" \\e[36m•{/} {b}Writing{/b} notes.md"
+		"\\e[36m•{/} {b}Writing{/b} notes.md"
 	],
 	"codex/write/running/open/100": [
-		" \\e[36m•{/} {b}Writing{/b} notes.md"
+		"\\e[36m•{/} {b}Writing{/b} notes.md"
 	],
 	"codex/write/running/open/44": [
-		" \\e[36m•{/} {b}Writing{/b} notes.md"
+		"\\e[36m•{/} {b}Writing{/b} notes.md"
 	],
 	"codex/write/done/closed/100": [
-		" \\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
+		"\\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
 		"     \\e[90m 1 {/}\\e[32m+{/}\\e[32mline 1{/}",
 		"     \\e[90m 2 {/}\\e[32m+{/}\\e[32mline 2{/}",
 		"     \\e[90m 3 {/}\\e[32m+{/}\\e[32mline 3{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/write/done/closed/44": [
-		" \\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
+		"\\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
 		"     \\e[90m 1 {/}\\e[32m+{/}\\e[32mline 1{/}",
 		"     \\e[90m 2 {/}\\e[32m+{/}\\e[32mline 2{/}",
 		"     \\e[90m 3 {/}\\e[32m+{/}\\e[32mline 3{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/write/done/open/100": [
-		" \\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
+		"\\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
 		"     \\e[90m 1 {/}\\e[32m+{/}\\e[32mline 1{/}",
 		"     \\e[90m 2 {/}\\e[32m+{/}\\e[32mline 2{/}",
 		"     \\e[90m 3 {/}\\e[32m+{/}\\e[32mline 3{/}",
@@ -4314,10 +4314,10 @@
 		"     \\e[90m13 {/}\\e[32m+{/}\\e[32mline 13{/}",
 		"     \\e[90m14 {/}\\e[32m+{/}\\e[32mline 14{/}",
 		"     \\e[90m15 {/}\\e[32m+{/}\\e[32mline 15{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/write/done/open/44": [
-		" \\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
+		"\\e[90m•{/} {b}Wrote{/b} notes.md (\\e[32m+15{/} \\e[31m-0{/})",
 		"     \\e[90m 1 {/}\\e[32m+{/}\\e[32mline 1{/}",
 		"     \\e[90m 2 {/}\\e[32m+{/}\\e[32mline 2{/}",
 		"     \\e[90m 3 {/}\\e[32m+{/}\\e[32mline 3{/}",
@@ -4333,58 +4333,58 @@
 		"     \\e[90m13 {/}\\e[32m+{/}\\e[32mline 13{/}",
 		"     \\e[90m14 {/}\\e[32m+{/}\\e[32mline 14{/}",
 		"     \\e[90m15 {/}\\e[32m+{/}\\e[32mline 15{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/write/failed/closed/100": [
-		" \\e[31m{b}✘ Failed to write notes.md{/b}{/}",
+		"\\e[31m{b}✘ Failed to write notes.md{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mEACCES: permission denied, open 'notes.md'{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/write/failed/closed/44": [
-		" \\e[31m{b}✘ Failed to write notes.md{/b}{/}",
+		"\\e[31m{b}✘ Failed to write notes.md{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mEACCES: permission denied, open{/}",
 		"     \\e[90m'notes.md'{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/write/failed/open/100": [
-		" \\e[31m{b}✘ Failed to write notes.md{/b}{/}",
+		"\\e[31m{b}✘ Failed to write notes.md{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mEACCES: permission denied, open 'notes.md'{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/write/failed/open/44": [
-		" \\e[31m{b}✘ Failed to write notes.md{/b}{/}",
+		"\\e[31m{b}✘ Failed to write notes.md{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mEACCES: permission denied, open{/}",
 		"     \\e[90m'notes.md'{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit/running/closed/100": [
-		" \\e[36m•{/} {b}Editing{/b} app.ts"
+		"\\e[36m•{/} {b}Editing{/b} app.ts"
 	],
 	"codex/edit/running/closed/44": [
-		" \\e[36m•{/} {b}Editing{/b} app.ts"
+		"\\e[36m•{/} {b}Editing{/b} app.ts"
 	],
 	"codex/edit/running/open/100": [
-		" \\e[36m•{/} {b}Editing{/b} app.ts"
+		"\\e[36m•{/} {b}Editing{/b} app.ts"
 	],
 	"codex/edit/running/open/44": [
-		" \\e[36m•{/} {b}Editing{/b} app.ts"
+		"\\e[36m•{/} {b}Editing{/b} app.ts"
 	],
 	"codex/edit/done/closed/100": [
-		" \\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
+		"\\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
 		"     \\e[90m 5 {/}\\e[31m-{/}\\e[31mline 5{/}",
 		"     \\e[90m 5 {/}\\e[32m+{/}\\e[32mchanged 5{/}",
 		"        \\e[90m⋮{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit/done/closed/44": [
-		" \\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
+		"\\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
 		"     \\e[90m 5 {/}\\e[31m-{/}\\e[31mline 5{/}",
 		"     \\e[90m 5 {/}\\e[32m+{/}\\e[32mchanged 5{/}",
 		"        \\e[90m⋮{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit/done/open/100": [
-		" \\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
+		"\\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
 		"     \\e[90m 1 {/} \\e[37mline 1{/}",
 		"     \\e[90m 2 {/} \\e[37mline 2{/}",
 		"     \\e[90m 3 {/} \\e[37mline 3{/}",
@@ -4407,10 +4407,10 @@
 		"     \\e[90m23 {/} \\e[37mline 22{/}",
 		"     \\e[90m24 {/} \\e[37mline 23{/}",
 		"     \\e[90m25 {/} \\e[37mline 24{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit/done/open/44": [
-		" \\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
+		"\\e[90m•{/} {b}Edited{/b} app.ts (\\e[32m+3{/} \\e[31m-2{/})",
 		"     \\e[90m 1 {/} \\e[37mline 1{/}",
 		"     \\e[90m 2 {/} \\e[37mline 2{/}",
 		"     \\e[90m 3 {/} \\e[37mline 3{/}",
@@ -4433,62 +4433,62 @@
 		"     \\e[90m23 {/} \\e[37mline 22{/}",
 		"     \\e[90m24 {/} \\e[37mline 23{/}",
 		"     \\e[90m25 {/} \\e[37mline 24{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit/failed/closed/100": [
-		" \\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mCould not find the exact text in app.ts. The old text must match exactly including all{/}",
 		"     \\e[90mwhitespace and newlines.{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit/failed/closed/44": [
-		" \\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mCould not find the exact text in{/}",
 		"     \\e[90mapp.ts. The old text must match exactly{/}",
 		"     \\e[90mincluding all whitespace and newlines.{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit/failed/open/100": [
-		" \\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mCould not find the exact text in app.ts. The old text must match exactly including all{/}",
 		"     \\e[90mwhitespace and newlines.{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit/failed/open/44": [
-		" \\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit app.ts{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mCould not find the exact text in{/}",
 		"     \\e[90mapp.ts. The old text must match exactly{/}",
 		"     \\e[90mincluding all whitespace and newlines.{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit@large/running/closed/100": [
-		" \\e[36m•{/} {b}Editing{/b} big.txt"
+		"\\e[36m•{/} {b}Editing{/b} big.txt"
 	],
 	"codex/edit@large/running/closed/44": [
-		" \\e[36m•{/} {b}Editing{/b} big.txt"
+		"\\e[36m•{/} {b}Editing{/b} big.txt"
 	],
 	"codex/edit@large/running/open/100": [
-		" \\e[36m•{/} {b}Editing{/b} big.txt"
+		"\\e[36m•{/} {b}Editing{/b} big.txt"
 	],
 	"codex/edit@large/running/open/44": [
-		" \\e[36m•{/} {b}Editing{/b} big.txt"
+		"\\e[36m•{/} {b}Editing{/b} big.txt"
 	],
 	"codex/edit@large/done/closed/100": [
-		" \\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
+		"\\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
 		"     \\e[90m 1 {/}\\e[31m-{/}\\e[31mold 1{/}",
 		"     \\e[90m 2 {/}\\e[31m-{/}\\e[31mold 2{/}",
 		"     \\e[90m 3 {/}\\e[31m-{/}\\e[31mold 3{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit@large/done/closed/44": [
-		" \\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
+		"\\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
 		"     \\e[90m 1 {/}\\e[31m-{/}\\e[31mold 1{/}",
 		"     \\e[90m 2 {/}\\e[31m-{/}\\e[31mold 2{/}",
 		"     \\e[90m 3 {/}\\e[31m-{/}\\e[31mold 3{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit@large/done/open/100": [
-		" \\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
+		"\\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
 		"     \\e[90m 1 {/}\\e[31m-{/}\\e[31mold 1{/}",
 		"     \\e[90m 2 {/}\\e[31m-{/}\\e[31mold 2{/}",
 		"     \\e[90m 3 {/}\\e[31m-{/}\\e[31mold 3{/}",
@@ -4529,10 +4529,10 @@
 		"     \\e[90m18 {/}\\e[32m+{/}\\e[32mnew 18{/}",
 		"     \\e[90m19 {/}\\e[32m+{/}\\e[32mnew 19{/}",
 		"     \\e[90m20 {/}\\e[32m+{/}\\e[32mnew 20{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit@large/done/open/44": [
-		" \\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
+		"\\e[90m•{/} {b}Edited{/b} big.txt (\\e[32m+20{/} \\e[31m-20{/})",
 		"     \\e[90m 1 {/}\\e[31m-{/}\\e[31mold 1{/}",
 		"     \\e[90m 2 {/}\\e[31m-{/}\\e[31mold 2{/}",
 		"     \\e[90m 3 {/}\\e[31m-{/}\\e[31mold 3{/}",
@@ -4573,604 +4573,604 @@
 		"     \\e[90m18 {/}\\e[32m+{/}\\e[32mnew 18{/}",
 		"     \\e[90m19 {/}\\e[32m+{/}\\e[32mnew 19{/}",
 		"     \\e[90m20 {/}\\e[32m+{/}\\e[32mnew 20{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit@large/failed/closed/100": [
-		" \\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit@large/failed/closed/44": [
-		" \\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mFound 20 occurrences of the text in{/}",
 		"     \\e[90mbig.txt. The text must be unique.{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/edit@large/failed/open/100": [
-		" \\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/edit@large/failed/open/44": [
-		" \\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
+		"\\e[31m{b}✘ Failed to edit big.txt{/b}{/}",
 		"\\e[90m   └ {/}\\e[90mFound 20 occurrences of the text in{/}",
 		"     \\e[90mbig.txt. The text must be unique.{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash/running/closed/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
+		"\\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ > test{/}",
 		"\\e[90m     > node --test{/}",
 		"\\e[90m     ok 1{/}"
 	],
 	"codex/bash/running/closed/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
+		"\\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ > test{/}",
 		"\\e[90m     > node --test{/}",
 		"\\e[90m     ok 1{/}"
 	],
 	"codex/bash/running/open/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
+		"\\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ > test{/}",
 		"\\e[90m     > node --test{/}",
 		"\\e[90m     ok 1{/}"
 	],
 	"codex/bash/running/open/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
+		"\\e[36m•{/} {b}Running{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ > test{/}",
 		"\\e[90m     > node --test{/}",
 		"\\e[90m     ok 1{/}"
 	],
 	"codex/bash/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mnpm{/} test",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ ok 22{/}",
 		"\\e[90m     ok 23{/}",
 		"\\e[90m     ok 24{/}",
-		"\\e[90m     + 23 lines (ctrl+o to expand){/}"
+		"\\e[90m    + 23 lines (ctrl+o to expand){/}"
 	],
 	"codex/bash/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mnpm{/} test",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ ok 22{/}",
 		"\\e[90m     ok 23{/}",
 		"\\e[90m     ok 24{/}",
-		"\\e[90m     + 23 lines (ctrl+o to expand){/}"
+		"\\e[90m    + 23 lines (ctrl+o to expand){/}"
 	],
 	"codex/bash/done/open/100": [
-		" \\e[32m$ {/}\\e[37mnpm{/} test",
-		" \\e[37m> test{/}",
-		" \\e[37m> node --test{/}",
-		" \\e[37mok 1{/}",
-		" \\e[37mok 2{/}",
-		" \\e[37mok 3{/}",
-		" \\e[37mok 4{/}",
-		" \\e[37mok 5{/}",
-		" \\e[37mok 6{/}",
-		" \\e[37mok 7{/}",
-		" \\e[37mok 8{/}",
-		" \\e[37mok 9{/}",
-		" \\e[37mok 10{/}",
-		" \\e[37mok 11{/}",
-		" \\e[37mok 12{/}",
-		" \\e[37mok 13{/}",
-		" \\e[37mok 14{/}",
-		" \\e[37mok 15{/}",
-		" \\e[37mok 16{/}",
-		" \\e[37mok 17{/}",
-		" \\e[37mok 18{/}",
-		" \\e[37mok 19{/}",
-		" \\e[37mok 20{/}",
-		" \\e[37mok 21{/}",
-		" \\e[37mok 22{/}",
-		" \\e[37mok 23{/}",
-		" \\e[37mok 24{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mnpm{/} test",
+		"\\e[37m> test{/}",
+		"\\e[37m> node --test{/}",
+		"\\e[37mok 1{/}",
+		"\\e[37mok 2{/}",
+		"\\e[37mok 3{/}",
+		"\\e[37mok 4{/}",
+		"\\e[37mok 5{/}",
+		"\\e[37mok 6{/}",
+		"\\e[37mok 7{/}",
+		"\\e[37mok 8{/}",
+		"\\e[37mok 9{/}",
+		"\\e[37mok 10{/}",
+		"\\e[37mok 11{/}",
+		"\\e[37mok 12{/}",
+		"\\e[37mok 13{/}",
+		"\\e[37mok 14{/}",
+		"\\e[37mok 15{/}",
+		"\\e[37mok 16{/}",
+		"\\e[37mok 17{/}",
+		"\\e[37mok 18{/}",
+		"\\e[37mok 19{/}",
+		"\\e[37mok 20{/}",
+		"\\e[37mok 21{/}",
+		"\\e[37mok 22{/}",
+		"\\e[37mok 23{/}",
+		"\\e[37mok 24{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash/done/open/44": [
-		" \\e[32m$ {/}\\e[37mnpm{/} test",
-		" \\e[37m> test{/}",
-		" \\e[37m> node --test{/}",
-		" \\e[37mok 1{/}",
-		" \\e[37mok 2{/}",
-		" \\e[37mok 3{/}",
-		" \\e[37mok 4{/}",
-		" \\e[37mok 5{/}",
-		" \\e[37mok 6{/}",
-		" \\e[37mok 7{/}",
-		" \\e[37mok 8{/}",
-		" \\e[37mok 9{/}",
-		" \\e[37mok 10{/}",
-		" \\e[37mok 11{/}",
-		" \\e[37mok 12{/}",
-		" \\e[37mok 13{/}",
-		" \\e[37mok 14{/}",
-		" \\e[37mok 15{/}",
-		" \\e[37mok 16{/}",
-		" \\e[37mok 17{/}",
-		" \\e[37mok 18{/}",
-		" \\e[37mok 19{/}",
-		" \\e[37mok 20{/}",
-		" \\e[37mok 21{/}",
-		" \\e[37mok 22{/}",
-		" \\e[37mok 23{/}",
-		" \\e[37mok 24{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mnpm{/} test",
+		"\\e[37m> test{/}",
+		"\\e[37m> node --test{/}",
+		"\\e[37mok 1{/}",
+		"\\e[37mok 2{/}",
+		"\\e[37mok 3{/}",
+		"\\e[37mok 4{/}",
+		"\\e[37mok 5{/}",
+		"\\e[37mok 6{/}",
+		"\\e[37mok 7{/}",
+		"\\e[37mok 8{/}",
+		"\\e[37mok 9{/}",
+		"\\e[37mok 10{/}",
+		"\\e[37mok 11{/}",
+		"\\e[37mok 12{/}",
+		"\\e[37mok 13{/}",
+		"\\e[37mok 14{/}",
+		"\\e[37mok 15{/}",
+		"\\e[37mok 16{/}",
+		"\\e[37mok 17{/}",
+		"\\e[37mok 18{/}",
+		"\\e[37mok 19{/}",
+		"\\e[37mok 20{/}",
+		"\\e[37mok 21{/}",
+		"\\e[37mok 22{/}",
+		"\\e[37mok 23{/}",
+		"\\e[37mok 24{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ npm ERR! missing script: test{/}",
 		"\\e[90m     npm ERR! A complete log is in ~/.npm/_logs{/}"
 	],
 	"codex/bash/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ npm ERR! missing script: test{/}",
 		"\\e[90m     npm ERR! A complete log is in ~/.npm/_{0}\\e[90m…{/}{0}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/bash/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mnpm{/} test",
 		"\\e[90m   └ npm ERR! missing script: test{/}",
 		"\\e[90m     npm ERR! A complete log is in ~/.npm/_logs{/}"
 	],
 	"codex/bash/failed/open/44": [
-		" \\e[32m$ {/}\\e[37mnpm{/} test",
-		" \\e[37mnpm ERR! missing script: test{/}",
-		" \\e[37mnpm ERR! A complete log is in ~/.npm/_logs{/}",
-		" {b}\\e[31m✗{/}{/b} (1)\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mnpm{/} test",
+		"\\e[37mnpm ERR! missing script: test{/}",
+		"\\e[37mnpm ERR! A complete log is in ~/.npm/_logs{/}",
+		"{b}\\e[31m✗{/}{/b} (1)\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@quiet/running/closed/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
 	],
 	"codex/bash@quiet/running/closed/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
 	],
 	"codex/bash@quiet/running/open/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
 	],
 	"codex/bash@quiet/running/open/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mtrue{/}"
 	],
 	"codex/bash@quiet/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ (no output){/}"
 	],
 	"codex/bash@quiet/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ (no output){/}"
 	],
 	"codex/bash@quiet/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ (no output){/}"
 	],
 	"codex/bash@quiet/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ (no output){/}"
 	],
 	"codex/bash@quiet/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ Command timed out after 5 seconds{/}"
 	],
 	"codex/bash@quiet/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ Command timed out after 5 seconds{/}"
 	],
 	"codex/bash@quiet/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ Command timed out after 5 seconds{/}"
 	],
 	"codex/bash@quiet/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[37mtrue{/}",
 		"\\e[90m   └ Command timed out after 5 seconds{/}"
 	],
 	"codex/bash@wide/running/closed/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past{0}…{0}",
-		"\\e[90m     + Show details{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past {0}…{0}",
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/bash@wide/running/closed/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{0}…{0}",
-		"\\e[90m     + Show details{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} {0}…{0}",
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/bash@wide/running/open/100": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
 		"     \\e[37mof a narrow terminal'{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@wide/running/open/44": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
 		"     \\e[37m'a very long command that keeps going{/}",
 		"     \\e[37mwell past the edge of a narrow{/}",
 		"     \\e[37mterminal'{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@wide/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the{0}…{0}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the {0}…{0}",
 		"\\e[90m   └ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{0}\\e[90m…{/}{0}",
 		"\\e[90m           70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
 		"\\e[90m     last{/}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/bash@wide/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} {0}…{0}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37me{0}…{0}",
 		"\\e[90m   └ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{0}\\e[90m…{/}{0}",
 		"\\e[90m           70 /opt/homebrew/lib/node_module{0}\\e[90m…{/}{0}",
 		"\\e[90m     last{/}",
-		"\\e[90m     + 2 lines (ctrl+o to expand){/}"
+		"\\e[90m    + 2 lines (ctrl+o to expand){/}"
 	],
 	"codex/bash@wide/done/open/100": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
 		"     \\e[37mof a narrow terminal'{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
-		" \\e[37mlast{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
+		"\\e[37mlast{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@wide/done/open/44": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
 		"     \\e[37m'a very long command that keeps going{/}",
 		"     \\e[37mwell past the edge of a narrow{/}",
 		"     \\e[37mterminal'{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37mxxxxxxxxxxxxxxxxxxxxx{/}",
-		" \\e[37m      70{/}",
-		" \\e[37m/opt/homebrew/lib/node_modules/@earendil-wo{/}",
-		" \\e[37mrks/pi-coding-agent/README.md{/}",
-		" \\e[37mlast{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37mxxxxxxxxxxxxxxxxxx{/}",
+		"\\e[37m      70{/}",
+		"\\e[37m/opt/homebrew/lib/node_modules/@earendil-wor{/}",
+		"\\e[37mks/pi-coding-agent/README.md{/}",
+		"\\e[37mlast{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@wide/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 5){/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going w{0}…{0}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 5){/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going we{0}…{0}",
 		"\\e[90m   └ jq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/bash@wide/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 5){/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.{0}…{0}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 5){/b} \\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.s{0}…{0}",
 		"\\e[90m   └ jq: error (at <stdin>:1): Cannot index{0}\\e[90m…{/}{0}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/bash@wide/failed/open/100": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/} \\e[37m'a very long command that keeps going well past the edge{/}",
 		"     \\e[37mof a narrow terminal'{/}",
-		" \\e[37mjq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
-		" {b}\\e[31m✗{/}{/b} (5)\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mjq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
+		"{b}\\e[31m✗{/}{/b} (5)\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@wide/failed/open/44": [
-		" \\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
+		"\\e[32m$ {/}\\e[37mcat{/} package.json \\e[37m|{/} \\e[37mjq{/} \\e[37m'.scripts'{/} \\e[37m&&{/} \\e[37mecho{/}",
 		"     \\e[37m'a very long command that keeps going{/}",
 		"     \\e[37mwell past the edge of a narrow{/}",
 		"     \\e[37mterminal'{/}",
-		" \\e[37mjq: error (at <stdin>:1): Cannot index{/}",
-		" \\e[37mstring with \"scripts\"{/}",
-		" {b}\\e[31m✗{/}{/b} (5)\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mjq: error (at <stdin>:1): Cannot index{/}",
+		"\\e[37mstring with \"scripts\"{/}",
+		"{b}\\e[31m✗{/}{/b} (5)\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@four/running/closed/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
 	],
 	"codex/bash@four/running/closed/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
 	],
 	"codex/bash@four/running/open/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
 	],
 	"codex/bash@four/running/open/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}"
 	],
 	"codex/bash@four/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ 2{/}",
 		"\\e[90m     3{/}",
 		"\\e[90m     4{/}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/bash@four/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ 2{/}",
 		"\\e[90m     3{/}",
 		"\\e[90m     4{/}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/bash@four/done/open/100": [
-		" \\e[32m$ {/}\\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
-		" \\e[37m1{/}",
-		" \\e[37m2{/}",
-		" \\e[37m3{/}",
-		" \\e[37m4{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"\\e[37m1{/}",
+		"\\e[37m2{/}",
+		"\\e[37m3{/}",
+		"\\e[37m4{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@four/done/open/44": [
-		" \\e[32m$ {/}\\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
-		" \\e[37m1{/}",
-		" \\e[37m2{/}",
-		" \\e[37m3{/}",
-		" \\e[37m4{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"\\e[37m1{/}",
+		"\\e[37m2{/}",
+		"\\e[37m3{/}",
+		"\\e[37m4{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/bash@four/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ seq: invalid argument{/}"
 	],
 	"codex/bash@four/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ seq: invalid argument{/}"
 	],
 	"codex/bash@four/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ seq: invalid argument{/}"
 	],
 	"codex/bash@four/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mseq{/} \\e[37m1{/} \\e[37m4{/}",
 		"\\e[90m   └ seq: invalid argument{/}"
 	],
 	"codex/powershell/running/closed/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name"
 	],
 	"codex/powershell/running/closed/44": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect{0}…{0}",
-		"\\e[90m     + Show details{/}"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-{0}…{0}",
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/powershell/running/open/100": [
-		" \\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name"
+		"\\e[36m•{/} {b}Running{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name"
 	],
 	"codex/powershell/running/open/44": [
-		" \\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
+		"\\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
 		"     Name",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/powershell/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
 		"\\e[90m   └ ----{/}",
 		"\\e[90m     app.ts{/}",
 		"\\e[90m     util.ts{/}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/powershell/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Obj{0}…{0}",
+		"{b}\\e[32m•{/}{/b} {b}Ran{/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Obje{0}…{0}",
 		"\\e[90m   └ ----{/}",
 		"\\e[90m     app.ts{/}",
 		"\\e[90m     util.ts{/}",
-		"\\e[90m     + 1 line (ctrl+o to expand){/}"
+		"\\e[90m    + 1 line (ctrl+o to expand){/}"
 	],
 	"codex/powershell/done/open/100": [
-		" \\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
-		" \\e[37mName{/}",
-		" \\e[37m----{/}",
-		" \\e[37mapp.ts{/}",
-		" \\e[37mutil.ts{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
+		"\\e[37mName{/}",
+		"\\e[37m----{/}",
+		"\\e[37mapp.ts{/}",
+		"\\e[37mutil.ts{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/powershell/done/open/44": [
-		" \\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
+		"\\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
 		"     Name",
-		" \\e[37mName{/}",
-		" \\e[37m----{/}",
-		" \\e[37mapp.ts{/}",
-		" \\e[37mutil.ts{/}",
-		" {b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mName{/}",
+		"\\e[37m----{/}",
+		"\\e[37mapp.ts{/}",
+		"\\e[37mutil.ts{/}",
+		"{b}\\e[32m✓{/}{/b}\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/powershell/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
 		"\\e[90m   └ Get-ChildItem: Cannot find path 'src'{/}"
 	],
 	"codex/powershell/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src {0}…{0}",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{0}…{0}",
 		"\\e[90m   └ Get-ChildItem: Cannot find path 'src'{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/powershell/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
+		"{b}\\e[31m•{/}{/b} {b}Failed (exit 1){/b} \\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/} Name",
 		"\\e[90m   └ Get-ChildItem: Cannot find path 'src'{/}"
 	],
 	"codex/powershell/failed/open/44": [
-		" \\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
+		"\\e[32m$ {/}\\e[37mGet-ChildItem{/} \\e[37m-Path{/} src \\e[37m|{/} \\e[37mSelect-Object{/}",
 		"     Name",
-		" \\e[37mGet-ChildItem: Cannot find path 'src'{/}",
-		" {b}\\e[31m✗{/}{/b} (1)\\e[90m • 1.23s{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[37mGet-ChildItem: Cannot find path 'src'{/}",
+		"{b}\\e[31m✗{/}{/b} (1)\\e[90m • 1.23s{/}",
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/grep/running/closed/100": [
-		" \\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
 	],
 	"codex/grep/running/closed/44": [
-		" \\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
 	],
 	"codex/grep/running/open/100": [
-		" \\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
 	],
 	"codex/grep/running/open/44": [
-		" \\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} TODO\\e[90m in {/}src"
 	],
 	"codex/grep/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ app.ts:2: // TODO: rename{/}",
 		"\\e[90m     util.ts:9: // TODO: split{/}"
 	],
 	"codex/grep/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ app.ts:2: // TODO: rename{/}",
 		"\\e[90m     util.ts:9: // TODO: split{/}"
 	],
 	"codex/grep/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ app.ts:2: // TODO: rename{/}",
 		"\\e[90m     util.ts:9: // TODO: split{/}"
 	],
 	"codex/grep/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ app.ts:2: // TODO: rename{/}",
 		"\\e[90m     util.ts:9: // TODO: split{/}"
 	],
 	"codex/grep/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ rg: src: No such file or directory{/}"
 	],
 	"codex/grep/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ rg: src: No such file or directory{/}"
 	],
 	"codex/grep/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ rg: src: No such file or directory{/}"
 	],
 	"codex/grep/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} TODO\\e[90m in {/}src",
 		"\\e[90m   └ rg: src: No such file or directory{/}"
 	],
 	"codex/find/running/closed/100": [
-		" \\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
 	],
 	"codex/find/running/closed/44": [
-		" \\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
 	],
 	"codex/find/running/open/100": [
-		" \\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
 	],
 	"codex/find/running/open/44": [
-		" \\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
+		"\\e[36m•{/} {b}Search{/b} *.ts\\e[90m in {/}src"
 	],
 	"codex/find/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ src/app.ts{/}",
 		"\\e[90m     src/util.ts{/}",
 		"\\e[90m     src/deep/x.ts{/}"
 	],
 	"codex/find/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ src/app.ts{/}",
 		"\\e[90m     src/util.ts{/}",
 		"\\e[90m     src/deep/x.ts{/}"
 	],
 	"codex/find/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ src/app.ts{/}",
 		"\\e[90m     src/util.ts{/}",
 		"\\e[90m     src/deep/x.ts{/}"
 	],
 	"codex/find/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[32m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ src/app.ts{/}",
 		"\\e[90m     src/util.ts{/}",
 		"\\e[90m     src/deep/x.ts{/}"
 	],
 	"codex/find/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ fd: invalid pattern{/}"
 	],
 	"codex/find/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ fd: invalid pattern{/}"
 	],
 	"codex/find/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ fd: invalid pattern{/}"
 	],
 	"codex/find/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
+		"{b}\\e[31m•{/}{/b} {b}Search{/b} *.ts\\e[90m in {/}src",
 		"\\e[90m   └ fd: invalid pattern{/}"
 	],
 	"codex/ls/running/closed/100": [
-		" \\e[36m•{/} {b}List{/b} src"
+		"\\e[36m•{/} {b}List{/b} src"
 	],
 	"codex/ls/running/closed/44": [
-		" \\e[36m•{/} {b}List{/b} src"
+		"\\e[36m•{/} {b}List{/b} src"
 	],
 	"codex/ls/running/open/100": [
-		" \\e[36m•{/} {b}List{/b} src"
+		"\\e[36m•{/} {b}List{/b} src"
 	],
 	"codex/ls/running/open/44": [
-		" \\e[36m•{/} {b}List{/b} src"
+		"\\e[36m•{/} {b}List{/b} src"
 	],
 	"codex/ls/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[32m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ app.ts{/}",
 		"\\e[90m     util.ts{/}",
 		"\\e[90m     deep/{/}"
 	],
 	"codex/ls/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[32m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ app.ts{/}",
 		"\\e[90m     util.ts{/}",
 		"\\e[90m     deep/{/}"
 	],
 	"codex/ls/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[32m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ app.ts{/}",
 		"\\e[90m     util.ts{/}",
 		"\\e[90m     deep/{/}"
 	],
 	"codex/ls/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[32m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ app.ts{/}",
 		"\\e[90m     util.ts{/}",
 		"\\e[90m     deep/{/}"
 	],
 	"codex/ls/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[31m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ Path not found: src{/}"
 	],
 	"codex/ls/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[31m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ Path not found: src{/}"
 	],
 	"codex/ls/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[31m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ Path not found: src{/}"
 	],
 	"codex/ls/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}List{/b} src",
+		"{b}\\e[31m•{/}{/b} {b}List{/b} src",
 		"\\e[90m   └ Path not found: src{/}"
 	],
 	"codex/custom:web_search/running/closed/100": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}"
 	],
 	"codex/custom:web_search/running/closed/44": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}"
 	],
 	"codex/custom:web_search/running/open/100": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})"
 	],
 	"codex/custom:web_search/running/open/44": [
-		" \\e[36m•{/} {b}Calling{/b}",
+		"\\e[36m•{/} {b}Calling{/b}",
 		"\\e[90m   └ {/}\\e[36mweb_search{/}(\\e[90m{\"query\":\"pi{/}",
 		"     \\e[90mtui\",\"limit\":3}{/})"
 	],
 	"codex/custom:web_search/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}",
 		"\\e[90m   └ result 4{/}",
 		"\\e[90m     result 5{/}",
 		"\\e[90m     result 6{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:web_search/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}",
 		"\\e[90m   └ result 4{/}",
 		"\\e[90m     result 5{/}",
 		"\\e[90m     result 6{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:web_search/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})",
 		"\\e[90m   └ {/}\\e[90mresult 1{/}",
 		"     \\e[90mresult 2{/}",
 		"     \\e[90mresult 3{/}",
 		"     \\e[90mresult 4{/}",
 		"     \\e[90mresult 5{/}",
 		"     \\e[90mresult 6{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:web_search/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b}",
 		"\\e[90m   └ {/}\\e[36mweb_search{/}(\\e[90m{\"query\":\"pi{/}",
 		"     \\e[90mtui\",\"limit\":3}{/})",
 		"     \\e[90mresult 1{/}",
@@ -5179,96 +5179,96 @@
 		"     \\e[90mresult 4{/}",
 		"     \\e[90mresult 5{/}",
 		"     \\e[90mresult 6{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:web_search/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}",
 		"\\e[90m   └ Error: Search provider unavailable{/}",
 		"\\e[90m     Command exited with code 7{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:web_search/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}",
 		"\\e[90m   └ Error: Search provider unavailable{/}",
 		"\\e[90m     Command exited with code 7{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:web_search/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mweb_search{/}(\\e[90m{\"query\":\"pi tui\",\"limit\":3}{/})",
 		"\\e[90m   └ {/}\\e[90mError: Search provider unavailable{/}",
 		"     \\e[90mCommand exited with code 7{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:web_search/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b}",
 		"\\e[90m   └ {/}\\e[36mweb_search{/}(\\e[90m{\"query\":\"pi{/}",
 		"     \\e[90mtui\",\"limit\":3}{/})",
 		"     \\e[90mError: Search provider unavailable{/}",
 		"     \\e[90mCommand exited with code 7{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:fetch@author/running/closed/100": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}"
 	],
 	"codex/custom:fetch@author/running/closed/44": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}"
 	],
 	"codex/custom:fetch@author/running/open/100": [
-		" \\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})"
+		"\\e[36m•{/} {b}Calling{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})"
 	],
 	"codex/custom:fetch@author/running/open/44": [
-		" \\e[36m•{/} {b}Calling{/b}",
+		"\\e[36m•{/} {b}Calling{/b}",
 		"\\e[90m   └ {/}\\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"htt{/}",
 		"     \\e[90mps://b.example\"],\"options\":{\"timeout\":5{/}",
 		"     \\e[90m}}{/})"
 	],
 	"codex/custom:fetch@author/done/closed/100": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}",
 		"\\e[90m   └ # Fetched{/}",
 		"\\e[90m     body line{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:fetch@author/done/closed/44": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}",
 		"\\e[90m   └ # Fetched{/}",
 		"\\e[90m     body line{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:fetch@author/done/open/100": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})",
 		"\\e[90m   └ {/}AUTHOR full: # Fetched",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:fetch@author/done/open/44": [
-		" {b}\\e[32m•{/}{/b} {b}Called{/b}",
+		"{b}\\e[32m•{/}{/b} {b}Called{/b}",
 		"\\e[90m   └ {/}\\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"htt{/}",
 		"     \\e[90mps://b.example\"],\"options\":{\"timeout\":5{/}",
 		"     \\e[90m}}{/})",
 		"     AUTHOR full: # Fetched",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:fetch@author/failed/closed/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}",
 		"\\e[90m   └ Error: fetch failed: 503{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:fetch@author/failed/closed/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}",
 		"\\e[90m   └ Error: fetch failed: 503{/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/custom:fetch@author/failed/open/100": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b} \\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"https://b.example\"],\"options\":{\"timeout\":5}}{/})",
 		"\\e[90m   └ {/}\\e[90mError: fetch failed: 503{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/custom:fetch@author/failed/open/44": [
-		" {b}\\e[31m•{/}{/b} {b}Failed{/b}",
+		"{b}\\e[31m•{/}{/b} {b}Failed{/b}",
 		"\\e[90m   └ {/}\\e[36mfetch{/}(\\e[90m{\"urls\":[\"https://a.example\",\"htt{/}",
 		"     \\e[90mps://b.example\"],\"options\":{\"timeout\":5{/}",
 		"     \\e[90m}}{/})",
 		"     \\e[90mError: fetch failed: 503{/}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"claude/group:finished/100": [
 		"",
@@ -5393,33 +5393,33 @@
 	],
 	"codex/group:finished/100": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}",
+		"\\e[90m•{/} {b}Explored{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts\\e[90m, {/}b.ts",
 		"\\e[90m     {/}\\e[36mSearch {/}TODO",
 		"\\e[90m     {/}\\e[36mList {/}src",
-		"\\e[90m     + Show details{/}",
+		"\\e[90m    + Show details{/}",
 		"",
 		"ROW bash {\"command\":\"npm test\"}",
 		"",
-		" \\e[90m•{/} {b}Explored{/b}",
+		"\\e[90m•{/} {b}Explored{/b}",
 		"\\e[90m   └ {/}\\e[36mSearch {/}*.ts",
-		"\\e[90m     + Show details{/}",
+		"\\e[90m    + Show details{/}",
 		"\\e]133;A\u0007",
 		"\\e]133;B\u0007\\e]133;C\u0007 All done.                                                                                          "
 	],
 	"codex/group:finished/44": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}",
+		"\\e[90m•{/} {b}Explored{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts\\e[90m, {/}b.ts",
 		"\\e[90m     {/}\\e[36mSearch {/}TODO",
 		"\\e[90m     {/}\\e[36mList {/}src",
-		"\\e[90m     + Show details{/}",
+		"\\e[90m    + Show details{/}",
 		"",
 		"ROW bash {\"command\":\"npm test\"}",
 		"",
-		" \\e[90m•{/} {b}Explored{/b}",
+		"\\e[90m•{/} {b}Explored{/b}",
 		"\\e[90m   └ {/}\\e[36mSearch {/}*.ts",
-		"\\e[90m     + Show details{/}",
+		"\\e[90m    + Show details{/}",
 		"\\e]133;A\u0007",
 		"\\e]133;B\u0007\\e]133;C\u0007 All done.                                  "
 	],
@@ -5438,54 +5438,54 @@
 		"ROW ls {\"path\":\"src\"}",
 		"",
 		"ROW bash {\"command\":\"rg x | head\"}",
-		"\\e[90m     − Show less{/}",
+		"\\e[90m    − Show less{/}",
 		"",
 		"ROW bash {\"command\":\"npm test\"}",
 		"",
 		"ROW find {\"pattern\":\"*.ts\"}",
-		"\\e[90m     − Show less{/}",
+		"\\e[90m    − Show less{/}",
 		"\\e]133;A\u0007",
 		"\\e]133;B\u0007\\e]133;C\u0007 All done.                                                                                          "
 	],
 	"codex/group:running/100": [
 		"",
-		" \\e[36m•{/} {b}Exploring{/b}",
+		"\\e[36m•{/} {b}Exploring{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts\\e[90m, {/}long.log",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:running/44": [
 		"",
-		" \\e[36m•{/} {b}Exploring{/b}",
+		"\\e[36m•{/} {b}Exploring{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts\\e[90m, {/}long.log",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:running/opened/100": [
 		"",
 		"ROW read {\"path\":\"a.ts\"}",
 		"",
 		"ROW bash {\"command\":\"cat long.log | tail -5\"}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/group:failed/100": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 1 failed{/}{/b}",
+		"\\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 1 failed{/}{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts",
 		"\\e[90m     {/}\\e[36mRead {/}gone.ts\\e[31m (failed){/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:failed/44": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 1 failed{/}{/b}",
+		"\\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 1 failed{/}{/b}",
 		"\\e[90m   └ {/}\\e[36mRead {/}a.ts",
 		"\\e[90m     {/}\\e[36mRead {/}gone.ts\\e[31m (failed){/}",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:failed/opened/100": [
 		"",
 		"ROW read {\"path\":\"a.ts\"}",
 		"",
 		"ROW read {\"path\":\"gone.ts\"}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	],
 	"codex/group:streaming/100": [
 		"",
@@ -5501,19 +5501,19 @@
 	],
 	"codex/group:exits/100": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 2 failed{/}{/b}",
+		"\\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 2 failed{/}{/b}",
 		"\\e[90m   └ {/}\\e[36mSearch {/}missing\\e[90m in {/}src\\e[90m (exit 1){/}",
 		"\\e[90m     {/}\\e[36mRead {/}gone.txt\\e[31m (exit 2){/}",
 		"\\e[90m     {/}\\e[36mRead {/}a.ts\\e[90m, {/}b.ts",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:exits/44": [
 		"",
-		" \\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 2 failed{/}{/b}",
+		"\\e[90m•{/} {b}Explored{/b}{b}\\e[31m · 2 failed{/}{/b}",
 		"\\e[90m   └ {/}\\e[36mSearch {/}missing\\e[90m in {/}src\\e[90m (exit 1){/}",
 		"\\e[90m     {/}\\e[36mRead {/}gone.txt\\e[31m (exit 2){/}",
 		"\\e[90m     {/}\\e[36mRead {/}a.ts\\e[90m, {/}b.ts",
-		"\\e[90m     + Show details{/}"
+		"\\e[90m    + Show details{/}"
 	],
 	"codex/group:exits/opened/100": [
 		"",
@@ -5524,6 +5524,6 @@
 		"ROW read {\"path\":\"src/a.ts\"}",
 		"",
 		"ROW read {\"path\":\"lib/b.ts\"}",
-		"\\e[90m     − Show less{/}"
+		"\\e[90m    − Show less{/}"
 	]
 }

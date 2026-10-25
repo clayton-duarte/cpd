@@ -37,7 +37,7 @@ test("the cpd pill holds only the word cpd, inverted, with caps 5", () => {
 
 test("the first sentence follows the pill outside it in text 7", () => {
   const head = draw(cpdMessage("Worker of Job chatfix (Attempt a1). More."))[0]!;
-  assert.equal(head, ` ${GREY("╭─")}${PILL} \x1b[37mWorker of Job chatfix (Attempt a1)\x1b[39m`);
+  assert.equal(head, `${GREY("╭─")}${PILL} \x1b[37mWorker of Job chatfix (Attempt a1)\x1b[39m`);
   assert.equal(plain(draw(cpdMessage("Worker of Job x"), { outputPad: 0 })[0]!), `╭─${CAP_L}cpd${CAP_R} Worker of Job x`);
 });
 
@@ -45,7 +45,7 @@ test("a sentence over 60 characters is cut with an ellipsis outside the pill", (
   const sentence = "w".repeat(10).concat(" ").repeat(9) + "end";
   const head = draw(cpdMessage(sentence), { width: 200 })[0]!;
   assert.ok(head.includes(PILL), "the pill is still just cpd");
-  const after = plain(head).slice(` ╭─${CAP_L}cpd${CAP_R} `.length);
+  const after = plain(head).slice(`╭─${CAP_L}cpd${CAP_R} `.length);
   assert.ok(after.endsWith("…"), after);
   assert.ok(after.length <= 61, after);
   assert.ok(!sentence.startsWith(after), "cut");
@@ -55,10 +55,10 @@ test("a long sentence wraps like a tool row's title and never inside the pill", 
   const sentence = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
   const rows = draw(cpdMessage(sentence), { width: 24 });
   const text = rows.map(plain);
-  const head = rows.findIndex((_r, i) => i > 0 && !text[i]!.startsWith(" │ "));
+  const head = rows.findIndex((_r, i) => i > 0 && !text[i]!.startsWith("│ "));
   const cont = text.slice(1, head === -1 ? undefined : head);
-  assert.ok(text[0]!.startsWith(` ╭─${CAP_L}cpd${CAP_R} alpha`), text[0]);
-  assert.ok(cont.length >= 1 && cont.every((l) => l.startsWith(" │ ")), "continuation rows led by ' │ ' like renderToolCall");
+  assert.ok(text[0]!.startsWith(`╭─${CAP_L}cpd${CAP_R} alpha`), text[0]);
+  assert.ok(cont.length >= 1 && cont.every((l) => l.startsWith("│ ")), "continuation rows led by '│ ' like renderToolCall");
   assert.equal(rows.join("").split(CAP_L).length - 1, 1, "one pill");
   assert.ok(text.slice(0, 1 + cont.length).every((l) => l.length <= 24), "within the pane");
   assert.ok(rows.slice(1, 1 + cont.length).every((l) => !l.includes("\x1b[45m")), "no pill background on continuation rows");
@@ -69,7 +69,7 @@ test("an always-open block ends with the closing row of ╰󰬪, all 8", () => {
   for (const expanded of [false, true])
     for (const outputPad of [1, 0]) {
       const rows = draw(summaryMessage(), { expanded, outputPad });
-      assert.equal(rows.at(-1), `${outputPad === 1 ? " " : ""}${GREY(`╰${TERM}`)}`, JSON.stringify(rows.at(-1)));
+      assert.equal(rows.at(-1), `${GREY(`╰${TERM}`)}`, JSON.stringify(rows.at(-1)));
     }
 });
 
@@ -84,7 +84,7 @@ test("an always-open block's last row is never a bare rail", () => {
 test("a block with no body ends with ╰󰬪 and no toggle", () => {
   for (const expanded of [false, true]) {
     const rows = draw(cpdMessage("Nothing more", ""), { expanded });
-    assert.equal(rows.at(-1), ` ${GREY(`╰${TERM}`)}`);
+    assert.equal(rows.at(-1), `${GREY(`╰${TERM}`)}`);
     const all = plain(rows.join("\n"));
     assert.ok(!all.includes("expand") && !all.includes("collapse"), "no toggle");
   }
@@ -92,7 +92,7 @@ test("a block with no body ends with ╰󰬪 and no toggle", () => {
 
 test("a foldable block keeps its toggle with ╰ in 8 and the glyph and word in 7", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(draw(m, { expanded: false }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B26} expand · 03:11\x1b[39m`);
-  assert.equal(draw(m, { expanded: true }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B2C} collapse · 03:11\x1b[39m`);
-  assert.equal(draw(m, { expanded: true })[0], ` ${GREY("╭─")}${PILL} \x1b[37mWorker of Job x\x1b[39m`);
+  assert.equal(draw(m, { expanded: false }).at(-1), `${GREY("╰")}\x1b[37m\u{F0B26} expand · 03:11\x1b[39m`);
+  assert.equal(draw(m, { expanded: true }).at(-1), `${GREY("╰")}\x1b[37m\u{F0B2C} collapse · 03:11\x1b[39m`);
+  assert.equal(draw(m, { expanded: true })[0], `${GREY("╭─")}${PILL} \x1b[37mWorker of Job x\x1b[39m`);
 });

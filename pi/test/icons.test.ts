@@ -40,9 +40,9 @@ const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 test("a cpd block closes with the chevron circles and ends with the right chevron terminator", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(plain(draw(m, false).at(-1)!), ` ╰${EXPAND} expand · 03:11`);
-  assert.equal(plain(draw(m, true).at(-1)!), ` ╰${COLLAPSE} collapse · 03:11`);
-  assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), ` ╰${TERM}`);
+  assert.equal(plain(draw(m, false).at(-1)!), `╰${EXPAND} expand · 03:11`);
+  assert.equal(plain(draw(m, true).at(-1)!), `╰${COLLAPSE} collapse · 03:11`);
+  assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), `╰${TERM}`);
 });
 
 test("the loader has the 28 moon_alt frames and the waiting glyph is not one of them", () => {
