@@ -556,7 +556,13 @@ impl Driver {
             }
             match now.stop_request.as_deref() {
                 None => {}
-                Some("cancelled") => return self.end(&now, End::Cancelled, dirs),
+                Some("cancelled") => {
+                    // A real cancel (the Job has `cancel_requested_at`) ends `Cancelled`; incident mode's stop (no
+                    // cancel request) ends `Interrupted`, which requeues the Job at the same Tier (contract §3.7).
+                    let cancelled = self.store.read(|conn| ledger::cancel_request(conn, &now.plan, &now.job))?.is_some();
+                    let end = if cancelled { End::Cancelled } else { End::Interrupted };
+                    return self.end(&now, end, dirs);
+                }
                 Some("timed_out") => {
                     let detail = format!("It used its {} minutes of active time.", self.config.timeouts.attempt_minutes);
                     return self.end(&now, End::Failed { cause: Cause::TimedOut, detail }, dirs);

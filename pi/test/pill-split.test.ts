@@ -6,6 +6,9 @@ import type { RenderedMessage, Theme } from "../lib/pi.ts";
 
 /** contract §6.9 / §6.1.1 (hs-d534, hs-d545), commands.md §15.9: the cpd pill holds only `cpd`; the first sentence follows it outside, text 7; a block that cannot fold ends with ` ╰󰬪`. */
 
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
 const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
@@ -15,9 +18,9 @@ const GREY = (s: string): string => `\x1b[90m${s}\x1b[39m`;
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 const cpdMessage = (text: string, content = "body"): RenderedMessage =>
-  ({ role: "custom", timestamp: 0, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
+  ({ role: "custom", timestamp: TIME_MS, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
 const summaryMessage = (): RenderedMessage =>
-  ({ role: "custom", timestamp: 0, customType: "cpd-plan-summary", content: "# Title\nline two", display: true, details: { review: "r6" } }) as unknown as RenderedMessage;
+  ({ role: "custom", timestamp: TIME_MS, customType: "cpd-plan-summary", content: "# Title\nline two", display: true, details: { review: "r6" } }) as unknown as RenderedMessage;
 
 const draw = (m: RenderedMessage, o: { expanded?: boolean; outputPad?: number; width?: number } = {}): string[] =>
   (new Rendering().render(m, { expanded: o.expanded ?? false, outputPad: o.outputPad ?? 1 }, theme) as Component).render(o.width ?? 80);
@@ -89,7 +92,7 @@ test("a block with no body ends with ╰󰬪 and no toggle", () => {
 
 test("a foldable block keeps its toggle with ╰ in 8 and the glyph and word in 7", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(draw(m, { expanded: false }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B26} expand\x1b[39m`);
-  assert.equal(draw(m, { expanded: true }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B2C} collapse\x1b[39m`);
+  assert.equal(draw(m, { expanded: false }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B26} expand · 03:11\x1b[39m`);
+  assert.equal(draw(m, { expanded: true }).at(-1), ` ${GREY("╰")}\x1b[37m\u{F0B2C} collapse · 03:11\x1b[39m`);
   assert.equal(draw(m, { expanded: true })[0], ` ${GREY("╭─")}${PILL} \x1b[37mWorker of Job x\x1b[39m`);
 });

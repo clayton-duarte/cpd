@@ -28,17 +28,20 @@ test("the config schema toggle defaults are the same two glyphs", () => {
   assert.equal(props.properties.collapse.default, COLLAPSE);
 });
 
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
 const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const cpdMessage = (text: string, content = "body"): RenderedMessage =>
-  ({ role: "custom", timestamp: 0, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
+  ({ role: "custom", timestamp: TIME_MS, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
 const draw = (m: RenderedMessage, expanded: boolean): string[] =>
   (new Rendering().render(m, { expanded, outputPad: 1 }, theme) as Component).render(80);
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 test("a cpd block closes with the chevron circles and ends with the right chevron terminator", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(plain(draw(m, false).at(-1)!), ` ╰${EXPAND} expand`);
-  assert.equal(plain(draw(m, true).at(-1)!), ` ╰${COLLAPSE} collapse`);
+  assert.equal(plain(draw(m, false).at(-1)!), ` ╰${EXPAND} expand · 03:11`);
+  assert.equal(plain(draw(m, true).at(-1)!), ` ╰${COLLAPSE} collapse · 03:11`);
   assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), ` ╰${TERM}`);
 });
 

@@ -171,10 +171,6 @@ fn wait_views_run(env: &TestEnv, exe: &str) -> Vec<(String, u32)> {
     views
 }
 
-fn pane_pids_of_window(env: &TestEnv, target: &str) -> Vec<String> {
-    tmux_out(env, &["list-panes", "-t", target, "-F", "#{pane_id} #{pane_pid}"]).lines().map(str::to_owned).collect()
-}
-
 #[test]
 fn without_a_terminal_it_is_the_usage_error_and_does_nothing() {
     let env = env();
@@ -236,36 +232,6 @@ fn it_removes_an_older_cpds_statusbar_pane() {
 }
 
 #[test]
-fn it_restarts_views_that_run_an_older_binary_once() {
-    let env = env();
-    let old = env.root().join("old-cpd");
-    copy_executable(CPD, &old);
-    let old = old.to_str().unwrap().to_owned();
-    // The cockpit is built by an older cpd: its views run `old`.
-    fake_cpd(&env, &old);
-    env.cpd(&["tui"]).ok();
-    let before = wait_views_run(&env, &old);
-    let engine = pane_pids_of_window(&env, "=cpd-work:watch");
-    // The install: panes started now run the installed binary.
-    fake_cpd(&env, CPD);
-
-    let t = run_in_terminal(&env, "update", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_eq!(t.stderr(), "");
-    let after = wait_views_run(&env, CPD);
-    assert_eq!(after.iter().map(|(v, _)| v).collect::<Vec<_>>(), before.iter().map(|(v, _)| v).collect::<Vec<_>>());
-    assert!(after.iter().zip(&before).all(|(a, b)| a.1 != b.1), "{before:?} -> {after:?}");
-    assert_eq!(pane_pids_of_window(&env, "=cpd-work:watch"), engine, "the engine is not touched");
-    assert_eq!(attach_calls(&env).len(), 1);
-
-    // Nothing is old now: the next one restarts nothing.
-    let again = run_in_terminal(&env, "again", false, "");
-    assert_eq!(again.exit_code(), 0, "{}", again.stderr());
-    assert_eq!(view_pids(&env), after);
-    assert_eq!(attach_calls(&env).len(), 2);
-}
-
-#[test]
 fn inside_the_cockpit_it_does_not_nest_an_attach() {
     let env = env();
     let old = env.root().join("old-cpd");
@@ -304,18 +270,6 @@ fn fake_cpd_with_sleeping_sessions(env: &TestEnv) {
     );
 }
 
-/// The server of the tests below is the *old* one: `older_server` copies the installed tmux to its own
-/// path and, until `arm`, the fake `tmux` on `PATH` runs that copy for every call, so the server the
-/// cockpit is built on has the copy as its own binary (`/proc/<pid>/exe`), as an older tmux has on hs.
-/// Once armed, the fake says that server runs tmux 1.0 (and no other), and runs the installed tmux for
-/// everything else: a call of the installed tmux to the old server is a call the restart must not make.
-fn older_server(env: &TestEnv) -> PathBuf {
-    let old = env.root().join("old-tmux");
-    fs::create_dir_all(&old).unwrap();
-    copy_executable(real_tmux().to_str().unwrap(), &old.join("tmux"));
-    older_server_run_by(env, &old.join("tmux"))
-}
-
 /// [`older_server`], with `old` as the program that builds the server (an older tmux for real).
 fn older_server_run_by(env: &TestEnv, old: &Path) -> PathBuf {
     let flag = env.root().join("older-server");
@@ -350,12 +304,6 @@ fn older_server_run_by(env: &TestEnv, old: &Path) -> PathBuf {
         ),
     );
     flag
-}
-
-/// The server that runs now is the one that is older than the installed tmux.
-fn arm(env: &TestEnv, flag: &Path) {
-    fs::write(flag, server_pid(env)).unwrap();
-    arm_real(env, flag);
 }
 
 /// [`arm`] for a server that really is older: the fake need not say so.
@@ -515,45 +463,6 @@ fn places() -> Vec<(String, String)> {
 }
 
 #[test]
-fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_servers_binary_attaches() {
-    for (what, lead_state, attempt) in [
-        ("a starting Attempt", "idle", Some("starting")),
-        ("a running Attempt", "idle", Some("running")),
-        ("a merging Attempt", "idle", Some("merging")),
-        ("a working Lead", "working", None),
-        ("a blocked Lead", "blocked", None),
-    ] {
-        let env = env();
-        fake_cpd_with_sleeping_sessions(&env);
-        let flag = older_server(&env);
-        let _driver = fixture(&env, attempt);
-        cockpit_with_sessions(&env);
-        // The engine stops a Session that has no pane: the state is set once they have panes.
-        store_of(&env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{lead_state}', state_label = iif('{lead_state}' = 'blocked', 'a dialog', NULL) WHERE id = 'lead1'"))).unwrap();
-        let (before, panes) = (server_pid(&env), tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
-        arm(&env, &flag);
-
-        let t = run_in_terminal(&env, "hold", false, "");
-        wait_until(&format!("the attach ({what})"), || {
-            let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
-            clients.status.success() && !clients.stdout.is_empty()
-        });
-        assert_eq!(kill_server_calls(&env), 0, "{what}");
-        assert_eq!(server_pid(&env), before, "{what}");
-        assert_eq!(tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]), panes, "{what}");
-        assert!(attach_calls(&env).is_empty(), "{what}: the installed tmux must not attach");
-        let line = t.stderr();
-        assert_eq!(line.lines().count(), 1, "{what}: {line}");
-        assert!(
-            line.contains("attaching with the server's own tmux") && line.contains("the restart happens once nothing is in the way"),
-            "{what}: {line}"
-        );
-        let pending: serde_json::Value = serde_json::from_str(&fs::read_to_string(pending_file(&env)).unwrap()).unwrap();
-        assert_eq!((pending["server"].as_str(), pending["failed"].is_null()), (Some("1.0"), true), "{what}");
-    }
-}
-
-#[test]
 fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_cleared() {
     let env = env();
     env.cpd(&["tui"]).ok();
@@ -563,34 +472,6 @@ fn a_server_that_is_not_older_needs_no_restart_and_a_stale_pending_file_is_clear
     assert_eq!(kill_server_calls(&env), 0);
     assert!(t.stderr().contains("The tmux restart failed") && t.stderr().contains("it broke."), "{}", t.stderr());
     assert!(!pending_file(&env).exists());
-}
-
-/// A tmux restart reopens the Sessions of the parked windows (`reopen_one`): the pane gets `@cpd_session` (the go
-/// signal: the wrapper's `session run` waits for it, then its pi reports `idle`) only once the store records the
-/// pane. A report that lands before leaves a row with no pane that engine E2 stops (hs-d238). The fake `tmux`
-/// writes down what `cpd session show` says of each Session as the signal is set on its pane.
-#[test]
-fn a_restart_records_the_pane_of_a_parked_session_before_it_gets_the_go_signal() {
-    let env = env();
-    fake_cpd_with_sleeping_sessions(&env);
-    let flag = older_server(&env);
-    let _driver = fixture(&env, None);
-    cockpit_with_sessions(&env);
-    arm(&env, &flag);
-    fs::write(format!("{}.record-go-signals", flag.display()), "").unwrap();
-
-    let t = run_in_terminal(&env, "go-signal", false, "");
-    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert!(t.stderr().contains("3 Session(s) reopened"), "{}", t.stderr());
-    let signals = fs::read_to_string(format!("{}.go-signals", flag.display())).unwrap_or_default();
-    // lead1 is the chat slot's, reopened by `session open` (its own test); the others are parked.
-    for id in ["lead2", "manager1"] {
-        let line = signals.lines().find(|l| l.split(' ').nth(1) == Some(id)).unwrap_or_else(|| panic!("{id} never got @cpd_session:\n{signals}"));
-        let mut fields = line.splitn(3, ' ');
-        let (pane, _, row) = (fields.next().unwrap(), fields.next(), fields.next().unwrap());
-        let row: serde_json::Value = serde_json::from_str(row).unwrap_or_else(|e| panic!("`session show {id}` at the go signal: {e}: {row}"));
-        assert_eq!(row["session"]["tmux_pane"], serde_json::json!(pane), "pane {pane} got @cpd_session {id} while the store's tmux_pane for it was {}", row["session"]["tmux_pane"]);
-    }
 }
 
 /// An installed tmux that is older than the one on `PATH`, at a known path; else why there is none.

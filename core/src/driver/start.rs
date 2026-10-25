@@ -189,8 +189,9 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
         }
         (None, Some((number, tier, never_started))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            if *never_started {
+            if *never_started || !catalog.is_valid(last) {
                 // The ledger queued the Job at that Tier again: the Attempt was not a try.
+                // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {
                 let next = catalog.next(last)?.ok_or_else(|| {
@@ -200,6 +201,8 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
             }
         }
     };
+    // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
+    let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
     // hs-d554: a Job stored on a Tier outside H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);

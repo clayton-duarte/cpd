@@ -1,8 +1,8 @@
 //! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR (a `cancelled` one muted, below
 //! the others, hs-d518),
 //! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
-//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
-//! box's top border.
+//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need a plain box-drawing line from the needed box's bottom border to the needing
+//! box's top border (no arrowhead; hs-d638).
 //!
 //! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling and the clicks
 //! work on it as on one chart (the pills' rectangles are on the whole buffer), and the row of boxes of each of its
@@ -26,7 +26,7 @@ use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
-/// Rows between two rows of boxes: the run of lines, then the arrowheads.
+/// Rows between two rows of boxes: the run of lines, then the row that reaches the needing box's top border.
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
@@ -50,11 +50,9 @@ impl Widget for ChartBody<'_> {
     }
 }
 
-/// The head of an arrow, just above the needing box's top border: `nf-md-arrow_down_thin` (U+F19B3).
-const ARROW: &str = "\u{F19B3}";
 /// Between a box title's repo name and its base: `nf-md-arrow_right_thin` (U+F19B0).
 const TO: &str = "\u{F19B0}";
-/// The needed box's bottom border where an arrow leaves it.
+/// The needed box's bottom border where a line leaves it.
 const EXIT: &str = "┬";
 
 /// The canvas of boxes: the chart of all of them, and the row of boxes (the level, [`levels`]) of each of its columns.
@@ -281,9 +279,8 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             }
         }
     }
-    for &(p, c) in &edges {
+    for &(p, _) in &edges {
         buf[(mid(p), bottom(p))].set_symbol(EXIT).set_style(lines);
-        buf[(mid(c), at[c].1 - 1)].set_symbol(ARROW).set_style(lines);
     }
 
     // the pills on the whole buffer; the columns row of boxes by row, box by box, then by each box's own chart columns
@@ -467,7 +464,7 @@ mod tests {
 │ no Jobs                         │
 ╰────────────────┬────────────────╯
                  ╰╮
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ no Jobs                           │
 ╰───────────────────────────────────╯");
@@ -496,7 +493,7 @@ mod tests {
 
     #[test]
     fn the_arrow_glyphs_are_one_cell_wide() {
-        for glyph in [ARROW, TO] {
+        for glyph in [TO] {
             assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
         }
     }
@@ -562,7 +559,7 @@ mod tests {
         let shown = text(&c);
         assert_eq!([('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()), [2, 2, 2, 2], "two boxes, four corners each: {shown}");
         assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
-        // the needed box's bottom border leaves by a ┬, the needing box's top border has the arrowhead above it
+        // the needed box's bottom border leaves by a ┬, the line reaches the needing box's top border
         assert_eq!(shown.matches('┬').count(), 1, "{shown}");
         assert!(shown.lines().any(|l| l.starts_with("╰") && l.contains('┬') && l.ends_with('╯')), "{shown}");
     }
@@ -770,11 +767,11 @@ mod tests {
 │ 󰝦 a│S1─────󰝦 b│S1             │
 ╰─────────────────┬─────────────────╯
                   │
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 c│S1                          │
 ╰───────────────────────────────────╯");
-        // the arrow is in the lines' colour
+        // the exit and the line are in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
         assert_eq!(Some(exit.fg), palette::fg(Meaning::Nothing).fg);
     }
@@ -788,7 +785,7 @@ mod tests {
 │ 󰝦 types│S1─────󰝦 gql│S1             │
 ╰────────────────────┬────────────────────╯
                    ╭─┴────────────────────────────────────╮
-                   󱦳                                      󱦳
+                   │                                      │
 ╭─ docs · docs-repo 󱦰 main · dispatch ╮ ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 readme│S1                       │ │ 󰝦 page│S1                       │
 ╰─────────────────────────────────────╯ ╰───────────────────────────────────╯");
@@ -803,7 +800,7 @@ mod tests {
 │ 󰝦 a│S1                          │ │ 󰝦 d│S1                        │
 ╰─────────────────┬─────────────────╯ ╰────────────────┬────────────────╯
                   ├────────────────────────────────────╯
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 w│S1                          │
 ╰───────────────────────────────────╯");
@@ -817,12 +814,12 @@ mod tests {
 │ no Jobs                       │
 ╰───────────────┬───────────────╯
                 ├─────────────────╮
-                󱦳                 │
+                │                 │
 ╭─ b · b-repo 󱦰 main · dispatch ╮ │
 │ no Jobs                       │ │
 ╰───────────────┬───────────────╯ │
                 ├─────────────────╯
-                󱦳
+                │
 ╭─ c · c-repo 󱦰 main · dispatch ╮
 │ no Jobs                       │
 ╰───────────────────────────────╯");

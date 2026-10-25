@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::engine::{Engine, stopping};
+use super::engine::{Engine, incident_holds, stopping};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -86,6 +86,10 @@ const IDLE: &str = "SELECT s.id, s.titled_at,
   FROM sessions s WHERE s.role IN ('lead', 'manager') AND s.archived_at IS NULL AND s.state = 'idle' ORDER BY s.id";
 
 pub(super) fn run(engine: &mut Engine) {
+    if incident_holds(engine, Step::E10) {
+        engine.log.line("E10: holding: incident mode is on");
+        return;
+    }
     reap(engine);
     let now = OffsetDateTime::now_utc();
     let idle = engine.store.read(|conn| {

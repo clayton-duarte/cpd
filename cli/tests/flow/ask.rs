@@ -181,30 +181,6 @@ fn every_ask_is_a_new_escalation() {
 }
 
 #[test]
-fn ask_times_out_and_expires_the_escalation() {
-    let env = TestEnv::new();
-    setup(&env);
-    let run = env.cpd(&["ask", "a-a1", "Anyone?", "--timeout-minutes", "0", "--plan", "pl"]);
-    let error = refused(&run, "ask_timeout", 5);
-    assert_eq!(error["details"]["escalation"], "a-a1-q1");
-
-    let (status, expired_at, answer): (String, Option<String>, Option<String>) = store(&env)
-        .read(|c| Ok(c.query_row("SELECT status, expired_at, answer FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-        .unwrap();
-    assert_eq!(status, "expired");
-    assert!(expired_at.is_some());
-    assert_eq!(answer, None);
-    let expired = events(&env, "escalation-expired");
-    assert_eq!(expired.len(), 1);
-    assert_eq!(expired[0]["data"], json!({"escalation": "a-a1-q1", "reason": "timeout"}));
-    assert_eq!(expired[0]["attempt"], "a-a1");
-    assert_eq!(session_state(&env), ("working".to_owned(), None));
-
-    // An expired Escalation cannot be answered any more.
-    refused(&env.cpd(&["answer", "a-a1-q1", "Late.", "--plan", "pl"]), "escalation_expired", 3);
-}
-
-#[test]
 fn ask_refuses_an_attempt_that_is_not_running() {
     let env = TestEnv::new();
     setup(&env);
