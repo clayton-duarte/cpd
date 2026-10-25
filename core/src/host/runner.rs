@@ -220,7 +220,10 @@ impl Runner for FakeRunner {
                 Err(Failed::Timeout(deadline::timeout(tool, argv, deadline)))
             }
             Some(Reply::Exit { code, stdout, stderr, takes }) => {
-                self.clock.sleep(takes);
+                // A reply that takes no time is no nap: `ManualClock::naps` lists only what a caller waited on.
+                if !takes.is_zero() {
+                    self.clock.sleep(takes);
+                }
                 Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
             }
         }
