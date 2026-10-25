@@ -665,66 +665,62 @@ fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
 const NO_WORKERS: &str = "workers 0/3 · 0 waiting · 1 queued";
 const ONE_WORKER: &str = "workers 1/3 · 0 waiting · 1 queued";
 
-impl Fx {
-    /// A tmux server with one session, `keepalive`.
-    fn tmux_server(&self) {
-        assert!(self.env.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
-    }
-
-    fn workers(&self) -> String {
-        self.option("@cpd_workers")
-    }
-
-    fn option(&self, name: &str) -> String {
-        let out = self.env.tmux(&["show", "-gv", name]);
-        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
-    }
+/// The engine in-process on the fake tmux server of `fx.tmux(..)`: Plan `pay` in `dispatch` (its `open` Job is the one queued
+/// Job of [`NO_WORKERS`]), no tmux server yet ([`Ip::tmux_server`]).
+fn engine_on_tmux() -> Ip {
+    let fx = engine_home("");
+    fx.engine_config_on_tmux("");
+    fx.engine_routes_on_tmux();
+    fx.engine_plan();
+    fx
 }
+
+/// The engine's own `errors` that name `@cpd_workers`.
+fn workers_errors(fx: &Ip) -> Vec<String> {
+    fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect()
+}
+
+/// Ticks to run for "more than one engine tick" (`tick_seconds` 1, a nap of a tenth of a second): 2.5 s of virtual time.
+const OVER_ONE_TICK: usize = 25;
 
 #[test]
 fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
-    let fx = fx("");
-    let engine = fx.start();
-    // time-claim: no error over more than one engine tick without a tmux server; no per-poll signal from the engine,
-    // which records nothing at a tick that does nothing.
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
-    assert!(!fx.env.tmux(&["has-session"]).status.success());
+    let fx = engine_on_tmux();
+    // No error over more than one engine tick without a tmux server; the engine records nothing at a tick that does nothing.
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+    assert_eq!(fx.events("error").len(), 0, "{:?}", fx.texts("error"));
+    assert!(!fx.tmux(&["has-session"]).status.success());
 
     fx.tmux_server();
-    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
-    let out = engine.stop();
-    assert_eq!(out.exit, 0, "{out:?}");
-    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    fx.watch_ticks(1).unwrap();
+    assert_eq!(fx.tmux_option("@cpd_workers"), NO_WORKERS);
+    assert_eq!(fx.events("error").len(), 0, "{:?}", fx.texts("error"));
 }
 
 #[test]
 fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
-    let fx = fx("");
+    let fx = engine_on_tmux();
     fx.tmux_server();
-    // A tmux that fails `set` and is the real one otherwise, first on the engine's PATH.
-    let real = std::env::var("PATH")
-        .unwrap()
-        .split(':')
-        .map(|dir| Path::new(dir).join("tmux"))
-        .find(|p| p.is_file())
-        .expect("tmux on PATH");
-    fx.env.fake("tmux", &format!("case \" $*\" in *\" set -g @cpd_workers\"*) echo boom >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
-    let engine = fx.start();
-    let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
-    wait_until("the error", || workers_errors().len() == 1);
-    // time-claim: the failed set is not reported again over more than one engine tick; no per-poll signal from the
-    // engine, which records nothing at a tick that sets nothing new.
-    std::thread::sleep(Duration::from_millis(2500));
-    assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
-    assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
-    assert_eq!(fx.workers(), "");
+    // A tmux that fails `set -g @cpd_workers` and is the route otherwise, until the test says it works again.
+    let broken = Arc::new(AtomicBool::new(true));
+    let failing = broken.clone();
+    let _ = (*fx.fakes.runner).clone().on(
+        "tmux",
+        move |call| failing.load(Ordering::SeqCst) && format!(" {}", call.args.join(" ")).contains(" set -g @cpd_workers"),
+        Reply::exit(1, "", "boom\n"),
+    );
+
+    // One engine run over more than one tick: the failed set is reported once, not at every tick (the engine records nothing at a
+    // tick that sets nothing new).
+    fx.watch_ticks(OVER_ONE_TICK).unwrap();
+    assert_eq!(workers_errors(&fx).len(), 1, "{:?}", workers_errors(&fx));
+    assert!(workers_errors(&fx)[0].contains("tmux set failed: boom"), "{:?}", workers_errors(&fx));
+    assert_eq!(fx.tmux_option("@cpd_workers"), "");
 
     // It kept running, and sets the text once tmux works again.
-    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
-    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
-    let out = engine.stop();
-    assert_eq!(out.exit, 0, "{out:?}");
+    broken.store(false, Ordering::SeqCst);
+    fx.watch_ticks(1).unwrap();
+    assert_eq!(fx.tmux_option("@cpd_workers"), NO_WORKERS);
 }
 
 #[test]
@@ -744,23 +740,20 @@ fn ensure_says_the_exit_status_is_unknown_when_tmux_has_none() {
 
 #[test]
 fn e1_expires_open_escalations_whose_asker_is_dead() {
-    let fx = fx("");
-    let mut gone = std::process::Command::new("true").spawn().unwrap();
-    let dead = gone.id();
-    gone.wait().unwrap();
-    let alive = std::process::id();
+    let fx = engine("");
+    fx.engine_plan();
+    // The askers are processes of the `FakeSpawn`: one has ended, one runs.
+    let (dead, alive) = (fx.ended_pid(), fx.live_pid());
     let lock = fx.live_driver("api-a1");
-    fx.add_running("api", "running", &ago(1));
-    fx.fixture(&format!(
+    fx.add_running("api", "running", &fx.stamp_ago(60_000));
+    fx.env.sql(&format!(
         "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
            VALUES ('pay', 'api-a1-q1', 'api-a1', 1, 'Why?', 'open', {dead}, '{t}'),
                   ('pay', 'api-a1-q2', 'api-a1', 2, 'How?', 'open', {alive}, '{t}');",
-        t = ago(1)
+        t = fx.stamp_ago(60_000)
     ));
 
-    let engine = fx.start();
-    wait_until("escalation-expired", || fx.count("escalation-expired") == 1);
-    engine.stop();
+    fx.watch_first_tick().unwrap();
     drop(lock);
 
     assert_eq!(
@@ -770,6 +763,23 @@ fn e1_expires_open_escalations_whose_asker_is_dead() {
     let status = |id: &str| fx.env.query::<String>(&format!("SELECT status FROM escalations WHERE id = '{id}'"));
     assert_eq!((status("api-a1-q1"), status("api-a1-q2")), ("expired".into(), "open".into()));
     assert!(fx.env.query::<Option<String>>("SELECT expired_at FROM escalations WHERE id = 'api-a1-q1'").is_some());
+}
+
+#[test]
+fn a_running_attempt_in_process_has_its_event_its_driver_pid_and_the_lock_of_a_live_driver() {
+    let fx = engine("");
+    fx.engine_plan();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &fx.stamp_ago(1_000));
+    fx.add_running("web", "starting", &fx.stamp_ago(1_000));
+
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running");
+    assert_eq!(fx.env.query::<i64>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'"), 4242);
+    assert_eq!(fx.events("attempt-status").len(), 1, "a starting Attempt has no starting → running Event");
+    let path = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse("api-a1").unwrap());
+    let second = Flock::lock(OpenOptions::new().read(true).write(true).open(&path).unwrap(), FlockArg::LockExclusiveNonblock);
+    assert!(second.is_err(), "the held lock refuses a second one");
+    drop(lock);
 }
 
 // ---------- E2 ----------

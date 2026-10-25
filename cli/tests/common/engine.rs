@@ -10,6 +10,7 @@
 //! [`MAX_NAPS`] naps, with a panic: virtual time, no wall clock.
 
 use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
@@ -18,10 +19,12 @@ use std::time::{Duration, Instant};
 use cpd_core::clock::{Clock, ManualClock, timestamp};
 use cpd_core::error::CpdError;
 use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
-use cpd_core::ids::PlanId;
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::ports::Ports;
+use nix::fcntl::{Flock, FlockArg};
 use serde_json::json;
 use time::OffsetDateTime;
 
@@ -37,6 +40,14 @@ type Step = Box<dyn FnMut(usize) -> bool + Send>;
 
 /// The executable the fake engine "started from" (`Spawn::self_exe`): E5 runs it with `pr poll`.
 pub const ENGINE_EXE: &str = "/opt/cpd/bin/cpd";
+
+/// The text of the engine's `config.toml`: machine `m1`, `extra`, the Tiers, a tick a second, no PR poll, then `tail` (more tables).
+fn engine_config_text(extra: &str, tail: &str) -> String {
+    format!(
+        "version = 1\nmachine = \"m1\"\n{extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+         [watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n{tail}"
+    )
+}
 
 /// The `ManualClock` of an `Fx` that also runs `step` on each nap and sets `until` after the nap it says is the last. It
 /// reads and advances time only through the `ManualClock` it holds, so `Fx::advance` and `fakes.clock` see the same time.
@@ -77,10 +88,13 @@ impl Fx {
     /// `config.toml` of machine `m1` for the engine on virtual time: a tick a second, no PR poll in the way (3600 s).
     /// `extra` is more TOML before the tables (top-level keys, or tables), as `TestEnv::write_tmux_config`'s.
     pub fn engine_config(&self, extra: &str) {
-        self.env.write_config(&format!(
-            "version = 1\nmachine = \"m1\"\n{extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n"
-        ));
+        self.env.write_config(&engine_config_text(extra, ""));
+    }
+
+    /// [`Fx::engine_config`] on the tmux server of [`Fx::tmux`] (the env's socket): the engine and the test's own tmux calls
+    /// reach the same server of the tmux route.
+    pub fn engine_config_on_tmux(&self, extra: &str) {
+        self.env.write_config(&engine_config_text(extra, &format!("[tmux]\nsocket = \"{}\"\n", self.env.tmux_socket())));
     }
 
     /// What the engine's own calls get when a test does not care: tmux has no server, and `cpd pr poll` (E5, through the
@@ -103,6 +117,14 @@ impl Fx {
     pub fn engine_base_routes(&self) {
         self.fakes.spawn.set_self_exe(ENGINE_EXE);
         self.fake("tmux", Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"));
+    }
+
+    /// [`Fx::engine_routes`] with the tmux route left to answer, not a tmux with no server: the fake server of [`Fx::tmux`] is the
+    /// engine's (give it the config of [`Fx::engine_config_on_tmux`]). Faults: `fx.fakes.runner` `once`/`on` (the tmux route docs).
+    pub fn engine_routes_on_tmux(&self) {
+        self.fakes.spawn.set_self_exe(ENGINE_EXE);
+        let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
+        self.fake("cpd", Reply::ok(&poll.to_string()));
     }
 
     /// Makes every call of `cpd` through the `FakeRunner` a `run_with` of this `Fx`'s ports, on the calling thread: the
@@ -278,6 +300,55 @@ impl Fx {
             let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
             Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })
+    }
+}
+
+impl Fx {
+    /// Job `key` of Plan `pay`, `running` with Attempt `<key>-a1` (`status`: `starting` or `running`) started at `started_at`,
+    /// its driver pid 4242 and its worktree beside the repo's. The `starting → running` Event is at `started_at` when the
+    /// Attempt is `running`.
+    pub fn add_running(&self, key: &str, status: &str, started_at: &str) {
+        let event = if status == "running" {
+            format!(
+                "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+                   VALUES (cpd_txn(), '{started_at}', 'attempt-status', 'ctx', '{PLAN}', '{key}', '{key}-a1', 'running',
+                           '{{\"from\":\"starting\",\"to\":\"running\"}}');"
+            )
+        } else {
+            String::new()
+        };
+        let worktree = self.env.root().join(format!("pay.pay--{key}-a1"));
+        self.add_job(
+            key,
+            &[],
+            &format!(
+                "UPDATE jobs SET status = 'running' WHERE plan = '{PLAN}' AND key = '{key}';
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+                   VALUES ('{PLAN}', '{key}-a1', '{key}', 1, 'S2', 'ladder', '{status}', 'cpd/{PLAN}--{key}-a1', '{}', '{started_at}', 4242);
+                 {event}",
+                worktree.display()
+            ),
+        );
+    }
+
+    /// Holds Attempt `attempt`'s driver lock, as a live driver does: a `flock` on our own lock file of the temp home (kept real,
+    /// it is not external software). The lock goes with the value the test holds.
+    pub fn live_driver(&self, attempt: &str) -> Flock<File> {
+        let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
+        let path = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+        Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+    }
+
+    /// A tmux server with one session, `keepalive`, on the tmux route ([`Fx::engine_config_on_tmux`]).
+    pub fn tmux_server(&self) {
+        assert!(self.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+    }
+
+    /// The server option `name` (`show -gv`), without its trailing newline: empty when it is not set.
+    pub fn tmux_option(&self, name: &str) -> String {
+        String::from_utf8_lossy(&self.tmux(&["show", "-gv", name]).stdout).trim_end().to_owned()
     }
 }
 
