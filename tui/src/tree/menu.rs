@@ -77,6 +77,7 @@ impl Kind {
         match row {
             None => Some(Kind::Empty),
             Some(Row::Toggle) => None,
+            Some(Row::Manager(..)) => None,
             Some(row) if row.archived() => Some(Kind::Archived),
             Some(Row::Context(_)) => Some(Kind::Context),
             Some(Row::Plan(..)) => Some(Kind::Plan),

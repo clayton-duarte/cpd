@@ -94,6 +94,8 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
+    /// An archived Manager Session of the Context, drawn in its archived section (commands.md §17, hs-d630, hs-d633).
+    Manager(&'a ContextNode, &'a SessionNode),
     /// The closing row of a Context (`╰󰬦 expand`, `╰󰬬 collapse`, or the terminator `╰󰬪` of a Context with no row; hs-d574): the only row that folds its archived rows.
     Toggle,
 }
@@ -148,7 +150,7 @@ impl<'a> Row<'a> {
     /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::Toggle => None,
+            Row::Context(_) | Row::Toggle | Row::Manager(..) => None,
             Row::Plan(_, p) => p.lead(),
             Row::Fork(_, _, s) => Some(s),
         }
@@ -157,7 +159,7 @@ impl<'a> Row<'a> {
     /// The Plan of the row; none for a Context or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::Toggle => None,
+            Row::Context(_) | Row::Toggle | Row::Manager(..) => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -169,7 +171,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.is_archived(),
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
-            Row::Toggle => false,
+            Row::Manager(..) | Row::Toggle => false,
         }
     }
 
@@ -181,7 +183,7 @@ impl<'a> Row<'a> {
                 Row::Context(c) => c.manager_asleep,
                 Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
                 Row::Fork(_, _, s) => s.is_asleep(),
-                Row::Toggle => false,
+                Row::Manager(..) | Row::Toggle => false,
             }
     }
 
@@ -193,7 +195,7 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.is_archived() || (!c.plans.is_empty() && c.plans.iter().all(quiet)),
             Row::Plan(c, p) => c.is_archived() || quiet(p),
-            Row::Fork(..) | Row::Toggle => false,
+            Row::Fork(..) | Row::Manager(..) | Row::Toggle => false,
         }
     }
 
@@ -203,7 +205,7 @@ impl<'a> Row<'a> {
         let (context, plan, session) = match *self {
             Row::Plan(c, p) => (c, p, p.lead()?),
             Row::Fork(c, p, s) => (c, p, s),
-            Row::Context(_) | Row::Toggle => return None,
+            Row::Context(_) | Row::Manager(..) | Row::Toggle => return None,
         };
         let subject = if context.is_archived() {
             Subject::Context(context.id.clone())
@@ -229,7 +231,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => Some(c.id.to_string()),
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
-            Row::Toggle => None,
+            Row::Manager(..) | Row::Toggle => None,
         }
     }
 
@@ -240,7 +242,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
             Row::Fork(_, _, s) => session_label(s),
-            Row::Toggle => String::new(),
+            Row::Manager(..) | Row::Toggle => String::new(),
         }
     }
 }

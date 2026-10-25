@@ -43,6 +43,9 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
+    /// Its archived Manager Sessions, oldest first (commands.md §17, hs-d630, hs-d633): the tree draws them in the
+    /// Context's collapsible archived section, after the archived Plans and forks.
+    pub archived_managers: Vec<SessionNode>,
     /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215):
     /// a `●` only from the Manager's own Inbox items (hs-d217), else the glyph of its state.
     pub dot: Dot,
@@ -210,6 +213,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 open_questions: questions.remove(&cid).unwrap_or(0),
                 archived_at,
                 plans,
+                archived_managers: Vec::new(),
                 id: context,
             });
         }
