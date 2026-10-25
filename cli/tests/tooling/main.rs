@@ -21,7 +21,6 @@ mod npm_fresh;
 mod preview_script;
 mod run_with;
 mod slot;
-mod tag_script;
 mod test_changed_script;
 mod tests_script;
 mod tripwire_script;
