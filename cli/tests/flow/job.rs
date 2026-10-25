@@ -548,14 +548,105 @@ fn cancel_ends_a_draft_queued_or_failed_job_at_once() {
     let out = job(&env, &["cancel", "f", "--reason", "Gave up."], "pl").ok();
     assert_eq!(out["status"], "cancelled");
     assert_eq!(job_row(&env, "pl", "f", "failed_cause"), Value::Null);
-    // Dependents stay blocked: cancelling does not touch them.
-    assert_eq!(job_row(&env, "pl", "dep", "status"), "queued");
+    // Its queued dependent fails in the same transaction (contract §3.2 "Cancel", hs-d647).
+    assert_eq!(job_row(&env, "pl", "dep", "status"), "failed");
+    assert_eq!(job_row(&env, "pl", "dep", "failed_cause"), "its need f was cancelled");
+    let failed = events(&env, "job-failed");
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["job"], "dep");
 
     let cancelled = events(&env, "job-cancelled");
     assert_eq!(cancelled.len(), 3);
     assert_eq!(cancelled[0]["data"], json!({"reason": "Not needed."}));
     assert_eq!(cancelled[0]["job"], "d");
     assert_eq!(cancelled[0]["attempt"], Value::Null);
+}
+
+#[test]
+fn cancel_fails_its_dependents_directly_and_transitively() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    job_add(&env, "pl", "b", "S2", &["a"]).ok();
+    job_add(&env, "pl", "c", "S2", &["b"]).ok();
+    lock(&env, "pl");
+
+    let out = job(&env, &["cancel", "a", "--reason", "Gave up."], "pl").ok();
+    assert_eq!(out["status"], "cancelled");
+    assert_eq!(out["failed"], json!(["b", "c"]));
+    for key in ["b", "c"] {
+        assert_eq!(job_row(&env, "pl", key, "status"), "failed", "{key}");
+        assert_eq!(job_row(&env, "pl", key, "failed_cause"), "its need a was cancelled", "{key}");
+    }
+    let failed = events(&env, "job-failed");
+    assert_eq!(failed.len(), 2);
+    for (i, key) in ["b", "c"].iter().enumerate() {
+        assert_eq!(failed[i]["job"], *key);
+    }
+
+    // Idempotent: a second cancel writes nothing and a re-run changes no Job.
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    let out = job(&env, &["cancel", "a", "--reason", "Again."], "pl").ok();
+    assert_eq!(out["already"], true);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+    assert_eq!(job_row(&env, "pl", "b", "status"), "failed");
+    assert_eq!(job_row(&env, "pl", "c", "status"), "failed");
+}
+
+#[test]
+fn cancel_cancels_a_draft_dependent() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "q", "S2", &[]).ok();
+    lock(&env, "pl");
+    // A draft appended after the lock, needing the queued Job `q`.
+    let spec = spec_file(&env);
+    let run = env.cpd(&["job", "add", "dd", "--title", "T", "--tier", "S2", "--spec", &spec, "--needs", "q", "--draft", "--plan", "pl"]);
+    run.ok();
+    assert_eq!(job_row(&env, "pl", "dd", "status"), "draft");
+
+    let out = job(&env, &["cancel", "q", "--reason", "Not needed."], "pl").ok();
+    assert_eq!(out["status"], "cancelled");
+    assert_eq!(out["cancelled"], json!(["dd"]));
+    assert_eq!(job_row(&env, "pl", "dd", "status"), "cancelled");
+    assert_eq!(job_row(&env, "pl", "dd", "cancel_reason"), "its need q was cancelled");
+    let cancelled = events(&env, "job-cancelled");
+    assert!(
+        cancelled.iter().any(|e| e["job"] == "dd" && e["data"]["reason"] == "its need q was cancelled"),
+        "one job-cancelled Event for dd: {cancelled:?}"
+    );
+}
+
+#[test]
+fn retry_refuses_a_job_whose_need_was_cancelled() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    job_add(&env, "pl", "b", "S2", &["a"]).ok();
+    lock(&env, "pl");
+    // Cancelling `a` leaves its queued dependent `b` failed (contract §3.2 "Cancel").
+    job(&env, &["cancel", "a", "--reason", "Gave up."], "pl").ok();
+    assert_eq!(job_row(&env, "pl", "b", "status"), "failed");
+
+    let e = refused(&job(&env, &["retry", "b", "--tier", "S2"], "pl"), "needs_unavailable", 3);
+    assert_eq!(e["details"]["needs"], json!([{"key": "a", "status": "cancelled"}]));
+    assert_eq!(job_row(&env, "pl", "b", "status"), "failed");
+
+    // Control: a `failed` need is legal, so its failed dependent retries (contract §5.4).
+    let ctl = TestEnv::new();
+    setup(&ctl);
+    plan(&ctl, "pl", "plan");
+    job_add(&ctl, "pl", "a", "S2", &[]).ok();
+    job_add(&ctl, "pl", "b", "S2", &["a"]).ok();
+    lock(&ctl, "pl");
+    engine(&ctl, "pl", "a", "failed");
+    engine(&ctl, "pl", "b", "failed");
+    let out = job(&ctl, &["retry", "b", "--tier", "S2"], "pl").ok();
+    assert_eq!(out["status"], "queued");
+    assert_eq!(job_row(&ctl, "pl", "b", "status"), "queued");
 }
 
 #[test]
