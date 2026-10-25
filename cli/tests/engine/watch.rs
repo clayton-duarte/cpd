@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use common::engine::EngineWindow;
 use common::fx::Fx as Ip;
-use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
+use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, wait_until};
 use cpd_core::clock::Clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
@@ -2488,6 +2488,433 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
     assert!(!lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+// ---------- E10 ----------
+//
+// E10 starts `<exe> session retitle <id> --width <w>` through `Spawn` and reads the run's end with `try_wait` at the next tick: the
+// `FakeSpawn` records each launch, and the test runs it (`Children::run_pending`, in each nap's step), which retitles through `run_with`
+// on a `pi` route of the `FakeRunner` and marks the pid exited with the command's exit code. A run the test does not run is a run in
+// flight. Time is the `ManualClock`: a titling "fails in a row for 10 minutes" by `advance`.
+
+/// A handle on the store of an in-process home that a step of the engine's run can own (it is `Send + 'static`): what a step reads and
+/// writes between two ticks.
+#[derive(Clone)]
+struct Db {
+    home: CpdHome,
+}
+
+impl Db {
+    fn count(&self, sql: &str) -> i64 {
+        let db = self.home.root().join("cpd.db");
+        let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn sql(&self, text: &str) {
+        common::sql(&mut Store::open(&self.home, 5000).unwrap(), text);
+    }
+
+    fn errors(&self) -> i64 {
+        self.count("SELECT count(*) FROM events WHERE kind = 'error'")
+    }
+}
+
+/// How many times `pi` was called so far.
+fn pi_calls(runner: &FakeRunner) -> usize {
+    runner.calls().iter().filter(|call| call.program.ends_with("pi")).count()
+}
+
+/// What E10's tests share: the `Fx` with a fake tmux server with a live pane per Session (E2 stops an idle Session without one) and the
+/// chat slot to read the width of, a Job `api` with its live driver for the Workers' Attempt, and the `cpd` children the engine started
+/// that the test runs.
+struct Titles {
+    fx: Ip,
+    panes: Vec<String>,
+    children: Arc<Mutex<common::fx::Children>>,
+    _driver: Flock<File>,
+}
+
+/// A Session file with one short conversation, as pi writes it.
+fn conversation(fx: &Ip, id: &str) -> PathBuf {
+    let path = fx.env.root().join(format!("{id}.jsonl"));
+    let lines = [
+        json!({"type": "session", "id": id}),
+        json!({"type": "message", "message": {"role": "user", "content": "How do we title Sessions?"}}),
+        json!({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "With an auxiliary agent."}]}}),
+    ];
+    fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+    path
+}
+
+/// The Sessions E10 started a run for (`run/titles/<session>.log`, appended by every run), by id.
+fn titled_logs(fx: &Ip) -> Vec<String> {
+    let mut logs: Vec<String> = fs::read_dir(fx.env.cpd_home().join("run/titles"))
+        .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".log").to_owned()).collect())
+        .unwrap_or_default();
+    logs.sort();
+    logs
+}
+
+impl Titles {
+    /// `fx`, a pane per id in `panes`, `pi` answering `reply`.
+    fn new(panes: usize, reply: Reply) -> Titles {
+        Titles::with_pi(panes, |fx| fx.fake_pi(reply))
+    }
+
+    /// [`Titles::new`] with `pi` scripted by `script` on the `Fx`.
+    fn with_pi(panes: usize, script: impl FnOnce(&Ip)) -> Titles {
+        let fx = engine_home("");
+        fx.engine_config_on_tmux("");
+        fx.engine_routes_on_tmux();
+        fx.engine_plan();
+        script(&fx);
+        let mut ids = Vec::new();
+        for n in 0..panes {
+            let args: &[&str] = if n == 0 { &["new-session", "-d", "-s", "x"] } else { &["new-window", "-d", "-t", "=x:"] };
+            let out = fx.tmux(&[args, &["-P", "-F", "#{pane_id}", "sleep", "600"]].concat());
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            ids.push(String::from_utf8(out.stdout).unwrap().trim().to_owned());
+        }
+        // E10 retitles only with a chat slot to read the width of (hs-d543): the cockpit's `main` window, its placeholder.
+        let out = fx.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "100", "-y", "30", "-P", "-F", "#{pane_id}", "sleep", "600"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let slot = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+        assert!(fx.tmux(&["set", "-p", "-t", &slot, "@cpd_view", "chat"]).status.success());
+        let driver = fx.live_driver("api-a1");
+        fx.add_running("api", "running", &ago_in(&fx, 1));
+        let children = Arc::new(Mutex::new(fx.children()));
+        Titles { fx, panes: ids, children, _driver: driver }
+    }
+
+    /// Session `id` of `role` in `state`, on pane number `pane`, with its finished turn `turn` minutes ago (`None`:
+    /// only its start, `stopped` to `idle`) and its title written `titled` minutes ago (`None`: no title).
+    fn session(&self, id: &str, role: &str, state: &str, pane: usize, turn: Option<i64>, titled: Option<i64>) {
+        let (title, titled_at) = titled.map_or(("NULL".to_owned(), "NULL".to_owned()), |m| ("'Old title'".to_owned(), format!("'{}'", ago_in(&self.fx, m))));
+        let (from, at) = turn.map_or(("stopped", ago_in(&self.fx, 60)), |m| ("working", ago_in(&self.fx, m)));
+        self.fx.env.sql(&format!(
+            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_at, created_at, title, titled_at)
+               VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, '{id}', '{file}', '/', 'O3', '{pane}', '{state}', 't', 't', {title}, {titled_at});
+             INSERT INTO events (txn, at, kind, context, session, text, data)
+               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');",
+            file = conversation(&self.fx, id).display(),
+            pane = self.panes[pane],
+            plan = if role == "worker" { "'pay'" } else { "NULL" },
+            attempt = if role == "worker" { "'api-a1'" } else { "NULL" }
+        ));
+    }
+
+    /// The engine runs `naps` naps of virtual time (a tick is ten naps), and the retitle runs it started are run before each nap passes.
+    fn run(&self, naps: usize) {
+        let children = self.children.clone();
+        self.fx
+            .watch(naps, move |_| {
+                children.lock().unwrap().run_pending();
+            })
+            .unwrap();
+    }
+
+    /// The engine runs until `step(nap)` says the nap is the last, after the retitle runs it started were run; `step` is a closure of
+    /// the test's own (it owns what it reads: a [`Db`], the `FakeRunner`, the clock).
+    fn run_steps(&self, mut step: impl FnMut(usize) -> bool + Send + 'static) {
+        let children = self.children.clone();
+        self.fx
+            .watch_steps(move |nap| {
+                children.lock().unwrap().run_pending();
+                step(nap)
+            })
+            .unwrap();
+    }
+
+    fn db(&self) -> Db {
+        Db { home: self.fx.home() }
+    }
+
+    /// The Sessions with a title written by a retitle run (a `session-titled` Event), by id.
+    fn retitled(&self) -> Vec<String> {
+        self.fx.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-titled' ORDER BY id")?;
+            stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()
+        })
+    }
+
+    fn started(&self) -> Vec<String> {
+        titled_logs(&self.fx)
+    }
+
+    /// `pi`'s answers in the real order of Session 4965bfc8 (hs-d356): its first call answers nothing, every later one the model's
+    /// preamble, never a `TITLE:` line.
+    fn empty_then_preamble(fx: &Ip) {
+        let calls = Arc::new(Mutex::new(0u32));
+        fx.route_fn("pi", move |_| {
+            let mut calls = calls.lock().unwrap();
+            *calls += 1;
+            Reply::ok(if *calls < 2 { "" } else { PREAMBLE })
+        });
+    }
+}
+
+/// An idle Lead or Manager whose turn ended after its title (and the title is 10 minutes old) is retitled; one titled
+/// less than 10 minutes ago, one that is working, one that only started, one without a finished turn and a Worker are
+/// not.
+#[test]
+fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
+    let t = Titles::new(7, Reply::ok("TITLE: Auxiliary agent titles\n"));
+    t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
+    t.session("due-untitled", "lead", "idle", 1, Some(1), None);
+    t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
+    t.session("working", "lead", "working", 3, Some(1), Some(20));
+    t.session("just-started", "lead", "idle", 4, None, None);
+    t.session("title-is-newer", "lead", "idle", 5, Some(40), Some(20));
+    t.session("worker", "worker", "idle", 6, Some(1), None);
+
+    // Five ticks: the two runs start in the first, are reaped in the second, and the next three start nothing.
+    t.run(50);
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["due-manager", "due-untitled"]);
+    assert_eq!(t.started(), ["due-manager", "due-untitled"]);
+    assert_eq!(t.fx.calls("pi").len(), 2, "no Session is retitled twice: the new title is newer than its turn");
+    let titles: Vec<String> = ["due-manager", "due-untitled", "throttled"]
+        .iter()
+        .map(|id| t.fx.env.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
+        .collect();
+    assert_eq!(titles, ["Auxiliary agent titles", "Auxiliary agent titles", "Old title"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// At most 2 retitles at once: a third waits for one to end, and then runs.
+#[test]
+fn e10_runs_at_most_two_retitles_at_once() {
+    let t = Titles::new(3, Reply::ok("TITLE: A title\n"));
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+    let (spawn, home) = (t.fx.fakes.spawn.clone(), t.fx.env.cpd_home().to_path_buf());
+    let waiting = Arc::new(Mutex::new(None));
+    let seen = waiting.clone();
+
+    // Nobody runs the launches for three ticks: two are in flight, the third Session waits. Then they run.
+    let children = t.children.clone();
+    t.fx.watch_steps(move |nap| {
+        if nap == 30 {
+            let started: Vec<String> = spawn.launches().iter().map(|l| l.args[2].clone()).collect();
+            let logs = fs::read_dir(home.join("run/titles")).unwrap().count();
+            *seen.lock().unwrap() = Some((started, logs));
+        }
+        if nap >= 30 {
+            children.lock().unwrap().run_pending();
+        }
+        nap >= 80
+    })
+    .unwrap();
+
+    assert_eq!(*waiting.lock().unwrap(), Some((vec!["s1".to_owned(), "s2".to_owned()], 2)), "the third waits");
+    assert_eq!(t.retitled().len(), 3);
+    assert_eq!(t.fx.calls("pi").len(), 3);
+    assert_eq!(t.started(), ["s1", "s2", "s3"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// A run E10 did not start counts: a held `title-<session>.lock` is a run in flight, so its Session is skipped and
+/// it takes one of the two places.
+#[test]
+fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
+    let t = Titles::new(3, Reply::ok("TITLE: A title\n"));
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+    // A lock file of ours in the temp home, held by a second open of it (our own flock: not external software).
+    let hold = |id: &str| {
+        let path = t.fx.home().locks_dir().join(format!("title-{id}.lock"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        Flock::lock(OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap(), FlockArg::LockExclusiveNonblock)
+            .map_err(|(_, e)| e)
+            .unwrap()
+    };
+    let (one, two) = (hold("s1"), hold("s2"));
+
+    t.run(30);
+    assert_eq!(t.fx.calls("pi").len(), 0, "two are held: no place for s3");
+    assert_eq!(t.fx.fakes.spawn.launches(), []);
+    drop(one);
+    // s1 starts in the first tick of this run (one place), and s3 once it has ended.
+    t.run(50);
+    drop(two);
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["s1", "s3"], "s2 is held until the end");
+    assert_eq!(t.fx.calls("pi").len(), 2);
+}
+
+/// A failed retitle writes nothing, is reported once however many ticks retry it, and the report names no
+/// Session or Plan (no Lead gets a turn). A title less than 10 minutes old is not retried at all. A titling is reported once
+/// it has failed for 10 minutes in a row (`FAILING`, of the `ManualClock`).
+#[test]
+fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
+    let t = Titles::new(2, Reply::exit(1, "", "pi: boom\n"));
+    t.session("due", "lead", "idle", 0, Some(1), Some(20));
+    t.session("throttled", "lead", "idle", 1, Some(1), Some(5));
+    let (db, runner, clock) = (t.db(), t.fx.fakes.runner.clone(), t.fx.fakes.clock.clone());
+    let before_the_limit = Arc::new(Mutex::new(None));
+    let seen = before_the_limit.clone();
+    let mut advanced = None;
+
+    t.run_steps(move |nap| {
+        match advanced {
+            // A retry: the failure is logged, not reported, until it has lasted the limit.
+            None if pi_calls(&runner) >= 2 => {
+                *seen.lock().unwrap() = Some(db.errors());
+                clock.advance(Duration::from_secs(10 * 60));
+                // The throttled Session's title is as young as it was.
+                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'throttled';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(5))));
+                advanced = Some(nap);
+                false
+            }
+            Some(at) => db.errors() >= 1 && nap >= at + 30,
+            None => false,
+        }
+    });
+
+    assert_eq!(*before_the_limit.lock().unwrap(), Some(0), "not reported before it has failed for the limit");
+    assert_eq!(t.started(), ["due"]);
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")));
+    assert_eq!(data["details"]["session"], "due");
+    assert!(data["details"]["tail"].as_str().unwrap().contains("pi: boom"), "{data}");
+    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+    assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
+}
+
+/// pi's answer to E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, which the old code wrote as the title.
+const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
+
+/// An empty answer and then the preamble (the two real answers, hs-d356) are no title and, while the Session's titling has
+/// failed for less than 10 minutes in a row, no `error` Event either: the Session stays due and E10 retries it at the next tick.
+#[test]
+fn e10_does_not_report_an_empty_answer_or_a_preamble_within_the_limit_and_writes_no_title() {
+    let t = Titles::with_pi(1, Titles::empty_then_preamble);
+    t.session("due", "lead", "idle", 0, Some(1), None);
+
+    t.run(50);
+
+    assert_eq!(t.fx.count("error"), 0, "a failing titling is logged, not reported, before the limit: {:?}", t.fx.events("error"));
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None, "the preamble is no title");
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT titled_at FROM sessions WHERE id = 'due'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+    assert!(t.fx.calls("pi").len() >= 2, "the Session stays due and is retried");
+}
+
+/// A titling that keeps failing past the limit (10 minutes of the clock) is reported once, as an `error` Event of E10 that names the
+/// Session and sets no Session or Plan; not a moment before the limit.
+#[test]
+fn e10_reports_a_titling_that_keeps_failing_past_the_limit_once() {
+    const LIMIT: Duration = Duration::from_secs(10 * 60);
+    let t = Titles::with_pi(1, Titles::empty_then_preamble);
+    t.session("due", "lead", "idle", 0, Some(1), None);
+    let (db, runner, clock) = (t.db(), t.fx.fakes.runner.clone(), t.fx.fakes.clock.clone());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let mut phase = 0;
+    let mut reported = None;
+
+    t.run_steps(move |nap| {
+        match phase {
+            // Failing in a row: a retry of the failed titling, then 20 s short of the limit (the first failure was a few ticks ago).
+            0 if pi_calls(&runner) >= 2 => {
+                clock.advance(LIMIT - Duration::from_secs(20));
+                phase = 1;
+            }
+            // Two more failed runs later: still short of the limit, no report.
+            1 if pi_calls(&runner) >= 4 => {
+                log.lock().unwrap().push(db.errors());
+                clock.advance(Duration::from_secs(40));
+                phase = 2;
+            }
+            2 if reported.is_none() && db.errors() >= 1 => reported = Some(nap),
+            _ => {}
+        }
+        reported.is_some_and(|at| nap >= at + 30)
+    });
+
+    assert_eq!(*seen.lock().unwrap(), [0], "reported before the limit");
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")), "{data}");
+    assert_eq!(data["details"]["session"], "due");
+    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+}
+
+/// A success clears the failure: the 10 minutes in a row start again. The titling fails, succeeds, is due again and fails for the
+/// rest of the time. More than 10 minutes after the first failure and less than 10 after the last success there is no `error`; a
+/// streak of 10 minutes since the success then is reported, once.
+#[test]
+fn e10_counts_the_failures_in_a_row_from_the_last_success() {
+    const STREAK: Duration = Duration::from_secs(9 * 60);
+    let works = Arc::new(AtomicBool::new(false));
+    let answer = works.clone();
+    let t = Titles::with_pi(1, move |fx| {
+        fx.route_fn("pi", move |_| if answer.load(Ordering::SeqCst) { Reply::ok("TITLE: Dynamic session titles\n") } else { Reply::ok("") });
+    });
+    t.session("due", "lead", "idle", 0, Some(1), None);
+    let (db, runner, clock, log) = (t.db(), t.fx.fakes.runner.clone(), t.fx.fakes.clock.clone(), t.fx.home().watch_log());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let notes = seen.clone();
+    let mut phase = 0;
+    let mut calls = 0;
+    let mut reported = None;
+
+    t.run_steps(move |nap| {
+        let ended = fs::read_to_string(&log).unwrap_or_default().contains("the retitle of Session due ended");
+        match phase {
+            // Failing: 9 minutes of it, which is short of the limit: no report.
+            0 if pi_calls(&runner) >= 2 => {
+                clock.advance(STREAK);
+                phase = 1;
+            }
+            1 if pi_calls(&runner) >= 4 => {
+                notes.lock().unwrap().push(("before the success", db.errors()));
+                works.store(true, Ordering::SeqCst);
+                phase = 2;
+            }
+            // The success: the run that titled has ended (E10 saw it, which clears the streak).
+            2 if ended => {
+                works.store(false, Ordering::SeqCst);
+                // Due again: its title is old, its turn newer.
+                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(20))));
+                calls = pi_calls(&runner);
+                phase = 3;
+            }
+            // Failing again: another 9 minutes. More than 10 since the first failure, less than 10 since the success: no report.
+            3 if pi_calls(&runner) >= calls + 2 => {
+                clock.advance(STREAK);
+                phase = 4;
+            }
+            4 if pi_calls(&runner) >= calls + 4 => {
+                notes.lock().unwrap().push(("after the success", db.errors()));
+                clock.advance(Duration::from_secs(2 * 60));
+                phase = 5;
+            }
+            5 if reported.is_none() && db.errors() >= 1 => reported = Some(nap),
+            _ => {}
+        }
+        reported.is_some_and(|at| nap >= at + 30)
+    });
+
+    assert_eq!(*seen.lock().unwrap(), [("before the success", 0), ("after the success", 0)], "the success did not clear the failures in a row");
+    assert_eq!(t.fx.count("error"), 1, "{:?}", t.fx.events("error"));
+    assert_eq!(t.retitled().len(), 1);
 }
 
 // ---------- E6 (removed) ----------
