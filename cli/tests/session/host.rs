@@ -500,6 +500,28 @@ fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
     assert!(!s.tmux.server_running().unwrap());
 }
 
+/// engine-W4: a tmux call that hangs is cut at its deadline and fails `tool_timeout` with the tool, the argv and the
+/// deadline. The hang is a reply that takes 600 s of virtual time on a `ManualClock`: the call ends at the deadline, not
+/// when the reply would. The group kill is the real runner's `killpg`, not ours (research section 5).
+#[test]
+fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
+    let clock = ManualClock::new();
+    let runner = FakeRunner::new(clock.clone()).on("tmux", |_| true, Reply::ok("").takes(std::time::Duration::from_secs(600)));
+    let dir = tempfile::tempdir().unwrap();
+    let tmux = Tmux::with_tmpdir("cpd-test-deadline", dir.path()).with_runner(Arc::new(runner.clone()));
+
+    let err = tmux.server_running().unwrap_err();
+
+    // The call returns at its deadline, not when the hung tmux would have ended.
+    assert_eq!(clock.elapsed(), std::time::Duration::from_secs(10));
+    assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
+    let d = err.details();
+    assert_eq!(d["tool"], "tmux");
+    assert_eq!(d["deadline_seconds"], 10);
+    assert_eq!(d["argv"], serde_json::json!(tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
+    assert_eq!(runner.calls().len(), 1, "no retry of a call that timed out");
+}
+
 // ---- Every tmux call is a UTF-8 client (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----
 //
 // A tmux 3.8 client with no UTF-8 locale prints the tabs of a `-F` format as `_`, so `list-panes` cannot be parsed.
