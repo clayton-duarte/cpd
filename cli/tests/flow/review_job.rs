@@ -252,7 +252,7 @@ fn the_worker_is_a_fork_of_the_lead_that_commits_nothing_and_the_merge_leaves_th
     let findings = fx.fx.env.cpd_home().join("run/pay/reviews/final.md");
     assert!(spec.starts_with("# Worker Spec: final, Attempt 1\n"), "{spec}");
     assert!(spec.contains("**review Job**") && spec.contains("commit nothing"), "{spec}");
-    assert!(spec.contains("git diff main...cpd/pay"), "{spec}");
+    assert!(spec.contains("git diff main...cpd/pay/repo"), "{spec}");
     assert!(spec.contains(findings.to_str().unwrap()), "{spec}");
     assert!(spec.contains("`review_commits`") && spec.contains("`review_missing`"), "{spec}");
     assert!(!spec.contains("no_commits") && !spec.contains("quick check"), "{spec}");

@@ -178,7 +178,7 @@ impl Fx {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{PLAN}', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', 'cpd/{PLAN}', '{}', 'Charge the card at checkout', 'config', cpd_txn(), 't', 't');",
+               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', 'cpd/{PLAN}/repo', '{}', 'Charge the card at checkout', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
