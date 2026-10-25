@@ -3,25 +3,25 @@
 //! (the first best base is taken), patch-id dedup, dropping a replayed commit that became empty, and
 //! `--rebase-merges`.
 
-use super::super::merge3::merge3;
+use super::super::merge3::merge3_favoring;
 use super::super::universe::RebaseState;
 use super::*;
 
 /// A path the merge could not settle: the blobs of the base and of each side (`None`: absent there).
-struct Conflict {
-    path: String,
-    base: Option<Oid>,
-    ours: Option<Oid>,
-    theirs: Option<Oid>,
+pub(super) struct Conflict {
+    pub(super) path: String,
+    pub(super) base: Option<Oid>,
+    pub(super) ours: Option<Oid>,
+    pub(super) theirs: Option<Oid>,
 }
 
-struct Merged {
+pub(super) struct Merged {
     /// Every path of the result; a conflicted one holds its markers, or the version left in the tree.
-    entries: BTreeMap<String, Oid>,
+    pub(super) entries: BTreeMap<String, Oid>,
     /// Sorted by path.
-    conflicts: Vec<Conflict>,
+    pub(super) conflicts: Vec<Conflict>,
     /// What git prints about the paths it merged or could not, in path order.
-    messages: Vec<String>,
+    pub(super) messages: Vec<String>,
 }
 
 fn tree_map(u: &Universe, tree: &Oid) -> BTreeMap<String, Oid> {
@@ -29,19 +29,20 @@ fn tree_map(u: &Universe, tree: &Oid) -> BTreeMap<String, Oid> {
 }
 
 /// The paths of the tree of the commit `commit`.
-fn commit_tree(u: &Universe, commit: &Oid) -> BTreeMap<String, Oid> {
+pub(super) fn commit_tree(u: &Universe, commit: &Oid) -> BTreeMap<String, Oid> {
     tree_map(u, &u.commit_data(commit).expect("a commit has data").tree)
 }
 
 /// The three-way merge of two flat trees over a base: git's trivial cases per path, the text merge for the
 /// rest. `label_ours` and `label_theirs` name the sides in markers and messages.
-fn merge_trees(
+pub(super) fn merge_trees(
     u: &mut Universe,
     repo: RepoId,
     base: &BTreeMap<String, Oid>,
     ours: &BTreeMap<String, Oid>,
     theirs: &BTreeMap<String, Oid>,
     (label_ours, label_theirs): (&str, &str),
+    favor_ours: bool,
 ) -> Merged {
     let paths: BTreeSet<&String> = base.keys().chain(ours.keys()).chain(theirs.keys()).collect();
     let mut merged = Merged { entries: BTreeMap::new(), conflicts: Vec::new(), messages: Vec::new() };
@@ -66,7 +67,7 @@ fn merge_trees(
                 let text = |blob: Option<&Oid>| blob.and_then(|b| u.blob_bytes(b)).unwrap_or_default();
                 let (base_text, ours_text, theirs_text) = (text(b), text(Some(ours_blob)), text(Some(theirs_blob)));
                 merged.messages.push(format!("Auto-merging {path}"));
-                let (bytes, conflicted) = merge3(&base_text, &ours_text, &theirs_text, label_ours, label_theirs);
+                let (bytes, conflicted) = merge3_favoring(&base_text, &ours_text, &theirs_text, label_ours, label_theirs, favor_ours);
                 merged.entries.insert(path.clone(), u.blob(repo, &bytes));
                 if conflicted {
                     let kind = if b.is_none() { "add/add" } else { "content" };
@@ -117,7 +118,7 @@ pub(super) fn merge_tree(c: &mut Ctx, args: &[String]) -> Run {
         return Ok(Out::fail(128, "fatal: refusing to merge unrelated histories\n"));
     };
     let trees = [&base, &sides[0], &sides[1]].map(|commit| commit_tree(c.u, commit));
-    let merged = merge_trees(c.u, repo, &trees[0], &trees[1], &trees[2], (a, b));
+    let merged = merge_trees(c.u, repo, &trees[0], &trees[1], &trees[2], (a, b), false);
     let tree = tree_of(c.u, repo, &merged.entries);
     if merged.conflicts.is_empty() {
         return Ok(Out::ok(format!("{tree}\n")));
@@ -127,19 +128,19 @@ pub(super) fn merge_tree(c: &mut Ctx, args: &[String]) -> Run {
     Ok(Out { code: 1, stdout: format!("{tree}\n{names}\n{messages}"), stderr: String::new() })
 }
 
-fn tree_of(u: &mut Universe, repo: RepoId, entries: &BTreeMap<String, Oid>) -> Oid {
+pub(super) fn tree_of(u: &mut Universe, repo: RepoId, entries: &BTreeMap<String, Oid>) -> Oid {
     let refs: Vec<(&str, &Oid)> = entries.iter().map(|(p, o)| (p.as_str(), o)).collect();
     u.tree(repo, &refs)
 }
 
 // ---- rebase ----------------------------------------------------------------------------------------
 
-fn sha7(oid: &Oid) -> &str {
+pub(super) fn sha7(oid: &Oid) -> &str {
     &oid.as_str()[..7]
 }
 
 /// The commit `HEAD` of the worktree names.
-fn head_commit(u: &Universe, repo: RepoId, wt: &Path) -> Option<Oid> {
+pub(super) fn head_commit(u: &Universe, repo: RepoId, wt: &Path) -> Option<Oid> {
     match u.head(wt) {
         Head::Branch(b) => u.ref_oid(repo, &format!("refs/heads/{b}")),
         Head::Detached(oid) => Some(oid),
@@ -148,7 +149,7 @@ fn head_commit(u: &Universe, repo: RepoId, wt: &Path) -> Option<Oid> {
 
 /// Makes the working tree and the index of `wt` what `files` and `index` say: every file of `files` written,
 /// every file the old index or `HEAD` tracked and `files` lacks deleted; untracked files stay.
-fn checkout(c: &mut Ctx, wt: &Path, files: &BTreeMap<String, Oid>, index: Vec<(String, Oid, u8)>) {
+pub(super) fn checkout(c: &mut Ctx, wt: &Path, files: &BTreeMap<String, Oid>, index: Vec<(String, Oid, u8)>) {
     let mut tracked: BTreeSet<String> = c.u.effective_index(wt).into_iter().map(|(p, _, _)| p).collect();
     tracked.extend(c.u.head_tree(wt).into_iter().map(|(p, _)| p));
     for path in tracked.iter().filter(|p| !files.contains_key(*p)) {
@@ -243,7 +244,7 @@ fn replay(c: &mut Ctx, repo: RepoId, wt: &Path, mut state: RebaseState, mut curr
         let theirs = tree_map(c.u, &data.tree);
         let subject = data.message.lines().next().unwrap_or("");
         let label = format!("{} ({subject})", sha7(&commit));
-        let merged = merge_trees(c.u, repo, &base, &ours, &theirs, ("HEAD", &label));
+        let merged = merge_trees(c.u, repo, &base, &ours, &theirs, ("HEAD", &label), false);
         if merged.conflicts.is_empty() {
             let tree = tree_of(c.u, repo, &merged.entries);
             current = c.u.commit_as(repo, &data.author, &tree, std::slice::from_ref(&current), &data.message);

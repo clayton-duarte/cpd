@@ -108,6 +108,8 @@ pub enum Kind {
     Blob,
     Tree,
     Commit,
+    /// An annotated tag: it names an object and has a message.
+    Tag,
 }
 
 enum Object {
@@ -115,6 +117,8 @@ enum Object {
     /// Flat, sorted by path.
     Tree(Vec<(String, Oid)>),
     Commit(Commit),
+    /// An annotated tag: the object it names.
+    Tag(Oid),
 }
 
 struct Stored {
@@ -245,6 +249,26 @@ impl Universe {
         let commit = Commit { tree: tree.clone(), parents: parents.to_vec(), author, message: message.to_owned(), time };
         self.store(repo, id, Object::Commit(commit))
     }
+    /// Stores an annotated tag `name` of `target` by `tagger` (`<name> <<email>>`) and adds it to what `repo` holds.
+    pub(super) fn tag_object(&mut self, repo: RepoId, target: &Oid, name: &str, tagger: &str, message: &str) -> Oid {
+        let kind = match self.kind(target) {
+            Some(Kind::Tree) => "tree",
+            Some(Kind::Blob) => "blob",
+            Some(Kind::Tag) => "tag",
+            _ => "commit",
+        };
+        let time = Self::EPOCH + self.clock.now().saturating_duration_since(self.start).as_secs();
+        let body = format!("object {target}\ntype {kind}\ntag {name}\ntagger {tagger} {time} +0000\n\n{message}\n");
+        let id = object_id("tag", body.as_bytes());
+        self.store(repo, id, Object::Tag(target.clone()))
+    }
+    /// The object an annotated tag names.
+    pub(super) fn tag_target(&self, oid: &Oid) -> Option<Oid> {
+        match &self.objects.get(oid)?.object {
+            Object::Tag(target) => Some(target.clone()),
+            _ => None,
+        }
+    }
     pub fn blob_bytes(&self, oid: &Oid) -> Option<Vec<u8>> {
         match &self.objects.get(oid)?.object {
             Object::Blob(bytes) => Some(bytes.clone()),
@@ -270,6 +294,7 @@ impl Universe {
             Object::Blob(_) => Kind::Blob,
             Object::Tree(_) => Kind::Tree,
             Object::Commit(_) => Kind::Commit,
+            Object::Tag(_) => Kind::Tag,
         })
     }
     /// Whether `repo` holds the object.
@@ -289,6 +314,7 @@ impl Universe {
                     stack.extend(c.parents.iter().cloned());
                 }
                 Some(Object::Tree(entries)) => stack.extend(entries.iter().map(|(_, o)| o.clone())),
+                Some(Object::Tag(target)) => stack.push(target.clone()),
                 Some(Object::Blob(_)) => {}
                 None => continue,
             }
@@ -358,6 +384,10 @@ impl Universe {
     /// The common git dir: `<main worktree>/.git`, or the bare repo's directory.
     pub fn git_dir(&self, repo: RepoId) -> PathBuf {
         self.repo_data(repo).git_dir.clone()
+    }
+    /// The directory that holds the main `HEAD` of the repo: its main worktree, or a bare repo's own directory.
+    pub(super) fn main_path(&self, repo: RepoId) -> PathBuf {
+        self.repo_data(repo).wts[0].path.clone()
     }
     /// The main worktree first, then the linked ones in the order they were added. A bare repo has none.
     pub fn worktrees(&self, repo: RepoId) -> Vec<Worktree> {
@@ -459,6 +489,13 @@ impl Universe {
     pub fn set_symbolic_ref(&mut self, repo: RepoId, name: &str, target: &str) {
         self.repo_mut(repo).symrefs.insert(name.to_owned(), target.to_owned());
     }
+    /// The symbolic refs whose full name starts with `prefix`, as `(name, target)`, sorted by name.
+    pub(super) fn symbolic_refs(&self, repo: RepoId, prefix: &str) -> Vec<(String, String)> {
+        self.repo_data(repo).symrefs.iter().filter(|(n, _)| n.starts_with(prefix)).map(|(n, t)| (n.clone(), t.clone())).collect()
+    }
+    pub(super) fn delete_symbolic_ref(&mut self, repo: RepoId, name: &str) {
+        self.repo_mut(repo).symrefs.remove(name);
+    }
     pub fn symbolic_ref(&self, repo: RepoId, name: &str) -> Option<String> {
         self.repo_data(repo).symrefs.get(name).cloned()
     }
@@ -509,6 +546,14 @@ impl Universe {
         let config = &mut self.repo_mut(repo).config;
         config.retain(|(k, _)| *k != key);
         config.push((key, value.to_owned()));
+    }
+    /// Drops the entries of the repo's own config for which `drop(key, value)` is true (keys normalized).
+    pub(super) fn config_drop(&mut self, repo: RepoId, drop: impl Fn(&str, &str) -> bool) {
+        self.repo_mut(repo).config.retain(|(k, v)| !drop(k, v));
+    }
+    /// The global entries, keys normalized.
+    pub(super) fn global_entries(&self) -> Vec<(String, String)> {
+        self.global.clone()
     }
     /// Every entry: the global ones, then the repo's, then `extra` (a call's `-c` and `GIT_CONFIG_*`), keys normalized.
     pub fn config_entries(&self, repo: RepoId, extra: &[(String, String)]) -> Vec<(String, String)> {

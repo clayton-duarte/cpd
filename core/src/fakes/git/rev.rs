@@ -63,7 +63,10 @@ fn atom(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
 pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
     for (suffix, want) in [("^{commit}", Kind::Commit), ("^{tree}", Kind::Tree)] {
         if let Some(inner) = spec.strip_suffix(suffix) {
-            let oid = parse(u, wt, inner)?;
+            let mut oid = parse(u, wt, inner)?;
+            while let Some(target) = u.tag_target(&oid) {
+                oid = target;
+            }
             let wrong = || RevError::WrongType(spec.to_owned());
             return match (u.kind(&oid), want) {
                 (Some(Kind::Commit), Kind::Commit) => Ok(oid),
@@ -73,6 +76,16 @@ pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
             };
         }
     }
+    if let Some(path) = spec.strip_prefix(':').filter(|p| !p.starts_with('/')) {
+        // `:<path>`: the blob the index holds at stage 0.
+        let wt_root = u.worktree_of(wt).ok_or_else(|| RevError::Unknown(spec.to_owned()))?;
+        return u
+            .effective_index(&wt_root)
+            .into_iter()
+            .find(|(p, _, stage)| p == path && *stage == 0)
+            .map(|(_, blob, _)| blob)
+            .ok_or_else(|| RevError::Unknown(spec.to_owned()));
+    }
     if let Some((rev, path)) = spec.split_once(':') {
         let tree = parse(u, wt, &format!("{rev}^{{tree}}"))?;
         return u
@@ -80,6 +93,17 @@ pub fn parse(u: &Universe, wt: &Path, spec: &str) -> Result<Oid, RevError> {
             .and_then(|entries| entries.into_iter().find(|(p, _)| p == path))
             .map(|(_, blob)| blob)
             .ok_or_else(|| RevError::Unknown(spec.to_owned()));
+    }
+    if let Some((inner, steps)) = spec.rsplit_once('~') {
+        // `<rev>~<n>`: the n-th first parent (`~` alone is `~1`).
+        if let Ok(n) = if steps.is_empty() { Ok(1) } else { steps.parse::<usize>() } {
+            let mut oid = parse(u, wt, &format!("{inner}^{{commit}}"))?;
+            for _ in 0..n {
+                let parent = u.commit_data(&oid).and_then(|c| c.parents.first().cloned());
+                oid = parent.ok_or_else(|| RevError::Unknown(spec.to_owned()))?;
+            }
+            return Ok(oid);
+        }
     }
     atom(u, wt, spec)
 }

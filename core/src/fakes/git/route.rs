@@ -16,6 +16,7 @@ mod remote;
 use remote::{fetch, ls_remote, push};
 mod merge;
 use merge::{merge_tree, rebase};
+mod fixture;
 
 const ZEROS: &str = "0000000000000000000000000000000000000000";
 use crate::host::runner::{Call, Handler, Reply};
@@ -68,8 +69,8 @@ type Run = Result<Out, String>;
 
 const NOT_A_REPO: &str = "fatal: not a git repository (or any of the parent directories): .git\n";
 const VERSION: &str = "git version 2.43.0\n";
-const GLOBAL_KEYS: [&str; 5] =
-    ["core.editor", "sequence.editor", "core.quotepath", "core.filesreflocktimeout", "core.packedrefstimeout"];
+const GLOBAL_KEYS: [&str; 6] =
+    ["core.editor", "sequence.editor", "core.quotepath", "core.filesreflocktimeout", "core.packedrefstimeout", "commit.gpgsign"];
 
 fn ambiguous(spec: &str) -> Out {
     Out::fail(
@@ -199,6 +200,22 @@ impl GitRoute {
             "worktree" => worktree(&mut ctx, rest),
             "write-tree" => write_tree(&mut ctx, rest),
             "read-tree" => read_tree(&mut ctx, rest),
+            "init" => fixture::init(&mut ctx, rest),
+            "clone" => fixture::clone(&mut ctx, rest),
+            "add" => fixture::add(&mut ctx, rest),
+            "commit" => fixture::commit(&mut ctx, rest),
+            "switch" | "checkout" => fixture::switch(&mut ctx, sub, rest),
+            "reset" => fixture::reset(&mut ctx, rest),
+            "merge" => fixture::merge(&mut ctx, rest),
+            "tag" => fixture::tag(&mut ctx, rest),
+            "mv" => fixture::mv(&mut ctx, rest),
+            "rm" => fixture::rm(&mut ctx, rest),
+            "show" => fixture::show(&mut ctx, rest),
+            "for-each-ref" => fixture::for_each_ref(&mut ctx, rest),
+            "grep" => fixture::grep(&mut ctx, rest),
+            "diff-index" => fixture::diff_index(&mut ctx, rest),
+            "diff-files" => fixture::diff_files(&mut ctx, rest),
+            "update-index" => fixture::update_index(rest),
             other => Err(other.to_owned()),
         }
     }
@@ -394,12 +411,23 @@ impl Pattern {
 }
 
 fn config(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("config", args, &["--get", "--get-regexp"], &[])?;
+    let toks = scan("config", args, &["--get", "--get-regexp", "--global"], &[])?;
     let flags = flags(&toks);
     let pos = positionals(&toks);
+    let global = flags.contains(&"--global");
+    let reading = flags.contains(&"--get") || flags.contains(&"--get-regexp");
+    let entries = if global {
+        c.u.global_entries()
+    } else {
+        let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
+        c.u.config_entries(repo, &c.extra)
+    };
+    if let (false, false, [key, value]) = (global, reading, &pos[..]) {
+        let repo = c.repo().expect("the entries came from a repo");
+        c.u.config_set(repo, key, value);
+        return Ok(Out::silent(0));
+    }
     let [arg] = pos[..] else { return Err("config (arguments)".to_owned()) };
-    let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
-    let entries = c.u.config_entries(repo, &c.extra);
     if flags.contains(&"--get") {
         let key = norm_key(arg);
         return Ok(match entries.iter().rev().find(|(k, _)| *k == key) {
@@ -438,6 +466,40 @@ fn remote(c: &mut Ctx, args: &[String]) -> Run {
             Some((_, url)) => Out::ok(format!("{}\n", c.u.resolve_url_with(repo, url, &c.extra))),
             None => Out::fail(2, format!("error: No such remote '{name}'\n")),
         }),
+        ["add", name, _] if remotes.iter().any(|(n, _)| n == name) => {
+            Ok(Out::fail(3, format!("error: remote {name} already exists.\n")))
+        }
+        ["add", name, url] => {
+            c.u.config_add(repo, &format!("remote.{name}.url"), url);
+            c.u.config_add(repo, &format!("remote.{name}.fetch"), &format!("+refs/heads/*:refs/remotes/{name}/*"));
+            Ok(Out::ok(""))
+        }
+        ["set-url", name, url] if remotes.iter().any(|(n, _)| n == name) => {
+            c.u.config_set(repo, &format!("remote.{name}.url"), url);
+            Ok(Out::ok(""))
+        }
+        ["remove" | "rm", name] if remotes.iter().any(|(n, _)| n == name) => {
+            let entries = c.u.config_entries(repo, &[]);
+            let tracking: BTreeSet<String> = entries
+                .iter()
+                .filter(|(k, v)| k.starts_with("branch.") && k.ends_with(".remote") && v == name)
+                .map(|(k, _)| k["branch.".len()..k.len() - ".remote".len()].to_owned())
+                .collect();
+            let own = format!("remote.{name}.");
+            c.u.config_drop(repo, |k, _| {
+                k.starts_with(&own) || tracking.iter().any(|b| k == format!("branch.{b}.remote") || k == format!("branch.{b}.merge"))
+            });
+            let prefix = format!("refs/remotes/{name}/");
+            for (reference, _) in c.u.refs(repo, &prefix) {
+                c.u.delete_ref(repo, &reference);
+            }
+            for (reference, _) in c.u.symbolic_refs(repo, &prefix) {
+                c.u.delete_symbolic_ref(repo, &reference);
+            }
+            Ok(Out::ok(""))
+        }
+        ["set-url", name, _] => Ok(Out::fail(2, format!("error: No such remote '{name}'\n"))),
+        ["remove" | "rm", name] => Ok(Out::fail(2, format!("error: No such remote: '{name}'\n"))),
         _ => Err(format!("remote {}", pos.join(" "))),
     }
 }
@@ -635,8 +697,9 @@ fn status(c: &mut Ctx, args: &[String]) -> Run {
     }
     if untracked {
         let known: Vec<&str> = merged.keys().copied().chain(conflicts.keys().map(String::as_str)).collect();
+        let ignore = fixture::ignore_of(&wt, &files, "status")?;
         let mut lines = BTreeSet::new();
-        for path in files.keys().filter(|p| !known.contains(&p.as_str())) {
+        for path in files.keys().filter(|p| !known.contains(&p.as_str()) && !ignore.ignores(p, false)) {
             let parts: Vec<&str> = path.split('/').collect();
             let shown = (1..parts.len())
                 .map(|k| format!("{}/", parts[..k].join("/")))
@@ -801,20 +864,26 @@ fn update_ref(c: &mut Ctx, args: &[String]) -> Run {
 }
 
 fn branch(c: &mut Ctx, args: &[String]) -> Run {
-    let (mut rename, mut delete, mut force) = (false, false, false);
+    let (mut rename, mut delete, mut force, mut list, mut remotes, mut current) = (false, false, false, false, false, false);
+    let mut format: Option<&str> = None;
     let mut pos: Vec<&str> = Vec::new();
     for arg in args {
         match arg.as_str() {
             "-m" => rename = true,
             "-d" => delete = true,
             "-D" => (delete, force) = (true, true),
+            "--list" => list = true,
+            "-r" => remotes = true,
+            "--show-current" => current = true,
+            flag if flag.starts_with("--format=") => format = Some(&flag["--format=".len()..]),
             flag if flag.starts_with('-') => return Err(format!("branch {flag}")),
             name => pos.push(name),
         }
     }
     let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
-    match (rename, delete, &pos[..]) {
-        (true, false, [old, new]) => {
+    let modes = [rename, delete, list || remotes || format.is_some(), current];
+    match (modes, &pos[..]) {
+        ([true, false, false, false], [old, new]) => {
             if c.u.ref_oid(repo, &format!("refs/heads/{old}")).is_none() {
                 return Ok(Out::fail(128, format!("fatal: no branch named '{old}'\n")));
             }
@@ -824,7 +893,7 @@ fn branch(c: &mut Ctx, args: &[String]) -> Run {
             c.u.rename_branch(repo, old, new);
             Ok(Out::ok(""))
         }
-        (false, true, names) if !names.is_empty() => {
+        ([false, true, false, false], names) if !names.is_empty() => {
             let (mut stdout, mut stderr, mut code) = (String::new(), String::new(), 0);
             for name in names {
                 match delete_branch(c, repo, name, force) {
@@ -834,6 +903,21 @@ fn branch(c: &mut Ctx, args: &[String]) -> Run {
             }
             Ok(Out { code, stdout, stderr })
         }
+        ([false, false, false, true], []) => {
+            let wt = match c.worktree() {
+                Ok(wt) => wt,
+                Err(out) => return Ok(out),
+            };
+            Ok(Out::ok(match c.u.head(&wt) {
+                Head::Branch(name) => format!("{name}\n"),
+                Head::Detached(_) => String::new(),
+            }))
+        }
+        ([false, false, true, false], patterns) | ([false, false, false, false], patterns @ []) => {
+            fixture::list_branches(c, repo, remotes, format, patterns)
+        }
+        ([false, false, false, false], [name]) => fixture::create_branch(c, repo, name, None),
+        ([false, false, false, false], [name, start]) => fixture::create_branch(c, repo, name, Some(start)),
         _ => Err("branch (arguments)".to_owned()),
     }
 }

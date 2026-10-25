@@ -82,7 +82,7 @@ pub(super) fn ls_remote(c: &mut Ctx, args: &[String]) -> Run {
 /// `fetch [<remote> [<branch>...]]`: the closure of each branch tip, and `refs/remotes/<remote>/<branch>`.
 /// Local branches, `HEAD` and the working tree are left alone.
 pub(super) fn fetch(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("fetch", args, &[], &[])?;
+    let toks = scan("fetch", args, &["-q"], &[])?;
     let pos = positionals(&toks);
     let (name, branches) = pos.split_first().map_or(("origin", &[][..]), |(n, b)| (*n, b));
     let Some(repo) = c.repo() else { return Ok(Out::fail(128, NOT_A_REPO)) };
@@ -148,9 +148,10 @@ impl Update {
 /// being `<src>[:<dst>]` (a branch name or a commit as `<src>`, a branch or a full ref as `<dst>`), or with
 /// `--delete` a branch. The remote must be a bare repo.
 pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
-    let toks = scan("push", args, &["--porcelain", "--delete"], &["--force-with-lease="])?;
+    let toks = scan("push", args, &["--porcelain", "--delete", "-q", "-u"], &["--force-with-lease="])?;
     let flags = flags(&toks);
     let (porcelain, delete) = (flags.contains(&"--porcelain"), flags.contains(&"--delete"));
+    let (quiet, upstream) = (flags.contains(&"-q"), flags.contains(&"-u"));
     let mut leases = Vec::new();
     for flag in flags.iter().filter(|f| f.starts_with("--force-with-lease=")) {
         let lease = flag["--force-with-lease=".len()..].split_once(':').ok_or_else(|| format!("push {flag}"))?;
@@ -228,6 +229,15 @@ pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
             }
             if let (Some(name), Some(branch)) = (&remote.name, to.strip_prefix("refs/heads/")) {
                 c.u.set_ref(repo, &format!("refs/remotes/{name}/{branch}"), &new, "update by push");
+                let local = match (src, c.u.head(&c.cwd)) {
+                    ("HEAD", Head::Branch(b)) => Some(b),
+                    (s, _) if c.u.ref_oid(repo, &format!("refs/heads/{s}")).is_some() => Some(s.to_owned()),
+                    _ => None,
+                };
+                if let (true, Some(local)) = (upstream, local) {
+                    c.u.config_set(repo, &format!("branch.{local}.remote"), name);
+                    c.u.config_set(repo, &format!("branch.{local}.merge"), &to);
+                }
             }
         }
         updates.push(update);
@@ -247,6 +257,9 @@ pub(super) fn push(c: &mut Ctx, args: &[String]) -> Run {
         let rejections: String = updates.iter().filter(|u| u.flag == '!').map(|u| shown_plain(u)).collect();
         let lines: String = updates.iter().map(shown).collect();
         return Ok(Out { code, stdout: format!("{to_url}{lines}Done\n"), stderr: format!("{rejections}{tail}") });
+    }
+    if quiet && !rejected {
+        return Ok(Out::silent(0));
     }
     if updates.iter().all(|u| u.flag == '=') {
         return Ok(Out::fail(0, "Everything up-to-date\n"));

@@ -58,6 +58,23 @@ fn diff(base: &[&[u8]], side: &[&[u8]]) -> Vec<Hunk> {
 /// The merge of `ours` and `theirs` over `base`: the text, and whether it holds conflict blocks, which are
 /// `<<<<<<< <label_ours>`, ours, `=======`, theirs, `>>>>>>> <label_theirs>`.
 pub(super) fn merge3(base: &[u8], ours: &[u8], theirs: &[u8], label_ours: &str, label_theirs: &str) -> (Vec<u8>, bool) {
+    merge3_favoring(base, ours, theirs, label_ours, label_theirs, false)
+}
+
+/// `(inserted, deleted)` lines of the change from `old` to `new`.
+pub(super) fn line_changes(old: &[u8], new: &[u8]) -> (usize, usize) {
+    diff(&split(old), &split(new)).iter().fold((0, 0), |(ins, del), h| (ins + h.with_end - h.with_start, del + h.end - h.start))
+}
+
+/// [`merge3`]; with `favor_ours` a conflicting hunk takes our side (`-X ours`) instead of a conflict block.
+pub(super) fn merge3_favoring(
+    base: &[u8],
+    ours: &[u8],
+    theirs: &[u8],
+    label_ours: &str,
+    label_theirs: &str,
+    favor_ours: bool,
+) -> (Vec<u8>, bool) {
     let (base, ours, theirs) = (split(base), split(ours), split(theirs));
     // (side, hunk): side 0 is ours.
     let mut all: Vec<(usize, Hunk)> = diff(&base, &ours).into_iter().map(|h| (0, h)).collect();
@@ -94,7 +111,6 @@ pub(super) fn merge3(base: &[u8], ours: &[u8], theirs: &[u8], label_ours: &str, 
             [(side, hunk)] => out.extend(text(side, &hunk)),
             [(0, a), (1, b)] if (a.start, a.end) == (b.start, b.end) && text(0, &a) == text(1, &b) => out.extend(text(0, &a)),
             _ => {
-                conflicted = true;
                 let side_text = |side: usize| {
                     let mut text: Vec<u8> = Vec::new();
                     let mut p = start;
@@ -109,6 +125,11 @@ pub(super) fn merge3(base: &[u8], ours: &[u8], theirs: &[u8], label_ours: &str, 
                     }
                     text
                 };
+                if favor_ours {
+                    out.extend(side_text(0));
+                    continue;
+                }
+                conflicted = true;
                 out.extend(format!("<<<<<<< {label_ours}\n").into_bytes());
                 out.extend(side_text(0));
                 out.extend(b"=======\n");
