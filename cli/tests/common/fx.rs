@@ -456,38 +456,12 @@ let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false,
         url
     }
 
-    /// Removes `origin` from a repo whose `origin` is only the GitHub URL `keyed_repo` gave it (no `local_origin`): for
-    /// what runs after `pr add` and must find no remote (`TestEnv::drop_unreachable_origin`, over the git route).
-    pub fn drop_unreachable_origin(&self, repo: &Path) {
-        // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
-        let rewritten = self.git_output(repo, &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
-        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
-            self.git(repo, &["remote", "remove", "origin"]);
-        }
-    }
-
     /// Kills the fake server, after unsetting the supervising hooks (`TestEnv::kill_tmux_server`, over the route).
     pub fn kill_tmux_server(&self) {
         for hook in ["pane-died", "window-unlinked"] {
             self.tmux(&["set-hook", "-gu", hook]);
         }
         self.tmux(&["kill-server"]);
-    }
-
-    /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
-    /// (`TestEnv::outline_for_review`, on this `Fx`'s `cpd`). Run it right before `plan review`.
-    pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
-        let mut done_when = serde_json::Map::new();
-        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
-            if job["status"] == "draft" {
-                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
-            }
-        }
-        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
-        let path = self.env.root().join(format!("outline-{plan}.json"));
-        std::fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// `<root>/repos/<name>` made in the `Universe` through its handle: `main`, `README.md`, one commit `initial`.
