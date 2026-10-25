@@ -38,12 +38,9 @@ cpd::flow driver_reload::  # m-flow: flow commands that may reach a real tmux
 cpd::flow driver::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_delete::  # m-flow: flow commands that may reach a real tmux
 cpd::flow plan_new_by_user::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
-cpd::flow review_close::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review::  # m-flow: flow commands that may reach a real tmux

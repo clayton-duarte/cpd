@@ -277,6 +277,12 @@ impl Fx {
         String::from_utf8(out.stdout).expect("git's stdout is UTF-8").trim_end().to_owned()
     }
 
+    /// `git` with `dir` as the cwd, through the route, whatever its exit code: for a command whose exit 1 is an answer
+    /// (`config --get-regexp` with no match).
+    pub fn git_output(&self, dir: &Path, args: &[&str]) -> Output {
+        self.run_tool("git", Some(dir), &[], args)
+    }
+
     /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).
     pub fn git_repo(&self, name: &str) -> PathBuf {
         self.repo_of_universe(name);
@@ -308,6 +314,56 @@ impl Fx {
         std::fs::write(&file, text).expect("write the file");
         self.git(dir, &["add", "-A"]);
         self.git(dir, &["commit", "-q", "-m", message]);
+    }
+
+    /// The configured URL of `origin`, a GitHub one: adds `acme/<the repo's directory name>` when the repo has no
+    /// `origin`, e.g. after [`Fx::drop_unreachable_origin`] (`TestEnv::github_origin`, over the git route).
+    pub fn github_origin(&self, repo: &Path) -> String {
+        if self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            return self.git(repo, &["config", "--get", "remote.origin.url"]);
+        }
+        let name = repo.file_name().expect("a repo directory").to_string_lossy().into_owned();
+        let url = format!("https://github.com/acme/{name}.git");
+        self.git(repo, &["remote", "add", "origin", &url]);
+        self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+        if !self.env.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+            self.env.repo_policy("acme", &name, "");
+        }
+        url
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL `keyed_repo` gave it (no `local_origin`): for
+    /// what runs after `pr add` and must find no remote (`TestEnv::drop_unreachable_origin`, over the git route).
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches: no `Fx::git`, which panics on it.
+        let rewritten = self.git_output(repo, &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// Kills the fake server, after unsetting the supervising hooks (`TestEnv::kill_tmux_server`, over the route).
+    pub fn kill_tmux_server(&self) {
+        for hook in ["pane-died", "window-unlinked"] {
+            self.tmux(&["set-hook", "-gu", hook]);
+        }
+        self.tmux(&["kill-server"]);
+    }
+
+    /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
+    /// (`TestEnv::outline_for_review`, on this `Fx`'s `cpd`). Run it right before `plan review`.
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// `<root>/repos/<name>` made in the `Universe` through its handle: `main`, `README.md`, one commit `initial`.
