@@ -201,8 +201,38 @@ impl Rows {
         self.fx.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
+    /// The number of transactions, read through a store opened and closed here: `env.query` keeps a connection, and with
+    /// it a descriptor, open, which could be the fd 3 a driver is handed.
     fn txns(&self) -> i64 {
-        self.fx.env.query("SELECT count(*) FROM txns")
+        store(&self.fx.env).read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
+    }
+
+    fn attempt(&self, id: &str) -> Value {
+        self.fx.cpd(&["attempt", "show", id, "--plan", PLAN]).ok()["attempt"].clone()
+    }
+
+    fn worktree(&self, id: &str) -> PathBuf {
+        self.repo.parent().unwrap().join(format!("pay.pay--{id}"))
+    }
+
+    /// `attempt run api-a1` in this process, with `lock` (or nothing) as its fd 3.
+    fn run_driver(&self, lock: Option<&Path>) -> Run {
+        let _fd3 = lock.map(|path| self.fx.hand_over(File::open(path).unwrap()));
+        self.fx.cpd(&["attempt", "run", ATTEMPT, "--plan", PLAN])
+    }
+
+    /// Attempt `api-a1` in `starting` and its lock file, as a starter would leave them: no worktree, no window.
+    fn starting(&self) -> PathBuf {
+        let lock = self.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+        fs::create_dir_all(lock.parent().unwrap()).unwrap();
+        File::create(&lock).unwrap();
+        self.fixture(&format!(
+            "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'api';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+               VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'starting', 'cpd/pay--api-a1', '{}', 't');",
+            self.worktree(ATTEMPT).display()
+        ));
+        lock
     }
 }
 
@@ -688,48 +718,21 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
 
 // ---------- the driver lock ----------
 
-/// Attempt `api-a1` in `starting` and its lock file, as a starter would leave them.
-fn starting(fx: &Fx) -> PathBuf {
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
-    fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    File::create(&lock).unwrap();
-    let worktree = fx.worktree(ATTEMPT);
-    fx.fixture(&format!(
-        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = 'api';
-         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
-           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'starting', 'cpd/pay--api-a1', '{}', 't');",
-        worktree.display()
-    ));
-    lock
-}
-
 #[test]
 fn a_driver_without_the_lock_as_fd_3_exits_without_writing() {
-    let fx = fx();
-    starting(&fx);
+    let fx = rows();
+    fx.starting();
     let before = fx.txns();
 
     // fd 3 not open.
-    let run = fx.env.cpd(&["attempt", "run", ATTEMPT, "--plan", PLAN]);
+    let run = fx.run_driver(None);
     assert_eq!(run.exit, 1, "{run:?}");
     assert_eq!(run.error()["code"], "driver_lock_missing");
 
     // fd 3 is another file.
-    let other = fx.env.root().join("other.lock");
+    let other = fx.fx.env.root().join("other.lock");
     fs::write(&other, "").unwrap();
-    let out = fx
-        .env
-        .command("sh")
-        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-        .arg(&other)
-        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
-        .output()
-        .unwrap();
-    let run = Run {
-        exit: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    };
+    let run = fx.run_driver(Some(&other));
     assert_eq!(run.exit, 1, "{run:?}");
     let error = run.error();
     assert_eq!(error["code"], "driver_lock_missing");
@@ -742,23 +745,15 @@ fn a_driver_without_the_lock_as_fd_3_exits_without_writing() {
 
 #[test]
 fn a_driver_refuses_an_attempt_that_is_not_starting() {
-    let fx = fx();
-    let lock = starting(&fx);
+    let fx = rows();
+    let lock = fx.starting();
     fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
     let before = fx.txns();
 
-    let out = fx
-        .env
-        .command("sh")
-        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-        .arg(&lock)
-        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
-        .output()
-        .unwrap();
+    let run = fx.run_driver(Some(&lock));
 
-    assert_eq!(out.status.code(), Some(3), "{out:?}");
-    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["error"]["code"], "illegal_transition");
+    assert_eq!(run.exit, 3, "{run:?}");
+    assert_eq!(run.error()["code"], "illegal_transition");
     assert_eq!(fx.txns(), before);
 }
 
@@ -766,8 +761,8 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
 /// E2 reads, so the Attempt is not its Worker's failure. It ends no Attempt itself.
 #[test]
 fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
-    let fx = fx();
-    let lock = starting(&fx);
+    let fx = rows();
+    let lock = fx.starting();
     // Above any user_version this binary knows (contract §4.5).
     rusqlite::Connection::open(fx.home().db()).unwrap().pragma_update(None, "user_version", 4999).unwrap();
     let plan = PlanId::parse(PLAN).unwrap();
@@ -775,36 +770,22 @@ fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
     let marker = fx.home().attempt_infra(&plan, &attempt);
     assert!(!marker.exists());
 
-    let out = fx
-        .env
-        .command("sh")
-        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-        .arg(&lock)
-        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
-        .output()
-        .unwrap();
+    let run = fx.run_driver(Some(&lock));
 
-    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["error"]["code"], "store_too_new", "{out:?}");
+    assert_eq!(run.error()["code"], "store_too_new", "{run:?}");
     assert_eq!(fx.home().infra(&plan, &attempt).unwrap().map(|(infra, _)| infra.code()), Some("store_too_new"));
 }
 
 /// Another failure of the driver leaves no marker: the ladder counts it.
 #[test]
 fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
-    let fx = fx();
-    let lock = starting(&fx);
+    let fx = rows();
+    let lock = fx.starting();
     fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
-    let out = fx
-        .env
-        .command("sh")
-        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-        .arg(&lock)
-        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
-        .output()
-        .unwrap();
-    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+
+    let run = fx.run_driver(Some(&lock));
+
+    assert_eq!(run.error()["code"], "illegal_transition", "{run:?}");
     let marker = fx.home().attempt_infra(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
     assert!(!marker.exists());
 }
@@ -833,7 +814,7 @@ fn dispatch_refuses_a_job_whose_fingerprint_does_not_match() {
 #[test]
 fn dispatch_refuses_when_the_driver_lock_is_held() {
     let fx = rows();
-    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &cpd_core::ids::AttemptId::parse(ATTEMPT).unwrap());
+    let lock = fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = OpenOptions::new().create(true).truncate(false).write(true).open(&lock).unwrap();
     held.try_lock().unwrap();

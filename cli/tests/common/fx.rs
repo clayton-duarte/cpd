@@ -22,6 +22,8 @@
 
 use std::cell::Cell;
 use std::ffi::OsString;
+use std::fs::File;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
@@ -38,6 +40,19 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// The virtual time [`Fx::until`] waits at most.
 const LIMIT: Duration = Duration::from_secs(600);
+
+/// The descriptor a driver finds its lock on (`Launch::hand_over`).
+const HAND_OVER_FD: std::os::fd::RawFd = 3;
+
+/// What [`Fx::hand_over`] returns: closes fd 3 when it drops.
+pub struct HandOver(());
+
+impl Drop for HandOver {
+    fn drop(&mut self) {
+        // SAFETY: closes the descriptor `hand_over` made; EBADF (the driver closed it) is the usual end.
+        unsafe { nix::libc::close(HAND_OVER_FD) };
+    }
+}
 
 /// Held by every [`Fx`] from its creation to its drop.
 static LOCK: Mutex<()> = Mutex::new(());
@@ -141,6 +156,29 @@ impl Fx {
         let remove: Vec<_> = launch.env_remove.iter().map(String::as_str).collect();
         let args: Vec<_> = launch.args.iter().map(String::as_str).collect();
         self.run(&cwd, &args, &set, &remove)
+    }
+
+    /// Makes `file` this process's fd 3 until the returned guard drops, as `Launch::hand_over` makes it a driver's: an
+    /// `attempt run` of this `Fx` finds its lock there. The descriptor is not close-on-exec. Takes the `File` (its own
+    /// descriptor is closed, or is fd 3 already, the lowest a process has free) and panics when another file is fd 3.
+    /// The guard closes fd 3 (the driver closes it itself when it ends the way it should; a closed descriptor is not an
+    /// error), so a test never leaves one behind.
+    pub fn hand_over(&self, file: File) -> HandOver {
+        if file.as_raw_fd() != HAND_OVER_FD {
+            // SAFETY: only probes the descriptor number.
+            let open = nix::fcntl::fcntl(unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) }, nix::fcntl::FcntlArg::F_GETFD);
+            assert!(open.is_err(), "fd {HAND_OVER_FD} is open in the test process: nothing can be handed over on it");
+            // SAFETY: `file` is open and fd 3 is not: `dup2` makes a copy on it.
+            let made = unsafe { nix::libc::dup2(file.as_raw_fd(), HAND_OVER_FD) };
+            assert_eq!(made, HAND_OVER_FD, "dup2 onto fd {HAND_OVER_FD}: {}", std::io::Error::last_os_error());
+        } else {
+            // Owned by the guard from here (it closes it); `File::open` made it close-on-exec.
+            let _ = std::os::fd::IntoRawFd::into_raw_fd(file);
+        }
+        // SAFETY: fd 3 is open, whichever way it got here.
+        let fd3 = unsafe { BorrowedFd::borrow_raw(HAND_OVER_FD) };
+        nix::fcntl::fcntl(fd3, nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty())).expect("clear close-on-exec on fd 3");
+        HandOver(())
     }
 
     /// An `Fx` over `env`. Waits for the other `Fx` of the process, if any.
