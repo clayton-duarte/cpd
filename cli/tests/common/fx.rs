@@ -27,10 +27,12 @@ use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::process::{ExitCode, Output};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::thread::ThreadId;
 use std::time::Duration;
 
 use nix::unistd::{dup, dup2_stdin, dup2_stdout};
 
+use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Reply};
@@ -59,6 +61,93 @@ impl Drop for HandOver {
     }
 }
 
+/// The nap hook of [`Fx::run_launch_with`], with its lifetime erased: only [`NapClock`] calls it, on the thread that installed it,
+/// while the call that borrowed it runs (the `Installed` guard takes it out before that call returns or unwinds).
+struct Erased(*mut (dyn FnMut(usize) + 'static));
+
+// SAFETY: it is called on the installing thread only (`NapSlot::owner`); the slot merely moves the pointer.
+unsafe impl Send for Erased {}
+
+#[derive(Default)]
+struct NapSlot {
+    hook: Option<Erased>,
+    owner: Option<ThreadId>,
+    /// The naps counted since the hook was installed.
+    naps: usize,
+    /// The virtual time when it was installed.
+    since: Duration,
+}
+
+/// The `Clock` of the fake ports: the `ManualClock`, and the hook of [`Fx::run_launch_with`] called after each nap of the thread
+/// that installed it. That is how a test changes the world between two polls of a loop it runs on its own thread (a Worker
+/// that submits, a cancel that arrives) with no second thread, no wait and no race: the loop naps, the hook acts, the loop goes on.
+struct NapClock {
+    inner: ManualClock,
+    slot: Mutex<NapSlot>,
+}
+
+impl NapClock {
+    fn slot(&self) -> MutexGuard<'_, NapSlot> {
+        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Clock for NapClock {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+
+    fn utc(&self) -> time::OffsetDateTime {
+        self.inner.utc()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        let taken = {
+            let mut slot = self.slot();
+            if slot.owner == Some(std::thread::current().id()) {
+                assert!(self.inner.elapsed() - slot.since < LIMIT, "the loop napped for {LIMIT:?} of virtual time: the world it waits for never came");
+                slot.naps += 1;
+                let n = slot.naps;
+                slot.hook.take().map(|hook| (hook, n))
+            } else {
+                None
+            }
+        };
+        if let Some((hook, n)) = taken {
+            // Puts the hook back when it returns or unwinds; while it runs, a nap inside it (a command the hook ran) calls none.
+            struct Back<'a>(&'a NapClock, Option<Erased>);
+            impl Drop for Back<'_> {
+                fn drop(&mut self) {
+                    let mut slot = self.0.slot();
+                    if slot.owner.is_some() {
+                        slot.hook = self.1.take();
+                    }
+                }
+            }
+            let mut back = Back(self, Some(hook));
+            let ptr = back.1.as_ref().map(|h| h.0).expect("just set");
+            // SAFETY: `ptr` is the `&mut dyn FnMut` that `run_launch_with` borrowed for its call, which has not returned: its
+            // `Installed` guard clears the slot first. Only this thread calls it, and the slot gave it up, so it is not called twice.
+            unsafe { (*ptr)(n) };
+            drop(back);
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        "NapClock"
+    }
+}
+
+/// Clears the nap hook when it drops.
+struct Installed<'a>(&'a NapClock);
+
+impl Drop for Installed<'_> {
+    fn drop(&mut self) {
+        *self.0.slot() = NapSlot::default();
+    }
+}
+
 /// Held by every [`Fx`] from its creation to its drop.
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -82,6 +171,8 @@ pub struct Fx {
     /// The fake ports of [`Fx::with_ports`]: the `ManualClock`, the `FakeRunner` and the `FakeSpawn`, and the `Ports`
     /// over them. [`Fx::new`] builds them too, but its commands run on the real ports.
     pub fakes: Fakes,
+    /// The clock of `fakes.ports`: `fakes.clock`'s time, and the hook of [`Fx::run_launch_with`].
+    nap: Arc<NapClock>,
     /// The `Universe` of the git route of `fakes.runner`: the repos, refs and config of every `git` call.
     pub universe: Arc<Mutex<Universe>>,
     /// The git route of `fakes.runner`.
@@ -193,6 +284,22 @@ impl Fx {
         self.run(&cwd, &args, &set, &remove)
     }
 
+    /// [`Fx::run_launch`] that calls `hook(self, n)` after the `n`th nap (from 1) the run takes on the fake clock, on this thread: a
+    /// loop of the run (a driver's poll) naps, the hook changes the world (a Worker commits and submits, a cancel arrives), the loop goes
+    /// on. The hook is not called by a nap inside itself (a command it runs). Panics when the run naps for [`LIMIT`] of virtual time
+    /// without ending. Only for an `Fx` of [`Fx::with_ports`].
+    pub fn run_launch_with(&self, launch: &Launch, mut hook: impl FnMut(&Fx, usize)) -> Run {
+        assert!(self.on_fake_ports, "run_launch_with is for an Fx::with_ports");
+        let mut call = |n: usize| hook(self, n);
+        let borrowed: &mut (dyn FnMut(usize) + '_) = &mut call;
+        // SAFETY: only the lifetime is erased. `Installed` takes the pointer out of the clock before `call` (borrowed here) is dropped,
+        // also when `run_launch` unwinds, and the clock calls it only on this thread during that time.
+        let erased: *mut (dyn FnMut(usize) + 'static) = unsafe { std::mem::transmute(borrowed) };
+        *self.nap.slot() = NapSlot { hook: Some(Erased(erased)), owner: Some(std::thread::current().id()), naps: 0, since: self.fakes.clock.elapsed() };
+        let _installed = Installed(&self.nap);
+        self.run_launch(launch)
+    }
+
     /// Makes `file` this process's fd 3 until the returned guard drops, as `Launch::hand_over` makes it a driver's: an
     /// `attempt run` of this `Fx` finds its lock there. The descriptor is not close-on-exec. Takes the `File` (its own
     /// descriptor is closed, or is fd 3 already, the lowest a process has free) and panics when another file is fd 3.
@@ -236,7 +343,9 @@ impl Fx {
         let (remove, set) = env.isolation();
         let saved_vars: Vec<_> = std::env::vars_os().collect();
         let saved_cwd = std::env::current_dir().expect("the current directory");
-        let fakes = Fakes::new();
+        let mut fakes = Fakes::new();
+        let nap = Arc::new(NapClock { inner: (*fakes.clock).clone(), slot: Mutex::default() });
+        fakes.ports.clock = nap.clone();
         // The test kit's global git config (`TestEnv`'s `.gitconfig`), in the Universe: no file is read.
         let mut universe = Universe::new(fakes.clock.clone());
         universe.set_global("user.name", "cpd test");
@@ -247,7 +356,7 @@ impl Fx {
         // Weak: the route lives in the runner's script, a strong handle back would be a cycle.
         let tmux_route = Arc::new(TmuxRoute::new().with_runner(fakes.runner.weak()));
         let _ = (*fakes.runner).clone().with_git(&git_route).route("tmux", tmux_route.clone());
-        let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
+        let fx = Fx { env, fakes, nap, universe, git_route, tmux_route, on_fake_ports: false, allow_unscripted: Cell::new(false), saved_vars, saved_cwd, _lock: lock };
         // From here `Drop` restores, also when a step below panics.
         // SAFETY: the lock serializes every `Fx`; nextest gives a test a process of its own, and a thread that does not
         // use `Fx` is not one that reads the environment while an `Fx` lives (docs/implementing.md, Tests).
