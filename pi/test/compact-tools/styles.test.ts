@@ -181,7 +181,7 @@ test("the codex style reuses an unchanged result and previews only its last line
 	bash.renderCall!(ctx.args, plainTheme, ctx);
 	const first = bash.renderResult!({ content, details: undefined }, { expanded: false, isPartial: false }, plainTheme, ctx) as Component;
 	assert.deepEqual(first.render(80).map(stripTerminalSequences), [
-		"   └ line 4997", "     line 4998", "     line 4999", "     + 4997 lines (ctrl+o to expand)",
+		"   └ line 4997", "     line 4998", "     line 4999", "    + 4997 lines (ctrl+o to expand)",
 	]);
 	const again = bash.renderResult!({ content, details: undefined }, { expanded: false, isPartial: false }, plainTheme, { ...ctx, lastComponent: first });
 	assert.equal(again, first);
@@ -240,7 +240,7 @@ test("groups only form in the claude style, and never while silent mode hides th
 	const codex = boundGroups("codex");
 	codex.chat.children = rows as unknown as Component[];
 	assert.deepEqual(codex.chat.render(80).map(stripTerminalSequences).filter(Boolean),
-		[" • Explored", "   └ Read a", "     Search x", "     + Show details"]);
+		["• Explored", "   └ Read a", "     Search x", "    + Show details"]);
 	codex.controller.dispose();
 
 	const compact = boundGroups("compact");
