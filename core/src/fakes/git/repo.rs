@@ -56,8 +56,8 @@ impl Repo {
     pub fn keyed(&self, _name: &str) {
         todo!("Repo::keyed")
     }
-    /// Pushes the branch `HEAD` names to `origin`: the objects, `refs/heads/<b>` there and
-    /// `refs/remotes/origin/<b>` here.
+    /// Pushes the branch `HEAD` names to `origin` (its url resolved through `insteadOf` to a repo of the
+    /// Universe): the objects, `refs/heads/<b>` there and `refs/remotes/origin/<b>` here.
     pub fn push(&self) {
         todo!("Repo::push")
     }
