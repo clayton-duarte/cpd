@@ -143,7 +143,8 @@ pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeo
     run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
 }
 
-/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result): one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
+/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result):
+/// one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
 pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
     let mut command = Command::new("gh");
     command.args(args).current_dir(cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());

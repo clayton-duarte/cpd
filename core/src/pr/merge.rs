@@ -63,10 +63,11 @@ pub struct MergeArgs {
 }
 
 pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> {
+    let runner = &*ports.runner;
     let PullRef { repo, number } = args.pull;
     // `--repo` names the repository: any directory will do.
     let cwd = Path::new(".");
-    let view = gh::view_for_merge(&*ports.runner, cwd, &repo, number)?;
+    let view = gh::view_for_merge(runner, cwd, &repo, number)?;
     if view.state == "MERGED" {
         store_merge(&repo, number, view.merged_at.as_deref())?;
     }
@@ -80,9 +81,9 @@ pub(super) fn merge(ports: &Ports, args: MergeArgs) -> Result<Output, CpdError> 
         .with("state", view.state)
         .with("merge_state", view.merge_state));
     }
-    gh::merge_pr(&*ports.runner, cwd, &repo, number, &view.head)?;
+    gh::merge_pr(runner, cwd, &repo, number, &view.head)?;
     // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
-    let stored = match gh::view_for_merge(&*ports.runner, cwd, &repo, number) {
+    let stored = match gh::view_for_merge(runner, cwd, &repo, number) {
         Ok(read) if read.state == "MERGED" => {
             store_merge(&repo, number, read.merged_at.as_deref())?;
             true

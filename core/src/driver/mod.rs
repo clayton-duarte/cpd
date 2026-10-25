@@ -11,7 +11,7 @@ pub mod lock;
 #[cfg(test)]
 pub(crate) mod ports_tests;
 mod run;
-mod stall;
+pub(crate) mod stall;
 mod start;
 pub mod worker;
 
