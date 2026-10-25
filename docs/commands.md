@@ -35,6 +35,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 22. [`policy`](#22-policy)
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
+25. [`incident`](#25-incident)
 
 ## 1. Conventions
 
@@ -4641,3 +4642,76 @@ Output:
 
 Idempotent: no; every call writes a new file.
 
+
+## 25. `incident`
+
+Incident mode (hs-d634, user decision hs-d634): machine-wide pause on most scheduling and requeue of running Attempts. One Manager-only command and one that any caller may read.
+
+### 25.1 `incident start`
+
+```
+cpd incident start --reason <text>
+```
+
+| Flag | Meaning |
+|---|---|
+| `--reason <text>` | required; 1 or more characters, explanation of the incident |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
+| `--reason` is present and at least 1 character | `usage` | 2 |
+
+Effects: one transaction; insert one row in `incident` table (`id = 1`, `started_at` now, `started_by` the Manager's Session id, `reason` the text, `started_txn` the transaction id); for every running Attempt in the same transaction, if `stop_request` is null set it to `'cancelled'`; append `incident-started` Event. The incident table is registered in `history_tables` (no_delete 0).
+
+Output:
+
+```json
+{"ok": true, "changed": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress"}}
+```
+
+Idempotent: yes; incident mode already on returns `"changed": false` with the existing row (same reason or changed reason, unchanged `started_at` and `by`).
+
+### 25.2 `incident end`
+
+```
+cpd incident end
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_SESSION` is set, valid, and a Manager Session (role `manager`, not archived) | `manager_only` | 3 |
+
+Effects: one transaction; delete the `incident` row; append `incident-ended` Event.
+
+Output:
+
+```json
+{"ok": true, "changed": true, "incident": null}
+```
+
+Idempotent: yes; incident mode already off returns `"changed": false` with `incident: null`.
+
+### 25.3 `incident status`
+
+```
+cpd incident status
+```
+
+No flags, no preconditions. Any caller may read.
+
+Effects: none (one read transaction).
+
+Output when off:
+
+```json
+{"ok": true, "on": false, "incident": null}
+```
+
+Output when on:
+
+```json
+{"ok": true, "on": true, "incident": {"started_at": "2026-10-14T21:10:00.000Z", "by": "3c9a…", "reason": "database migration in progress"}}
+```
+
+Idempotent: yes; read-only.
