@@ -180,7 +180,7 @@ pub struct StartArgs {
     plan: PlanArg,
 }
 
-/// Runs `command`. Only `view` reads `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+/// Runs `command`. Only `view`, `poll` and `merge` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
 pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Add(args) => add::add(args),
@@ -188,11 +188,11 @@ pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdE
         Command::Cancel(args) => cancel::cancel(args),
         Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
-        Command::Poll(args) => poll::poll(args),
+        Command::Poll(args) => poll::poll(ports, args),
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(ports, args),
-        Command::Merge(args) => merge::merge(args),
+        Command::Merge(args) => merge::merge(ports, args),
     }
 }
 
