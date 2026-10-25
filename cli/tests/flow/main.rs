@@ -16,6 +16,7 @@ mod context_pending;
 mod context_pending_waiting;
 mod context;
 mod driver_idle;
+mod driver_open;
 mod driver_reload;
 mod driver;
 mod host_repair;

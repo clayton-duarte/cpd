@@ -125,7 +125,7 @@ impl Clock for NapClock {
                     }
                 }
             }
-            let mut back = Back(self, Some(hook));
+            let back = Back(self, Some(hook));
             let ptr = back.1.as_ref().map(|h| h.0).expect("just set");
             // SAFETY: `ptr` is the `&mut dyn FnMut` that `run_launch_with` borrowed for its call, which has not returned: its
             // `Installed` guard clears the slot first. Only this thread calls it, and the slot gave it up, so it is not called twice.
@@ -385,6 +385,11 @@ impl Fx {
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8(out.stdout).expect("git's stdout is UTF-8").trim_end().to_owned()
+    }
+
+    /// [`Fx::git`] that does not assert: the `Output` of a `git` that may fail (a merge that conflicts).
+    pub fn git_try(&self, dir: &Path, args: &[&str]) -> Output {
+        self.run_tool("git", Some(dir), &[], args)
     }
 
     /// A new repo `<root>/repos/<name>` of the `Universe`: branch `main`, one commit (`README.md`).

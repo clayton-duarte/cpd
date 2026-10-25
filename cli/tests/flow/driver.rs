@@ -24,11 +24,11 @@ use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
-const PLAN: &str = "pay";
-const JOB: &str = "api";
+pub(super) const PLAN: &str = "pay";
+pub(super) const JOB: &str = "api";
 /// The stored title of PR `repo`; the shape it is given is `config` (its Jobs are `work` Jobs).
-const PR_TITLE: &str = "Charge the card at checkout";
-const PR_URL: &str = "https://github.com/acme/pay/pull/812";
+pub(super) const PR_TITLE: &str = "Charge the card at checkout";
+pub(super) const PR_URL: &str = "https://github.com/acme/pay/pull/812";
 const ATTEMPT: &str = "api-a1";
 
 /// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
@@ -82,7 +82,7 @@ fn fx_with(config_extra: &str) -> Fx {
 
 /// The config on this env's tmux server (`config_extra` is more TOML), a fake pi install whose Tier catalog is
 /// seeded in the cache by [`seed_rows`], and the policy file of the repo `acme/pay`.
-fn seed_home(env: &TestEnv, config_extra: &str) {
+pub(super) fn seed_home(env: &TestEnv, config_extra: &str) {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -104,7 +104,7 @@ fn seed_home(env: &TestEnv, config_extra: &str) {
 
 /// The Tier catalog, Context, Lead Session, Plan (phase `dispatch`) and PR `repo` of Plan `pay` in the store of `env`;
 /// `repo` and `lead` are the paths the PR names.
-fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
+pub(super) fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
     let catalog: String = EFFORTS
         .iter()
         .map(|(letter, model, efforts)| {
@@ -128,16 +128,16 @@ fn seed_rows(env: &TestEnv, repo: &Path, lead: &Path) {
     );
 }
 
-fn store(env: &TestEnv) -> Store {
+pub(super) fn store(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
 
-fn fixture(env: &TestEnv, sql: &str) {
+pub(super) fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
 /// Job `key` of PR `pr` of Plan `pay`, queued with its Locked-Job fingerprint.
-fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
+pub(super) fn add_job_in(env: &TestEnv, pr: &str, key: &str, needs: &[&str]) {
     let mut sql = format!(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
          VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
