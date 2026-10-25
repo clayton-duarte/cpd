@@ -142,6 +142,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
 | `cpd host approve` | Record the User's approval for one checkout repair (adapter) (§9.11) | internal | |
 | `cpd host repair` | Repair the skipped cpd install (Manager) (§9.11) | Manager | |
-| `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
-| `cpd version` | The release plumbing (commands.md §26.2) | | |
-| `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |
+| `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
+| `cpd tag` | Tag the commit that set the workspace version (commands.md §27.1) | Lead | |
+| `cpd version` | The release plumbing (commands.md §27) | | |
+| `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §27.2) | Lead | |

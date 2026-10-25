@@ -36,7 +36,8 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 23. [`slot`](#23-slot)
 24. [`secret`](#24-secret)
 25. [`incident`](#25-incident)
-26. [`tag` and `version`](#26-tag-and-version)
+26. [`prune`](#26-prune)
+27. [`tag` and `version`](#27-tag-and-version)
 
 ## 1. Conventions
 
@@ -4797,11 +4798,51 @@ Output when on with auto-end:
 
 Idempotent: yes; read-only.
 
-## 26. `tag` and `version`
+## 26. `prune`
+
+```
+cpd prune [--apply] [--drop <lead-branch>]... <repo>...
+```
+
+The successor of `scripts/prune-worktrees.sh` (hs-d138, hs-d143, hs-d144): the clean-up of leftover worktrees whose work reached `origin/main`, which the Manager runs by hand after a Plan. The script shrinks to `exec cpd prune "$@"`. A User's command at a shell: no callers, not cockpit, not internal.
+
+Flags and arguments:
+- `--apply`: do the removals. Without it nothing changes (apart from `git fetch origin`) and the command prints what it would do.
+- `--drop <lead-branch>`: repeatable. A worktree whose Lead Branch is one of the values is removed whether or not it is merged (rule `remove dropped`), unless it is protected.
+- `<repo>...`: one or more repos, at least one. A missing repo argument or an unknown flag is a usage error, exit 2.
+
+**Protected set.** Before anything else the command reads the store (no `cpd` child, no `jq`): for every Plan that is not done, the `lead_branch` of each PR whose status is not merged, and `cpd/<plan>--<attempt id>` for each Attempt of a Job of such a PR. If the store cannot be read the command exits 2 before touching anything. `git` and `gh` (authenticated) go through the `Runner`.
+
+**Rules.** Per worktree (the main one is skipped), the first rule that holds wins:
+
+```
+keep   active       the branch is protected (also with --drop)
+keep   dirty        `git status --porcelain` is not empty (untracked files included)
+remove dropped      the Lead Branch L is one of the --drop values (merged or not)
+remove              HEAD is an ancestor of origin/main
+remove              a merged PR P has a head branch equal to L or starting with `L/`, or,
+                    when L is `cpd/<plan>/<key>` (a legacy Lead Branch renamed locally),
+                    equal to `cpd/<plan>`; HEAD is an ancestor of P's head commit, and P
+                    reached main (its base is main, or the base is the head of a merged PR
+                    that reached main, at most 5 levels)
+keep   not merged   otherwise
+```
+
+L is the branch, or for a branch containing `--` the part before the first `--`. A detached HEAD has no L. Removal deletes the worktree and its local branch, never a remote branch.
+
+Effects per repo: `git fetch origin`, `gh pr list --state merged --limit 500` of the repo's `origin` slug, `git worktree list --porcelain`; with `--apply`, for each removal `git worktree remove --force`, `git branch -D` (only when no other worktree has the branch) and finally `git worktree prune`.
+
+Output: one line per worktree, `keep <path> (<branch|detached>): <reason>`, `remove <path> (<branch|detached>)` or `remove <path> (<branch>): dropped`, `failed <path>: <error>`, then `<repo>: <n> remove, <m> keep`.
+
+Exit codes: 0 unless a command failed; a failure is printed and the run goes on, exit 1 at the end. 2: usage, or the protected set could not be read.
+
+Tests: in-process on `Fakes` (`FakeRunner` git and gh routes, a temp store), the names of the old `cli/tests/tooling/prune_script.rs` kept: `a_failed_command_is_reported_and_exits_non_zero`, `keeps_what_cpd_still_runs`, `matches_a_legacy_lead_branch_renamed_locally`, `drop_removes_clean_unmerged_worktrees_of_the_named_lead_branch`, and `a_failing_cpd_exits_2_and_removes_nothing` (now: an unreadable store). The command is listed in `cli/tests/tooling/interface.rs`.
+
+## 27. `tag` and `version`
 
 The release plumbing of docs/versioning.md, in Rust over `Ports` (`Runner` for git, std `fs` for files). `scripts/tag-version.sh` and `scripts/sync-version.sh` are thin: each is `exec cpd tag` / `exec cpd version sync "$@"` and keeps only what must exist before cpd does. Their old exec tests are replaced by in-process tests on `Fakes` (a `FakeRunner` git route; a temp dir for the files), and `scripts/check-portable.sh` still guards the two scripts.
 
-### 26.1 `cpd tag`
+### 27.1 `cpd tag`
 
 `cpd tag` takes no arguments. It tags the commit of `origin/main` that last changed the workspace version of `Cargo.toml` with the annotated tag `v<version>` and pushes it. It is idempotent: a rerun does nothing or finishes the push.
 
@@ -4826,7 +4867,7 @@ Output (stderr, one line each; the stream the script used):
 
 Every failure is a `tag-version:` line; there is no JSON. `scripts/install-cpd.sh` runs it last and only warns on a failure (docs/implementing.md "Releases"). Callers: Lead (§2).
 
-### 26.2 `cpd version sync [--print]`
+### 27.2 `cpd version sync [--print]`
 
 cpd's version is `0.<PROTOCOL>.<migrations>`: `PROTOCOL` is the `pub const PROTOCOL: u32 = <n>;` of `core/src/events/kind.rs`, `<migrations>` the count of `.sql` files in `core/src/store/migrations/`.
 
