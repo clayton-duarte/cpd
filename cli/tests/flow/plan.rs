@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::fx::Fx;
-use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::Reply;
