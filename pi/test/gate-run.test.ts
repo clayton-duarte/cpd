@@ -84,7 +84,7 @@ test("a leftover process is reported with the NEXTEST_TEST_NAME of its environme
   assert.match(stderr, /left 1 things behind/, stderr);
   assert.match(stderr, /process \d+ \(ppid 1\) zsh -c sleep 120 ?\n/, stderr);
   assert.ok(stderr.includes(`    NEXTEST_TEST_NAME=${TEST_NAME}\n`), stderr);
-  assert.ok(stderr.includes("    parents: 1 /sbin/init\n"), stderr);
+  assert.match(stderr, /\n    parents: 1 \/sbin\/init ?\n/, stderr);
 });
 
 test("a leftover process whose environment has no NEXTEST_TEST_NAME says so instead of naming a test", () => {
