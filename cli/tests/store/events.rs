@@ -11,7 +11,6 @@ use std::time::Duration;
 use crate::home::{HasCpdHome, Home};
 use crate::scripted::ScriptedClock;
 use common::fx::Fx;
-use cpd_core::clock::Clock;
 use common::{Run, TestEnv};
 #[path = "../common/follower.rs"]
 mod follower;
@@ -607,7 +606,8 @@ fn migrating(fx: &Fx) -> impl FnOnce() + Send + 'static {
     fs::create_dir_all(&locks).unwrap();
     let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
     let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let now = (fx.fakes.clock.utc().unix_timestamp_nanos() / 1_000_000) as u64;
+    // The wall clock, not the fake one: the store reads a marker's age from it (`store/lock.rs` `unix_ms`).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
     lock.write_all(marker.to_string().as_bytes()).unwrap();
     move || {
