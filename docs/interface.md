@@ -145,3 +145,5 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd test` | The tests a change reaches, and named tests (commands.md §26) | | |
 | `cpd test changed` | Run the Rust tests the changed files can reach (§26.1) | Manager, Lead, Worker | |
 | `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
+| `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
+| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |

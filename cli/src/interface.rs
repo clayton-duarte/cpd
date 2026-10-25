@@ -115,6 +115,8 @@ pub const TABLE: &[Entry] = &[
     ("host repair", &[Manager], false),
     ("test changed", &[Manager, Lead, Worker], false),
     ("test run", &[Manager, Lead, Worker], false),
+    ("test list", &[Manager, Lead, Worker], false),
+    ("test build", &[Manager, Lead, Worker], false),
 ];
 
 /// The tree of `cpd --help`: clap's commands depth-first in clap's order,

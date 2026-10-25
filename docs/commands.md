@@ -4814,6 +4814,15 @@ cpd test run <name>...
 
 Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
 
-### 26.3 The `scripts/tests.sh` contract
+### 26.3 `test list` and `test build`
 
-`.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. `build` (`nextest run --workspace --no-run`, then `npm run typecheck`) and `list` stay in the shell; `run` becomes `exec cpd test run "$@"` once `cpd test` passes its tests. Until then the shell stays whole, so the TDD checks of cpd work while the change is in flight.
+```
+cpd test list <name>
+cpd test build
+```
+
+`list` exits 0 only when that one test exists: a pi name when its title is in a `test(` or `it(` call of its file (nothing is started), a Rust name when `nextest list --workspace --message-format oneline <name>` prints a test. `build` runs `nextest run --workspace --no-run`, then `npm run typecheck`, and stops at the first failure; its status is that of the step that failed. Both run from the repo root, whatever the cwd.
+
+### 26.4 The `scripts/tests.sh` contract
+
+`.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. The script is only the bootstrap: it builds cpd with `scripts/cargo.sh build -p cpd` (a no-op when cpd is current, so a stale cpd never answers), takes the newest `target/*/cpd` and runs `exec cpd test <command> "$@"`; `scripts/test-changed` does the same for `cpd test changed`. A process's output reaches the caller when that process ends, not line by line: the runner returns it whole.
