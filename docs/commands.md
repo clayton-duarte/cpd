@@ -3862,7 +3862,7 @@ Decision (User, 2026-10-22, accepted assumptions A1–A5). Agents never call 1Pa
 
 ```
 For op or path ending /op with arguments:
-cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: <matched>
+cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §23); refused: <matched>
 
 For cpd secret approve:
 cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve
@@ -3876,7 +3876,7 @@ cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md
 
 **When.** At pi's `tool_call`, registered once at load like `cpd_plan_review`, called from the adapter's start-up where `registerTool` is. The code is `pi/lib/secret.ts`: `registerSecretTool(host: Host): void`.
 
-**Role and vault.** It is for a Lead or Manager only: any other role (Worker), or no active run, is refused with the CpdError `not_a_lead` and a message `the tool cpd_secret_approve is for Lead and Manager Sessions only`. The vaults `cpd` and `homeserver` are refused with the reason `these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §24)`.
+**Role and vault.** It is for a Lead or Manager only: any other role (Worker), or no active run, is refused with the CpdError `not_a_lead` and a message `the tool cpd_secret_approve is for Lead and Manager Sessions only`. The vaults `cpd` and `homeserver` are refused with the reason `these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §23)`.
 
 **Parameters:** `action` (one of `get`, `list`, `create`, `edit`, `delete`), `vault`, `item` (every action but `list`), `field` (required for `get`, `create` and `edit`), `reason` (one line, at most 200 characters: why the agent needs it).
 
