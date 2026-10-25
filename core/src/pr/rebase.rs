@@ -136,8 +136,8 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
 
     // 8. The Gate on R', in the gate worktree; it is removed whatever the result.
     let again = format!("pr rebase --pr {key}");
-    // Under a `pr.gate` other than `local` (§8.3) nothing runs: the gate worktree only goes.
-    if policy.pr.gate == Gate::Local {
+    // Under a `gate.pr` other than `local` (§8.3) nothing runs: the gate worktree only goes.
+    if policy.gate.pr == Gate::Local {
         worktree.gate_and_remove(&gate_hooks(&env, &policy, &id, &pr))?.map_err(|r| refusal(&id, &pr, &new, r, &again))?;
     } else {
         worktree.remove()?;
