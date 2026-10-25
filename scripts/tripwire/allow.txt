@@ -26,10 +26,8 @@ cpd::flow context_pending_waiting::  # m-flow: flow commands that may reach a re
 cpd::flow context::  # m-flow: flow commands that may reach a real tmux
 cpd::flow job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow metrics::  # m-flow: flow commands that may reach a real tmux
-cpd::flow plan_new_by_user::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy_scopes::  # m-flow: flow commands that may reach a real tmux
 cpd::flow policy::  # m-flow: flow commands that may reach a real tmux
-cpd::flow review_job::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tmux
 cpd::flow review::  # m-flow: flow commands that may reach a real tmux
 cpd::flow spec::  # m-flow: flow commands that may reach a real tmux
