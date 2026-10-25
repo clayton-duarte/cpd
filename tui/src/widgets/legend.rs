@@ -20,6 +20,7 @@ use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
+use crate::cells;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::pill::pill;
@@ -52,7 +53,7 @@ impl Section {
         (0..columns)
             .map(|c| {
                 let cells = self.rows.iter().filter_map(|r| r.get(c)).map(Line::width);
-                let head = self.header.map_or(0, |h| h.get(c).map_or(0, |t| t.chars().count()));
+                let head = self.header.map_or(0, |h| h.get(c).map_or(0, |t| cells::width(t)));
                 cells.chain(std::iter::once(head)).max().unwrap_or(0) as u16
             })
             .collect()
@@ -62,7 +63,7 @@ impl Section {
     fn width(&self) -> u16 {
         let w = self.column_widths();
         (w.iter().sum::<u16>() + COLUMN_SPACING * (w.len() as u16).saturating_sub(1))
-            .max(self.title.chars().count() as u16)
+            .max(cells::width(self.title) as u16)
     }
 
     /// The title row, the header row if any, and the rows.
@@ -344,6 +345,10 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     };
     Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
 }
+
+#[cfg(test)]
+#[path = "legend_width_tests.rs"]
+mod legend_width_tests;
 
 #[cfg(test)]
 mod tests {

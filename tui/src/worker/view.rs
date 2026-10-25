@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
+use crate::cells;
 use crate::palette;
 use crate::scroll::Scroller;
 
@@ -57,19 +58,24 @@ impl View {
     }
 }
 
-/// `text` as rows of at most `width` characters, each after one blank, broken at spaces (a longer word is cut); at most
+/// `text` as rows of at most `width` columns, each after one blank, broken at spaces (a longer word is cut); at most
 /// [`HEADER_ROWS`], the last ending ` …` when text is left out. No rows for no text.
 fn wrap_header(text: &str, width: usize) -> Vec<String> {
     let room = width.saturating_sub(1).max(1);
     let mut rows: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
-        let chars: Vec<char> = word.chars().collect();
-        for piece in chars.chunks(room) {
-            let piece: String = piece.iter().collect();
+        let mut rest = word;
+        while !rest.is_empty() {
+            let mut piece = cells::take(rest, room);
+            if piece.is_empty() {
+                // A character wider than the room is taken whole: it cannot fit any row.
+                piece = &rest[..rest.chars().next().map_or(0, char::len_utf8)];
+            }
+            rest = &rest[piece.len()..];
             match rows.last_mut() {
-                Some(row) if row.chars().count() + 1 + piece.chars().count() <= width => {
+                Some(row) if cells::width(row) + 1 + cells::width(piece) <= width => {
                     row.push(' ');
-                    row.push_str(&piece);
+                    row.push_str(piece);
                 }
                 _ => rows.push(format!(" {piece}")),
             }
@@ -78,13 +84,17 @@ fn wrap_header(text: &str, width: usize) -> Vec<String> {
     if rows.len() > HEADER_ROWS {
         rows.truncate(HEADER_ROWS);
         let last = rows.last_mut().expect("truncated to HEADER_ROWS");
-        while last.chars().count() + 2 > width && last.rfind(' ').is_some_and(|i| i > 0) {
+        while cells::width(last) + 2 > width && last.rfind(' ').is_some_and(|i| i > 0) {
             last.truncate(last.rfind(' ').expect("checked"));
         }
         last.push_str(" …");
     }
     rows
 }
+
+#[cfg(test)]
+#[path = "width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {

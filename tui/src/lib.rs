@@ -30,6 +30,7 @@ mod guard_popup_tests;
 mod guard_terminal_tests;
 #[cfg(test)]
 mod section_title_tests;
+mod cells;
 mod chat;
 mod cockpit;
 pub mod dialog;
@@ -50,9 +51,13 @@ mod layout_tests;
 mod layout_tree_tests;
 #[cfg(test)]
 mod input_box_tests;
+#[cfg(test)]
+mod input_box_width_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;
+#[cfg(test)]
+mod menu_width_tests;
 #[cfg(test)]
 mod failed_pill_tests;
 #[cfg(test)]
@@ -88,7 +93,11 @@ mod popup;
 pub mod read;
 mod runner;
 mod scroll;
+#[cfg(test)]
+mod scroll_width_tests;
 pub mod section;
+#[cfg(test)]
+mod section_width_tests;
 mod no_notes;
 mod terminal_writes;
 mod tree;

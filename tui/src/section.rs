@@ -14,6 +14,7 @@
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
+use crate::cells;
 use crate::palette;
 use crate::pill;
 
@@ -56,13 +57,13 @@ fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, pill_style: 
 /// [`row`] with its padding, `pad` blank cells on each side, given.
 fn row_padded(lead: &str, pad: usize, muted: Style, title: &str, count: Option<usize>, pill_style: Style, width: usize) -> Line<'static> {
     let width = width - 2 * pad;
-    let lead: String = lead.chars().take(width).collect();
-    let left = width - lead.chars().count();
-    let text: String = title.chars().take(left.saturating_sub(2)).collect();
+    let lead: String = cells::take(lead, width).to_string();
+    let left = width - cells::width(&lead);
+    let text: String = cells::take(title, left.saturating_sub(2)).to_string();
     let pill = left >= 3 && !text.is_empty();
-    let left = if pill { left - text.chars().count() - 2 } else { left };
-    let count = count.map(|n| n.to_string()).filter(|c| pill && 1 + c.chars().count() + 2 <= left).unwrap_or_default();
-    let fill = left - if count.is_empty() { 0 } else { count.chars().count() + 2 };
+    let left = if pill { left - cells::width(&text) - 2 } else { left };
+    let count = count.map(|n| n.to_string()).filter(|c| pill && 1 + cells::width(c) + 2 <= left).unwrap_or_default();
+    let fill = left - if count.is_empty() { 0 } else { cells::width(&count) + 2 };
     let mut spans = vec![Span::raw(PAD.repeat(pad)), Span::styled(lead, muted)];
     if pill {
         spans.extend(pill::pill(text, pill_style));

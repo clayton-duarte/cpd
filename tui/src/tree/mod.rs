@@ -43,6 +43,8 @@ mod margin_tests;
 #[cfg(test)]
 mod scroll_tests;
 #[cfg(test)]
+mod width_tests;
+#[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
 mod new_context_tests;
