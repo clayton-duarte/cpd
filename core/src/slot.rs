@@ -11,10 +11,10 @@
 
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
@@ -134,29 +134,72 @@ pub struct Args {
     pub command: Vec<OsString>,
 }
 
+/// How the command of `cpd slot` ended, as its starter saw it.
+pub enum Ended {
+    /// It ran and ended with this status.
+    Status(ExitStatus),
+    /// It could not be started.
+    NotStarted(std::io::Error),
+    /// It started and its end could not be waited for.
+    WaitFailed(std::io::Error),
+}
+
 /// `cpd slot` (commands.md §23): runs the command in a slot and returns its exit status; the slot is free again
 /// when this returns. Inside a slot already (`CPD_TEST_SLOT` set and non-empty) it takes none.
 pub fn run(args: Args) -> Result<u8, CpdError> {
+    run_with(&Ports::real(), args, &mut std::io::stderr(), &mut start_and_wait)
+}
+
+/// [`run`] on `ports.clock` for the waiting, `stderr` for the lines it says, and `start` to run the command (it inherits
+/// stdin, stdout and stderr; [`start_and_wait`] is the real one): what a test calls, with a `start` that records the
+/// command it is given (its program, arguments and variables) and says how it ended.
+pub fn run_with(
+    ports: &Ports,
+    args: Args,
+    stderr: &mut dyn Write,
+    start: &mut dyn FnMut(Command) -> Ended,
+) -> Result<u8, CpdError> {
     let Some((program, rest)) = args.command.split_first() else {
         return Err(CpdError::new(ErrorCode::Usage, "A command is required after `--`: cpd slot -- <cmd> [args…]."));
     };
     let mut command = Command::new(program);
     command.args(rest);
     if std::env::var_os(SLOT_VARIABLE).is_some_and(|v| !v.is_empty()) {
-        return Ok(execute(command, program));
+        return Ok(status_of(start(command), program, stderr));
     }
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
-    let slot = Slots::new(&home, config.test_concurrency).take("slot", &mut |line, waited| {
+    let slot = Slots::new(&home, config.test_concurrency).take_with(ports, "slot", &mut |line, waited| {
         if waited {
-            eprintln!("{line}");
+            let _ = writeln!(stderr, "{line}");
         }
         Ok(())
     })?;
     command.env(SLOT_VARIABLE, slot.index().to_string());
-    let status = execute(command, program);
+    let status = status_of(start(command), program, stderr);
     drop(slot);
     Ok(status)
+}
+
+/// The exit status of the shell's convention for how `ended`: `128 + n` for signal `n`, `127` for a command not found,
+/// `126` for one that cannot run; what is wrong is said on `stderr`.
+fn status_of(ended: Ended, program: &OsString, stderr: &mut dyn Write) -> u8 {
+    let name = program.to_string_lossy();
+    match ended {
+        Ended::Status(status) => status.code().map_or_else(|| 128 + status.signal().unwrap_or(0), |c| c) as u8,
+        Ended::NotStarted(e) if e.kind() == ErrorKind::NotFound => {
+            let _ = writeln!(stderr, "cpd slot: {name}: command not found.");
+            127
+        }
+        Ended::NotStarted(e) => {
+            let _ = writeln!(stderr, "cpd slot: {name}: cannot execute: {e}.");
+            126
+        }
+        Ended::WaitFailed(e) => {
+            let _ = writeln!(stderr, "cpd slot: cannot wait for {name}: {e}.");
+            126
+        }
+    }
 }
 
 /// The pid of the command, for [`forward`]; `0` before it has started.
@@ -175,9 +218,8 @@ extern "C" fn forward(signal: i32) {
 }
 
 /// Starts `command`, which inherits stdin, stdout and stderr, and waits for it, forwarding `SIGINT`, `SIGTERM` and
-/// `SIGHUP` to it, so that a signal never frees a slot under a command that still runs. Returns the exit status of
-/// the shell's convention: `128 + n` for signal `n`, `127` for a command not found, `126` for one that cannot run.
-fn execute(mut command: Command, program: &OsString) -> u8 {
+/// `SIGHUP` to it, so that a signal never frees a slot under a command that still runs.
+pub fn start_and_wait(mut command: Command) -> Ended {
     let action = SigAction::new(SigHandler::Handler(forward), SaFlags::empty(), SigSet::empty());
     for signal in [Signal::SIGINT, Signal::SIGTERM, Signal::SIGHUP] {
         // SAFETY: the handler only reads and writes atomics and calls kill(2), which are async-signal-safe.
@@ -187,29 +229,14 @@ fn execute(mut command: Command, program: &OsString) -> u8 {
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(e) => {
-            let name = program.to_string_lossy();
-            return match e.kind() {
-                ErrorKind::NotFound => {
-                    eprintln!("cpd slot: {name}: command not found.");
-                    127
-                }
-                _ => {
-                    eprintln!("cpd slot: {name}: cannot execute: {e}.");
-                    126
-                }
-            };
-        }
+        Err(e) => return Ended::NotStarted(e),
     };
     CHILD.store(child.id() as i32, Ordering::Relaxed);
     if let Some(early) = Some(EARLY.swap(0, Ordering::Relaxed)).filter(|s| *s != 0) {
         forward(early);
     }
     match child.wait() {
-        Ok(status) => status.code().map_or_else(|| 128 + status.signal().unwrap_or(0), |c| c) as u8,
-        Err(e) => {
-            eprintln!("cpd slot: cannot wait for {}: {e}.", program.to_string_lossy());
-            126
-        }
+        Ok(status) => Ended::Status(status),
+        Err(e) => Ended::WaitFailed(e),
     }
 }

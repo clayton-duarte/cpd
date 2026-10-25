@@ -34,10 +34,11 @@ impl Env {
         Env::open_home_with(&Ports::real(), home)
     }
 
-    /// [`Env::open_home`] on `ports`.
+    /// [`Env::open_home`] on `ports`: the waits of the open (the setup lock another cpd holds while it migrates) sleep
+    /// on `ports.clock`.
     pub fn open_home_with(ports: &Ports, home: CpdHome) -> Result<Env, CpdError> {
         let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+        let store = Store::open_with(&*ports.clock, &home, u64::from(config.timeouts.store_busy_ms), None)?;
         Ok(Env { home, config, store, ports: ports.clone() })
     }
 
