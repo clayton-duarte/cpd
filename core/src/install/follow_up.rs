@@ -14,8 +14,6 @@ use crate::ports::Ports;
 
 /// How long a tmux listing or kill may take.
 const TMUX_DEADLINE: Duration = Duration::from_secs(10);
-/// How long the killed engine has to release `locks/watch.lock`.
-const LOCK_WAIT: Duration = Duration::from_secs(60);
 /// The step of that wait.
 const LOCK_STEP: Duration = Duration::from_millis(250);
 
@@ -174,7 +172,7 @@ impl FollowUps<'_> {
         let free = loop {
             match Self::lock_free(&lock) {
                 Ok(true) => break true,
-                Ok(false) if waited >= LOCK_WAIT => break false,
+                Ok(false) if waited >= self.install.lock_wait => break false,
                 Ok(false) => {
                     self.ports.clock.sleep(LOCK_STEP);
                     waited += LOCK_STEP;
@@ -189,7 +187,7 @@ impl FollowUps<'_> {
             self.fail(format!(
                 "the old engine still holds {} after {}s: it was told to stop and has not; the new engine was not started",
                 lock.display(),
-                LOCK_WAIT.as_secs()
+                self.install.lock_wait.as_secs()
             ));
             return;
         }
