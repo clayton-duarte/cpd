@@ -1,6 +1,7 @@
 //! `attempt submit`, `attempt read`, `attempt show` and `attempt list`
-//! (commands.md §6.1–§6.3), run as the built binary against a temporary
-//! `$CPD_HOME` and temporary git repos; `attempt read`, `attempt show` and `attempt list` call no git and no hook,
+//! (commands.md §6.1–§6.3). `attempt submit` without a hook runs in this process on the fake git ([`Git`]: repos of the
+//! `Universe`, no git process); the quick-check and kind-check tests still run the built binary against a temporary
+//! `$CPD_HOME` and temporary git repos (they run `sh` hooks). `attempt read`, `attempt show` and `attempt list` call no git and no hook,
 //! so their tests run the command tree in this process (`Fx`, [`Rows`]) against rows alone. The Plan, its Jobs,
 //! Attempts and Sessions are fixtures written straight into the database; the commands under test are the only ones
 //! that write the rest.
@@ -16,6 +17,7 @@ use common::{Run, TestEnv, refused};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -211,10 +213,6 @@ impl Fx {
         self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
     }
 
-    fn txns(&self) -> i64 {
-        self.env.query("SELECT count(*) FROM txns")
-    }
-
     fn events(&self, kind: &str) -> Vec<Value> {
         self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
@@ -305,13 +303,162 @@ impl Rows {
     }
 }
 
+// ---------- fixtures over the fake git: worktrees without a git process ----------
+
+/// [`Fx`] in this process: the repo, its Lead worktree and the Attempts' worktrees are repos of the fake git (`Universe`),
+/// their files real files in the env's temp dir; the same rows. No git, hook or other process runs.
+struct Git {
+    fx: InProcess,
+    home: CpdHome,
+    repo: PathBuf,
+    lead: PathBuf,
+    /// The worktree of `api-a1`.
+    work: PathBuf,
+}
+
+/// `files` are committed on `main` before the Lead worktree is cut from it.
+fn git_fixture(files: &[(&str, &str)]) -> Git {
+    git_fixture_kind(files, "work")
+}
+
+/// [`git_fixture`] with Job `api` of `kind` (`work` or `review`).
+fn git_fixture_kind(files: &[(&str, &str)], kind: &str) -> Git {
+    let fx = InProcess::with_ports();
+    let repo = fx.git_repo("pay").canonicalize().unwrap();
+    for (path, content) in files {
+        fx.commit_file(&repo, path, content, "setup");
+    }
+    let lead = in_fakes(&fx, || create_lead_worktree(&repo, &plan(), "main", &setup(&fx, "setup.log"))).unwrap().path;
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
+    // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets `[protected]`.
+    fx.env.repo_policy("acme", "pay", "");
+    fx.env.sql(&format!(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '{}', 'pay', 'main', 'dispatch', 'cpd/pay', '{}', cpd_txn(), 't', 't');",
+        repo.display(),
+        lead.display()
+    ));
+    let mut git = Git { fx, home, repo, lead, work: PathBuf::new() };
+    git.work = git.attempt_in(&Pr { key: "repo".into(), repo: git.repo.clone(), lead: git.lead.clone() }, "api", "running", kind);
+    git
+}
+
+/// `f` with the fake ports of `fx` as the ambient ones: the core's git functions (`create_lead_worktree`, ...) run on them.
+fn in_fakes<R>(fx: &InProcess, f: impl FnOnce() -> R) -> R {
+    Ports::scope(&fx.fakes.ports, f)
+}
+
+fn setup(fx: &InProcess, log: &str) -> Setup {
+    Setup { timeout: Duration::from_secs(30), log: fx.env.root().join(log) }
+}
+
+impl Git {
+    fn store(&self) -> Store {
+        Store::open(&self.home, 5000).unwrap()
+    }
+
+    /// PR `key` of Plan `pay` in a new repo `<key>`, started: Lead Branch `cpd/pay/<key>` and its Lead worktree.
+    fn add_pr(&self, key: &str) -> Pr {
+        let repo = self.fx.git_repo(key).canonicalize().unwrap();
+        let branch = format!("cpd/pay/{key}");
+        let lead = pr_lead_worktree_path(&repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+        in_fakes(&self.fx, || prepare_lead_worktree(&repo, &plan(), &lead, &branch, "main", &setup(&self.fx, "setup.log"))).map_err(|f| f.error).unwrap();
+        self.fx.env.repo_policy("acme", key, "");
+        self.fx.env.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', '{key}', '{}', '{key}', 'main', 'dispatch', '{branch}', '{}', cpd_txn(), 't', 't');",
+            repo.display(),
+            lead.display()
+        ));
+        Pr { key: key.into(), repo, lead }
+    }
+
+    /// A Job of `pr` and of `kind` (`work` or `review`) with its Attempt `<key>-a1` in `status`: its worktree cut from the
+    /// Lead Branch HEAD. Returns the worktree.
+    fn attempt_in(&self, pr: &Pr, key: &str, status: &str, kind: &str) -> PathBuf {
+        let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
+        let made = in_fakes(&self.fx, || create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup(&self.fx, "attempt.log"))).unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at, kind, review)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', 'work', ?5)",
+                    // The pseudo-kind `review` is a `work` Job with the review flag.
+                    params![key, "f".repeat(64), tx.id(), pr.key, kind == "review"],
+                )?;
+                tx.execute(
+                    "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+                     VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', ?6, ?3, ?4, ?5, 't')",
+                    params![attempt.to_string(), key, made.branch, made.path.to_str().unwrap(), made.base_sha, status],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        made.path
+    }
+
+    /// [`Git::attempt_in`] for a `work` Job of the first PR.
+    fn attempt_as(&self, key: &str, status: &str) -> PathBuf {
+        self.attempt_in(&Pr { key: "repo".into(), repo: self.repo.clone(), lead: self.lead.clone() }, key, status, "work")
+    }
+
+    /// Commits `path` = `content` in `dir`, a worktree.
+    fn commit_in(&self, dir: &Path, path: &str, content: &str) -> String {
+        self.fx.commit_file(dir, path, content, &format!("edit {path}"));
+        self.fx.git(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// Commits `path` = `content` in the Attempt worktree.
+    fn commit(&self, path: &str, content: &str) -> String {
+        self.commit_in(&self.work, path, content)
+    }
+
+    fn submit(&self) -> Run {
+        self.submit_in(&self.work)
+    }
+
+    fn submit_in(&self, cwd: &Path) -> Run {
+        self.fx.cpd_in(cwd, &["attempt", "submit", "api-a1", "--plan", PLAN])
+    }
+
+    fn status(&self) -> String {
+        self.fx.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+    }
+
+    fn txns(&self) -> i64 {
+        self.fx.env.query("SELECT count(*) FROM txns")
+    }
+
+    fn events(&self, kind: &str) -> Vec<Value> {
+        self.fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+    }
+
+    /// The `attempt-status` Events' `data`, oldest first.
+    fn statuses(&self) -> Vec<Value> {
+        self.events("attempt-status").iter().map(|e| e["data"].clone()).collect()
+    }
+
+    /// The `txn` of each `attempt-status` Event, oldest first.
+    fn status_txns(&self) -> Vec<i64> {
+        let text: String = self.fx.env.query("SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' ORDER BY rowid)");
+        text.split(',').map(|t| t.parse().unwrap()).collect()
+    }
+}
+
 const NEXT: &str = "Stop now. Do not make more changes.";
 
 // ---------- attempt submit ----------
 
 #[test]
 fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     let sha = fx.commit("src/a.rs", "fn a() {}\n");
     let out = fx.submit().ok();
     assert_eq!(out, json!({"ok": true, "attempt": "api-a1", "submitted": true, "sha": sha, "next": NEXT}));
@@ -328,7 +475,7 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert_eq!(submitted_sha, sha);
     assert!(submitted_at.ends_with('Z') && submitted_at.contains('T'), "{submitted_at}");
     assert_eq!(tail, None, "no pre-commit table: nothing ran, check_tail stays null");
-    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
+    assert_eq!(fx.fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
     assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
@@ -337,21 +484,21 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert_eq!(events[1]["data"], json!({"from": "running", "to": "running", "check": "end", "what": "checks"}));
     assert_eq!(events[2]["data"], json!({"from": "running", "to": "merging"}));
     assert_eq!((events[2]["plan"].as_str(), events[2]["job"].as_str(), events[2]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
-    assert_eq!(fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
+    assert_eq!(fx.fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
 }
 
 #[test]
 fn submit_works_from_a_subdirectory_and_takes_the_plan_from_the_environment() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     let sha = fx.commit("src/a.rs", "x\n");
-    let run = fx.env.command(common::CPD).args(["attempt", "submit", "api-a1"]).env("CPD_PLAN", PLAN).current_dir(fx.work.join("src")).output().unwrap();
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
-    assert_eq!(fx.env.query::<String>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), sha);
+    let run = fx.fx.cpd_with(&fx.work.join("src"), &["attempt", "submit", "api-a1"], &[("CPD_PLAN", PLAN)]);
+    assert_eq!(run.exit, 0, "{}", run.stdout);
+    assert_eq!(fx.fx.env.query::<String>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), sha);
 }
 
 #[test]
 fn submit_twice_is_already_and_writes_nothing() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     let sha = fx.commit("a.txt", "a\n");
     fx.submit().ok();
     let txns = fx.txns();
@@ -359,29 +506,58 @@ fn submit_twice_is_already_and_writes_nothing() {
     assert_eq!(out, json!({"ok": true, "attempt": "api-a1", "submitted": true, "sha": sha, "next": NEXT, "already": true}));
     assert_eq!(fx.txns(), txns);
     // Also from outside the worktree: the Attempt's state is checked first.
-    assert_eq!(fx.submit_in(fx.env.root()).ok()["already"], true);
+    assert_eq!(fx.submit_in(fx.fx.env.root()).ok()["already"], true);
     // And once the Attempt has ended with that submission.
-    fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'api-a1'");
+    fx.fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'api-a1'");
     assert_eq!(fx.submit().ok()["already"], true);
 }
 
 #[test]
+fn submit_refuses_an_attempt_that_is_not_running() {
+    // One `Fx` lives at a time in the process (it owns the environment): each case is its own scope.
+    {
+        let fx = git_fixture(&[]);
+        fx.commit("a.txt", "a\n");
+        fx.fx.env.sql("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1'");
+        let error = refused(&fx.submit(), "attempt_not_running", 3);
+        assert_eq!(error["details"]["status"], "ended");
+        assert_eq!(error["details"]["cause"], "timed_out");
+    }
+
+    // Merging, but HEAD is not what was submitted: the HEAD moved after the submit.
+    {
+        let fx = git_fixture(&[]);
+        fx.commit("a.txt", "a\n");
+        fx.submit().ok();
+        fx.commit("b.txt", "b\n");
+        refused(&fx.submit(), "attempt_not_running", 3);
+    }
+
+    // Starting: the Worker has not been started yet.
+    let fx = git_fixture(&[]);
+    let web = fx.attempt_as("web", "starting");
+    fx.commit_in(&web, "a.txt", "a\n");
+    let run = fx.fx.cpd_in(&web, &["attempt", "submit", "web-a1", "--plan", PLAN]);
+    assert_eq!(refused(&run, "attempt_not_running", 3)["details"]["status"], "starting");
+}
+
+#[test]
 fn submit_refuses_a_caller_outside_the_worktree_or_off_the_branch() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     fx.commit("a.txt", "a\n");
-    let error = refused(&fx.submit_in(fx.env.root()), "wrong_worktree", 3);
+    let error = refused(&fx.submit_in(fx.fx.env.root()), "wrong_worktree", 3);
     assert_eq!(error["details"]["branch"], "cpd/pay--api-a1");
     refused(&fx.submit_in(&fx.lead), "wrong_worktree", 3);
     refused(&fx.submit_in(&fx.repo), "wrong_worktree", 3);
 
-    fx.env.git(&fx.work, &["checkout", "-q", "-b", "other"]);
+    fx.fx.git(&fx.work, &["checkout", "-q", "-b", "other"]);
     refused(&fx.submit(), "wrong_worktree", 3);
     assert_eq!(fx.status(), "running");
 }
 
 #[test]
 fn submit_refuses_a_dirty_tree_untracked_files_included() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     fx.commit("a.txt", "a\n");
     fs::write(fx.work.join("scratch.txt"), "x").unwrap();
     let error = refused(&fx.submit(), "dirty_tree", 3);
@@ -395,16 +571,16 @@ fn submit_refuses_a_dirty_tree_untracked_files_included() {
 
 #[test]
 fn submit_refuses_an_attempt_with_no_commit_on_top_of_the_base() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     let error = refused(&fx.submit(), "no_commits", 3);
-    assert_eq!(error["details"]["base_sha"], fx.env.git(&fx.work, &["rev-parse", "HEAD"]));
+    assert_eq!(error["details"]["base_sha"], fx.fx.git(&fx.work, &["rev-parse", "HEAD"]));
     assert_eq!(fx.status(), "running");
 }
 
 #[test]
 fn submit_refuses_a_diff_that_touches_protected_paths() {
-    let fx = fixture(&[("verify.sh", "#!/bin/sh\n")]);
-    fx.env.repo_policy("acme", "pay", "[protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n");
+    let fx = git_fixture(&[("verify.sh", "#!/bin/sh\n")]);
+    fx.fx.env.repo_policy("acme", "pay", "[protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n");
     fx.commit("src/fine.rs", "ok\n");
     fx.commit("verify.sh", "#!/bin/sh\nexit 0\n");
     fx.commit("scripts/ci/run.sh", "x\n");
@@ -414,6 +590,24 @@ fn submit_refuses_a_diff_that_touches_protected_paths() {
     paths.sort();
     assert_eq!(paths, [".cpd/note", "scripts/ci/run.sh", "verify.sh"]);
     assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn submit_takes_the_protected_list_from_the_policy_of_the_jobs_pr() {
+    let fx = git_fixture(&[]);
+    // Only the web PR's repo policy protects verify.sh.
+    let web = fx.add_pr("web");
+    fx.fx.env.repo_policy("acme", "web", "[protected]\npaths = [\"verify.sh\"]\n");
+    let ui = fx.attempt_in(&web, "ui", "running", "work");
+    fx.commit_in(&ui, "verify.sh", "exit 0\n");
+    fx.commit_in(&fx.work, "verify.sh", "exit 0\n");
+
+    let error = refused(&fx.fx.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]), "gate_tampered", 3);
+    assert_eq!(error["details"]["paths"], json!(["verify.sh"]));
+    assert_eq!(fx.fx.env.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
+    // The first PR's repo policy has no such list: the same file is fine there.
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
 }
 
 #[test]
@@ -466,13 +660,13 @@ fn submit_refuses_a_failed_quick_check_with_its_tail_and_log() {
 
 #[test]
 fn submit_checks_its_arguments_and_selection() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     fx.commit("a.txt", "a\n");
-    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a1"]), "plan_required", 2);
-    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "Bad_Id", "--plan", PLAN]), "invalid_attempt_id", 2);
-    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a9", "--plan", PLAN]), "attempt_not_found", 4);
-    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
-    refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit"]), "usage", 2);
+    refused(&fx.fx.cpd_in(&fx.work, &["attempt", "submit", "api-a1"]), "plan_required", 2);
+    refused(&fx.fx.cpd_in(&fx.work, &["attempt", "submit", "Bad_Id", "--plan", PLAN]), "invalid_attempt_id", 2);
+    refused(&fx.fx.cpd_in(&fx.work, &["attempt", "submit", "api-a9", "--plan", PLAN]), "attempt_not_found", 4);
+    refused(&fx.fx.cpd_in(&fx.work, &["attempt", "submit", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
+    refused(&fx.fx.cpd_in(&fx.work, &["attempt", "submit"]), "usage", 2);
     assert_eq!(fx.status(), "running");
 }
 
@@ -618,17 +812,9 @@ fn an_impl_job_whose_build_fails_is_refused_tests_build_failed() {
     assert_eq!(fx.seen("ran.txt"), None);
 }
 
-impl Fx {
-    /// The `txn` of each `attempt-status` Event, oldest first, comma-joined.
-    fn status_txns(&self) -> Vec<i64> {
-        let text: String = self.env.query("SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' ORDER BY rowid)");
-        text.split(',').map(|t| t.parse().unwrap()).collect()
-    }
-}
-
 #[test]
 fn a_work_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
-    let fx = fixture(&[]);
+    let fx = git_fixture(&[]);
     fx.commit("a.txt", "x\n");
     fx.submit().ok();
     assert_eq!(fx.statuses(), [span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
@@ -649,7 +835,7 @@ fn a_refused_quick_check_ends_the_checks_span_and_leaves_the_attempt_running() {
 /// Guards the rule that a review Job has no checks and no span (green today).
 #[test]
 fn a_review_jobs_submit_records_no_check_span() {
-    let fx = fixture_kind(&[], "review", None);
+    let fx = git_fixture_kind(&[], "review");
     let findings = fx.home.root().join("run/pay/reviews/api.md");
     fs::create_dir_all(findings.parent().unwrap()).unwrap();
     fs::write(&findings, "- one finding\n").unwrap();

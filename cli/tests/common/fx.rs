@@ -42,7 +42,6 @@ use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::host::spawn::{Launch, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::{Fakes, Ports};
-use time::OffsetDateTime;
 
 use super::{Run, TestEnv};
 
