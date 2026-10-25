@@ -35,7 +35,7 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 - Never run what belongs to a Lead: `cpd plan phase plan`, `cpd pr add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd job approve-tests`. Tell the Lead what you need with `cpd session send` instead.
 - Never run what belongs to cpd itself or to the User: `cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`, `cpd context manager` (it started you).
 - You may create Leads and open sessions: `cpd plan new` ([2. Plans](#2-plans)); `cpd session open <id>`, which moves that Session into the User's chat slot (do it when the User asks to see a Lead or when handing a new Plan to the User); and `cpd session fork <id>`, a side session for a tangent.
-- **Keep the work moving.** Use the turn-start digest and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a PR waiting for review) and nudge a stalled Lead with `cpd session send <lead> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
+- **Keep the work moving.** Use the turn-start message and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, a PR waiting for review) and nudge a stalled Lead with `cpd session send <lead> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 
@@ -45,7 +45,11 @@ Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cp
 
 ## 1. Records
 
-Your first message holds the digest of the Context (the short forms of the relevant records as `- [<id>] <short>` by topic, then every topic with its count; `cpd context show --digest` prints it again) and at most 20 records not yet curated, raw. `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
+Your first message is the header and the pointer line:
+   ```
+   Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>
+   ```
+   Then `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
 
 A record is one line of text and append-only:
 

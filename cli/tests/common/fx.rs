@@ -43,7 +43,6 @@ use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::host::spawn::{FakeSpawn, Launch, Pid, Signal, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::{Fakes, Ports};
-use time::OffsetDateTime;
 
 use super::{Run, TestEnv};
 
@@ -427,6 +426,52 @@ impl Fx {
         }
     }
 
+    /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
+    /// wrapper reads the ambient ports (`git::run`, `tamper`, `sync_lead`, the gate). A thread `f` spawns captures
+    /// `fx.fakes.ports.clone()` and scopes it itself.
+    pub fn scoped<R>(&self, f: impl FnOnce() -> R) -> R {
+        Ports::scope(&self.fakes.ports, f)
+    }
+
+    /// Makes a process migrate the store, as `Store::open` of another `cpd` does (contract §1.4): `locks/store.lock` is
+    /// held (a real `flock` on a file of the env, which conflicts with the product's own open of it in this process) with
+    /// the marker of a live migrating pid (running in the `FakeSpawn`), until `hold` of the `ManualClock`'s time has
+    /// passed: the first `sleep` or `now` after that releases it, so a waiter's retries are what pass the time. Replaces
+    /// the `Ports`' clock by one that does it; `fakes.clock` is still the `ManualClock` under it (`elapsed`, `naps`).
+    /// The lock drops with the `Fx`. Only on [`Fx::with_ports`]; once.
+    pub fn hold_store_migration(&mut self, hold: Duration) {
+        assert!(self.on_fake_ports && self.migration.is_none(), "hold_store_migration: on an Fx::with_ports, once");
+        let locks = self.env.cpd_home().join("locks");
+        std::fs::create_dir_all(&locks).expect("create the locks directory");
+        let file = std::fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).expect("open store.lock");
+        let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).expect("take store.lock");
+        let pid = self.fakes.spawn.spawn(&Launch { program: "cpd".to_owned(), args: vec!["migrating-holder".to_owned()], ..Launch::default() }).expect("the FakeSpawn starts it");
+        // `started_unix_ms` at the end of time: the waiter's `migrated_for` is `now - started`, saturating, so it is 0
+        // and the ceiling (`MIGRATION_WAIT_CEILING`, tested in `store/lock.rs`) never fires while the test reads no wall clock.
+        let marker = serde_json::json!({"migrating": true, "pid": pid.0, "started_unix_ms": u64::MAX, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+        lock.write_all(marker.to_string().as_bytes()).expect("write the marker");
+        let migration = Arc::new(Migration { lock: Mutex::new(Some(lock)), release_at: hold, clock: self.fakes.clock.clone() });
+        self.fakes.ports.clock = Arc::new(MigrationClock(migration.clone()));
+        self.migration = Some(migration);
+    }
+
+    /// Runs `hook` at every `sleep` of the `Ports`' clock, on the thread that sleeps, in place of what another process
+    /// does while a command waits (an `ask` waits for its `answer`): the `ManualClock` advances by the nap as usual, then
+    /// the hook runs with a [`Nap`] that runs `cpd` on the ports as they were before the hook's clock (a `sleep` of that
+    /// command runs no hook). Replaces the hook of an earlier call; it stays until replaced. Only on [`Fx::with_ports`].
+    pub fn on_nap(&mut self, hook: impl FnMut(&Nap) + Send + 'static) {
+        assert!(self.on_fake_ports, "on_nap: on an Fx::with_ports");
+        let hook: Hook = Box::new(hook);
+        match &self.nap {
+            Some(clock) => *clock.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook),
+            None => {
+                let nap = Nap { ports: self.fakes.ports.clone() };
+                let clock = Arc::new(NapClock { inner: self.fakes.ports.clock.clone(), nap, hook: Mutex::new(Some(hook)) });
+                self.fakes.ports.clock = clock.clone();
+                self.nap = Some(clock);
+            }
+        }
+    }
     /// The `i`th `Launch` the `FakeSpawn` recorded (from 0, in order).
     pub fn take_launch(&self, i: usize) -> Launch {
         let launches = self.fakes.spawn.launches();
@@ -604,6 +649,32 @@ impl Fx {
     pub fn local_origin(&self, repo: &Path, bare: &Path) {
         let url = self.git(repo, &["config", "--get", "remote.origin.url"]);
         self.git(repo, &["config", &format!("url.{}.insteadOf", bare.display()), &url]);
+    }
+
+    /// Removes `origin` from a repo whose `origin` is only the GitHub URL [`Fx::keyed_repo`] gave it (no
+    /// [`Fx::local_origin`]): for what runs after `pr add` and must find no remote, as before keying.
+    pub fn drop_unreachable_origin(&self, repo: &Path) {
+        // Exit 1 and no output when nothing matches.
+        let rewritten = self.run_tool("git", Some(repo), &[], &["config", "--get-regexp", r"^url\..*\.insteadof$"]);
+        if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
+            self.git(repo, &["remote", "remove", "origin"]);
+        }
+    }
+
+    /// `TestEnv::outline_for_review` through `cpd` in-process: gives `plan` an outline whose `done_when` covers every PR
+    /// with a draft Job, which a Plan review needs (commands.md §4.6, §4.13; hs-d502).
+    pub fn outline_for_review(&self, plan: &str) {
+        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        let mut done_when = serde_json::Map::new();
+        for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
+            if job["status"] == "draft" {
+                done_when.insert(job["pr"].as_str().expect("a Job's PR").to_owned(), serde_json::json!(["Done"]));
+            }
+        }
+        let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
+        let path = self.env.root().join(format!("outline-{plan}.json"));
+        std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Writes `path` (relative to `dir`) with `text` and commits it with `message`.
