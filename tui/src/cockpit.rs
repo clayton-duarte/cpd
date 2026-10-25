@@ -289,11 +289,11 @@ fn unexpected_listing(tmux: &Tmux, line: &str) -> CpdError {
 }
 
 /// The tree's width on reset.
-const TREE_WIDTH: &str = "25%";
+const TREE_WIDTH: &str = "20%";
 /// The widgets' width on reset.
-const WIDGETS_WIDTH: &str = "25%";
+const WIDGETS_WIDTH: &str = "30%";
 /// The Plan view's height on reset.
-const PLAN_HEIGHT: &str = "25%";
+const PLAN_HEIGHT: &str = "30%";
 /// The Worker pane's width on reset.
 const WORKER_WIDTH: &str = "30%";
 
@@ -678,7 +678,7 @@ mod tests {
     fn the_reset_applies_the_sizes_in_order() {
         // %0 tree, %1 chat, %2 widgets, %3 plan
         let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
-        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 25%", "resize-pane -t %2 -x 25%", "resize-pane -t %3 -y 25%"]);
+        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 30%", "resize-pane -t %3 -y 30%"]);
     }
 
     #[test]
