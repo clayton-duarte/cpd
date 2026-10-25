@@ -214,8 +214,14 @@ impl Live {
             }
         });
         assert_eq!(ran.exit, 0, "{}", ran.stdout);
-        if did.is_none() { eprintln!("DEBUG {}\n{}", self.attempt(&id), self.events(&id).iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n")); }
         (self.attempt(&id), did.expect("the driver napped: the Worker ran"))
+    }
+
+    /// The Worker's pi ends without submitting again: its window is gone from the fake server.
+    fn end_the_worker(&self) {
+        for pane in self.fx.panes().iter().filter(|p| p.window_name != "main") {
+            assert!(self.fx.tmux(&["kill-window", "-t", &pane.window]).status.success());
+        }
     }
 
     /// `job dispatch <key>`: the driver's `Launch` is recorded, nothing is started.
@@ -228,7 +234,6 @@ impl Live {
 fn submit(live: &Live, id: &str) -> Value {
     // The environment of the Worker's window: its Plan and its Attempt.
     let r = live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json();
-    eprintln!("DEBUGSUBMIT {r}");
     r
 }
 
@@ -237,20 +242,20 @@ fn submit_only(live: &Live, id: &str) -> Value {
     submit(live, id)
 }
 
-/// A Worker that submits, is refused while the base conflicts, merges the base, resolves it and submits again: `(refused, submitted)`.
+/// A Worker that submits, is refused while the base conflicts, merges the base resolving the conflict on its own side and submits
+/// again: `(refused, submitted)`. (`FakeGit` has no `MERGE_HEAD`: a conflicted merge cannot be concluded by a `commit`, so the Worker
+/// resolves in the merge, with `-X ours`.)
 fn merge_the_base(live: &Live, id: &str) -> (Value, Value) {
     let refused = submit(live, id);
     let wt = live.worktree(id);
     live.fx.git(&wt, &["fetch", "-q", "origin", "main"]);
-    let merge = live.fx.git_try(&wt, &["merge", "--no-edit", "origin/main"]);
-    assert_eq!(merge.status.code(), Some(1), "the base conflicts: {merge:?}");
-    live.commit(&wt, "README.md", "resolved\n", "merge the base");
+    live.fx.git(&wt, &["merge", "-q", "--no-edit", "-X", "ours", "origin/main"]);
     (refused, submit(live, id))
 }
 
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
 /// `pr.gate = "local"` with a `pre-merge` hook that notes the slot and the commit it gates, Job `api` merged (its commit `api.txt` is on
-/// the Lead Branch, **not pushed**), a fake `gh` that creates pull request 812, and the PR's `open` Job `open-repo` queued.
+/// the Lead Branch, **not pushed**), and the PR's `open` Job `open-repo` queued. `gh` is the test's to script.
 fn open_live() -> Live {
     let live = live("");
     live.fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
@@ -259,7 +264,6 @@ fn open_live() -> Live {
         "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{merged}' WHERE key = 'api';"
     ));
     live.hooks("[pre-merge]\ngate = \"make test\"\n");
-    live.gh_creates();
     live.add_cpd_job("open-repo", "open");
     live
 }
@@ -283,6 +287,7 @@ fn open_pr_live() -> Live {
 #[test]
 fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_the_pull_request() {
     let live = open_live();
+    live.gh_creates();
     let tip = live.lead_sha();
     // The base moved, without a conflict: that is no reason to merge it.
     let base = live.advance_base("base.txt", "base\n");
@@ -333,6 +338,7 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
 #[test]
 fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_attempt_merging() {
     let live = open_live();
+    live.gh_creates();
     live.run_job("open-repo", submit_only);
     let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
     let statuses: Vec<Value> = live.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
@@ -350,6 +356,7 @@ fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_
 #[test]
 fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker_merges_the_base() {
     let live = open_live();
+    live.gh_creates();
     // The Lead Branch changed README.md, and so did the base.
     live.commit(&live.lead, "README.md", "mine\n", "mine");
     let tip = live.lead_sha();
@@ -370,9 +377,9 @@ fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker
     assert_eq!(submitted["ok"], true, "{submitted}");
     let new = live.lead_sha();
     assert_ne!(new, tip);
-    assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}^1")]), tip);
-    assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}^2")]), base);
-    assert_eq!(fs::read_to_string(live.lead.join("README.md")).unwrap(), "resolved\n");
+    assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}~1")]), tip);
+    assert!(live.fx.git_try(&live.repo, &["merge-base", "--is-ancestor", &base, &new]).status.success(), "the merge commit holds the base");
+    assert_eq!(fs::read_to_string(live.lead.join("README.md")).unwrap(), "mine\n");
     assert_eq!(live.gate_runs(), [format!("slot=0 head={new}")], "the Gate ran once, on the resolved head");
     assert_eq!(live.remote("cpd/pay"), new);
     assert_eq!(live.gh_pr_calls().iter().filter(|c| c[1] == "create").count(), 1);
@@ -385,11 +392,17 @@ fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker
 #[test]
 fn an_open_jobs_gate_failure_is_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
     let live = open_live();
+    live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
     *live.hooks.reply.lock().unwrap() = Reply::exit(1, "the gate says no\n", "");
     let before = live.remote("cpd/pay");
 
-    let (attempt, refused) = live.run_job("open-repo", submit_only);
+    // The Worker does not fix it: its pi ends.
+    let (attempt, refused) = live.run_job("open-repo", |live, id| {
+        let refused = submit(live, id);
+        live.end_the_worker();
+        refused
+    });
 
     assert_eq!((&refused["ok"], &refused["error"]["code"]), (&json!(false), &json!("gate_failed")), "{refused}");
     assert!(refused["error"]["details"]["tail"].as_str().unwrap().contains("the gate says no"), "{refused}");
@@ -437,7 +450,7 @@ fn an_update_job_with_a_conflicting_base_is_refused_until_the_worker_merges_it_a
     assert_eq!((&refused["error"]["code"], &refused["error"]["details"]["files"], &refused["error"]["details"]["base_sha"]), (&json!("base_conflict"), &json!(["README.md"]), &json!(base)), "{refused}");
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     let new = live.lead_sha();
-    assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}^1")]), tip);
+    assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}~1")]), tip);
     assert_eq!(live.remote("cpd/pay"), new, "its merge pushes the resolution");
     assert_eq!(live.gate_runs(), [format!("slot=0 head={new}")]);
     assert!(live.gh_pr_calls().is_empty(), "the pull request exists: {:?}", live.gh_pr_calls());
