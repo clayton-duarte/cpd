@@ -4,7 +4,9 @@
 use crate::common;
 
 use crate::guards::{test_files, test_lines_with};
+use common::fx::Fx;
 use common::{SLEEP_SECONDS, TestEnv};
+use cpd_core::clock::ManualClock;
 
 #[test]
 fn commands_get_an_isolated_environment() {
@@ -459,29 +461,14 @@ impl Drop for Sweep {
 
 // ---- hygiene.md 5b: an env is made under the run's TMPDIR ----
 
-const ENVS_HELPER_GATE: &str = "CPD_HARNESS_ENVS_HELPER";
-
-/// Not a test of its own: makes an env and prints its directory. Does nothing unless gated.
-#[test]
-fn envs_helper() {
-    if std::env::var_os(ENVS_HELPER_GATE).is_none() {
-        return;
-    }
-    let env = TestEnv::new();
-    println!();
-    println!("DIR {}", env.root().display());
-    println!("READY");
-}
-
 #[test]
 fn an_env_is_made_under_the_runs_tmpdir() {
+    // In this process, under the `Fx`'s lock: `TestEnv` reads the `TMPDIR` of its process, which the `Fx` sets for the
+    // one call (no helper process whose environment the test sets).
+    let fx = Fx::new();
     let tmp = tempfile::tempdir().unwrap();
-    let mut helper = start_helper("harness::envs_helper", ENVS_HELPER_GATE, &[("TMPDIR", tmp.path().as_os_str())]);
-    let dirs = helper_lines(&mut helper, "DIR");
-    assert_eq!(dirs.len(), 1, "the helper printed no DIR");
-    let dir = std::path::PathBuf::from(&dirs[0]);
-    let _gone = DirsOnDrop(vec![dir.clone()]);
-    assert_eq!(dir.parent(), Some(tmp.path()), "the env's directory is not under the TMPDIR of its process");
+    let env = fx.with_vars(&[("TMPDIR", tmp.path().to_str().unwrap())], TestEnv::bare);
+    assert_eq!(env.root().parent(), Some(tmp.path()), "the env's directory is not under the TMPDIR of its process");
 }
 
 #[test]
@@ -559,51 +546,62 @@ fn refused_fails_on_another_code_or_exit() {
 
 #[test]
 fn wait_until_returns_once_ready_and_names_what_it_waited_for_on_timeout() {
+    // On a `ManualClock`: the polls and the timeout are virtual time, no wait.
+    let clock = ManualClock::new();
     let mut n = 0;
-    common::wait_until("three polls", || {
+    common::wait_until_on(&clock, "three polls", common::WAIT, || {
         n += 1;
         n == 3
     });
-    let caught = std::panic::catch_unwind(|| common::wait_until_for("never", std::time::Duration::from_millis(150), || false)).unwrap_err();
+    assert_eq!(clock.naps(), [common::POLL; 2], "three looks are two polls");
+    let timeout = std::time::Duration::from_millis(150);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| common::wait_until_on(&clock, "never", timeout, || false))).unwrap_err();
     assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for never")));
+    assert!(clock.elapsed() >= 2 * common::POLL + timeout, "it gave up before its timeout: {:?}", clock.elapsed());
 }
 
 #[test]
 fn wait_some_says_the_last_state_on_timeout() {
+    let clock = ManualClock::new();
     let mut n = 0;
-    let got = common::wait_some("a value", std::time::Duration::from_secs(5), || {
+    let got = common::wait_some_on(&clock, "a value", std::time::Duration::from_secs(5), || {
         n += 1;
         if n < 3 { Err(format!("poll {n}")) } else { Ok(n) }
     });
     assert_eq!(got, 3);
-    let caught = std::panic::catch_unwind(|| common::wait_some::<()>("x", std::time::Duration::from_millis(150), || Err("stuck".into()))).unwrap_err();
+    let timeout = std::time::Duration::from_millis(150);
+    let caught =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| common::wait_some_on::<()>(&clock, "x", timeout, || Err("stuck".into())))).unwrap_err();
     assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for x: stuck")));
 }
 
 #[test]
 fn sql_writes_the_envs_store() {
-    let env = TestEnv::new();
-    env.write_tmux_config("");
-    env.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
-    env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
-    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
+    let fx = Fx::new();
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
+    fx.env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
+    assert_eq!(fx.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
 }
 
 #[test]
 fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
-    let a = TestEnv::new();
-    let b = TestEnv::new();
-    for env in [&a, &b] {
+    let fx = Fx::new();
+    let (a, b) = (&fx.env, fx.another_env());
+    for env in [a, &b] {
         let store = env.store();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     }
     a.write_tmux_config("");
     b.write_tmux_config("");
-    a.cpd(&["context", "new", "c1", "--title", "Only in a", "--owner", "acme"]).ok();
-    assert_eq!(a.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
-    assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
+    // `b`'s commands run in this process too, with `b`'s `$CPD_HOME`.
+    let in_b = |args: &[&str]| fx.cpd_with(b.root(), args, &[("CPD_HOME", b.cpd_home().to_str().unwrap())]);
+    fx.cpd(&["context", "new", "c1", "--title", "Only in a", "--owner", "acme"]).ok();
+    assert_eq!(fx.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
+    assert_eq!(in_b(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
 
-    let empty = TestEnv::empty();
+    // `TestEnv::empty` without its reaper process: the same empty `$CPD_HOME`.
+    let empty = TestEnv::bare();
     // main's harness gives every env the owner policy `acme` (policy/owners/acme.toml): no store is what makes it empty.
     assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
 }
