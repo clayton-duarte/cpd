@@ -202,6 +202,17 @@ impl Handler for VersionRoute {
     }
 }
 
+/// The path a wrapper runs from in `fx`'s env: an empty file `installed-bin/cpd` that is never run, made the first time
+/// (a wrapper that finds it written again takes it for a new install and reloads).
+pub fn installed_cpd(fx: &Fx) -> PathBuf {
+    let installed = fx.env.root().join("installed-bin/cpd");
+    if !installed.exists() {
+        std::fs::create_dir_all(installed.parent().expect("a parent")).expect("create installed-bin");
+        std::fs::write(&installed, "").expect("write the installed cpd");
+    }
+    installed
+}
+
 /// The pane of a Lead's wrapper: its screen and its `Spawn`, the installed `cpd`'s verdict and the process's stdin.
 pub struct Pane {
     /// The pids and signals of the processes the wrapper starts and signals.

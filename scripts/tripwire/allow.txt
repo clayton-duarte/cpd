@@ -20,9 +20,7 @@ cpd::session pill_lines::  # m-session: session tests on a real tmux server
 cpd::session plannotator_env::  # m-session: session tests on a real tmux server
 cpd::session session_asleep::  # m-session: session tests on a real tmux server
 cpd::session session_first_message::  # m-session: session tests on a real tmux server
-cpd::session session_retier::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
-cpd::session session::  # m-session: session tests on a real tmux server
 cpd::flow ask::  # m-flow: flow commands that may reach a real tmux
 cpd::flow attempt::  # m-flow: flow commands that may reach a real tmux
 cpd::flow config::  # m-flow: flow commands that may reach a real tmux

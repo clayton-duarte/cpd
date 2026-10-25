@@ -1,15 +1,16 @@
 //! `cpd session retier` (commands.md §10.15, contract §2.2 Session `tier`, §5.2 `session-retiered`, §6.5 "A Session's
-//! Tier while it runs"; hs-d506), run as the built binary, and a relaunch (commands.md §10.8) on the row's current Tier.
+//! Tier while it runs"; hs-d506), and a relaunch (commands.md §10.8) on the row's current Tier.
 //!
 //! Every test here fails before the command exists, for the reason its comment gives.
 //!
-//! The store-only tests run the command tree in this process (`Fx`). The two relaunch tests stay on `TestEnv`: they
-//! run `cpd session open` in a real tmux cockpit with a fake `pi` and `wait_until`.
+//! Every test runs the command tree in this process (`Fx`). The two relaunch tests run `cpd session open` on the fake
+//! tmux, and the `session run` of the pane it made on a thread of the test, on virtual time (`common::wrapper`): the pi
+//! it starts is a pid of the `FakeSpawn`, whose `Launch` is what they read.
 
 use crate::common::fx::Fx;
-use crate::common::{SLEEP_SECONDS, TestEnv, refused, wait_until};
+use crate::common::{TestEnv, refused};
 use crate::common::session::{events, home, setup, show};
-use crate::session::{cockpit, fake_pi, pi_calls_with};
+use crate::common::wrapper::{Pane, installed_cpd};
 
 use std::fs;
 
@@ -199,20 +200,21 @@ fn retier_refuses_what_it_may_not_touch_and_writes_nothing() {
 /// Fails now: the resume argv is `--session <file>` with no `--model`.
 #[test]
 fn a_resumed_lead_runs_on_the_rows_current_tier() {
-    let env = TestEnv::new();
-    fixture(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
-    cockpit(&env);
-    let sessions = env.home().join(".pi/agent/sessions/g");
+    let fx = Fx::with_ports();
+    fixture(&fx.env);
+    fx.cockpit();
+    let sessions = fx.env.home().join(".pi/agent/sessions/g");
     fs::create_dir_all(&sessions).unwrap();
     let file = sessions.join("2026_lead1.jsonl");
     fs::write(&file, "{\"type\":\"session\"}\n").unwrap();
-    env.sql("UPDATE sessions SET tier = 'O2' WHERE id = 'lead1'");
+    fx.env.sql("UPDATE sessions SET tier = 'O2' WHERE id = 'lead1'");
 
-    env.cpd(&["session", "open", LEAD1]).ok();
-    wait_until("the resume", || !pi_calls_with(&env, "--session").is_empty());
-    let argv = &pi_calls_with(&env, "--session")[0];
+    let opened = fx.cpd(&["session", "open", LEAD1]).ok();
+    let pane = Pane::at(&fx, opened["pane"].as_str().unwrap(), &installed_cpd(&fx));
+    let mut wrapper = pane.run(&["session", "run", LEAD1]);
+    wrapper.until("the resume", || !pane.spawn.pis().is_empty());
+    let argv = &pane.spawn.pis()[0].args;
+    assert!(argv.iter().any(|a| a == "--session"), "a resume: {argv:?}");
     let at = |flag: &str| argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag} in {argv:?}"));
     assert_eq!(argv[at("--model") + 1], "p/opus:medium", "{argv:?}");
     assert_eq!(argv[at("--session") + 1], file.display().to_string());
@@ -224,18 +226,19 @@ fn a_resumed_lead_runs_on_the_rows_current_tier() {
 /// Fails now: `usage` (no `retier`), exit 2.
 #[test]
 fn a_fresh_lead_started_after_a_retier_runs_on_the_new_tier() {
-    let env = TestEnv::new();
-    fixture(&env);
-    env.fake_cpd_views();
-    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
-    cockpit(&env);
-    env.cpd(&["session", "retier", LEAD1]).ok();
+    let fx = Fx::with_ports();
+    fixture(&fx.env);
+    fx.cockpit();
+    fx.cpd(&["session", "retier", LEAD1]).ok();
 
-    env.cpd(&["session", "open", LEAD1]).ok();
-    wait_until("lead1's pi", || !pi_calls_with(&env, "--session-id").is_empty());
-    let argv = &pi_calls_with(&env, "--session-id")[0];
+    let opened = fx.cpd(&["session", "open", LEAD1]).ok();
+    let pane = Pane::at(&fx, opened["pane"].as_str().unwrap(), &installed_cpd(&fx));
+    let mut wrapper = pane.run(&["session", "run", LEAD1]);
+    wrapper.until("lead1's pi", || !pane.spawn.pis().is_empty());
+    let argv = &pane.spawn.pis()[0].args;
+    assert!(argv.iter().any(|a| a == "--session-id"), "a fresh start: {argv:?}");
     let at = argv.iter().position(|a| a == "--model").unwrap_or_else(|| panic!("no --model in {argv:?}"));
     assert_eq!(argv[at + 1], "p/opus:medium", "{argv:?}");
-    let message = home(&env).lead_message(&cpd_core::ids::PlanId::parse("pay").unwrap());
+    let message = home(&fx.env).lead_message(&cpd_core::ids::PlanId::parse("pay").unwrap());
     assert!(argv.ends_with(&["--".to_owned(), format!("@{}", message.display())]), "{argv:?}");
 }
