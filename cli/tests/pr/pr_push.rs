@@ -1,7 +1,9 @@
 //! `pr push` (commands.md §9.9, contract §7.6): the built binary against a temporary
 //! repo with a bare `origin` and a Plan written straight into the database. It takes
 //! no lock (hs-d243): its Gate runs in a gate worktree of its own, and a Job merges
-//! into the PR while it runs.
+//! into the PR while it runs. `pr push` is a repair: it runs `gate.pr` (the repo's
+//! `pre-merge`) in the Lead worktree at G (hs-d679); the merge itself, in its Attempt
+//! worktree, runs `gate.merge` (the repo's `pre-commit`).
 
 use crate::common;
 
@@ -34,7 +36,9 @@ struct Fx {
 
 fn fx(status: &str) -> Fx {
     let env = TestEnv::new();
-    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    // The repair `pr push` runs `gate.pr` (the repo's `pre-merge`); the Job merge runs `gate.merge`
+    // (the repo's `pre-commit`), which this repo does not set. Contract §7.4 step 6, §7.6 (hs-d679).
+    env.owner_policy("acme", "[gate]\nmerge = \"none\"\npr = \"local\"\n");
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // The PR is of the repo `acme/pay` (its `name`): its policy file is required, empty unless a test sets hooks.
     env.repo_policy("acme", "pay", "");

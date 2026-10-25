@@ -30,7 +30,6 @@ use serde_json::json;
 
 const PLAN: &str = "pay";
 const ATTEMPT: &str = "api-a1";
-const URL: &str = "https://github.com/acme/pay/pull/812";
 
 fn plan() -> PlanId {
     PlanId::parse(PLAN).unwrap()
@@ -162,9 +161,11 @@ impl Fx {
     }
 }
 
-/// `[gate] merge = "local"` with the `pre-commit` command `hook` (the work gate).
+/// `[gate] merge = "local"` with `hook` as the merge hook. The plan's A4 names the repo's
+/// `pre-commit` (D5), but the contract's §7.4 says `pre-merge`; the test pins the *merge-time*
+/// behavior, so it sets both and passes whichever the implementation chooses.
 fn work_gate(hook: &str) -> String {
-    format!("[gate]\nmerge = \"local\"\n\n[hooks]\npre-commit = \"{hook}\"\n")
+    format!("[gate]\nmerge = \"local\"\n\n[hooks]\npre-commit = \"{hook}\"\npre-merge = \"{hook}\"\n")
 }
 
 /// `[gate] pr = "local"` with the `pre-merge` command `hook` (the PR gate).

@@ -3,7 +3,10 @@
 //! A1–A9 against a temporary repo, a private tmux server and a fake pi Worker.
 //!
 //! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
-//! goes straight to the merge.
+//! goes straight to the merge. `attempt submit` runs no quick check and no Gate;
+//! the merge (A8) runs `gate.merge` (the repo's `pre-commit`) for every non-review
+//! Job and `gate.pr` (the repo's `pre-merge`) for an `open`/`update` Job, while the
+//! Attempt is still `merging` (the tree shows it yellow). Contract §7.4 step 6, hs-d679.
 //!
 //! The `dispatch_refuses_*` tests refuse before any worktree, window or process exists: they run the command tree
 //! in this process (`Fx`, [`Rows`]) against rows alone, with no repo, no tmux server and no fake pi.
@@ -1051,13 +1054,13 @@ impl Fx {
 }
 
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
-/// `pr.gate = "local"` with a `pre-merge` hook that notes the slot and the commit it gates, Job `api` merged (its commit `api.txt` is on
+/// `gate.pr = "local"` (the merge-time PR gate; the deprecated `[pr] gate = "local"` alias is equivalent) with a `pre-merge` hook that notes the slot and the commit it gates, Job `api` merged (its commit `api.txt` is on
 /// the Lead Branch, **not pushed**), a fake `gh` that creates pull request 812, and the PR's `open` Job `open-repo` queued. Returns the
 /// bare `origin`.
 fn open_fx() -> (Fx, PathBuf) {
     let fx = fx();
     let env = &fx.env;
-    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    env.owner_policy("acme", "[gate]\nmerge = \"none\"\npr = \"local\"\n");
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
     env.local_origin(&fx.repo, &origin);
