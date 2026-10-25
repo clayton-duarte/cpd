@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::{self, Failed};
+use crate::host::runner::Runner;
 
 /// The fields an op call adds to the command's output.
 pub type Fields = Map<String, Value>;
@@ -98,6 +99,16 @@ pub fn get(vault: &str, item: &str, field: &str) -> Result<Fields, CpdError> {
     let out = run(&["item", "get", item, "--vault", vault, "--fields", &label, "--reveal"], None)?;
     let value = out.strip_suffix('\n').unwrap_or(&out);
     Ok(fields([("value", json!(value))]))
+}
+
+/// [`get`] on `runner`.
+pub fn get_with(_runner: &dyn Runner, _vault: &str, _item: &str, _field: &str) -> Result<Fields, CpdError> {
+    todo!()
+}
+
+/// [`list`] on `runner`.
+pub fn list_with(_runner: &dyn Runner, _vault: &str) -> Result<Fields, CpdError> {
+    todo!()
 }
 
 /// `op item list --vault <vault> --format json`: `{items: [{id, title}]}`.

@@ -26,6 +26,8 @@ use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::runner::Runner;
+use cpd_core::config::PiInstall;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -125,6 +127,17 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
         let _ = tx.send(answer);
     });
     Ok(rx)
+}
+
+/// [`start`] on `runner`, with pi located as `pi` and pi's Node `node`.
+#[allow(dead_code)] // a stub until the seam lands
+pub(super) fn start_with(
+    _runner: std::sync::Arc<dyn Runner>,
+    _engine: &Engine,
+    _pi: &PiInstall,
+    _node: &std::path::Path,
+) -> Result<Receiver<Result<Value, Failure>>, Failure> {
+    todo!()
 }
 
 /// Writes the cache from the helper's answer, whole, by rename; returns how many posts it holds. An answer without

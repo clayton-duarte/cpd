@@ -26,6 +26,7 @@ use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
 use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::runner::Runner;
 use cpd_core::host::exe::started_as;
 use cpd_core::host::limit::limit;
 
@@ -265,6 +266,12 @@ fn poll(root: &Path) -> Result<Value, Failure> {
         Failed::Timeout(e) => Failure::from(&e),
     })?;
     printed(&out, &argv)
+}
+
+/// [`poll`] on `runner`, with `exe` the recorded path of cpd's own executable.
+#[allow(dead_code)] // a stub until the seam lands
+pub(super) fn poll_with(_runner: &dyn Runner, _exe: &Path, _root: &Path) -> Result<Value, Failure> {
+    todo!()
 }
 
 /// What a child printed: its success value (`ok` true, exit 0), or the failure it printed (`ok` false, with an

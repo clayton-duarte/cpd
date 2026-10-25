@@ -11,6 +11,7 @@ use serde_json::json;
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::deadline::{self, Failed};
+use crate::host::runner::Runner;
 
 /// A local git call's deadline (contract §7): a local repo answers in seconds.
 const LOCAL_DEADLINE: Duration = Duration::from_secs(60);
@@ -70,6 +71,11 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
         Some(code) => Ok(Out { code, stdout, stderr }),
         None => Err(failed(dir, args, "git was killed by a signal.".to_owned(), None, &stderr)),
     }
+}
+
+/// [`run`] on `runner`.
+pub fn run_with(_runner: &dyn Runner, _dir: &Path, _args: &[&str]) -> Result<Out, CpdError> {
+    todo!()
 }
 
 /// Like [`run`], but any non-zero exit is `git_failed` (with `argv`, `exit` and

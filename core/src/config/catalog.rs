@@ -18,6 +18,7 @@ use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::{self, Failed};
+use crate::host::runner::Runner;
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
@@ -100,6 +101,11 @@ pub fn node() -> PathBuf {
         .map(|d| d.join("pi-node").join("current").join("bin").join("node"))
         .filter(|p| p.is_file())
         .unwrap_or_else(|| PathBuf::from("node"))
+}
+
+/// [`read`] on `runner`.
+pub fn read_with(_runner: &dyn Runner, _pi: &PiInstall, _config: &Config, _deadline: Duration) -> Result<Catalog, CpdError> {
+    todo!()
 }
 
 fn catalog_failed(message: impl Into<String>) -> CpdError {

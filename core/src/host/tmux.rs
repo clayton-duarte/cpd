@@ -486,6 +486,11 @@ impl Tmux {
         Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None }
     }
 
+    /// This server, with every call run by `runner` instead of the real processes.
+    pub fn with_runner(self, _runner: std::sync::Arc<dyn super::runner::Runner>) -> Tmux {
+        todo!()
+    }
+
     pub fn socket(&self) -> &str {
         &self.socket
     }

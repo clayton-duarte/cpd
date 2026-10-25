@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::deadline::{self, Failed};
+use crate::host::runner::Runner;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -207,6 +208,11 @@ pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, C
     let stderr = String::from_utf8_lossy(&out.stderr);
     let reply: Value = serde_json::from_str(&stdout).map_err(|e| gh_failed(format!("gh api graphql printed unexpected JSON: {e}."), &stderr))?;
     parse_lookup(&reply, refs).map_err(|message| gh_failed(message, &stderr))
+}
+
+/// [`github_lookup`] on `runner`.
+pub fn github_lookup_with(_runner: &dyn Runner, _home: &CpdHome, _refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
+    todo!()
 }
 
 /// The reply of [`github_lookup`]; `Err` is the message of its `gh_failed`.

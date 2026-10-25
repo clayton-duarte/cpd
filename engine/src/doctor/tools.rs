@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use super::check::{Check, Severity};
 use cpd_core::config::catalog::node;
 use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::runner::Runner;
 
 /// A tool with its minimum, and the first version it is not allowed to be.
 struct Tool {
@@ -29,6 +30,24 @@ const TOOLS: [Tool; 4] = [
 /// The checks `git`, `tmux`, `pi`, `gh`, in that order.
 pub fn tools() -> Vec<Check> {
     TOOLS.iter().map(check).collect()
+}
+
+/// [`tools`] on `runner`.
+#[allow(dead_code)] // a stub until the seam lands
+pub fn tools_with(_runner: &dyn Runner) -> Vec<Check> {
+    todo!()
+}
+
+/// [`gh_auth`] on `runner`.
+#[allow(dead_code)] // a stub until the seam lands
+pub fn gh_auth_with(_runner: &dyn Runner) -> Check {
+    todo!()
+}
+
+/// [`pi_node`] on `runner`.
+#[allow(dead_code)] // a stub until the seam lands
+pub fn pi_node_with(_runner: &dyn Runner) -> Check {
+    todo!()
 }
 
 /// The first dotted number run of `parts` or more numbers in `text`, cut to

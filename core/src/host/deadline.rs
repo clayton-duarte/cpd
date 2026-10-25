@@ -83,7 +83,7 @@ fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: D
 
 /// The `tool_timeout` error (contract §1.2): `tool`, `argv`, `deadline_seconds`
 /// (an integer; a decimal only for a test's sub-second override).
-fn timeout(tool: &str, argv: Vec<String>, deadline: Duration) -> CpdError {
+pub(crate) fn timeout(tool: &str, argv: Vec<String>, deadline: Duration) -> CpdError {
     let what = argv.get(1..).map(|rest| rest.join(" ")).unwrap_or_default();
     let seconds = if deadline.subsec_nanos() == 0 { json!(deadline.as_secs()) } else { json!(deadline.as_secs_f64()) };
     CpdError::new(ErrorCode::ToolTimeout, format!("{tool} ran past its deadline of {seconds}s and was killed: {tool} {what}"))

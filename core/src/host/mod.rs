@@ -22,7 +22,13 @@ pub mod layout;
 pub mod limit;
 pub mod pi;
 pub mod priority;
+pub mod runner;
 pub mod tmux;
+
+#[cfg(test)]
+mod runner_tests;
+#[cfg(test)]
+mod tmux_runner_tests;
 
 pub use layout::{View, chat_slot, session_pane, view_pane};
 pub use tmux::{Pane, PaneId, Spawn, Split, Tmux, WindowId};

@@ -11,6 +11,9 @@ mod grants;
 pub mod op;
 pub mod rules;
 
+#[cfg(test)]
+mod runner_tests;
+
 use std::io::{IsTerminal, Read};
 use std::fmt;
 use std::str::FromStr;
