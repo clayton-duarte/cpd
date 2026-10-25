@@ -563,7 +563,7 @@ fn a_test_job_whose_named_tests_fail_passes_and_leaves_both_logs() {
 
 #[test]
 fn the_tests_commands_are_not_given_a_test_slot() {
-    // hs-d464: a run of named tests is not a full run; the Gate is what takes a slot (contract §7.7).
+    // hs-d464: a run of named tests is not a full run; hs-d679 removed the test-slot pool entirely.
     let fx = red(TESTS);
     fx.commit("tests/t.rs", "// fails\n");
     fx.submit().ok();
