@@ -51,6 +51,7 @@ pub mod fx;
 pub mod healthy;
 pub mod screen;
 pub mod session;
+pub mod tree;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");

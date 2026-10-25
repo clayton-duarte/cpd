@@ -41,6 +41,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::host::Tmux;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
+use crate::ports::Ports;
 
 pub use archive::{Blocker, archive_ended_workers, archive_blocked, blockers};
 pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
@@ -352,8 +353,10 @@ impl Env {
         self.store.read(|conn| resolve::resolve(conn, reference))
     }
 
+    /// The one construction site of a session command's tmux: its calls run on the runner of the ambient [`Ports`]
+    /// (the real one, or the fakes of `run_with`).
     fn tmux(&self) -> Tmux {
-        Tmux::new(self.config.tmux.socket.clone())
+        Tmux::new(self.config.tmux.socket.clone()).with_runner(Ports::current().runner)
     }
 }
 
