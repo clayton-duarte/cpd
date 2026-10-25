@@ -136,6 +136,7 @@ error_codes! {
     NoManager = "no_manager" => Refused,
     ManagerOnly = "manager_only" => Refused,
     UntilPrNotIncident = "until_pr_not_incident" => Refused,
+    IncidentHold = "incident_hold" => Refused,
     UserOnly = "user_only" => Refused,
     CurationNotPending = "curation_not_pending" => Refused,
     ManagerMissing = "manager_missing" => Refused,

@@ -23,6 +23,17 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr open";
 
+/// `incident_hold` (exit 3, contract §7.6, commands.md §9.1/§9.3/§9.9, hs-d643): `plan` is held
+/// by incident mode and the caller is an agent. `pr` names the PR the caller resolved, for
+/// `details.pr`.
+///
+/// STUB (Job inc-v2-guard-tests): panics so the red tests fail; Job inc-v2-guard replaces this
+/// with the refusal.
+pub fn hold_refused(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrKey, agent: bool) -> Result<(), CpdError> {
+    let _ = (conn, plan, pr, agent);
+    unimplemented!("the incident hold guard (Job inc-v2-guard)")
+}
+
 pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
