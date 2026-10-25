@@ -55,7 +55,7 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
     // 3. Jobs.
     let cancelled = cancel_jobs(&mut env.store, &plan, reason)?;
-    wait_until_ended(&mut env.store, &plan, WAIT, POLL)?;
+    wait_until_ended_with(&env.ports, &mut env.store, &plan, WAIT, POLL)?;
 
     // 4. Escalations.
     let expired = expire_escalations(&mut env.store, &plan, reason)?;
@@ -107,20 +107,22 @@ fn live_attempts(conn: &Connection, plan: &PlanId) -> Result<Vec<String>, CpdErr
     Ok(stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
 }
 
-/// [`wait_until_ended`] on `ports.clock`: the deadline is read and the nap taken there.
-pub(crate) fn wait_until_ended_with(_ports: &Ports, _store: &mut Store, _plan: &PlanId, _limit: Duration, _every: Duration) -> Result<(), CpdError> {
-    todo!("plan cancel's wait on Ports: now and sleep on ports.clock")
+/// [`wait_until_ended_with`] on the real ports.
+#[cfg(test)]
+fn wait_until_ended(store: &mut Store, plan: &PlanId, limit: Duration, every: Duration) -> Result<(), CpdError> {
+    wait_until_ended_with(&Ports::real(), store, plan, limit, every)
 }
 
-/// Polls, up to `limit`, until no Attempt of `plan` is left that is not `ended`; else `cancel_timeout`.
-fn wait_until_ended(store: &mut Store, plan: &PlanId, limit: Duration, every: Duration) -> Result<(), CpdError> {
-    let deadline = Instant::now() + limit;
+/// Polls, up to `limit`, until no Attempt of `plan` is left that is not `ended`; else `cancel_timeout`. The deadline is
+/// read and the naps are taken on `ports.clock`.
+pub(crate) fn wait_until_ended_with(ports: &Ports, store: &mut Store, plan: &PlanId, limit: Duration, every: Duration) -> Result<(), CpdError> {
+    let deadline = ports.clock.now() + limit;
     loop {
         let live = store.read(|conn| live_attempts(conn, plan))?;
         if live.is_empty() {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if ports.clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::CancelTimeout,
                 format!("Attempts of Plan {plan} are still running {}s after the stop request: {}. Rerun cpd plan cancel.", limit.as_secs(), live.join(", ")),
@@ -128,7 +130,7 @@ fn wait_until_ended(store: &mut Store, plan: &PlanId, limit: Duration, every: Du
             .with("plan", plan.as_str())
             .with("attempts", live));
         }
-        sleep(every);
+        ports.clock.sleep(every);
     }
 }
 

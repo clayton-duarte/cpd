@@ -489,7 +489,7 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
         let tip = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
         let contained = git::run::run(repo, &["merge-base", "--is-ancestor", &tip, snapshot])?;
         match contained.code {
-            0 => settle(env, &mut catalog, plan, key, &attempt)?,
+            0 => settle_in(env, &mut catalog, plan, key, &attempt)?,
             1 => {}
             code => {
                 return Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
@@ -501,17 +501,14 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
     Ok(())
 }
 
-/// [`settle`] on the ports of `env`: the 60 s deadline and the 200 ms polls are read and slept on `env.ports.clock`.
-pub(crate) fn settle_in(_env: &mut Env, _catalog: &mut Option<Catalog>, _plan: &PlanId, _key: &PrKey, _attempt: &AttemptId) -> Result<(), CpdError> {
-    todo!("guard U's wait on Ports: now and sleep on env.ports.clock")
-}
-
 /// Waits until Attempt `attempt` is no longer `merging`, at most 60 s, reading the
 /// store every 200 ms; whenever its driver lock is free (the driver is dead), R
 /// ends it. pi's catalog, which R needs only to pick a crashed Attempt's next
 /// Tier, is loaded the first time R runs.
-fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
-    let deadline = Instant::now() + GUARD_WAIT;
+/// Reads the time and takes the naps on `env.ports.clock`.
+pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
+    let clock = env.ports.clock.clone();
+    let deadline = clock.now() + GUARD_WAIT;
     loop {
         if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
@@ -525,7 +522,7 @@ fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrK
         if status != "merging" {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::CasLost,
                 format!(
@@ -537,7 +534,7 @@ fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrK
             .with("pr", key.as_str())
             .with("attempt", attempt.to_string()));
         }
-        std::thread::sleep(GUARD_POLL);
+        clock.sleep(GUARD_POLL);
     }
 }
 
