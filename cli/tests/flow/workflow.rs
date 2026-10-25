@@ -151,14 +151,14 @@ impl Fx {
     fn add_job(&self, key: &str, kind: &str, needs: &[&str]) {
         self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-               VALUES ('{PLAN}', '{PR}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'queued', 0, '{kind}', cpd_txn(), 't');"
+               VALUES ('{PLAN}', '{PR}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, '{kind}', cpd_txn(), 't');"
         ));
         for need in needs {
             self.env.sql(&format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{PLAN}', '{key}', '{need}');"));
         }
         let all = self.store().read(|c| jobs::load(c, &plan())).unwrap();
         let job = all.iter().find(|j| j.key == key).unwrap();
-        self.env.sql(&format!("UPDATE jobs SET fingerprint = '{}' WHERE plan = '{PLAN}' AND key = '{key}';", locked_fingerprint(job)));
+        self.env.sql(&format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = '{PLAN}' AND key = '{key}';", locked_fingerprint(job)));
     }
 
     fn set_job(&self, key: &str, status: &str) {
@@ -381,9 +381,13 @@ fn parallel_sibling_jobs_get_extra_worktrees_off_the_lead_branch_tip() {
     let (_, _, _, _, b1, w1) = fx.attempt_row(&first.attempt.to_string());
     assert_eq!((b1.as_str(), w1.as_str()), (branch.as_str(), worktree.as_str()), "the first sibling keeps the workflow worktree");
     let (_, _, _, _, b2, w2) = fx.attempt_row(&second.attempt.to_string());
+    let extra = git::attempt_worktree_path(&fx.repo, &plan(), &second.attempt).unwrap();
     assert_eq!(b2, git::attempt_branch(&plan(), &second.attempt), "the second sibling gets its own branch");
-    assert_ne!(w2, worktree, "the second sibling gets an extra worktree off the Lead Branch tip");
-    assert_eq!(fx.git(Path::new(&w2), &["rev-parse", &format!("refs/heads/{b2}")]), tip, "the extra worktree is cut from the Lead Branch tip");
+    assert_eq!(w2, extra.display().to_string(), "the second sibling gets an extra worktree off the Lead Branch tip");
+    // A2 cuts that extra worktree from the Lead Branch tip.
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("extra.log") };
+    let made = create_attempt_worktree(&fx.repo, &fx.lead, &plan(), &second.attempt, &setup).unwrap();
+    assert_eq!(made.base_sha, tip, "the extra worktree is cut from the Lead Branch tip");
 }
 
 #[test]
@@ -460,7 +464,13 @@ fn both_gates_run_in_the_workflow_worktree_before_the_pr_lands() {
         pr_marker.display()
     ));
 
+    // The merge runs in this process: put the env's `bin/` first so its `gh` shim answers, never the network.
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let shimmed = std::env::join_paths(std::iter::once(fx.env.bin()).chain(std::env::split_paths(&path))).unwrap();
+    unsafe { std::env::set_var("PATH", &shimmed) };
     let _ = fx.merge(&attempt);
+    // SAFETY: nextest gives this test a process of its own.
+    unsafe { std::env::set_var("PATH", &path) };
 
     let workflow = fs::canonicalize(&fx.lead).unwrap();
     let read = |p: &Path| fs::canonicalize(fs::read_to_string(p).unwrap().trim()).unwrap();
