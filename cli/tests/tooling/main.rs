@@ -24,6 +24,7 @@ mod slot;
 mod test_changed_script;
 mod testkit;
 mod testkit_screen;
+mod testkit_tree;
 mod tests_script;
 mod tripwire_script;
 mod version;
