@@ -14,9 +14,10 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::host::deadline::Failed;
-use crate::host::runner::{NO_DEADLINE, Runner, SystemRunner};
+use crate::host::runner::{NO_DEADLINE, Runner};
 use crate::ids::ContextId;
 use crate::output::Output;
+use crate::ports::Ports;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -244,12 +245,7 @@ fn show(args: ShowArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"item": item_json(&item, now)?})))
 }
 
-/// The offset of local time, as `date +%z` prints it (`+0200`, `-0530`).
-fn local_offset() -> Result<UtcOffset, CpdError> {
-    local_offset_with(&SystemRunner)
-}
-
-/// [`local_offset`] on `runner`: one call of `date +%z`.
+/// The offset of local time, as `date +%z` prints it (`+0200`, `-0530`): one call on `runner`.
 pub fn local_offset_with(runner: &dyn Runner) -> Result<UtcOffset, CpdError> {
     let fail = |message: String| CpdError::new(ErrorCode::SpawnFailed, message).with("argv", json!(["date", "+%z"]));
     let out = runner
@@ -280,13 +276,13 @@ fn parse_offset(text: &str) -> Option<UtcOffset> {
     UtcOffset::from_hms(sign * hours, sign * minutes, 0).ok()
 }
 
-/// When `until` is, counting from `now` (§21.3).
-fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, CpdError> {
+/// When `until` is, counting from `now`; `tomorrow`'s local offset comes from `date +%z` on `runner` (§21.3).
+fn snooze_until(runner: &dyn Runner, until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, CpdError> {
     match until {
         Until::Minutes15 => Ok(now + Duration::minutes(15)),
         Until::Hour1 => Ok(now + Duration::hours(1)),
         Until::Tomorrow => {
-            let local = now.to_offset(local_offset()?);
+            let local = now.to_offset(local_offset_with(runner)?);
             let today = local.replace_time(Time::from_hms(9, 0, 0).expect("09:00 is a time"));
             Ok(if today > local { today } else { today + Duration::days(1) })
         }
@@ -294,15 +290,15 @@ fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, Cpd
 }
 
 /// [`snooze_until`] counting from `ports.clock.utc()`, `tomorrow`'s local offset from `date +%z` on `ports.runner`.
-pub fn snooze_until_on(_ports: &crate::ports::Ports, _until: Until) -> Result<OffsetDateTime, CpdError> {
-    todo!("inbox snooze on Ports: now from ports.clock.utc(), the offset from ports.runner")
+pub fn snooze_until_on(ports: &Ports, until: Until) -> Result<OffsetDateTime, CpdError> {
+    snooze_until(&*ports.runner, until, ports.clock.utc())
 }
 
 /// `inbox snooze` (§21.3).
 fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
-    let Env { mut store, .. } = Env::open()?;
-    let now = OffsetDateTime::now_utc();
-    let until = timestamp(snooze_until(args.until, now)?);
+    let Env { mut store, ports, .. } = Env::open()?;
+    let now = ports.clock.utc();
+    let until = timestamp(snooze_until(&*ports.runner, args.until, now)?);
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;

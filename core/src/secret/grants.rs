@@ -125,13 +125,13 @@ pub fn approve(home: &CpdHome, approval: &Approval) -> Result<OffsetDateTime, Cp
 }
 
 /// [`approve`] with `at` the time of `ports.clock.utc()`: the approval `want` (its `at` ignored), and when it expires.
-pub(crate) fn approve_on(_ports: &crate::ports::Ports, _home: &CpdHome, _want: &Approval) -> Result<OffsetDateTime, CpdError> {
-    todo!("a secret approval on Ports: stamped with ports.clock.utc()")
+pub(crate) fn approve_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<OffsetDateTime, CpdError> {
+    approve(home, &Approval { at: crate::clock::timestamp(ports.clock.utc()), ..want.clone() })
 }
 
 /// [`take_approval`] at `ports.clock.utc()`.
-pub(crate) fn take_approval_on(_ports: &crate::ports::Ports, _home: &CpdHome, _want: &Approval) -> Result<bool, CpdError> {
-    todo!("a secret approval on Ports: expires by ports.clock.utc()")
+pub(crate) fn take_approval_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<bool, CpdError> {
+    take_approval(home, want, ports.clock.utc())
 }
 
 /// Consumes the first approval equal to `want` (its `at` aside) that has not expired: removes it and says so.
