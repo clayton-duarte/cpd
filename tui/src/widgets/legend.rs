@@ -18,7 +18,6 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 use cpd_core::error::CpdError;
 use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
-use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
@@ -123,7 +122,7 @@ pub(crate) fn sections() -> Vec<Section> {
             ]
         })
         .collect();
-    // the failed pill turns through the eight moons, red, while the Plan's Lead works (hs-d586)
+    // the failed pill turns through the 28 moon phases, red, while the Plan's Lead works (hs-d586)
     let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
     jobs.insert(
         failed + 1,
@@ -136,7 +135,7 @@ pub(crate) fn sections() -> Vec<Section> {
     let sample = JobCounts { queued: 1, running: 1, merging: 2, failed: 0, merged: 3, ..JobCounts::default() };
     let slots = [0, 1, 2, 4, 3].map(|i| palette::JOB_LEGEND[i]);
     let mut counters = Vec::new();
-    for (i, ((_, status, merging), n)) in slots.iter().zip(sample.counters(Phase::Dispatch)).enumerate() {
+    for (i, ((_, status, merging), n)) in slots.iter().zip(sample.counters()).enumerate() {
         if i > 0 {
             counters.push(palette::separator());
         }
@@ -157,8 +156,8 @@ pub(crate) fn sections() -> Vec<Section> {
         header: None,
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
-            vec![frames, plain("the Lead is working (one frame every 100 ms)")],
-            vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 100 ms)")],
+            vec![frames, plain("the Lead is working (one frame every 50 ms)")],
+            vec![fixing, plain("the Lead is working on a Plan with a failed Job (one frame every 50 ms)")],
             vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],

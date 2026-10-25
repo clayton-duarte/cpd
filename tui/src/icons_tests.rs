@@ -12,7 +12,7 @@ use crate::read::JobStatus;
 use crate::widgets::legend;
 use crate::{fold, link};
 
-/// The code points the swap removed (U+F0F61 stays: it is still a moon frame).
+/// The code points the swap removed (none of the moon_alt frames is among them).
 const OLD: [u32; 8] = [0xF1787, 0xF0996, 0xF073A, 0xF03CC, 0xF0B95, 0xF004B, 0xF0063, 0xF005A];
 
 fn text(line: &Line) -> String {
@@ -40,13 +40,18 @@ fn the_job_and_check_glyphs_are_the_decided_code_points() {
 }
 
 #[test]
-fn the_waiting_glyph_is_circle_opacity_and_the_moon_loader_keeps_the_first_quarter() {
+fn the_waiting_glyph_is_circle_opacity_and_the_moon_alt_loader_has_28_frames() {
     assert_eq!(palette::WAITING, "\u{F1853}");
-    let frames = ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
+let frames: [&str; 28] = [
+    "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
+    "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}",
+    "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}",
+    "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
+];
     assert_eq!(palette::SPINNER.to_vec(), frames.to_vec());
     assert!(!palette::SPINNER.contains(&palette::WAITING));
-    assert_eq!(palette::IDLE, "\u{F0F64}");
-    assert_eq!(palette::NEEDS_YOU, "\u{F0F62}");
+    assert_eq!(palette::IDLE, "\u{E3D5}");
+    assert_eq!(palette::NEEDS_YOU, "\u{E3E3}");
 }
 
 #[test]
@@ -82,8 +87,8 @@ fn the_legend_draws_the_new_glyphs() {
     assert!(sample("landing").contains('\u{F1464}'), "{}", sample("landing"));
     let dots = section_text("Session Dots");
     assert!(dots.contains('\u{F1853}'), "{dots:?}");
-    let precedence = format!("> {} > \u{F1853} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
-    assert!(dots.contains(&precedence), "{dots:?}");
+    let precedence = "> \u{E3E3} > \u{F1853} > \u{E3D5} > \u{E3D5}";
+    assert!(dots.contains(precedence), "{dots:?}");
     let _ = Meaning::ALL;
     for s in &sections {
         let all = section_text(s.title);

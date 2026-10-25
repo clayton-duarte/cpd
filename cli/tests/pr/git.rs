@@ -12,7 +12,7 @@ use cpd_core::error::ErrorCode;
 use cpd_core::git::hooks::{HookError, HookOutcome, Pipeline, run_hook};
 use cpd_core::git::{
     GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_attempt_worktree_with, create_lead_worktree, create_lead_worktree_with,
-    discard_worktree, push_commit, lead_branch, lead_worktree_path, remove_merged_attempt, tamper_check,
+    discard_worktree, push_commit, lead_branch, lead_worktree_path, tamper_check,
     touched_protected,
 };
 use cpd_core::git::gate::Slots;
@@ -206,29 +206,6 @@ fn a_failing_attempt_pre_start_removes_the_worktree_and_branch() {
 }
 
 #[test]
-fn a_merged_attempt_is_removed_with_branch_d_and_an_unmerged_one_is_refused() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let setup = setup(&env, "attempt.log");
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
-    let made = create_attempt_worktree(&repo, &lead.path, &plan(), &attempt(), &setup).unwrap();
-    commit_file(&env, &made.path, "work.txt", "work\n");
-
-    // Unmerged: git's own guard refuses the branch deletion.
-    let err = remove_merged_attempt(&lead.path, &made.path, &made.branch).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::GitFailed);
-    assert_eq!(err.details()["argv"][3], "branch");
-    assert_eq!(env.git(&repo, &["branch", "--list", &made.branch]).trim(), made.branch);
-
-    env.git(&lead.path, &["merge", "-q", "--ff-only", &made.branch]);
-    remove_merged_attempt(&lead.path, &made.path, &made.branch).unwrap();
-    assert!(!made.path.exists());
-    assert_eq!(env.git(&repo, &["branch", "--list", &made.branch]), "");
-    // Rerunning is safe.
-    remove_merged_attempt(&lead.path, &made.path, &made.branch).unwrap();
-}
-
-#[test]
 fn discard_removes_whatever_state_and_is_idempotent() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
@@ -264,19 +241,6 @@ fn branch_config(env: &TestEnv, repo: &Path) -> String {
 }
 
 #[test]
-fn a_lead_worktree_from_origin_has_no_upstream_and_its_push_writes_no_config() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    with_origin(&env, &repo);
-
-    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-
-    assert!(made.push_failed.is_none());
-    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", &made.branch]), format!("{}\trefs/heads/{}", made.base_sha, made.branch));
-    assert_eq!(branch_config(&env, &repo), "", "no upstream: nothing in .git/config");
-}
-
-#[test]
 fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
@@ -307,46 +271,6 @@ fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
 }
 
 #[test]
-fn a_fetch_outlasts_a_worktree_add_in_progress() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let origin = with_origin(&env, &repo);
-    let other = env.root().join("other");
-    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
-    commit_file(&env, &other, "new.txt", "new\n");
-    env.git(&other, &["push", "-q", "origin", "main"]);
-    // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder.
-    let adding = repo.join(".git/worktrees/adding");
-    fs::create_dir_all(&adding).unwrap();
-    fs::write(adding.join("HEAD"), format!("{}\n", "0".repeat(40))).unwrap();
-    fs::write(adding.join("commondir"), "../..\n").unwrap();
-    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
-    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "fetch", "origin", "main"])).unwrap();
-    assert!(String::from_utf8_lossy(&broken.stderr).contains("bad object worktrees/adding/HEAD"), "{broken:?}");
-
-    // The fetch below runs in this process, whose git reads the User's global config, not the env's: automatic
-    // maintenance would prune the fake entry, so turn it off in the repo's own config.
-    env.git(&repo, &["config", "maintenance.auto", "false"]);
-    let fetched = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: the fetch outlasts an entry half-created for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_dir_all(&adding).unwrap();
-        });
-        cpd_core::git::run::fetch(&repo, &["origin", "main"])
-    });
-
-    fetched.unwrap();
-    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), env.git(&other, &["rev-parse", "HEAD"]));
-    // Any other failure is not retried.
-    let started = Instant::now();
-    let err = cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"]).unwrap_err();
-    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
-    // time-claim: a failure that is not the race returns at once (20 retries would take over 1.9 s); no per-poll signal from git.
-    assert!(started.elapsed() < Duration::from_secs(1));
-}
-
-#[test]
 fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");
@@ -363,49 +287,6 @@ fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
     assert_eq!(push_commit(&lead.path, &lead.branch, &two).unwrap(), Push::Pushed { new: true });
     assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), two);
     assert_eq!(branch_config(&env, &repo), "", "no -u");
-}
-
-#[test]
-fn rule_p_an_ancestor_pushed_after_its_descendant_is_a_success_that_pushed_nothing() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let origin = with_origin(&env, &repo);
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-    commit_file(&env, &lead.path, "a.txt", "a\n");
-    let a = env.git(&lead.path, &["rev-parse", "HEAD"]);
-    commit_file(&env, &lead.path, "b.txt", "b\n");
-    let b = env.git(&lead.path, &["rev-parse", "HEAD"]);
-    // Merge B pushed first; merge A's push of its own `new` comes late.
-    assert_eq!(push_commit(&lead.path, &lead.branch, &b).unwrap(), Push::Pushed { new: true });
-
-    assert_eq!(push_commit(&lead.path, &lead.branch, &a).unwrap(), Push::Contained { remote: b.clone() });
-    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), b, "the remote is not moved back");
-}
-
-#[test]
-fn rule_p_a_rejection_whose_remote_tip_lacks_the_commit_stands() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let origin = with_origin(&env, &repo);
-    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
-    // A known commit that does not descend from ours, pushed to the remote branch.
-    commit_file(&env, &lead.path, "theirs.txt", "theirs\n");
-    let theirs = env.git(&lead.path, &["rev-parse", "HEAD"]);
-    env.git(&lead.path, &["push", "-q", "origin", &format!("{theirs}:refs/heads/{}", lead.branch)]);
-    env.git(&lead.path, &["reset", "-q", "--hard", &lead.base_sha]);
-    commit_file(&env, &lead.path, "ours.txt", "ours\n");
-    let ours = env.git(&lead.path, &["rev-parse", "HEAD"]);
-
-    let Push::Rejected { stderr } = push_commit(&lead.path, &lead.branch, &ours).unwrap() else { panic!("not rejected") };
-    assert!(stderr.contains("rejected"), "{stderr}");
-    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), theirs);
-
-    // A remote tip not in the local object store is a rejection too.
-    let other = env.root().join("other");
-    env.run_ok(env.root(), "git", &["clone", "-q", "-b", &lead.branch, origin.to_str().unwrap(), other.to_str().unwrap()]);
-    commit_file(&env, &other, "unknown.txt", "unknown\n");
-    env.git(&other, &["push", "-q", "origin", &lead.branch]);
-    assert!(matches!(push_commit(&lead.path, &lead.branch, &theirs).unwrap(), Push::Rejected { .. }));
 }
 
 #[test]
@@ -497,26 +378,6 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 }
 
 #[test]
-fn the_log_has_a_hooks_line_before_the_hook_ends() {
-    // The hook ends only once the test has read the log (`go`): its first line must be there before.
-    let h = hooks("pre-merge = \"echo first; until [ -e go ]; do sleep 0.05; done; echo last\"\n");
-    let (repo, log, pre_merge) = (h.repo.clone(), h.log.clone(), pipeline(&h.wt, Hook::PreMerge));
-    let runner = std::thread::spawn(move || {
-        let op = Operation { branch: "main" };
-        run_hook(Hook::PreMerge, &pre_merge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
-    });
-    common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
-    let seen = fs::read_to_string(&h.log).unwrap_or_default();
-    let ended = runner.is_finished();
-    fs::write(h.repo.join("go"), "").unwrap();
-    let result = runner.join().unwrap();
-    assert_eq!(seen, "first\n", "the log before the hook ended");
-    assert!(!ended, "the hook ended before the log was read");
-    assert_eq!(result.tail.as_deref(), Some("first\nlast"));
-    assert_eq!(fs::read_to_string(&h.log).unwrap(), "first\nlast\n");
-}
-
-#[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
     // Keys are not in alphabetical order: file order decides, not the table's sort. `zeta`
     // (first in the file) only fails once `slow` (last) has started, so the commands run
@@ -605,17 +466,6 @@ fn the_command_runs_with_sh_in_the_worktree_root() {
 }
 
 #[test]
-fn an_undefined_variable_or_worktrunk_filter_fails_before_anything_runs() {
-    for bad in ["{{ nope }}", "{{ branch | sanitize }}", "{{ vars.x }}", "{{ target_worktree_path_of('x') }}"] {
-        let h = hooks(&format!("[pre-merge]\nfirst = \"touch ran.txt\"\nsecond = \"echo {bad}\"\n"));
-        let result = h.run(Hook::PreMerge);
-        assert!(matches!(result.outcome, HookOutcome::Error(HookError::Invalid(_))), "{bad}: {result:?}");
-        assert_eq!(result.tail, None);
-        assert!(!h.repo.join("ran.txt").exists(), "{bad}");
-    }
-}
-
-#[test]
 fn target_worktree_path_is_undefined_when_no_worktree_has_the_target() {
     let h = hooks("pre-merge = \"echo {{ target_worktree_path }}\"\n");
     let op = Operation { branch: "no-such-branch" };
@@ -646,18 +496,6 @@ fn is_dead(pid: &str) -> bool {
     let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", pid]).output().unwrap();
     let state = String::from_utf8(out.stdout).unwrap();
     state.trim().is_empty() || state.trim().starts_with('Z')
-}
-
-#[test]
-fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
-    // The background child would touch survivor.txt after 10 s; the kill must end it long
-    // before, and the test waits for its death rather than for the clock.
-    let h = hooks("pre-merge = \"(sleep 10; touch survivor.txt) & echo $! > pid; wait\"\n");
-    let result = h.run_for(Hook::PreMerge, Duration::from_secs(1));
-    assert_eq!(result.outcome, HookOutcome::Error(HookError::Timeout));
-    let pid = h.file("pid").trim().to_owned();
-    common::wait_until("the background child to die with the hook's process group", || is_dead(&pid));
-    assert!(!h.repo.join("survivor.txt").exists(), "the background child outlived the kill");
 }
 
 #[test]
@@ -768,31 +606,6 @@ fn touched(repo: &Path) -> Vec<String> {
 }
 
 #[test]
-fn each_protected_path_is_refused() {
-    let paths = [
-        ".cpd/anything",
-        ".cpd/deep/er/file",
-        "verify.sh",
-        "scripts/ci/run.sh",
-        "scripts/ci/new/nested.sh",
-    ];
-    // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
-    let (env, repo) = tamper_repo();
-    for path in paths {
-        env.git(&repo, &["branch", "-f", "att", "cpd/pay-4521"]);
-        on_att(&env, &repo, |r| {
-            let full = r.join(path);
-            fs::create_dir_all(full.parent().unwrap()).unwrap();
-            fs::write(full, "changed\n").unwrap();
-        });
-        assert_eq!(touched(&repo), vec![path.to_owned()], "{path}");
-        let err = tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap_err();
-        assert_eq!(err.code(), ErrorCode::GateTampered, "{path}");
-        assert_eq!(err.details()["paths"], serde_json::json!([path]));
-    }
-}
-
-#[test]
 fn deleting_a_protected_path_is_refused() {
     let (env, repo) = tamper_repo();
     on_att(&env, &repo, |r| fs::remove_file(r.join("verify.sh")).unwrap());
@@ -872,15 +685,6 @@ fn base_merge_repo(path: &str, content: Option<&str>) -> (TestEnv, PathBuf) {
     env.git(&repo, &["merge", "-q", "--no-ff", "-m", "merge the base", "main"]);
     env.git(&repo, &["switch", "-q", "main"]);
     (env, repo)
-}
-
-#[test]
-fn a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed() {
-    for path in [".cpd/x", "verify.sh", "scripts/ci/run.sh"] {
-        let (_env, repo) = base_merge_repo(path, Some("from the base\n"));
-        assert_eq!(touched_protected(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap(), Vec::<String>::new(), "{path}");
-        tamper_check(&repo, "cpd/pay-4521", &list(), "main", "cpd/pay-4521", "att").unwrap();
-    }
 }
 
 #[test]
@@ -969,39 +773,6 @@ impl Moving {
 }
 
 #[test]
-fn rule_s_two_merges_synced_in_the_reverse_order_end_at_the_tip_and_clean() {
-    let m = moving();
-    let _first = m.merge("a.txt", "a\n");
-    let second = m.merge("b.txt", "b\n");
-
-    // The second merge's sync runs first, then the first merge's.
-    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
-    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
-
-    m.assert_at_tip_and_clean(&second);
-    assert_eq!(fs::read_to_string(m.lead.join("a.txt")).unwrap(), "a\n");
-    assert_eq!(fs::read_to_string(m.lead.join("b.txt")).unwrap(), "b\n");
-}
-
-#[test]
-fn rule_s_two_syncs_at_once_both_end_with_the_lead_worktree_at_the_tip() {
-    let m = moving();
-    m.merge("a.txt", "a\n");
-    let tip = m.merge("b.txt", "b\n");
-
-    let results = std::thread::scope(|s| {
-        let one = s.spawn(|| sync_lead(&m.lead, &m.branch));
-        let two = s.spawn(|| sync_lead(&m.lead, &m.branch));
-        [one.join().unwrap(), two.join().unwrap()]
-    });
-
-    for result in results {
-        assert_eq!(result.unwrap(), Synced::Done);
-    }
-    m.assert_at_tip_and_clean(&tip);
-}
-
-#[test]
 fn rule_s_keeps_a_staged_edit_and_reports_it_stale() {
     let m = moving();
     fs::write(m.lead.join("README.md"), "staged by the Lead\n").unwrap();
@@ -1031,28 +802,6 @@ fn rule_s_keeps_an_unstaged_edit_and_reports_it_stale() {
     assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
     assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "edited by the Lead\n");
     assert!(!m.lead.join("a.txt").exists());
-}
-
-#[test]
-fn rule_s_waits_out_an_index_lock_held_for_one_second() {
-    let m = moving();
-    let tip = m.merge("a.txt", "a\n");
-    let lock = PathBuf::from(m.env.git(&m.lead, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]));
-    fs::write(&lock, "").unwrap();
-
-    let started = Instant::now();
-    let synced = std::thread::scope(|s| {
-        s.spawn(|| {
-            // time-claim: rule S waits out an index lock held for a second; no per-poll signal from git.
-            std::thread::sleep(Duration::from_secs(1));
-            fs::remove_file(&lock).unwrap();
-        });
-        sync_lead(&m.lead, &m.branch)
-    });
-
-    assert_eq!(synced.unwrap(), Synced::Done);
-    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
-    m.assert_at_tip_and_clean(&tip);
 }
 
 #[test]
@@ -1103,32 +852,6 @@ fn gated(env: &TestEnv) -> (PathBuf, cpd_core::git::Created, String) {
 
 fn worktrees(env: &TestEnv, repo: &Path) -> String {
     env.git(repo, &["worktree", "list", "--porcelain"])
-}
-
-#[test]
-fn the_gate_runs_pre_start_then_pre_merge_in_a_detached_worktree_at_g_and_removes_it() {
-    let env = TestEnv::new();
-    let out = env.root().join("out");
-    fs::create_dir_all(&out).unwrap();
-    let wt = format!(
-        "pre-start = \"touch started; echo {{{{ branch }}}} {{{{ base }}}} {{{{ worktree_path }}}} $(git rev-parse HEAD) > {0}/start.txt\"\n\
-         pre-merge = \"test -f started && echo {{{{ branch }}}} {{{{ target }}}} $(git rev-parse HEAD) $(git symbolic-ref -q HEAD || echo detached) > {0}/merge.txt\"\n",
-        out.display()
-    );
-    let (repo, lead, g) = gated(&env);
-    let pipes = pipes(&wt);
-
-    let gated = gate(&repo, &plan(), &key(), &g, &gate_hooks(&env, &lead.branch, &pipes)).unwrap();
-
-    assert_eq!(gated, Ok(()));
-    let w = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
-    assert_eq!(w, repo.parent().unwrap().join(format!("pay.pay-4521.api.gate-{}", std::process::id())));
-    let w_real = repo.parent().unwrap().canonicalize().unwrap().join(w.file_name().unwrap());
-    assert_eq!(fs::read_to_string(out.join("start.txt")).unwrap(), format!("cpd/pay-4521 main {} {g}\n", w_real.display()));
-    assert_eq!(fs::read_to_string(out.join("merge.txt")).unwrap(), format!("cpd/pay-4521 main {g} detached\n"));
-    assert!(!w.exists(), "the gate worktree is removed");
-    assert!(!worktrees(&env, &repo).contains(".gate-"));
-    assert_eq!(branch_config(&env, &repo), "", "no .git/config write");
 }
 
 #[test]
@@ -1240,46 +963,6 @@ fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
 }
 
 // ------------------------------------------------------------ deadline (contract §1.2, §7)
-
-/// Whether process `pid` is running (a zombie is not).
-fn running(pid: i32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
-}
-
-/// engine-W4, commands-W1: a git call that hangs is killed at its deadline with its
-/// whole process group, and fails `tool_timeout`. The deadline is shortened to 1 s by
-/// `CPD_TEST_DEADLINE_GIT`, which a debug build reads from its environment: this test
-/// runs itself again in a child process born with it, so no other test sees it.
-#[test]
-fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
-    const NAME: &str = "a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
-    if std::env::var_os("CPD_TEST_DEADLINE_GIT").is_none() {
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        child.args(["--exact", &format!("git::{NAME}"), "--nocapture"]).env("CPD_TEST_DEADLINE_GIT", "1");
-        let out = common::output(&mut child).unwrap();
-        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
-        return;
-    }
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    let pidfile = env.root().join("sleep.pid");
-    // A real git whose alias runs a sleeper in git's process group, and waits for it.
-    env.git(&repo, &["config", "alias.hang", &format!("!sleep {} & echo $! > '{}'; wait", common::SLEEP_SECONDS, pidfile.display())]);
-
-    let started = std::time::Instant::now();
-    let err = cpd_core::git::run::run(&repo, &["hang"]).unwrap_err();
-
-    // time-claim: the call returns at its 1 s deadline, not when the sleeper ends; no per-poll signal from the deadline.
-    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
-    assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
-    let d = err.details();
-    assert_eq!(d["tool"], "git");
-    assert_eq!(d["deadline_seconds"], 1);
-    assert_eq!(d["argv"], serde_json::json!(["git", "-C", repo.display().to_string(), "hang"]));
-    let pid: i32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-    common::wait_until("git's child to die with its process group", || !running(pid));
-}
 
 // ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
 //

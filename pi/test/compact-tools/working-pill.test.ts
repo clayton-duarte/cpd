@@ -10,7 +10,7 @@ import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dis
 
 test.after(() => restoreClocks());
 
-/** The cockpit loader's eight code points, written out so this test does not depend on the module. */
+/** The cockpit loader's 28 code points, written out so this test does not depend on the module. */
 const LOADER = MOON_FRAMES;
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
@@ -72,11 +72,11 @@ test("every working label keeps its words and ends with …", () => {
 	}
 });
 
-test("the working indicator frames are the cockpit loader, plain, at 100 ms", () => {
+test("the working indicator frames are the cockpit loader plain at 50 ms", () => {
 	const { indicator } = drive((h) => h.get("agent_start")!({}));
 	assert.ok(indicator, "an indicator is set");
-	assert.equal(indicator!.intervalMs, 100);
-	assert.equal(indicator!.frames.length, 8);
+	assert.equal(indicator!.intervalMs, 50);
+	assert.equal(indicator!.frames.length, 28);
 	indicator!.frames.forEach((frame, index) => {
 		assert.equal(strip(frame), LOADER[index], `frame ${index}`);
 		assert.equal(frame, LOADER[index], `frame ${index} has no colour of its own: the pill paints it in text 0`);

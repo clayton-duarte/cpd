@@ -49,8 +49,8 @@ fn a_commit_within_a_frame_of_the_last_read_waits_for_the_frame_to_end() {
     assert!(s.take(t0).is_some());
     s.done();
     s.commit();
-    assert_eq!(s.take(t0 + ms(50)), None);
-    assert_eq!(s.take(t0 + ms(99)), None);
+    assert_eq!(s.take(t0 + ms(25)), None);
+    assert_eq!(s.take(t0 + ms(49)), None);
     assert_eq!(s.take(t0 + FRAME), Some(ReadKind { force: false }));
 }
 
@@ -81,7 +81,7 @@ fn no_second_read_is_taken_while_one_is_out() {
 }
 
 #[test]
-fn a_burst_of_a_hundred_commits_in_a_second_takes_ten_reads_at_most() {
+fn a_burst_of_a_hundred_commits_in_a_second_takes_twenty_reads_at_most() {
     let t0 = Instant::now();
     let mut s = Schedule::new(t0, SAFETY);
     let mut taken = 0;
@@ -95,7 +95,21 @@ fn a_burst_of_a_hundred_commits_in_a_second_takes_ten_reads_at_most() {
         }
     }
     assert!(taken >= 1, "a burst still reads");
-    assert!(taken <= 10, "took {taken} reads in one second");
+    assert!(taken > 10, "took {taken} reads: one per 50 ms frame");
+    assert!(taken <= 20, "took {taken} reads in one second");
+}
+
+#[test]
+fn the_read_pace_and_the_frame_clock_are_one_50_ms_frame() {
+    assert_eq!(FRAME, ms(50));
+    let t0 = Instant::now();
+    let mut s = Schedule::new(t0, SAFETY);
+    s.commit();
+    assert!(s.take(t0).is_some());
+    s.done();
+    s.commit();
+    assert_eq!(s.take(t0 + ms(49)), None);
+    assert_eq!(s.take(t0 + ms(50)), Some(ReadKind { force: false }));
 }
 
 #[test]
@@ -177,10 +191,10 @@ fn no_need_and_no_deadline_waits_for_a_signal_only() {
 }
 
 #[test]
-fn a_frame_need_wakes_at_the_next_100_ms_boundary_of_the_wall_clock() {
+fn a_frame_need_wakes_at_the_next_50_ms_boundary_of_the_wall_clock() {
     let now = Instant::now();
     let needs = Needs { frame: true, second: false, at: None };
-    assert_eq!(wake(now, 1234, &needs, None), Some(now + ms(66)));
+    assert_eq!(wake(now, 1234, &needs, None), Some(now + ms(16)));
 }
 
 #[test]
@@ -193,10 +207,10 @@ fn a_second_need_wakes_at_the_next_whole_second_of_the_wall_clock() {
 #[test]
 fn the_earliest_of_the_deadline_the_needs_and_the_extra_time_wins() {
     let now = Instant::now();
-    let all = Needs { frame: true, second: true, at: Some(now + ms(40)) };
-    assert_eq!(wake(now, 1234, &all, Some(now + ms(900))), Some(now + ms(40)));
+    let all = Needs { frame: true, second: true, at: Some(now + ms(10)) };
+    assert_eq!(wake(now, 1234, &all, Some(now + ms(900))), Some(now + ms(10)));
     let no_at = Needs { frame: true, second: true, at: Some(now + ms(500)) };
-    assert_eq!(wake(now, 1234, &no_at, Some(now + ms(900))), Some(now + ms(66)));
+    assert_eq!(wake(now, 1234, &no_at, Some(now + ms(900))), Some(now + ms(16)));
     let slow = Needs { frame: false, second: true, at: Some(now + ms(800)) };
     assert_eq!(wake(now, 1234, &slow, Some(now + ms(20))), Some(now + ms(20)));
 }

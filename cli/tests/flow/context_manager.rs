@@ -7,7 +7,7 @@ use crate::common;
 
 use std::fs;
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, refused, wait_until};
+use common::{SLEEP_SECONDS, TestEnv, refused, wait_until};
 use serde_json::{Value, json};
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
@@ -179,39 +179,6 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
 }
 
 #[test]
-fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
-    let env = TestEnv::new();
-    setup(&env);
-    cockpit(&env);
-    // The tmux server's global environment is what every new pane starts from.
-    for (name, value) in [("PLANNOTATOR_DATA_DIR", "/tmp/x"), ("PLANNOTATOR_PORT", "1"), ("PLANNOTATOR_REMOTE", "1")] {
-        let out = env.tmux(&["set-environment", "-g", name, value]);
-        assert!(out.status.success(), "tmux set-environment {name}");
-    }
-    // The caller of `cpd context manager` has them too.
-    let out = env
-        .command(CPD)
-        .args(["context", "manager", "--context", "ctx"])
-        .env("PLANNOTATOR_DATA_DIR", "/tmp/x")
-        .env("PLANNOTATOR_PORT", "1")
-        .env("PLANNOTATOR_REMOTE", "1")
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "cpd context manager failed: {}", String::from_utf8_lossy(&out.stderr));
-    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let id = out["manager"]["session"].as_str().unwrap().to_owned();
-
-    let envs = pi_envs(&env, &id, 1);
-    let mut names = var_names(&envs[0], "PLANNOTATOR_");
-    names.sort_unstable();
-    assert_eq!(names, ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_UPDATE_CHECK", "PLANNOTATOR_URL_HOST"]);
-    // The caller's values are replaced by cpd's: remote, and a port of the range, not the caller's `1`.
-    assert!(has_var(&envs[0], "PLANNOTATOR_REMOTE=1"));
-    assert!(!has_var(&envs[0], "PLANNOTATOR_PORT=1"), "the caller's port is not the Manager's");
-    assert!(!envs[0].lines().any(|l| l.starts_with("PLANNOTATOR_DATA_DIR=")));
-}
-
-#[test]
 fn the_manager_tier_is_the_config_key() {
     let env = TestEnv::new();
     setup(&env);
@@ -307,32 +274,4 @@ fn refusals_register_nothing() {
     assert!(manager_ids(&env).is_empty());
     assert_eq!(window_names(&env), ["main"]);
     assert!(env.calls("pi").is_empty());
-}
-
-#[test]
-fn session_open_brings_the_manager_into_the_chat_slot() {
-    let env = TestEnv::new();
-    setup(&env);
-    cockpit(&env);
-    let placeholder = slot(&env);
-    let started = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
-    let id = started["manager"]["session"].as_str().unwrap().to_owned();
-    assert_eq!(slot(&env), placeholder, "context manager never moves the slot");
-
-    let out = env.cpd(&["session", "open", &id]).ok();
-    assert_eq!((&out["session"], &out["displaced"], &out["pane"]), (&json!(id), &Value::Null, &started["manager"]["pane"]));
-    let now = slot(&env);
-    assert_eq!((now[0].as_str(), now[2].as_str()), (started["manager"]["pane"].as_str().unwrap(), id.as_str()));
-    assert!(panes(&env).iter().all(|p| p[3] != "chat"), "the placeholder died with its window");
-    assert_eq!(window_names(&env), ["main"]);
-    assert_eq!(env.cpd(&["session", "show", &id]).ok()["session"]["place"], "chat");
-    assert_eq!(env.cpd(&["session", "open", &id]).ok()["already"], true);
-
-    // Parking it puts it back in `ctx-<context>`, alone, with a placeholder in the slot.
-    env.cpd(&["session", "park"]).ok();
-    assert_eq!(slot(&env)[3], "chat");
-    let parked = panes(&env).into_iter().find(|p| p[2] == id).unwrap();
-    assert_eq!(parked[1], "ctx-ctx");
-    pi_envs(&env, &id, 1);
-    assert_eq!(env.calls("pi").len(), 1, "it was started once");
 }

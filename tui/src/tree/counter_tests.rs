@@ -115,3 +115,23 @@ fn an_asleep_rows_counters_are_all_colour_8_and_its_dot_and_name_stay_colour_7()
     }
     assert_eq!(counter_colours(&buf, 3), [C15, C14, C11, C9, C10], "a live row keeps its status colours");
 }
+
+const PHASES: [Phase; 5] = [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Deploy, Phase::Done];
+
+#[test]
+fn drafts_replace_queued_as_the_first_counter_in_every_phase() {
+    for phase in PHASES {
+        let t = tree(vec![context("cc", vec![lone("aa", phase, [3, 1, 2, 0, 0, 5])])]);
+        let buf = render(&t, 2);
+        assert_eq!(counters_text(&buf, 1), "3⋅2⋅0⋅0⋅5", "phase {phase:?}");
+    }
+}
+
+#[test]
+fn the_draft_counter_is_magenta_in_every_phase() {
+    for phase in PHASES {
+        let t = tree(vec![context("cc", vec![lone("aa", phase, [3, 1, 2, 0, 0, 5])])]);
+        let buf = render(&t, 2);
+        assert_eq!(counter_colours(&buf, 1), [C13, C14, C8, C8, C10], "phase {phase:?}");
+    }
+}

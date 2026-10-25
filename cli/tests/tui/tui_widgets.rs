@@ -970,7 +970,7 @@ fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lea
         let popup = &popups(&env)[n];
         let at = popup.iter().position(|a| a == "display-popup").unwrap();
         assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}' --client '{CLIENT}'"), "{popup:?}");
-        assert_eq!(popup[at + 1..at + 4], ["-E", "-c", CLIENT], "{popup:?}");
+        assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
     }
     // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
     std::thread::sleep(std::time::Duration::from_millis(600));
@@ -1107,7 +1107,7 @@ fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
     let popup = &popups(&env)[0];
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"), "{popup:?}");
-    assert_eq!(popup[at + 1..at + 4], ["-E", "-c", CLIENT], "{popup:?}");
+    assert_eq!(popup[at + 1..at + 5], ["-E", "-B", "-c", CLIENT], "{popup:?}");
 }
 
 // ---------- a merge in progress (hs-d495): the marker, the spinner and no click ----------

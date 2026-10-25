@@ -152,7 +152,11 @@ impl Fx {
             Some(text) => {
                 let mut child =
                     common::spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())).expect("spawn cpd");
-                child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+                // A command that refuses before it reads its stdin has exited: the write may meet a closed pipe, and the Run says why.
+                match child.stdin.take().unwrap().write_all(text.as_bytes()) {
+                    Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+                    other => other.unwrap(),
+                }
                 child.wait_with_output()
             }
         }

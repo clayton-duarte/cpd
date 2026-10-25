@@ -1,4 +1,4 @@
-//! The Plan view's failed pill (hs-d586, commands.md §13.2 'Chart' and 'legend'): always red, never cyan; the moon loader
+//! The Plan view's failed pill (hs-d586, commands.md §13.2 'Chart' and 'legend'): always red, never cyan; the 28 moon_alt loader (hs-d616)
 //! in place of the close circle while the Plan's Lead works, every failed pill of the Plan together; a cancelled pill
 //! stays still. Glyphs are codepoints and colours come from the palette's calls, never raw values.
 
@@ -11,8 +11,12 @@ use crate::plan::boxes;
 use crate::read::{JobNode, JobStatus, NeedsUser, PrNode, PrStatus};
 use crate::widgets::legend;
 
-const MOONS: [&str; 8] =
-    ["\u{F0F64}", "\u{F0F67}", "\u{F0F61}", "\u{F0F68}", "\u{F0F62}", "\u{F0F66}", "\u{F0F63}", "\u{F0F65}"];
+const MOONS: [&str; 28] = [
+    "\u{E3E3}", "\u{E3C8}", "\u{E3C9}", "\u{E3CA}", "\u{E3CB}", "\u{E3CC}", "\u{E3CD}",
+    "\u{E3CE}", "\u{E3CF}", "\u{E3D0}", "\u{E3D1}", "\u{E3D2}", "\u{E3D3}", "\u{E3D4}",
+    "\u{E3D5}", "\u{E3D6}", "\u{E3D7}", "\u{E3D8}", "\u{E3D9}", "\u{E3DA}", "\u{E3DB}",
+    "\u{E3DC}", "\u{E3DD}", "\u{E3DE}", "\u{E3DF}", "\u{E3E0}", "\u{E3E1}", "\u{E3E2}",
+];
 const CLOSE_CIRCLE: &str = "\u{F0159}";
 
 fn pr() -> PrNode {
@@ -86,12 +90,12 @@ fn a_failed_pill_is_red_with_the_close_circle_when_its_lead_is_not_working() {
 }
 
 #[test]
-fn a_failed_pill_turns_through_the_eight_moon_phases_while_its_lead_works() {
+fn a_failed_pill_turns_through_the_28_moon_alt_phases_while_its_lead_works() {
     let jobs = [job("a", JobStatus::Failed)];
     let stuck = NeedsUser { stuck_jobs: vec![jobs[0].key.clone()], lead_working: true, ..NeedsUser::default() };
     for needs in [working(), stuck] {
-        for frame in 0..9 {
-            assert_eq!(pills(&jobs, &needs, frame), [(MOONS[frame % 8].to_owned(), red_pill())], "frame {frame}");
+        for frame in 0..30 {
+            assert_eq!(pills(&jobs, &needs, frame), [(MOONS[frame % 28].to_owned(), red_pill())], "frame {frame}");
         }
     }
 }
@@ -99,7 +103,7 @@ fn a_failed_pill_turns_through_the_eight_moon_phases_while_its_lead_works() {
 #[test]
 fn every_failed_pill_turns_together_and_a_cancelled_pill_stays_still() {
     let jobs = [job("a", JobStatus::Failed), job("b", JobStatus::Failed), job("c", JobStatus::Cancelled)];
-    for frame in 0..8 {
+    for frame in 0..28 {
         let got = pills(&jobs, &working(), frame);
         assert_eq!(got[0], (MOONS[frame].to_owned(), red_pill()), "a, frame {frame}");
         assert_eq!(got[1], got[0], "b turns with a, frame {frame}");
@@ -127,10 +131,10 @@ fn the_legend_lists_one_failed_pill_in_red_and_its_red_loader() {
     let body = &failed[0][1].spans[1];
     assert!(body.content.starts_with(CLOSE_CIRCLE), "the static failed glyph: {:?}", body.content);
     assert_eq!(body.style, palette::job_pill(JobStatus::Failed, false, true), "the failed pill is red");
-    // the red loader: the eight moons, each in the failed (red) colour
+    // the red loader: the 28 moons, each in the failed (red) colour
     let red = palette::fg_clickable(palette::Meaning::Failed);
     let loader = sections.iter().flat_map(|s| s.rows.iter().flatten()).any(|line| {
-        line.spans.len() == 8 && line.spans.iter().zip(MOONS).all(|(s, m)| s.content == m && s.style == red)
+        line.spans.len() == 28 && line.spans.iter().zip(MOONS).all(|(s, m)| s.content == m && s.style == red)
     });
-    assert!(loader, "a red loader sample with the eight moon frames");
+    assert!(loader, "a red loader sample with the 28 moon frames");
 }

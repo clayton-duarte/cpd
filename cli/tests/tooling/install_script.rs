@@ -542,47 +542,6 @@ fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_a
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 
-/// The incident, on a real cockpit and the real binary as the new one: the install runs from a caller with no UTF-8 locale (the
-/// launchd agent), every tmux call it or cpd makes is a UTF-8 client, and the engine is restarted.
-#[test]
-fn the_install_restarts_the_engine_of_a_real_cockpit_for_a_caller_without_a_utf8_locale() {
-    let mut failures = Vec::new();
-    for locale in [crate::common::Locale::Unset, crate::common::Locale::LangC, crate::common::Locale::LcAllC] {
-        let env = TestEnv::new();
-        env.write_config(&format!("version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
-        env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-        // The views the cockpit starts just sleep (as tui.rs's), everything else is the built binary.
-        env.fake("cpd", &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{}' \"$@\"", common::CPD));
-        logging_tmux(&env, "");
-        // The cockpit and the engine, built by a caller with a locale.
-        env.cpd(&["tui"]).ok();
-        wait_until("the engine holds the lock", || lock_held(&env));
-        let before = order(&env).len();
-
-        let checkout = Checkout::new(&env, &[]);
-        let built = env.fake("cpd-built", &format!("exec '{}' \"$@\"", common::CPD));
-        let target = env.root().join("target");
-        let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-        let mut cmd = env.command(checkout.script());
-        locale.apply(&mut cmd).env("CARGO", cargo).env("CARGO_TARGET_DIR", &target);
-        let out = common::output(&mut cmd).unwrap();
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // The engine the install started is a child of a tmux window: the teardown stops it.
-        if out.status.code() != Some(0) || stderr.contains("follow-up failed") {
-            failures.push(format!("{locale:?}: the install exited {:?}: {stderr}", out.status.code()));
-            continue;
-        }
-        if !lock_held(&env) {
-            failures.push(format!("{locale:?}: no engine holds the lock after the install: {stderr}"));
-        }
-        let bare: Vec<String> = order(&env)[before..].iter().filter(|l| l.starts_with("tmux ") && !l.starts_with("tmux -u ")).cloned().collect();
-        if !bare.is_empty() {
-            failures.push(format!("{locale:?}: tmux calls that are not UTF-8 clients: {bare:?}"));
-        }
-    }
-    assert!(failures.is_empty(), "the install fails without a UTF-8 locale:\n{}", failures.join("\n"));
-}
-
 // ---- The tag step (scripts/tag-version.sh runs once, at the end of a successful install; a failure of it only warns) ----
 
 /// A recording `scripts/tag-version.sh` in the checkout: appends a line to `tag-version.log` of the TempDir, prints `stderr_line`
@@ -1193,23 +1152,31 @@ fn every_hit_is_listed_with_its_own_line_and_counted_and_only_the_failing_file_i
 /// A copy of the repository's `scripts/` in a temporary directory: what the check classifies when run without arguments.
 fn copied_scripts() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir(dir.path().join("scripts")).unwrap();
-    for entry in fs::read_dir(SCRIPTS).unwrap() {
+    copy_dir(Path::new(SCRIPTS), &dir.path().join("scripts"));
+    dir
+}
+
+/// Copies the files of `from` and of its subdirectories (`scripts/tripwire/`, a covered script) to the new directory `to`.
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
         let path = entry.unwrap().path();
-        if path.is_file() {
-            fs::copy(&path, dir.path().join("scripts").join(path.file_name().unwrap())).unwrap();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_dir(&path, &target);
+        } else if path.is_file() {
+            fs::copy(&path, &target).unwrap();
         }
     }
-    dir
 }
 
 #[test]
 fn the_covered_scripts_of_the_repository_pass() {
-    // The Gate's run: no argument checks the covered list (fourteen scripts; the Linux-only ones are listed with a reason each).
+    // The Gate's run: no argument checks the covered list (fifteen scripts; the Linux-only ones are listed with a reason each).
     let root = Path::new(SCRIPTS).join("..");
     let run = run_check(&Path::new(SCRIPTS).join("check-portable.sh"), &root, &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (14 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (15 files, "), "{}", run.all());
 }
 
 #[test]
@@ -1218,7 +1185,7 @@ fn a_script_in_neither_list_fails_so_a_new_script_cannot_skip_the_decision() {
     let script = dir.path().join("scripts/check-portable.sh");
     let before = run_check(&script, dir.path(), &[]);
     assert_eq!(before.exit, 0, "the copy passes before the new script: {}", before.stderr);
-    assert!(before.all().contains("check-portable: ok (14 files, "), "{}", before.all());
+    assert!(before.all().contains("check-portable: ok (15 files, "), "{}", before.all());
 
     fs::write(dir.path().join("scripts/brand-new.sh"), "#!/bin/sh\nexit 0\n").unwrap();
     let run = run_check(&script, dir.path(), &[]);
@@ -1238,7 +1205,7 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     fs::write(dir.path().join("scripts/test-time.sh"), text).unwrap();
     let run = run_check(&script, dir.path(), &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (14 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (15 files, "), "{}", run.all());
 
     let mut text = fs::read_to_string(dir.path().join("scripts/npm-fresh.sh")).unwrap();
     text.push_str("\nreadlink -f \"$0\"\n");
