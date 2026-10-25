@@ -181,7 +181,7 @@ pub(super) fn rebase(c: &mut Ctx, args: &[String]) -> Run {
     match (flags.as_slice(), pos.as_slice()) {
         ([], [onto]) => start(c, repo, &wt, onto),
         (["--continue"], []) => resume(c, repo, &wt),
-        (["--abort"], []) => abort(c, repo, &wt),
+        (["--abort"], []) => abort(c, &wt),
         _ => Err("rebase (arguments)".to_owned()),
     }
 }
@@ -319,8 +319,7 @@ fn resume(c: &mut Ctx, repo: RepoId, wt: &Path) -> Run {
 }
 
 /// `rebase --abort`: a `reset --hard` to `orig-head`, `HEAD` back where it was.
-fn abort(c: &mut Ctx, repo: RepoId, wt: &Path) -> Run {
-    let _ = repo;
+fn abort(c: &mut Ctx, wt: &Path) -> Run {
     let Some(state) = c.u.rebase_state(wt) else { return Ok(Out::fail(128, "fatal: no rebase in progress\n")) };
     let files = commit_tree(c.u, &state.orig_head);
     let index = files.iter().map(|(p, o)| (p.clone(), o.clone(), 0)).collect();
