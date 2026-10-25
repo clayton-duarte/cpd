@@ -9,6 +9,7 @@
 //! - [`install_state`]: the install state file `$CPD_HOME/run/cpd-install.json` (§1.4, §3.7 E6, hs-d618);
 //! - [`exe`]: the running executable and the reload after an install (§6.7);
 //! - [`limit`]: the test overrides of fixed limits and polls (contract §1.2, debug builds only);
+//! - [`input`]: the keyboard of a command that owns its terminal, scoped by a test that runs it in-process;
 //! - [`layout`]: window names, `@cpd_*` options and the chat slot (§6.2);
 //! - [`priority`]: the idle priority prefix of an Attempt's processes (hs-d528);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
@@ -17,6 +18,7 @@ pub mod addr;
 pub mod deadline;
 pub mod exe;
 pub mod git_guard;
+pub mod input;
 pub mod install_state;
 pub mod layout;
 pub mod limit;

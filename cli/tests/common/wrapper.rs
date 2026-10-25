@@ -13,8 +13,9 @@
 //! - the installed `cpd` is a file the test writes (never run); `<installed> --version` is a route of the `FakeRunner`
 //!   that answers the real verdict of this env's store (`cpd::run_with` of `--version`) or what the test says;
 //! - the pane's screen is a file the process's stdout and stderr point at while the `Pane` lives (what `print!` and
-//!   `eprintln!` write in the wrapper), and its stdin is `/dev/null`: the wrapper that waits for Enter reads the end of
-//!   input. The screen is read from the descriptors, so it holds what the wrapper printed only where the harness does
+//!   `eprintln!` write in the wrapper), and its keyboard is a [`Keys`] (`cpd_core::host::input`): the wrapper that waits
+//!   for Enter pauses there, as at a nap, and reads what the test typed with [`Wrapper::enter`] since, else the end of
+//!   input (the User gave up). The screen is read from the descriptors, so it holds what the wrapper printed only where the harness does
 //!   not capture `print!` itself: under nextest (`--nocapture`, a process per test), not under a plain `cargo test`.
 
 use std::any::Any;
@@ -65,6 +66,7 @@ pub struct PaneSpawn {
     inner: Arc<FakeSpawn>,
     log: Mutex<Log>,
     ignore_term: AtomicBool,
+    term_exits: Mutex<Option<i32>>,
 }
 
 impl PaneSpawn {
@@ -102,6 +104,12 @@ impl PaneSpawn {
         self.ignore_term.store(true, Ordering::SeqCst);
     }
 
+    /// From now on a pi exits with `code` at `SIGTERM`, as pi 1.2.0 does (`shutdown({fromSignal})` ends in
+    /// `process.exit(0)`), instead of being ended by the signal.
+    pub fn exit_on_term(&self, code: i32) {
+        *self.term_exits.lock().unwrap_or_else(PoisonError::into_inner) = Some(code);
+    }
+
     /// Whether `pid` runs.
     pub fn alive(&self, pid: Pid) -> bool {
         self.inner.alive(pid)
@@ -125,6 +133,12 @@ impl Spawn for PaneSpawn {
     fn signal(&self, p: Pid, s: Signal) -> io::Result<()> {
         self.log().signals.push((p, s));
         if s == Signal::Term && self.ignore_term.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if s == Signal::Term && let Some(code) = *self.term_exits.lock().unwrap_or_else(PoisonError::into_inner) {
+            if self.inner.alive(p) {
+                self.inner.exit(p, code);
+            }
             return Ok(());
         }
         self.inner.signal(p, s)
@@ -209,19 +223,33 @@ impl Pane {
     /// asked for the review host) until `fx` drops. The stdin and the output of the process point at `/dev/null` and
     /// the screen file until the `Pane` drops.
     pub fn new(fx: &Fx, session: &str, installed: &Path) -> Pane {
-        fx.cockpit();
+        if fx.tmux_state().is_none() {
+            fx.cockpit();
+        }
         let command = format!("{} session run {session}", installed.display());
         let out = fx.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
         assert!(out.status.success(), "tmux new-window: {}", String::from_utf8_lossy(&out.stderr));
         let pane = String::from_utf8(out.stdout).expect("tmux's stdout is UTF-8").trim().to_owned();
         let set = fx.tmux(&["set", "-p", "-t", &pane, "@cpd_session", session]);
         assert!(set.status.success(), "tmux set: {}", String::from_utf8_lossy(&set.stderr));
+        Pane::at(fx, &pane, installed)
+    }
+
+    /// The pane `pane` of the cockpit of `fx`, which a command already made (`session open`, `session fork`): as
+    /// [`Pane::new`] for the rest.
+    pub fn at(fx: &Fx, pane: &str, installed: &Path) -> Pane {
+        let pane = pane.to_owned();
         fx.export("TMUX", &format!("{}/tmux-0/{},1,0", fx.env.tmux_tmpdir().display(), fx.env.tmux_socket()));
         fx.export("TMUX_PANE", &pane);
         fx.export("PLANNOTATOR_URL_HOST", "localhost");
         fx.fakes.spawn.set_self_exe(installed);
 
-        let spawn = Arc::new(PaneSpawn { inner: fx.fakes.spawn.clone(), log: Mutex::default(), ignore_term: AtomicBool::new(false) });
+        let spawn = Arc::new(PaneSpawn {
+            inner: fx.fakes.spawn.clone(),
+            log: Mutex::default(),
+            ignore_term: AtomicBool::new(false),
+            term_exits: Mutex::new(None),
+        });
         let runner = fx.fakes.runner.weak();
         let ports = Ports { clock: fx.fakes.clock.clone(), runner: runner.clone(), spawn: fx.fakes.spawn.clone() };
         let verdict = Arc::new(VersionRoute { ports, verdict: Mutex::new(Verdict::Real) });
@@ -254,12 +282,15 @@ impl Pane {
         std::fs::read_to_string(&self.screen).unwrap_or_default()
     }
 
-    /// Starts `cpd <args>` (a `session run`) as the pane's process; it runs to its first nap at the first `step`.
+    /// Starts `cpd <args>` (a `session run`) as the pane's process; it runs to its first nap at the first `step`. Its
+    /// `TMUX_PANE` is this pane's at each `step`.
     pub fn run(&self, args: &[&str]) -> Wrapper {
         let argv: Vec<OsString> = std::iter::once("cpd").chain(args.iter().copied()).map(OsString::from).collect();
         let (nap_tx, nap_rx) = channel();
         let (go_tx, go_rx) = channel();
         let stepped = Arc::new(Stepped { inner: self.clock.clone(), nap: Mutex::new(nap_tx.clone()), go: Mutex::new(go_rx) });
+        let typed = Arc::new(Mutex::new(Vec::new()));
+        let keys = Keys { stepped: stepped.clone(), typed: typed.clone(), buffer: Vec::new(), at: 0 };
         let ports = Ports { clock: stepped.clone(), runner: self.runner.clone(), spawn: self.spawn.clone() };
         let screen = self.screen.clone();
         let thread = std::thread::spawn(move || {
@@ -268,7 +299,8 @@ impl Pane {
                 return;
             }
             let mut out = Vec::new();
-            let ended = match catch_unwind(AssertUnwindSafe(|| cpd::run_with(&ports, argv, &mut out))) {
+            let run = || cpd_core::host::input::scope(Box::new(keys), || cpd::run_with(&ports, argv, &mut out));
+            let ended = match catch_unwind(AssertUnwindSafe(run)) {
                 Ok(code) => Ended::Returned { code: exit_code(code), stdout: String::from_utf8_lossy(&out).into_owned() },
                 Err(payload) => match payload.downcast::<Exec>() {
                     Ok(exec) => Ended::Exec(exec.0),
@@ -283,7 +315,7 @@ impl Pane {
             }
             let _ = nap_tx.send(Event::Done(ended));
         });
-        Wrapper { go: Some(go_tx), events: nap_rx, thread: Some(thread), ended: None, clock: self.clock.clone() }
+        Wrapper { go: Some(go_tx), events: nap_rx, thread: Some(thread), ended: None, clock: self.clock.clone(), pane: self.pane.clone(), typed }
     }
 
     /// The new process of an `exec` the wrapper asked for: `cpd` with the launch's arguments, which the old one
@@ -349,19 +381,59 @@ impl Stepped {
     }
 }
 
+impl Stepped {
+    /// The wrapper stops here until the test's next `step`; unwinds when the `Wrapper` is gone.
+    fn pause(&self) {
+        let _ = self.nap.lock().unwrap_or_else(PoisonError::into_inner).send(Event::Napped);
+        if !self.wait_for_step() {
+            resume_unwind(Box::new(Stopped));
+        }
+    }
+}
+
 impl Clock for Stepped {
     fn now(&self) -> Instant {
         self.inner.now()
     }
     fn sleep(&self, d: Duration) {
         self.inner.sleep(d);
-        let _ = self.nap.lock().unwrap_or_else(PoisonError::into_inner).send(Event::Napped);
-        if !self.wait_for_step() {
-            resume_unwind(Box::new(Stopped));
-        }
+        self.pause();
     }
     fn utc(&self) -> OffsetDateTime {
         self.inner.utc()
+    }
+}
+
+/// The keyboard of a wrapper: when it asks for a line it pauses, as at a nap (no time passes), so the test may type
+/// ([`Wrapper::enter`]) after it sees what the wrapper printed; what was typed by the next `step` is the line, and
+/// nothing typed is the end of input.
+struct Keys {
+    stepped: Arc<Stepped>,
+    typed: Arc<Mutex<Vec<u8>>>,
+    buffer: Vec<u8>,
+    at: usize,
+}
+
+impl io::Read for Keys {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = self.fill_buf()?.read(out)?;
+        self.consume(n);
+        Ok(n)
+    }
+}
+
+impl BufRead for Keys {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.at >= self.buffer.len() {
+            self.stepped.pause();
+            self.buffer = std::mem::take(&mut *self.typed.lock().unwrap_or_else(PoisonError::into_inner));
+            self.at = 0;
+        }
+        Ok(&self.buffer[self.at..])
+    }
+
+    fn consume(&mut self, n: usize) {
+        self.at += n;
     }
 }
 
@@ -372,15 +444,25 @@ pub struct Wrapper {
     thread: Option<JoinHandle<()>>,
     ended: Option<Ended>,
     clock: Arc<ManualClock>,
+    /// The tmux pane id: `TMUX_PANE` while it runs.
+    pane: String,
+    typed: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Wrapper {
+    /// Types Enter: the wrapper that waits for a line at its next `step` (it paused at the prompt) reads it.
+    pub fn enter(&self) {
+        self.typed.lock().unwrap_or_else(PoisonError::into_inner).push(b'\n');
+    }
+
     /// Lets the wrapper run to its next nap (the clock has moved by it) or to its end. Returns whether it still runs.
     /// A wrapper that panicked panics here.
     pub fn step(&mut self) -> bool {
         if self.ended.is_some() {
             return false;
         }
+        // SAFETY: under the `Fx`'s lock; the wrapper's thread is parked in a wait for this step, and no other runs.
+        unsafe { std::env::set_var("TMUX_PANE", &self.pane) };
         self.go.as_ref().expect("a running wrapper").send(()).expect("the wrapper waits for its step");
         match self.events.recv().expect("the wrapper ends with an event") {
             Event::Napped => true,

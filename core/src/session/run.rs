@@ -3,7 +3,7 @@
 //! exits it offers to resume it.
 
 use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -157,7 +157,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
         print!("\n  pi exited. Press Enter to resume {name} here.\n");
         let _ = std::io::stdout().flush();
         let mut line = String::new();
-        match std::io::stdin().lock().read_line(&mut line) {
+        match crate::host::input::read_line(&mut line) {
             Ok(0) | Err(_) => return Ok(Output::Owned),
             Ok(_) => {}
         }
