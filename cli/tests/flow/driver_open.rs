@@ -22,21 +22,39 @@ use serde_json::{Value, json};
 
 use super::driver::{JOB, PLAN, PR_TITLE, PR_URL, add_job_in, fixture, seed_home, seed_rows, store};
 
-/// The Gate's hook, a reply of the fake `sh`: it notes the test slot and the commit the hook runs on (the head of its worktree, read
-/// when it runs: the gate worktree is gone when the Gate ends) and answers `reply`.
+/// One run of a Gate hook, as the fake `sh` saw it.
+#[derive(Clone, Debug)]
+struct GateRun {
+    /// The rendered command (`sh -c <command>`).
+    command: String,
+    /// The directory it ran in.
+    cwd: PathBuf,
+    /// The commit checked out there, read when the hook runs.
+    head: String,
+    /// Whether the hook's environment names a test slot (`CPD_TEST_SLOT`): there are no slots since #425.
+    slotted: bool,
+}
+
+/// The Gate's hooks, replies of the fake `sh`: each notes its command, its directory and the commit the hook runs on (the head of its
+/// worktree, read when it runs) and answers `reply`.
 struct Hooks {
     runner: Arc<dyn Runner>,
-    runs: Mutex<Vec<String>>,
+    runs: Mutex<Vec<GateRun>>,
     reply: Mutex<Reply>,
 }
 
 impl Handler for Hooks {
     fn handle(&self, call: &Call) -> Reply {
-        let slot = call.envs.iter().find(|(k, _)| k == "CPD_TEST_SLOT").and_then(|(_, v)| v.clone()).unwrap_or_default();
+        let cwd = call.cwd.clone().expect("a hook has a cwd");
         let mut head = Command::new("git");
-        head.args(["rev-parse", "HEAD"]).current_dir(call.cwd.as_ref().expect("a hook has a cwd"));
+        head.args(["rev-parse", "HEAD"]).current_dir(&cwd);
         let head = self.runner.output(&mut head, "git", Duration::from_secs(5)).expect("git rev-parse");
-        self.runs.lock().unwrap().push(format!("slot={slot} head={}", String::from_utf8_lossy(&head.stdout).trim()));
+        self.runs.lock().unwrap().push(GateRun {
+            command: call.args[1].clone(),
+            cwd,
+            head: String::from_utf8_lossy(&head.stdout).trim().to_owned(),
+            slotted: call.envs.iter().any(|(k, _)| k == "CPD_TEST_SLOT"),
+        });
         self.reply.lock().unwrap().clone()
     }
 }
@@ -102,6 +120,11 @@ impl Live {
         self.repo.parent().unwrap().join(format!("pay.pay--{id}"))
     }
 
+    /// [`Live::worktree`] as a hook sees it as its cwd (the hook runner canonicalizes it): the Attempt's worktree is gone once it ends.
+    fn canonical_worktree(&self, id: &str) -> PathBuf {
+        self.repo.canonicalize().unwrap().parent().unwrap().join(format!("pay.pay--{id}"))
+    }
+
     pub(super) fn lead_sha(&self) -> String {
         self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
@@ -133,9 +156,27 @@ impl Live {
         self.fx.git(&self.lead, &["commit", "-q", "--allow-empty", "-m", "hooks"]);
     }
 
-    /// What the Gate noted: the lines `slot=<n> head=<sha>`, one per run of a hook.
+    /// What the Gates noted: `<command> head=<sha>`, one per run of a hook, in order.
     fn gate_runs(&self) -> Vec<String> {
-        self.hooks.runs.lock().unwrap().clone()
+        self.hooks.runs.lock().unwrap().iter().map(|r| format!("{} head={}", r.command, r.head)).collect()
+    }
+
+    /// The directory each run of a hook was in, in order.
+    fn gate_dirs(&self) -> Vec<PathBuf> {
+        self.hooks.runs.lock().unwrap().iter().map(|r| r.cwd.clone()).collect()
+    }
+
+    /// There is no test slot (#425): no hook was given one, and no slot lock file exists in `$CPD_HOME/run`, and no gate worktree is left
+    /// beside the repo.
+    fn assert_no_slot_and_no_gate_worktree(&self) {
+        assert!(self.hooks.runs.lock().unwrap().iter().all(|r| !r.slotted), "a hook was given a test slot");
+        let names = |dir: &Path| -> Vec<String> {
+            fs::read_dir(dir).map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default()
+        };
+        let slots: Vec<String> = names(&self.fx.env.cpd_home().join("run")).into_iter().filter(|n| n.starts_with("test-")).collect();
+        assert!(slots.is_empty(), "{slots:?}");
+        let gates: Vec<String> = names(self.repo.parent().unwrap()).into_iter().filter(|n| n.contains(".gate-")).collect();
+        assert!(gates.is_empty(), "{gates:?}");
     }
 
     /// The fake `gh`: no pull request of the branch yet, `pr create` answers [`PR_URL`], and the lookup of the pull request answers it.
@@ -251,28 +292,26 @@ fn submit_only(live: &Live, id: &str) -> Value {
     submit(live, id)
 }
 
-/// A Worker that submits, is refused while the base conflicts, merges the base resolving the conflict on its own side and submits
-/// again: `(refused, submitted)`. (`FakeGit` has no `MERGE_HEAD`: a conflicted merge cannot be concluded by a `commit`, so the Worker
-/// resolves in the merge, with `-X ours`.)
-fn merge_the_base(live: &Live, id: &str) -> (Value, Value) {
-    let refused = submit(live, id);
+/// A Worker that merges the base into its branch, resolving the conflict on its own side, and submits. (`FakeGit` has no `MERGE_HEAD`:
+/// a conflicted merge cannot be concluded by a `commit`, so the Worker resolves in the merge, with `-X ours`.)
+fn merge_the_base_and_submit(live: &Live, id: &str) -> Value {
     let wt = live.worktree(id);
     live.fx.git(&wt, &["fetch", "-q", "origin", "main"]);
     live.fx.git(&wt, &["merge", "-q", "--no-edit", "-X", "ours", "origin/main"]);
-    (refused, submit(live, id))
+    submit(live, id)
 }
 
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
-/// `pr.gate = "local"` with a `pre-merge` hook that notes the slot and the commit it gates, Job `api` merged (its commit `api.txt` is on
+/// both Gates `local` (`[gate] merge` and `pr`, contract §8.3) with a `pre-commit` and a `pre-merge` hook that note the commit they run on, Job `api` merged (its commit `api.txt` is on
 /// the Lead Branch, **not pushed**), and the PR's `open` Job `open-repo` queued. `gh` is the test's to script.
 fn open_live() -> Live {
     let live = live("");
-    live.fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    live.fx.env.owner_policy("acme", "[gate]\nmerge = \"local\"\npr = \"local\"\n");
     let merged = live.commit(&live.lead, "api.txt", "api\n", "api");
     live.fixture(&format!(
         "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = '{merged}' WHERE key = 'api';"
     ));
-    live.hooks("[pre-merge]\ngate = \"make test\"\n");
+    live.hooks("[pre-commit]\ngate = \"make quick\"\n\n[pre-merge]\ngate = \"make test\"\n");
     live.add_cpd_job("open-repo", "open");
     live
 }
@@ -290,11 +329,12 @@ fn open_pr_live() -> Live {
     live
 }
 
-/// A Worker that did nothing, with the base unmoved or moved without a conflict, submits the Lead Branch as it is: its merge merges
-/// nothing (the Lead Branch does not move), runs the Gate in a test slot at the Lead tip, pushes it, and runs `gh pr create` (never with
-/// `--draft`), writing `pr open`'s rows and Events in the transaction that ends the Job `merged`.
+/// A Worker that did nothing, with the base unmoved or moved without a conflict, submits the Lead Branch as it is: its submit runs no
+/// Gate, and its merge merges nothing (the Lead Branch does not move), runs both Gates (`gate.merge`, then `gate.pr`) in the Attempt
+/// worktree at its HEAD, which is the Lead tip, with no test slot, pushes it, and runs `gh pr create` (never with `--draft`), writing
+/// `pr open`'s rows and Events in the transaction that ends the Job `merged` (contract §7.4 step 6, hs-d679).
 #[test]
-fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_the_pull_request() {
+fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_pushes_and_opens_the_pull_request() {
     let live = open_live();
     live.gh_creates();
     let tip = live.lead_sha();
@@ -302,7 +342,12 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
     let base = live.advance_base("base.txt", "base\n");
     assert_ne!(live.remote("cpd/pay"), tip, "the Lead's commit is not pushed yet");
 
-    let (attempt, submitted) = live.run_job("open-repo", submit_only);
+    // The submit runs no Gate: the Worker's closure ends right after it, before the driver merges.
+    let (attempt, submitted) = live.run_job("open-repo", |live, id| {
+        let submitted = submit(live, id);
+        assert_eq!(live.gate_runs(), Vec::<String>::new(), "the submit ran a Gate");
+        submitted
+    });
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     assert_eq!(submitted["ok"], true, "{submitted}");
@@ -312,13 +357,15 @@ fn an_open_job_with_no_conflict_merges_nothing_gates_in_a_slot_pushes_and_opens_
     assert_eq!(attempt["merged_sha"], tip);
     assert!(!live.lead.join("base.txt").exists());
     assert_ne!(live.fx.git(&live.repo, &["merge-base", &tip, &base]), base, "the base is not an ancestor of the Lead Branch");
-    // The Gate ran once, at the Lead tip, in a test slot; its gate worktree is gone.
-    assert_eq!(live.gate_runs(), [format!("slot=0 head={tip}")]);
-    let log = fs::read_to_string(live.fx.env.cpd_home().join("run/pay/logs/pr-repo.pre-merge.log")).unwrap();
-    assert!(log.starts_with("gate: slot 0 taken after "), "{log}");
-    let left: Vec<String> =
-        fs::read_dir(live.repo.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.contains(".gate-")).collect();
-    assert!(left.is_empty(), "{left:?}");
+    // Both Gates ran at the merge, once each and in this order, at the Lead tip, in the Attempt's own worktree (not a gate worktree, no slot).
+    assert_eq!(live.gate_runs(), [format!("make quick head={tip}"), format!("make test head={tip}")]);
+    let worktree = live.canonical_worktree("open-repo-a1");
+    assert_eq!(live.gate_dirs(), [worktree.clone(), worktree]);
+    live.assert_no_slot_and_no_gate_worktree();
+    let logs = live.fx.env.cpd_home().join("run/pay/logs");
+    let log = fs::read_to_string(logs.join("open-repo-a1.pre-merge.log")).unwrap();
+    assert!(!log.contains("slot"), "{log}");
+    assert!(logs.join("open-repo-a1.pre-commit.log").exists(), "the gate.merge log is the Attempt's");
     // Pushed, and the pull request created: ready, never a draft.
     assert_eq!(live.remote("cpd/pay"), tip);
     let calls = live.gh_pr_calls();
@@ -359,65 +406,82 @@ fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_
     assert_eq!(txns[2], txns[3], "the end and running -> merging share a transaction");
 }
 
-/// With a base that conflicts with the Lead Branch, the Worker's merge commit is required: the submit is refused `base_conflict` (before
-/// the Gate, so the Gate never runs on a head that the base would refuse), with the files and the commands, until the Worker has merged
-/// the base and resolved it. The merge commit then lands as it is (no rebase), the Gate runs on it, and the pull request opens.
+/// With a base that conflicts with the Lead Branch, the submit is accepted (it runs no base check, no Gate: #425) and the base check is
+/// the first step of the Attempt's merge (§7.4 step 6), before both Gates: the Attempt ends `failed` / `merge_conflict`, a ladder cause,
+/// the conflicted files and the command that merges the base in its detail, and nothing is gated, pushed or opened. The Job goes back to
+/// `queued`; the next Attempt's Worker merges the base and resolves it, its merge commit lands as it is (no rebase), both Gates run on
+/// it, and the pull request opens.
 #[test]
-fn an_open_job_with_a_conflicting_base_is_refused_base_conflict_until_the_worker_merges_the_base() {
+fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_next_attempt_merges_the_base() {
     let live = open_live();
     live.gh_creates();
     // The Lead Branch changed README.md, and so did the base.
     live.commit(&live.lead, "README.md", "mine\n", "mine");
     let tip = live.lead_sha();
     let base = live.advance_base("README.md", "theirs\n");
+    let remote = live.remote("cpd/pay");
 
-    let (attempt, (refused, submitted)) = live.run_job("open-repo", merge_the_base);
+    // The first Worker does not merge the base: its submit is accepted, and the merge is what finds the conflict.
+    let (first, submitted) = live.run_job("open-repo", submit_only);
 
-    assert_eq!(refused["ok"], false, "{refused}");
-    assert_eq!(refused["error"]["code"], "base_conflict");
-    let details = &refused["error"]["details"];
-    assert_eq!((&details["pr"], &details["base"], &details["base_sha"], &details["sha"], &details["files"]), (&json!("repo"), &json!("main"), &json!(base), &json!(tip), &json!(["README.md"])));
-    let next = details["next"].as_array().unwrap();
-    assert!(next[0].as_str().unwrap().starts_with("git -C ") && next[0].as_str().unwrap().ends_with(" merge --no-edit origin/main"), "{next:?}");
-    assert_eq!(next[1], "cpd attempt submit open-repo-a1");
+    assert_eq!(submitted["ok"], true, "{submitted}");
+    assert_eq!((&first["outcome"], &first["cause"]), (&json!("failed"), &json!("merge_conflict")), "{first}");
+    // The detail of the failure is the feedback the next Attempt's Spec carries.
+    let retry = live.event("open-repo-a1", "attempt-retry");
+    let detail = retry["data"]["feedback"].as_str().unwrap();
+    assert!(detail.contains("README.md") && detail.contains(&base[..7]), "the conflicted file and the base are named: {retry}");
+    assert!(detail.contains("merge it into your branch") && detail.contains("cpd attempt submit open-repo-a1"), "what the Worker does is named: {retry}");
+    assert!(detail.contains("Nothing was gated, pushed or opened"), "{retry}");
+    assert_eq!(live.job_status("open-repo"), "queued", "a ladder cause");
+    // Before the Gates: nothing gated, pushed, created or written.
+    assert_eq!(live.gate_runs(), Vec::<String>::new(), "no Gate ran on a head the base refuses");
+    assert_eq!((live.lead_sha(), live.remote("cpd/pay")), (tip.clone(), remote));
+    assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"), "{:?}", live.gh_pr_calls());
+    assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
 
-    // Then the Worker's merge commit lands as it is, and the PR opens.
-    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    // The next Attempt's Worker merges the base and resolves the conflict: its merge commit lands as it is, and the PR opens.
+    let (second, submitted) = live.run_job("open-repo", merge_the_base_and_submit);
+
+    assert_eq!((&second["outcome"], &second["cause"]), (&json!("merged"), &json!("merged")), "{second}");
+    assert_eq!(second["id"], "open-repo-a2");
     assert_eq!(submitted["ok"], true, "{submitted}");
     let new = live.lead_sha();
     assert_ne!(new, tip);
     assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}~1")]), tip);
     assert!(live.fx.git_try(&live.repo, &["merge-base", "--is-ancestor", &base, &new]).status.success(), "the merge commit holds the base");
     assert_eq!(fs::read_to_string(live.lead.join("README.md")).unwrap(), "mine\n");
-    assert_eq!(live.gate_runs(), [format!("slot=0 head={new}")], "the Gate ran once, on the resolved head");
+    assert_eq!(live.gate_runs(), [format!("make quick head={new}"), format!("make test head={new}")], "both Gates ran once, on the resolved head");
+    live.assert_no_slot_and_no_gate_worktree();
     assert_eq!(live.remote("cpd/pay"), new);
     assert_eq!(live.gh_pr_calls().iter().filter(|c| c[1] == "create").count(), 1);
     assert_eq!(live.pr_row().0, "open");
     assert_eq!(live.job_status("open-repo"), "merged");
 }
 
-/// A Gate failure fails the Attempt like any other (§7.7): the submit is refused `gate_failed` (the Worker fixes it), and nothing is pushed,
-/// created or written. A Worker that does not fix it ends crashed, through the ladder.
+/// A Gate failure is the merge's, not the submit's (#425): the submit is accepted (it runs no Gate), the merge runs `gate.pr` in the Attempt
+/// worktree, and its failure ends the Attempt `failed` / `gate_failed` with the hook's tail and log in the detail, nothing pushed, created or
+/// written. `gate_failed` is no ladder cause: the Job fails and the Lead decides.
 #[test]
-fn an_open_jobs_gate_failure_is_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
+fn an_open_jobs_gate_failure_ends_its_merge_gate_failed_and_pushes_nothing_creates_nothing_and_fails_the_attempt() {
     let live = open_live();
     live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
     *live.hooks.reply.lock().unwrap() = Reply::exit(1, "the gate says no\n", "");
     let before = live.remote("cpd/pay");
 
-    // The Worker does not fix it: its pi ends.
-    let (attempt, refused) = live.run_job("open-repo", |live, id| {
-        let refused = submit(live, id);
-        live.end_the_worker();
-        refused
-    });
+    let (attempt, submitted) = live.run_job("open-repo", submit_only);
 
-    assert_eq!((&refused["ok"], &refused["error"]["code"]), (&json!(false), &json!("gate_failed")), "{refused}");
-    assert!(refused["error"]["details"]["tail"].as_str().unwrap().contains("the gate says no"), "{refused}");
-    assert!(refused["error"]["details"]["log"].as_str().unwrap().ends_with("pr-repo.pre-merge.log"), "{refused}");
-    assert_eq!(attempt["outcome"], "failed");
-    assert_ne!(live.job_status("open-repo"), "merged");
+    assert_eq!(submitted["ok"], true, "the submit runs no Gate: {submitted}");
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("failed"), &json!("gate_failed")), "{attempt}");
+    let failed = live.plan_events("job-failed");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    let detail = failed[0].1["detail"].as_str().unwrap();
+    assert!(detail.contains("pre-merge failed (exit 1)"), "{detail}");
+    assert!(detail.contains("the gate says no"), "the hook's tail is in the detail: {detail}");
+    assert!(detail.contains("open-repo-a1.pre-merge.log"), "the hook's log is in the detail: {detail}");
+    assert_eq!(live.job_status("open-repo"), "failed", "gate_failed is no ladder cause: the Lead decides");
+    assert_eq!(live.gate_dirs(), [live.canonical_worktree("open-repo-a1")], "the Gate ran once, in the Attempt worktree");
+    live.assert_no_slot_and_no_gate_worktree();
     assert_eq!(live.remote("cpd/pay"), before, "nothing was pushed");
     assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"), "{:?}", live.gh_pr_calls());
     assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
@@ -443,25 +507,39 @@ fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_faile
     assert!(live.plan_events("pr-opened").is_empty());
 }
 
-/// The update Job on a conflict: the same path as the open Job without `gh`. The Worker merges the base (the submit refuses until it has),
-/// cpd gates and pushes the resolution in the merge; the pull request is already open, so nothing is created and no PR row changes.
+/// The update Job on a conflict: the same path as the open Job without `gh`. Its first Attempt is accepted at the submit and fails at the
+/// merge `merge_conflict` (the base check, before the Gates); the next Attempt's Worker merges the base, and cpd runs both Gates on it and
+/// pushes the resolution in the merge; the pull request is already open, so nothing is created and no PR row changes.
 #[test]
-fn an_update_job_with_a_conflicting_base_is_refused_until_the_worker_merges_it_and_its_merge_pushes_the_resolution() {
+fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_merges_it_and_its_merge_pushes_the_resolution() {
     let live = open_pr_live();
     live.add_cpd_job("up-repo", "update");
     live.commit(&live.lead, "README.md", "mine\n", "mine");
     let tip = live.lead_sha();
     let base = live.advance_base("README.md", "theirs\n");
     let row = live.pr_row();
+    let remote = live.remote("cpd/pay");
 
-    let (attempt, (refused, _)) = live.run_job("up-repo", merge_the_base);
+    let (first, submitted) = live.run_job("up-repo", submit_only);
 
-    assert_eq!((&refused["error"]["code"], &refused["error"]["details"]["files"], &refused["error"]["details"]["base_sha"]), (&json!("base_conflict"), &json!(["README.md"]), &json!(base)), "{refused}");
+    assert_eq!(submitted["ok"], true, "{submitted}");
+    assert_eq!((&first["outcome"], &first["cause"]), (&json!("failed"), &json!("merge_conflict")), "{first}");
+    let retry = live.event("up-repo-a1", "attempt-retry");
+    let detail = retry["data"]["feedback"].as_str().unwrap();
+    assert!(detail.contains("README.md") && detail.contains(&base[..7]), "{retry}");
+    assert_eq!(live.job_status("up-repo"), "queued", "a ladder cause");
+    assert_eq!(live.gate_runs(), Vec::<String>::new(), "the base check is before the Gates");
+    assert_eq!((live.lead_sha(), live.remote("cpd/pay")), (tip.clone(), remote), "nothing merged, nothing pushed");
+
+    let (attempt, submitted) = live.run_job("up-repo", merge_the_base_and_submit);
+
+    assert_eq!(submitted["ok"], true, "{submitted}");
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     let new = live.lead_sha();
     assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}~1")]), tip);
     assert_eq!(live.remote("cpd/pay"), new, "its merge pushes the resolution");
-    assert_eq!(live.gate_runs(), [format!("slot=0 head={new}")]);
+    assert_eq!(live.gate_runs(), [format!("make quick head={new}"), format!("make test head={new}")], "both Gates ran, once, on the resolved head");
+    live.assert_no_slot_and_no_gate_worktree();
     assert!(live.gh_pr_calls().is_empty(), "the pull request exists: {:?}", live.gh_pr_calls());
     assert_eq!(live.pr_row(), row, "an update Job writes no PR row");
     assert!(live.plan_events("pr-opened").is_empty());
@@ -470,8 +548,8 @@ fn an_update_job_with_a_conflicting_base_is_refused_until_the_worker_merges_it_a
 }
 
 /// A feedback fix Job on an open PR reaches the remote through the update path (hs-d497): `job add` queues the PR's `update` Job in its own
-/// transaction (once, however many fixes are added; `reason` `feedback`), which is Ready only when the fixes have merged, gates the Lead
-/// Branch in a slot and pushes it. No `pr rebase` or `pr push` is run by anyone.
+/// transaction (once, however many fixes are added; `reason` `feedback`), which is Ready only when the fixes have merged, runs both Gates
+/// at its merge (no slot) on the Lead Branch and pushes it. No `pr rebase` or `pr push` is run by anyone.
 #[test]
 fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() {
     let live = open_pr_live();
@@ -511,6 +589,7 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     assert_ne!(live.remote("cpd/pay"), lead, "the fixes' own pushes failed: the remote lacks them");
     blocked.store(false, std::sync::atomic::Ordering::SeqCst);
     let before = live.gate_runs();
+    let before_dirs = live.gate_dirs().len();
 
     let (attempt, submitted) = live.run_job("up-repo", submit_only);
 
@@ -518,15 +597,23 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     assert_eq!(submitted["ok"], true, "{submitted}");
     assert_eq!(live.lead_sha(), lead, "nothing to merge: the base did not move");
     assert_eq!(live.remote("cpd/pay"), lead);
-    assert_eq!(live.gate_runs(), [before, vec![format!("slot=0 head={lead}")]].concat(), "the Gate ran on the Lead tip, in a slot");
+    assert_eq!(
+        live.gate_runs(),
+        [before, vec![format!("make quick head={lead}"), format!("make test head={lead}")]].concat(),
+        "both Gates ran on the Lead tip, at the update Job's merge"
+    );
+    let worktree = live.canonical_worktree("up-repo-a1");
+    assert_eq!(live.gate_dirs()[before_dirs..], [worktree.clone(), worktree], "in its Attempt worktree");
+    live.assert_no_slot_and_no_gate_worktree();
     assert!(live.gh_pr_calls().is_empty());
 }
 
 /// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`
-/// Job adopts it. Its submit runs no Gate, its merge pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
+/// Job adopts it. Its submit runs no Gate; its merge runs both Gates (step 6, before the adoption: #425 moved the adoption after them,
+/// hs-d679) but pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
 /// `merged`, `pr-merged` (no `pr-opened`), and the Plan `done` with the last PR.
 #[test]
-fn an_open_job_adopts_a_pull_request_merged_on_github_with_no_gate_and_no_push() {
+fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_push() {
     let live = open_live();
     let merged = common::pay_lookup().replace("\"state\":\"OPEN\"", "\"state\":\"MERGED\"").replace("\"mergedAt\":null", "\"mergedAt\":\"2026-10-20T12:00:00Z\"");
     live.runner()
@@ -534,11 +621,18 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_with_no_gate_and_no_push()
         .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&merged));
     let before = live.remote("cpd/pay");
 
-    let (attempt, submitted) = live.run_job("open-repo", submit_only);
+    let tip = live.lead_sha();
+
+    let (attempt, submitted) = live.run_job("open-repo", |live, id| {
+        let submitted = submit(live, id);
+        assert_eq!(live.gate_runs(), Vec::<String>::new(), "the submit ran a Gate");
+        submitted
+    });
 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     assert_eq!(submitted["ok"], true, "{submitted}");
-    assert_eq!(live.gate_runs(), Vec::<String>::new(), "no Gate");
+    assert_eq!(live.gate_runs(), [format!("make quick head={tip}"), format!("make test head={tip}")], "both Gates ran at the merge, before the adoption");
+    live.assert_no_slot_and_no_gate_worktree();
     assert_eq!(live.remote("cpd/pay"), before, "no push");
     assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"));
     assert_eq!(live.pr_row().0, "merged");
