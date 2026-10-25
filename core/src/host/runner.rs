@@ -5,9 +5,9 @@ use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::ExitStatus;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use super::deadline::{self, Failed};
@@ -23,6 +23,10 @@ pub trait Runner: Send + Sync {
     /// Runs `cmd` for at most `deadline` and returns what [`deadline::output`] returns: the same `Output`,
     /// `Failed::Io` or `Failed::Timeout(tool_timeout)`.
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed>;
+
+    /// Runs `cmd` with no deadline, in its own process group, like [`Command::output`]: for a call that returns when
+    /// the User says so (`tmux display-popup`, contract §6.3).
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output>;
 
     /// Runs what `call` describes: like [`Runner::output`], and also writes `call.stdin` to the child's stdin
     /// (then closes it) and sends the child's stderr to the file `call.stderr_to`, appending.
@@ -52,6 +56,9 @@ pub struct SystemRunner;
 impl Runner for SystemRunner {
     fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
         deadline::output(cmd, tool, deadline)
+    }
+    fn output_unbounded(&self, cmd: &mut Command, _tool: &str) -> std::io::Result<Output> {
+        cmd.process_group(0).output()
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
         let mut cmd = if call.tool == HOOK_TOOL { command(&idle(call)) } else { command(call) };
@@ -144,6 +151,39 @@ pub struct FakeRunner {
     script: Arc<Mutex<Script>>,
 }
 
+/// A [`FakeRunner`] held weakly: for a route that lives in the runner's own script and calls it back.
+struct WeakRunner {
+    clock: ManualClock,
+    script: Weak<Mutex<Script>>,
+}
+
+impl WeakRunner {
+    fn upgrade(&self) -> Option<FakeRunner> {
+        self.script.upgrade().map(|script| FakeRunner { clock: self.clock.clone(), script })
+    }
+}
+
+impl Runner for WeakRunner {
+    fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
+        match self.upgrade() {
+            Some(runner) => runner.output(cmd, tool, deadline),
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+        }
+    }
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output> {
+        match self.upgrade() {
+            Some(runner) => runner.output_unbounded(cmd, tool),
+            None => Err(ErrorKind::NotFound.into()),
+        }
+    }
+    fn run(&self, call: &Call) -> Result<Output, Failed> {
+        match self.upgrade() {
+            Some(runner) => runner.run(call),
+            None => Err(Failed::Io(ErrorKind::NotFound.into())),
+        }
+    }
+}
+
 /// The program's file name: `/x/bin/tmux` is `tmux`.
 fn file_name(program: &str) -> &str {
     program.rsplit('/').next().unwrap_or(program)
@@ -173,6 +213,10 @@ impl FakeRunner {
     pub fn route(self, program: &str, handler: Arc<dyn Handler>) -> FakeRunner {
         self.script().routes.push((program.to_owned(), handler));
         self
+    }
+    /// This runner as a [`Runner`] that does not keep the script alive.
+    pub fn weak(&self) -> Arc<dyn Runner> {
+        Arc::new(WeakRunner { clock: self.clock.clone(), script: Arc::downgrade(&self.script) })
     }
     /// Every call in order, answered or not.
     pub fn calls(&self) -> Vec<Call> {
@@ -217,7 +261,10 @@ impl FakeRunner {
                 Err(Failed::Timeout(deadline::timeout(&call.tool, argv, deadline)))
             }
             Some(Reply::Exit { code, stdout, stderr, takes }) => {
-                self.clock.sleep(takes);
+                // A reply that takes no time is no nap: `ManualClock::naps` lists only what a caller waited on.
+                if !takes.is_zero() {
+                    self.clock.sleep(takes);
+                }
                 Ok(Output { status: ExitStatus::from_raw(code << 8), stdout, stderr })
             }
         }
@@ -245,5 +292,13 @@ impl Runner for FakeRunner {
     }
     fn run(&self, call: &Call) -> Result<Output, Failed> {
         self.reply(call.clone())
+    }
+    /// No deadline: the call is recorded with the longest one, which no reply reaches.
+    fn output_unbounded(&self, cmd: &mut Command, tool: &str) -> std::io::Result<Output> {
+        match self.output(cmd, tool, Duration::MAX) {
+            Ok(out) => Ok(out),
+            Err(Failed::Io(e)) => Err(e),
+            Err(Failed::Timeout(e)) => Err(std::io::Error::other(e.message().to_owned())),
+        }
     }
 }
