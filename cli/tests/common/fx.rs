@@ -39,7 +39,7 @@ use cpd_core::clock::{Clock, ManualClock};
 use cpd_core::fakes::git::{GitRoute, Repo, Universe};
 use cpd_core::fakes::tmux::{Invocation, TmuxRoute};
 use cpd_core::host::runner::{Call, Handler, Reply};
-use cpd_core::host::spawn::{Launch, Spawn};
+use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ports::{Fakes, Ports};
 
@@ -232,6 +232,19 @@ impl Fx {
             assert!(self.fakes.clock.elapsed() - start < LIMIT, "waited {LIMIT:?} virtual time");
             self.advance(TICK);
         }
+    }
+
+    /// The pid of a process the `FakeSpawn` runs: it is alive until [`Fx::ended_pid`] or an `exit` of the test.
+    pub fn live_pid(&self) -> u32 {
+        let launch = Launch { program: "cpd".into(), args: vec!["pr".into(), "merge".into()], ..Launch::default() };
+        self.fakes.spawn.spawn(&launch).expect("the FakeSpawn starts nothing and cannot fail").0
+    }
+
+    /// The pid of a process the `FakeSpawn` ran and that has ended.
+    pub fn ended_pid(&self) -> u32 {
+        let pid = self.live_pid();
+        self.fakes.spawn.exit(Pid(pid), 0);
+        pid
     }
 
     /// Runs `f` with this `Fx`'s fake ports as the ambient `Ports::current()` of this thread: for a library call whose
@@ -601,6 +614,20 @@ let fx = Fx { env, fakes, universe, git_route, tmux_route, on_fake_ports: false,
         self.cpd(args)
     }
 
+    /// Runs `f` with the process's stderr pointing at a file of the env's, and gives its result and what was written there:
+    /// the lines the product prints with `eprintln!` (a `Run`'s `stderr` is empty). The descriptor is put back after, also
+    /// on a panic. A harness that captures the output itself (the libtest default) takes `eprintln!` first and leaves the
+    /// file empty: nextest, the Gate's runner, does not.
+    pub fn with_stderr<T>(&self, f: impl FnOnce() -> T) -> (T, String) {
+        let path = self.env.root().join("stderr-capture");
+        let file = std::fs::File::create(&path).expect("create the stderr file");
+        let result = {
+            let _saved = Stderr::enter(&file);
+            f()
+        };
+        (result, std::fs::read_to_string(&path).expect("read the stderr file"))
+    }
+
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
         self.cpd_with(cwd, args, &[])
@@ -885,6 +912,25 @@ impl Drop for NoTerminal {
     fn drop(&mut self) {
         let _ = dup2_stdin(&self.stdin);
         let _ = dup2_stdout(&self.stdout);
+    }
+}
+
+/// The process's stderr pointing at a file, put back on drop.
+struct Stderr {
+    saved: OwnedFd,
+}
+
+impl Stderr {
+    fn enter(file: &std::fs::File) -> Stderr {
+        let saved = Stderr { saved: dup(std::io::stderr()).expect("dup stderr") };
+        dup2_stderr(file).expect("point stderr at the file");
+        saved
+    }
+}
+
+impl Drop for Stderr {
+    fn drop(&mut self) {
+        let _ = dup2_stderr(&self.saved);
     }
 }
 

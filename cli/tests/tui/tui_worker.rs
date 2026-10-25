@@ -3,9 +3,8 @@
 //! screen, changes the store or the file between two polls and lets the clock run the 500 ms check. The rendering of
 //! messages, wrapping and scrolling is unit-tested in `tui/src/worker/`.
 //!
-//! Two tests stay in a pane of a private tmux server, their subject being tmux's (`mig-tui-a-3` and `mig-tui-a-4`
-//! migrate them): `scrolling_leaves_the_end_and_q_closes_the_pane` (`q` kills the pane `$TMUX_PANE` names) and
-//! `an_unknown_attempt_or_plan_is_refused_before_drawing` (the root parser's `usage` refusals).
+//! `q` kills the pane `$TMUX_PANE` names on the fake tmux server of the `Fx`; the refusals of the root parser run through
+//! `Fx::cpd`.
 
 use crate::common;
 
@@ -18,11 +17,11 @@ use std::time::Duration;
 use clap::Parser;
 use common::fx::Fx;
 use common::screen::{Bytes, Display, FakeTty, Screen, Script, Step, ch, idle, then};
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use cpd_tui::view_ports::backed_off_with;
 use cpd_tui::worker;
@@ -36,13 +35,6 @@ fn config(env: &TestEnv) {
         env.tmux_socket()
     );
     env.write_config(&config);
-}
-
-/// A real env, for the tests that still run in a pane.
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    config(&env);
-    env
 }
 
 /// An env in this process: the fake ports, the store and the config of [`config`].
@@ -101,89 +93,6 @@ fn session_file(env: &TestEnv) -> PathBuf {
     path
 }
 
-// ---------- the pane ----------
-
-const SESSION: &str = "worker";
-
-struct Pane<'a> {
-    env: &'a TestEnv,
-}
-
-impl<'a> Pane<'a> {
-    /// Runs `cpd tui view worker api-a1 --plan ship` in a `width` × `height` pane of the env's private tmux server.
-    fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
-        Pane::start_command(env, width, height, &format!("{CPD} tui view worker api-a1 --plan ship"))
-    }
-
-    /// Runs `command` as the cockpit runs a view: the pane carries `@cpd_view` before the command starts, and the
-    /// server has the cockpit's `pane-died` hook, so a view that exits is started again (contract §6.1).
-    fn start_command(env: &'a TestEnv, width: u16, height: u16, command: &str) -> Pane<'a> {
-        let out = env.tmux(&[
-            "-u",
-            "set-option",
-            "-g",
-            "remain-on-exit",
-            "on",
-            ";",
-            "set-hook",
-            "-g",
-            "pane-died",
-            PANE_DIED_HOOK,
-            ";",
-            "new-session",
-            "-d",
-            "-s",
-            SESSION,
-            "-x",
-            &width.to_string(),
-            "-y",
-            &height.to_string(),
-            &format!("sleep {SLEEP_SECONDS}"),
-            ";",
-            "set-option",
-            "-p",
-            "-t",
-            SESSION,
-            "@cpd_view",
-            "worker",
-            ";",
-            "respawn-pane",
-            "-k",
-            "-t",
-            SESSION,
-            command,
-        ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        Pane { env }
-    }
-
-    /// The screen, each row without trailing blanks, without the empty rows at the end.
-    fn screen(&self) -> Vec<String> {
-        let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
-        while rows.last().is_some_and(String::is_empty) {
-            rows.pop();
-        }
-        rows
-    }
-
-    fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    fn keys(&self, keys: &[&str]) {
-        let mut args = vec!["send-keys", "-t", SESSION];
-        args.extend(keys);
-        assert!(self.env.tmux(&args).status.success());
-    }
-
-    /// Whether the pane is gone: it was the session's only pane, so the session goes with it.
-    fn closed(&self) -> bool {
-        !self.env.tmux(&["has-session", "-t", SESSION]).status.success()
-    }
-}
-
 const STATUS: &str = " api-a1 running · working";
 
 // ---------- the view in this process ----------
@@ -229,7 +138,8 @@ fn args(argv: &[&str]) -> worker::Args {
 fn view(fx: &Fx, argv: &[&str], terminal: bool, display: &Display, steps: Vec<Step>) -> (Result<Output, CpdError>, Vec<u8>) {
     let mut input = Script::new(fx.fakes.ports.clock.clone(), steps);
     let mut out = Bytes::default();
-    let result = worker::run_on(&fx.fakes.ports, args(argv), &mut FakeTty::new(terminal), &mut out, display.terminal(), &mut input);
+    // `q` closes the pane through `Ports::current()`: the fake, never a real tmux
+    let result = Ports::scope(&fx.fakes.ports, || worker::run_on(&fx.fakes.ports, args(argv), &mut FakeTty::new(terminal), &mut out, display.terminal(), &mut input));
     assert_eq!(input.remaining(), 0, "the view ended before its script: {result:?}");
     (result, out.bytes())
 }
@@ -342,20 +252,29 @@ fn an_appended_entry_is_followed_at_the_end() {
 
 #[test]
 fn scrolling_leaves_the_end_and_q_closes_the_pane() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file));
-    let pane = Pane::start(&env, 40, 4);
-    pane.wait("the end", |s| s.iter().any(|r| r.contains("test result")));
-    pane.keys(&["g"]); // not a key
-    pane.keys(&["k", "k", "k", "k", "k", "k"]);
-    let screen = pane.wait("the top", |s| s.first().is_some_and(|r| r.contains("you")));
-    assert_eq!(screen, ["16:33:44 you", "      Implement the API.", "16:33:44 agent", STATUS]);
-    pane.keys(&["G"]);
-    pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
-    // The pane carries `@cpd_view` and the server respawns a dead one: `q` must close the pane, not end the program.
-    pane.keys(&["q"]);
-    common::wait_until("q to close the pane", || pane.closed());
+    let fx = fx();
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file));
+    // the view's pane: one of the cockpit's, on the fake server, which `$TMUX_PANE` names
+    fx.cockpit();
+    let pane = fx.panes().into_iter().find(|p| p.view == "plan").expect("the plan pane").pane;
+    fx.export("TMUX_PANE", &pane);
+    let (display, shots) = (Display::new(40, 4), Shots::default());
+    let mut steps = vec![shots.take(&display), Step::Event(ch('g'))]; // not a key
+    steps.extend(["k"; 6].map(|k| Step::Event(ch(k.chars().next().unwrap()))));
+    steps.extend([shots.take(&display), Step::Event(ch('G')), shots.take(&display)]);
+    // `q` must close the pane, not end the program: the pane carries `@cpd_view` and the server respawns a dead one
+    steps.push(Step::Event(ch('q')));
+    view(&fx, &["api-a1", "--plan", "ship"], true, &display, steps).0.unwrap();
+    assert!(shots.get(0).iter().any(|r| r.contains("test result")), "the end: {:?}", shots.get(0));
+    assert_eq!(shots.get(1), ["16:33:44 you", "      Implement the API.", "16:33:44 agent", STATUS], "the top");
+    assert!(shots.get(2).iter().any(|r| r.contains("test result")), "the end again: {:?}", shots.get(2));
+    assert!(fx.panes().iter().all(|p| p.pane != pane), "q closed the pane: {:?}", fx.panes());
+    assert!(
+        fx.calls("tmux").iter().any(|c| c.args.windows(3).any(|w| w[0] == "kill-pane" && w[1] == "-t" && w[2] == pane)),
+        "kill-pane of {pane}: {:?}",
+        fx.calls("tmux")
+    );
 }
 
 /// A view that fails at start (here: no such Attempt) is started again by the hook; it waits before it exits and
@@ -437,15 +356,15 @@ fn a_follow_that_fails_is_shown_and_the_status_stays() {
 
 #[test]
 fn an_unknown_attempt_or_plan_is_refused_before_drawing() {
-    let env = env();
-    populate(&env, None);
-    let run = env.cpd(&["tui", "view", "worker", "nope-a1", "--plan", "ship"]);
+    let fx = fx();
+    populate(&fx.env, None);
+    let run = fx.cpd(&["tui", "view", "worker", "nope-a1", "--plan", "ship"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("attempt_not_found")), "{run:?}");
-    let run = env.cpd(&["tui", "view", "worker", "api-a1", "--plan", "nope"]);
+    let run = fx.cpd(&["tui", "view", "worker", "api-a1", "--plan", "nope"]);
     assert_eq!(run.error()["code"], "plan_not_found", "{run:?}");
-    let run = env.cpd(&["tui", "view", "worker", "api-a1"]);
+    let run = fx.cpd(&["tui", "view", "worker", "api-a1"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("plan_required")), "{run:?}");
-    let run = env.cpd(&["tui", "view", "worker"]);
+    let run = fx.cpd(&["tui", "view", "worker"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{run:?}");
 }
 
