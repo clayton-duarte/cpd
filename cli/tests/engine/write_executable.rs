@@ -9,17 +9,23 @@
 //! denial for its whole life, which is why this test runs an authored `cpd` itself. It pins the
 //! contract the fix gives: no in-place open of an executable in use, a temp file then a rename.
 
+#[cfg(target_os = "linux")]
 use crate::common;
 
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::process::{Child, Stdio};
 
+#[cfg(target_os = "linux")]
 use common::{CPD, TestEnv, copy_executable, spawn, write_executable};
 
+#[cfg(target_os = "linux")]
 /// The running copy of `cpd`: killed and reaped on drop, so no process is left,
 /// whether the test passes or panics.
 struct Running(Child);
 
+#[cfg(target_os = "linux")]
 impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -27,6 +33,8 @@ impl Drop for Running {
     }
 }
 
+// ETXTBSY on a running executable is a Linux behaviour; macOS lets the open succeed.
+#[cfg(target_os = "linux")]
 #[test]
 fn write_executable_over_a_running_script_does_not_fail() {
     let env = TestEnv::new();
