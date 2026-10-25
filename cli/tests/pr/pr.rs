@@ -1045,19 +1045,25 @@ impl Poll {
         self.cpd(&["pr", command, "--pr", key, "--plan", "pay"])
     }
 
-    /// A second PR `web` of Plan `pay`, waiting on PR `repo`, in its own repo: its rows and nothing on disk.
-    fn add_waiting_web(&self) {
-        let repo = self.keyed_repo("web").canonicalize().unwrap();
-        seed_web(self.store(), &repo, &repo, "", Web::Waiting);
-    }
-
-    /// [`Poll::add_waiting_web`], with PR `web` open as pull request 813 on its pushed Lead Branch `cpd/pay/web`, its Job `ui` merged.
-    fn add_open_web(&self) {
+    /// The keyed repo `web`, with a bare `origin` that has `main`.
+    fn web_repo(&self) -> PathBuf {
         let repo = self.keyed_repo("web").canonicalize().unwrap();
         let origin = self.env.root().join("repos/web-origin.git");
         self.git(self.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
         self.local_origin(&repo, &origin);
         self.git(&repo, &["push", "-q", "origin", "main"]);
+        repo
+    }
+
+    /// A second PR `web` of Plan `pay`, waiting on PR `repo`, in its own repo: its rows and nothing else.
+    fn add_waiting_web(&self) {
+        let repo = self.web_repo();
+        seed_web(self.store(), &repo, &repo, "", Web::Waiting);
+    }
+
+    /// [`Poll::add_waiting_web`], with PR `web` open as pull request 813 on its pushed Lead Branch `cpd/pay/web`, its Job `ui` merged.
+    fn add_open_web(&self) {
+        let repo = self.web_repo();
         let lead = repo.parent().unwrap().join("web.pay.web");
         self.git(&repo, &["worktree", "add", "-q", "-b", "cpd/pay/web", lead.to_str().unwrap(), "main"]);
         self.git(&lead, &["config", "user.name", "cpd test"]);
@@ -1066,6 +1072,24 @@ impl Poll {
         let sha = self.git(&lead, &["rev-parse", "HEAD"]);
         self.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay/web"]);
         seed_web(self.store(), &repo, &lead, &sha, Web::Open);
+    }
+
+    /// PR `key` of Plan `pay` open as pull request `number` of `acme/pay`, with the pull request's row `pr open` writes: the
+    /// Plan's title, no review, no checks.
+    fn mark_opened(&self, key: &str, number: i64) {
+        let url = format!("https://github.com/acme/pay/pull/{number}");
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                       VALUES ('acme/pay', {number}, '{url}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
+                     UPDATE prs SET status = 'open', pr_number = {number}, pr_url = '{url}', pr_opened_at = 'opened',
+                            pull_request = (SELECT id FROM pull_requests WHERE number = {number})
+                      WHERE plan = 'pay' AND key = '{key}';"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
     }
 
     /// The `base` of PR `web` of Plan `pay`.
@@ -1322,6 +1346,8 @@ fn poll_stacked_pr(fx: &Poll) {
 /// Plan `pay`: PR `repo` (812, base `main`) and PR `up` (814) stacked on it, both open, as a poll stored them.
 fn stacked() -> Poll {
     let fx = poll_fx("deploy");
+    // The base PR's Lead Branch is pushed, clean: the clean-up of its merge removes the worktree, which unpushed work would keep.
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
     fx.stack_up();
     fx.search(&[based(pay("OPEN", None, None), "main"), based(up("OPEN"), "cpd/pay")]);
     let out = fx.poll();
@@ -2254,7 +2280,8 @@ fn a_lookup_with_a_not_found_alias_and_exit_1_still_applies_the_others() {
 fn a_merged_pr_makes_its_dependent_startable_but_poll_does_not_start_it() {
     let fx = poll_fx("dispatch");
     fx.add_waiting_web();
-    fx.pr_cmd("open", "repo").ok();
+    // `pr open` only queues the PR's opener Job now: the open pull request is written straight, as the Lead's opener leaves it.
+    fx.mark_opened("repo", 812);
     assert_eq!(code(&fx.cpd(&["pr", "start", "web", "--plan", "pay"])), ("pr_not_ready".into(), 3));
 
     fx.search(&[]);
@@ -2368,7 +2395,8 @@ fn a_pull_request_github_cannot_find_loses_its_flags_and_is_not_read_again() {
     assert_eq!(fx.gh_calls().len(), calls + 1, "one call: the search");
     assert_eq!(fx.txns(), txns);
 
-    // An owned row GitHub cannot find is unchanged.
+    // An owned row GitHub cannot find is unchanged. One `Fx` at a time in a process: the first is dropped.
+    drop(fx);
     let fx = poll_fx_owned_not_found();
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
     assert_eq!(fx.pr_data().3, "open");
@@ -2461,18 +2489,14 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-                   VALUES ('acme/pay', 900, 'https://github.com/acme/pay/pull/900', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
-                 UPDATE prs SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
-                 UPDATE prs SET status = 'open', pr_number = 900, pr_url = 'https://github.com/acme/pay/pull/900', pr_opened_at = 'opened',
-                        pull_request = (SELECT id FROM pull_requests WHERE number = 900)
-                  WHERE plan = 'pay' AND key = 'fix';
+                "UPDATE prs SET status = 'dispatch', lead_worktree = '{lead}', started_at = 't' WHERE plan = 'pay' AND key = 'fix';
                  UPDATE plans SET phase = 'deploy' WHERE id = 'pay';",
                 lead = fx.lead.display()
             ))?;
             Ok(())
         })
         .unwrap();
+    fx.mark_opened("fix", 900);
 
     fx.lookup(&[Some(node("acme/pay", 900, "MERGED", None, None))]);
     let out = fx.poll();
@@ -2610,6 +2634,8 @@ fn an_owned_pull_request_that_left_the_search_and_is_closed_is_told_to_the_plan_
 fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_path() {
     let fx = poll_fx("deploy");
     let (worktree, branch) = kept_attempt(&fx);
+    // The Lead Branch is pushed and clean, as a merged PR's is: its clean-up removes the worktree, which unpushed work would keep.
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
     let started = fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "pay--b-a1", "cat"]);
     assert!(started.status.success(), "{started:?}");
     assert!(fx.tmux(&["new-window", "-d", "-t", "cpd-work", "-n", "other-plan", "cat"]).status.success());
