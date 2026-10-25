@@ -53,7 +53,6 @@ cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real 
 cpd::pr git_guard::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr git::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr merge::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr pr_crud::  # m-pr-a: pr commands that may reach a real tmux
 cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server
