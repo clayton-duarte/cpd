@@ -31,25 +31,23 @@ Replace every external subprocess with an in-process fake or mock behind a trait
 | Trait | Purpose | Real adapter | Fake | Test seam | Notes |
 |---|---|---|---|---|---|
 | **`Clock`** | System time, sleep | `SystemClock` reads wall time | `ManualClock` (virtual time, no sleep) | `&dyn Clock` at loop entry | `core/src/clock.rs`; injected at every loop (driver, session, slot, ask, plan, context, pr, engine tick, TUI view, pi adapter `waitFor`) |
-| **`Runner`** | Subprocess spawning | `std::process::Command` | `FakeRunner` records argv, returns `Output` from a map or script | `env.command(program)` with fakes in `env.bin()` first on PATH | `core/src/host/deadline.rs`; every `gh`, `pi`, `node`, `sh`, `cpd` call; deadline, grace, drain on the clock |
-| **`Tmux`** | Terminal multiplexer | `tmux -u -L <socket> -f /dev/null <args>` | `FakeTmux` SQLite state, 35 subcommands, no process, hooks run synchronously | `Tmux::with_program(fake)` (unit tests); `TestEnv::fake_tmux()` symlink to `fake-tmux` bin | `core/src/host/tmux.rs`; methods above it stay; `__ctl` control surface for tests |
-| **`Git`** | Version control | `git -C <dir> <argv>` | `FakeGit` SQLite state, 23+ subcommands, commits/refs/worktrees as rows, no process | `CPD_TEST_GIT` env var (set by nextest setup script), `git::run::run` reads it in debug build only | `core/src/git/run.rs:57`; the one spawn point; contract tests stay real |
-| **`Spawn` / `Procs`** | Long-lived children, signals | `std::process::Child`, `nix::sys::signal::kill`, `/proc/<pid>/…` | `FakeSpawn` tracks pids, `kill` marks dead, stubs signal delivery | Builders in tests, records in `FakeTmux` (pane pids are fake) and `FakeSpawn` state | `core/src/host/spawn.rs` (new); drivers, session panes, pollers, `kill(pid, 0)` |
+| **`Runner`** | Every subprocess (tmux, git, gh, pi, node, sh, cpd) | `SystemRunner` = `deadline::output` | `FakeRunner` scripts `Output`s by program file name; routes `tmux` and `git` (in-process handlers, added by PRs port-tmux and port-git) | `&dyn Runner` / `_with` forms; `Tmux::with_runner` | `core/src/host/runner.rs`; deadline on the `ManualClock`; `deadline.rs` tests are the real contract tests |
+| **`Spawn` / `Procs`** | Long-lived children, signals | `std::process::Child`, `nix::sys::signal::kill`, `/proc/<pid>/…` | `FakeSpawn` tracks pids, `kill` marks dead, stubs signal delivery | Builders in tests, records in the fake tmux route (pane pids are fake) and `FakeSpawn` state | `core/src/host/spawn.rs` (new); drivers, session panes, pollers, `kill(pid, 0)` |
+
+**Tmux and git are not ports.** They are routes of the `FakeRunner`, chosen by the program's file name (`tmux`, `git`): the fake tmux of `cli/src/fakes/tmux` and the fake git are in-process handlers that take what a `Command` carries (argv, env, cwd). `Tmux::with_program` and `CPD_TEST_GIT` go away. (Lead decision of 2026-10-25, refining this ADR.)
 
 ## Entry points and thin mains
 
-**`Ports`** is one struct of `Arc<dyn T>` for each trait:
+**`Ports`** is `{ clock, runner, spawn }`, one `Arc<dyn T>` for each trait:
 ```rust
 pub struct Ports {
     pub clock: Arc<dyn Clock>,
     pub runner: Arc<dyn Runner>,
-    pub tmux: Arc<dyn Tmux>,
-    pub git: Arc<dyn Git>,
     pub spawn: Arc<dyn Spawn>,
 }
 
 impl Ports {
-    pub fn real() -> Self { … }  // SystemClock, Runner, real Tmux, etc.
+    pub fn real() -> Self { … }  // SystemClock, SystemRunner, real Spawn
 }
 ```
 
@@ -72,9 +70,9 @@ Complete list of every `Command::new`, `.spawn()`, and process operation outside
 
 | File | Line | Operation | Port | Reason |
 |---|---|---|---|---|
-| `core/src/git/run.rs` | 57 | `Command::new("git")` | `Git` | Version control spawn point |
+| `core/src/git/run.rs` | 57 | `Command::new("git")` | `Runner` (route `git`) | Version control spawn point |
 | `core/src/host/deadline.rs` | 120+ | `subprocess.spawn()` | `Runner` | Timeout wrapper |
-| `core/src/host/tmux.rs` | 501 | `Command::new("tmux")` | `Tmux` | Terminal multiplexer |
+| `core/src/host/tmux.rs` | 501 | `Command::new("tmux")` | `Runner` (route `tmux`) | Terminal multiplexer |
 | `core/src/clock.rs` | 10 | `SystemTime::now()` | `Clock` | Current time |
 | `core/src/host/spawn.rs` | 50+ | Signal operations | `Spawn` | Process signals |
 | `engine/src/watch/engine.rs` | 300+ | Timer reads | `Clock` | Engine tick |
@@ -125,8 +123,8 @@ For each test file under `cli/tests/<area>/`:
 1. **Classify** (read the test, count the external calls): which port(s)?
 2. **Port or delete**:
    - **K (kept)**: uses no external subprocess → no change
-   - **T (tmux)**: calls `env.tmux()` or asserts on `tmux` output → `env.tmux_state()` or delete
-   - **G (git)**: calls `env.git()` or real git commands → `CPD_TEST_GIT` or delete
+   - **T (tmux)**: calls `env.tmux()` or asserts on `tmux` output → the `tmux` route of the `FakeRunner` or delete
+   - **G (git)**: calls `env.git()` or real git commands → the `git` route of the `FakeRunner` or delete
    - **R (runner/script)**: calls a script or `env.fake_*()` → shim with `Runner` or delete
    - **C (clock)**: has a sleep, poll, or `Instant` → `ManualClock`, inject at loop
    - **X (delete)**: no seam possible (rendering, real tmux client) → gone
@@ -384,10 +382,10 @@ On 2026-10-25 the incident PR tripfix (#329) deleted 213 exec-based tests that f
 | `ramdisk` | setup | – | RAM disk config for Gate | `TMPDIR=/dev/shm` on Linux | 1 (script) |
 | `design` | ADR | – | This document, implementing.md update | None (doc) | 1 (spec) |
 | `clk` | seam | – | `Clock` trait, `ManualClock`, `SystemClock` | None direct | 2 |
-| `port-run` | seam | `clk` | `Runner` trait, `FakeRunner` | None direct | 2 |
-| `port-tmux` | seam + bin | `clk` | `Tmux` trait, `FakeTmux` (lib + bin), `fake-tmux` | None direct | 3 |
-| `port-git` | seam | `clk` | `Git` trait, `FakeGit` (stub for now) | None direct | 2 |
-| `ports` | product | `clk`, `port-*` | `Ports` struct, thin main, `run_with`, engine/session/tui signatures | None direct | 2 |
+| `port-run` | seam | `clk` | `Runner` trait, `SystemRunner`, `FakeRunner`, feature `fakes` | None direct | 2 |
+| `port-tmux` | seam + bin | `clk` | `tmux` route of the `FakeRunner` (in-process handler from `cli/src/fakes/tmux`), `Tmux::with_runner` | None direct | 3 |
+| `port-git` | seam | `clk` | `git` route of the `FakeRunner` (in-process handler) | None direct | 2 |
+| `ports` | product | `clk`, `port-*` | `Ports` struct `{ clock, runner, spawn }`, thin main, `run_with`, engine/session/tui signatures | None direct | 2 |
 | `testkit` | harness | `ports` | `#[cfg(testkit)]` features, `ManualClock` tests, trait unit tests | Saves build (10s) | 1 |
 | `mig-pr-1..3` | tests | `testkit`, `port-git` | Migrate `cli/tests/pr/*` (317 tests, ~105 each) | Saves ~100 s | 3 |
 | `mig-flow-1..4` | tests | `port-*`, `testkit` | Migrate `cli/tests/flow/*` (531 tests, ~132 each) | Saves ~80 s | 4 |

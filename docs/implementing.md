@@ -170,6 +170,48 @@ Do not describe code that this PR has not created yet as present: this PR create
 
 **Update (pro-d29):** `cpd slot` is being removed by the Plan `no-slots` of Context cpd; if the `slot poll` named above is gone from main when you start, skip it.
 
+### Processes in tests
+
+A test never starts a process: `tmux`, `git`, `gh`, `node`, the secret tool and `cpd` are scripted on a `FakeRunner`, whose time is the `ManualClock`. There is ONE process trait, `Runner`; tmux and git are not traits of their own, they are routes of the `FakeRunner` (see ADR 0013).
+
+Decided API, in `core/src/host/runner.rs` (cpd-core, always compiled, no feature, like `Clock`):
+```rust
+pub trait Runner: Send + Sync {
+    /// Runs `cmd` for at most `deadline`; returns what `deadline::output` returns:
+    /// the same `Output`, `Failed::Io` or `Failed::Timeout(tool_timeout)`.
+    fn output(&self, cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed>;
+}
+pub struct SystemRunner;                      // `deadline::output(cmd, tool, deadline)`; nothing else
+#[derive(Clone)] pub struct FakeRunner { .. } // Arc inside: a clone shares the script and the record
+impl FakeRunner {
+    pub fn new(clock: ManualClock) -> FakeRunner;   // `Reply::takes` passes virtual time on this clock
+    pub fn on(self, program: &str, matches: impl Fn(&Call) -> bool + Send + Sync + 'static, reply: Reply) -> FakeRunner;
+    pub fn once(self, /* same */) -> FakeRunner;    // used up after one answer
+    pub fn route(self, program: &str, handler: Arc<dyn Handler>) -> FakeRunner;
+    pub fn calls(&self) -> Vec<Call>;               // every call in order, answered or not
+    pub fn unscripted(&self) -> Vec<Call>;          // the calls no rule matched
+}
+pub trait Handler: Send + Sync { fn handle(&self, call: &Call) -> Reply; }
+pub struct Call { pub tool: String, pub program: String, pub args: Vec<String>,
+    pub envs: Vec<(String, Option<String>)> /* Command::get_envs: None = removed */,
+    pub cwd: Option<PathBuf>, pub deadline: Duration }
+pub enum Reply { Exit { code: i32, stdout: Vec<u8>, stderr: Vec<u8>, takes: Duration }, Io(std::io::ErrorKind) }
+impl Reply { pub fn ok(stdout: &str) -> Reply; pub fn exit(code: i32, stdout: &str, stderr: &str) -> Reply;
+             pub fn io(kind: ErrorKind) -> Reply; pub fn takes(self, d: Duration) -> Reply; }
+```
+
+Semantics:
+- `on` and `once` rules are tried in order; the first match answers. `program` is compared with the program's file name (`/x/bin/tmux` is `tmux`). A `once` rule is used up after one answer, then the next matching rule answers.
+- A call no rule matches is answered by the `route` of its program (a `Handler`, whose `Reply` is treated like a scripted one); else it is `Failed::Io(ErrorKind::NotFound)` (a program that does not exist) and `unscripted()` lists it. A call answered by a rule or a route is not unscripted.
+- A reply that `takes` d: if `d >= deadline` the fake does `clock.sleep(deadline)` and returns `Failed::Timeout(e)`, where `e` is built by the same function `deadline::output` uses (`deadline::timeout`): the same `tool_timeout` code, `details.tool`, `details.argv`, `details.deadline_seconds`; else it does `clock.sleep(d)` and returns the `Output` (`ExitStatus::from_raw(code << 8)`).
+- The fake never reads `CPD_TEST_DEADLINE_*`, never starts a process and never reads the stdin the caller set (`Stdio` cannot be read back): a caller that feeds stdin is tested at the layer above it.
+
+Threading: each caller keeps its public signature and has a `_with(runner: &dyn Runner, ..)` form (`git::run::run_with`, `inbox::team`, `secret::op`, `config::catalog`, `doctor::tools`, `watch::pr`, `watch::team`), the old one calling it with `&SystemRunner`. `Tmux` has a field `runner: Arc<dyn Runner>`, `SystemRunner` by default, and `Tmux::with_runner(self, Arc<dyn Runner>) -> Tmux`. No global, thread-local or env var picks a runner. Behaviour with `SystemRunner` is identical.
+
+Where the fakes live: `core/src/fakes` behind the cargo feature `fakes` of cpd-core (off by default; `cpd-engine`, `cpd-tui` and `cpd` enable it in `[dev-dependencies]`). The in-process fake tmux and fake git are handlers there that take what a `Command` carries, routed as `tmux` and `git`; PRs port-tmux and port-git fill it. `FakeRunner` itself is not behind the feature.
+
+What stays real: the tests of `core/src/host/deadline.rs`, which are the contract tests of `SystemRunner`.
+
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - **The store area is in-process** (Plan tests-mock, PR `mx-pure`): a test of `cli/tests/store/` calls the library (`cpd_core::store::Store`, `CpdHome`) in its own process, on a real temp filesystem and the bundled SQLite; it starts no `cpd`, no tmux, no `sqlite3` CLI and no reaper. **To write a store test:** `use crate::home::{Home, HasCpdHome};`, then `let home = Home::new();` (a `tempfile` directory with a migrated store; `Home::empty()` has none, for a test of the first open) and open the store on it with the file's `open(&home)` helper, which resolves `home.cpd_home()` through `CpdHome::resolve`; the directory is removed when `home` drops. No `TestEnv::new()` or `TestEnv::empty()`: `cli/tests/tooling/guards.rs` counts them per file of `cli/tests/store/` against `STORE_TESTENV_DEBT`, an exact ratchet (a new call fails; a call that goes away fails until the number is lowered) that PR `mx-inproc` takes to nothing. What the area still runs through `TestEnv` is the debt (writers in other processes, the `cpd` binary): do not add to it.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).

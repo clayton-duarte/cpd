@@ -59,6 +59,8 @@ mod pill_texts;
 mod poll_run_tests;
 #[cfg(test)]
 mod incident_option_tests;
+#[cfg(test)]
+mod runner_tests;
 
 use std::fs;
 use std::io;

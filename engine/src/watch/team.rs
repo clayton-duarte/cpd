@@ -9,8 +9,9 @@
 //! an `error` Event until a run succeeds: the engine tells the Manager of it (hs-d314), no Inbox item.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
@@ -25,7 +26,9 @@ use cpd_core::config::catalog::node;
 use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::{Runner, SystemRunner};
+use cpd_core::config::PiInstall;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -90,8 +93,17 @@ pub(super) fn run(engine: &mut Engine) {
 /// Starts the helper on its own thread; returns where its answer will arrive.
 fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let pi = locate_pi().map_err(|e| Failure::from(&e))?;
+    start_with(Arc::new(SystemRunner), engine, &pi, &node())
+}
+
+/// [`start`] on `runner`, with pi located as `pi` and pi's Node `node`.
+pub(super) fn start_with(
+    runner: Arc<dyn Runner>,
+    engine: &Engine,
+    pi: &PiInstall,
+    node: &Path,
+) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let script = engine.config.pi_adapter_dir().map_err(|e| Failure::from(&e))?.join("lib").join("slack-channel.ts");
-    let node = node();
     let args = [
         script.display().to_string(),
         "--coding-agent".to_owned(),
@@ -102,7 +114,7 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
         engine.config.inbox.slack_user_id.clone(),
     ];
     let argv: Vec<String> = std::iter::once(node.display().to_string()).chain(args.iter().cloned()).collect();
-    let mut cmd = Command::new(&node);
+    let mut cmd = Command::new(node);
     cmd.args(&args)
         .env("PI_CODING_AGENT_DIR", &pi.agent_dir)
         .env("CPD_HOME", engine.home.root())
@@ -114,7 +126,7 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
         .stdin(Stdio::null());
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let answer = match deadline::output(&mut cmd, "node", DEADLINE) {
+        let answer = match runner.output(&mut cmd, "node", DEADLINE) {
             Ok(out) => printed(&out, &argv.iter().map(String::as_str).collect::<Vec<_>>()),
             Err(Failed::Io(e)) => Err(Failure::from(
                 &CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)),

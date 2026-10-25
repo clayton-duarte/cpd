@@ -7,6 +7,9 @@ mod pi;
 mod state;
 mod tools;
 
+#[cfg(test)]
+mod runner_tests;
+
 use std::time::Duration;
 
 use serde_json::json;
