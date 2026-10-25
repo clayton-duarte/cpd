@@ -50,4 +50,3 @@ mod secret_op;
 mod spec;
 mod repo_cmds;
 mod repo_config;
-mod workflow;
