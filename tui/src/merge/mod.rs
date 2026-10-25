@@ -227,10 +227,17 @@ pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     // The terminal is restored; the merge runs in the background, owned by the tmux server: this process ends now, and
     // the popup closes.
     let (action, socket) = ending.expect("the body ran");
-    if action == Action::Merge {
-        Tmux::new(socket).run(&start_args(&args.pull, &args.client))?;
-    }
+    finish(&Tmux::new(socket).with_runner(ports.runner.clone()), &args.pull, &args.client, action)?;
     Ok(Output::Owned)
+}
+
+/// What the view does once the User answered: a [`Action::Merge`] starts the merge in the background (`tmux run-shell -b`,
+/// see [`start_args`]), a [`Action::Cancel`] does nothing.
+pub fn finish(tmux: &Tmux, pull: &Pull, client: &str, action: Action) -> Result<(), CpdError> {
+    match action {
+        Action::Merge => tmux.run(&start_args(pull, client)).map(drop),
+        Action::Cancel => Ok(()),
+    }
 }
 
 /// Draws and takes input until the User confirms or cancels.

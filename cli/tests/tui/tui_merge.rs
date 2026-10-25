@@ -1,35 +1,36 @@
-//! The `merge` view (commands.md §13.2; hs-d273, hs-d473) on a private tmux server: the dialog's text, the keys and the
-//! clicks that confirm or cancel, and what the confirm starts. The merge action itself (`cpd tui action merge`, and the
-//! `pr merge` and `pr poll` it runs) and the view's refusals run in this process through `run_with` on `Fx::with_ports`:
-//! `gh` is a `Handler` route of the `FakeRunner` that answers `pr view`, `pr merge` and the poll, and notes whether the merge
-//! marker exists at each of its calls (no child process, no polling). The confirm closes the popup at once and starts
-//! `cpd tui action merge <ref> --client <name>` with tmux `run-shell -b`: that action runs `pr merge` and then the poll
-//! in the background, and opens the cockpit's one failure dialog when the merge fails. The fake `gh` of the env says
-//! what ran (its recorded argv) and blocks `pr merge` until the test releases it; a fake `tmux` and a fake `cpd` record
-//! what the view and the action ask of them. The click is raw mouse bytes sent to the pane.
+//! The `merge` view (commands.md §13.2; hs-d273, hs-d473) in this process on `Fx::with_ports`: the dialog's text, the keys and
+//! the clicks that confirm or cancel (`merge::show_with` over scripted input), and what the confirm starts (`merge::finish`
+//! on the fake tmux: one `run-shell -b`, whose `sh -c` the `FakeRunner` records). The merge action itself (`cpd tui action
+//! merge`, and the `pr merge` and `pr poll` it runs) and the view's refusals run through `run_with`: `gh` is a `Handler`
+//! route of the `FakeRunner` that answers `pr view`, `pr merge` and the poll, and notes whether the merge marker exists at
+//! each of its calls (no child process, no polling). The confirm closes the popup at once and starts `cpd tui action merge
+//! <ref> --client <name>` in the background: that action runs `pr merge` and then the poll, and opens the cockpit's one
+//! failure dialog when the merge fails.
 
 use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use common::fx::Fx;
-use common::{CPD, TestEnv, wait_until, wait_until_for};
+use common::screen::{Keys, SharedBackend, ch, key, left_click};
+use common::TestEnv;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Handler, Reply};
+use cpd_core::host::Tmux;
 use cpd_core::host::spawn::{Launch, Pid, Spawn};
 use cpd_core::store::Store;
-use cpd_tui::merge;
+use cpd_tui::merge::{self, Action, Pull};
+use cpd_tui::view_ports::Ctx;
+use ratatui::crossterm::event::{Event, KeyCode};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 const REF: &str = "o/r#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
-/// The client the view was opened on, for the tests that have none attached.
+/// The client the view was opened on.
 const CLIENT: &str = "/dev/pts/9";
 /// What `gh api graphql` does when the poll is to succeed and when it is to fail: the search lists nothing, and the direct
 /// read of the stored open `o/r#7` the search missed (`p0: repository`) finds it merged (the merge the action just made).
@@ -45,25 +46,7 @@ macro_rules! empty_search {
         r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#
     };
 }
-const POLL_OK: &str = concat!(
-    r#"case "$4" in *"p0: repository"*) echo '"#,
-    merged_lookup!(),
-    r#"'; exit 0;; esac; echo '"#,
-    empty_search!(),
-    r#"'; exit 0"#
-);
-/// How long the view may take to close once confirmed while `gh pr merge` blocks. The claim is that it does not wait
-/// for `gh`, so the wait is for the view's own work only.
-const CLOSES: Duration = Duration::from_secs(15);
-
-/// A test env with the config the views read, and the pull request `o/r#7` in the store.
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    configure(&env);
-    env
-}
-
-/// An `Fx` on fake ports over an env like [`env`]'s.
+/// An `Fx` on fake ports with the config the views read and the pull request `o/r#7` in its store.
 fn fx() -> Fx {
     let fx = Fx::with_ports();
     configure(&fx.env);
@@ -99,87 +82,12 @@ fn seed(env: &TestEnv) {
         .unwrap();
 }
 
-/// The file the fake `gh pr merge` waits for, when the test gives it one.
-fn release_file(env: &TestEnv) -> PathBuf {
-    env.root().join("release")
-}
-
-/// A `gh` whose `pr view` says OPEN with `merge_state`, whose `pr merge` first waits for `release` to exist (at most a
-/// minute; none: it does not wait) and then exits `merge_exit` with `merge said no`, and whose `api graphql`, the poll,
-/// runs `graphql` ([`POLL_OK`], [`POLL_FAILS`]).
-fn gh_with(env: &TestEnv, merge_state: &str, merge_exit: i32, release: Option<&Path>, graphql: &str) {
-    let wait = release.map_or(String::new(), |file| {
-        format!("_i=0; while [ ! -e '{}' ] && [ $_i -lt 1200 ]; do _i=$((_i+1)); sleep 0.05; done; ", file.display())
-    });
-    env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\"pr view\") echo '{{\"state\":\"OPEN\",\"mergeStateStatus\":\"{merge_state}\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}'; exit 0;;\n\"pr merge\") {wait}echo 'merge said no' >&2; exit {merge_exit};;\n\"api graphql\") {graphql};;\nesac\nexit 9"
-    ));
-}
-
-fn release(env: &TestEnv) {
-    fs::write(release_file(env), "").unwrap();
-}
-
-/// A `cpd` on `PATH` that records its calls and runs the built binary: the one tmux's `run-shell` and the popup run.
-/// After a `tui action` it creates [`action_done`]: the positive signal that the background run ended.
-fn fake_cpd(env: &TestEnv) {
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in\n\"tui action\") '{CPD}' \"$@\"; _rc=$?; true > '{done}'; exit $_rc;;\nesac\nexec '{CPD}' \"$@\"",
-            done = action_done(env).display()
-        ),
-    );
-}
-
-fn action_done(env: &TestEnv) -> PathBuf {
-    env.root().join("action-done")
-}
-
-fn wait_action_done(env: &TestEnv) {
-    wait_until("the background action to end", || action_done(env).exists());
-}
-
-/// The real `tmux`'s path.
-fn real_tmux(env: &TestEnv) -> String {
-    let out = env.command("sh").args(["-c", "command -v tmux"]).output().unwrap();
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
-
-/// A `tmux` on `PATH` that records its calls and runs the real one, after the shell code `before` (which sees `"$@"`).
-fn fake_tmux_before(env: &TestEnv, before: &str) {
-    env.fake("tmux", &format!("{before}\nexec '{}' \"$@\"", real_tmux(env)));
-}
-
-fn fake_tmux(env: &TestEnv) {
-    fake_tmux_before(env, "");
-}
-
-/// The tmux calls that name `word` as one of their arguments.
-fn tmux_calls(env: &TestEnv, word: &str) -> Vec<Vec<String>> {
-    naming(env.calls("tmux"), word)
-}
-
 fn naming(calls: Vec<Vec<String>>, word: &str) -> Vec<Vec<String>> {
     calls.into_iter().filter(|c| c.iter().any(|a| a == word)).collect()
 }
 
-/// The calls of `cpd tui action …` the fake `cpd` saw.
-fn action_calls(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("cpd").into_iter().filter(|c| c[..2] == ["tui", "action"]).collect()
-}
-
-fn merges(env: &TestEnv) -> Vec<Vec<String>> {
-    merges_of(env.calls("gh"))
-}
-
 fn merges_of(gh_calls: Vec<Vec<String>>) -> Vec<Vec<String>> {
     gh_calls.into_iter().filter(|c| c[..2] == ["pr", "merge"]).collect()
-}
-
-/// The `gh` calls' first words, in order: `pr view`, `pr merge`, `api graphql` ...
-fn call_order(env: &TestEnv) -> Vec<String> {
-    order_of(env.calls("gh"))
 }
 
 fn order_of(gh_calls: Vec<Vec<String>>) -> Vec<String> {
@@ -197,37 +105,6 @@ fn merge_log(env: &TestEnv) -> Vec<String> {
     text.lines().map(|l| l.split_once(' ').expect("a time stamp, a space, the line").1.to_owned()).collect()
 }
 
-fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
-    let out = env.tmux(args);
-    assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap()
-}
-
-/// `cpd tui view merge o/r#7 --client <client>` in a window of the popup, 60x8 (the dialog draws its own frame).
-fn start_on(env: &TestEnv, client: &str) -> String {
-    let args = [
-        "new-session", "-d", "-s", "view", "-x", "60", "-y", "8", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", REF, "--client",
-        client,
-    ];
-    tmux_out(env, &args).trim().to_owned()
-}
-
-fn start(env: &TestEnv) -> String {
-    start_on(env, CLIENT)
-}
-
-fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
-    tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
-}
-
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    common::wait_screen(what, || screen(env, pane), done)
-}
-
-fn wait_dialog(env: &TestEnv, pane: &str) -> Vec<String> {
-    wait_screen(env, pane, "the dialog", |r| r.iter().any(|l| l.contains(&pill("Merge"))))
-}
-
 /// A pill: its label between the caps U+E0B6 and U+E0B4.
 fn pill(label: &str) -> String {
     format!("\u{E0B6}{label}\u{E0B4}")
@@ -236,75 +113,6 @@ fn pill(label: &str) -> String {
 /// A row of the dialog's frame, 58 wide inside the bars.
 fn inside(text: &str) -> String {
     format!("│{text:<58}│")
-}
-
-fn closed(env: &TestEnv) -> bool {
-    !env.tmux(&["has-session", "-t", "view"]).status.success()
-}
-
-/// A left button press at 1-based `(column, row)` of the pane, as the terminal sends it (SGR mouse reporting). The
-/// release is not sent: the view acts on the press, and may be gone by the time a release would arrive.
-fn click(env: &TestEnv, pane: &str, column: u16, row: u16) {
-    tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{column};{row}M")]);
-}
-
-/// The three ways to confirm: Enter, `y` and a click on the Merge pill (0-based columns 2 to 8, row 6).
-fn confirm(env: &TestEnv, pane: &str, how: &str) {
-    match how {
-        "click" => click(env, pane, 5, 7),
-        key => drop(tmux_out(env, &["send-keys", "-t", pane, key])),
-    }
-}
-
-// ---------- a real client, for the tests that look at popups ----------
-
-/// A second private tmux server whose one pane is a real client of the env's server (`tmux -L <socket> attach -t
-/// cockpit`), so popups open and draw; killed on drop. (`tui.rs` has a twin of it.)
-struct Outer<'a> {
-    env: &'a TestEnv,
-    socket: String,
-}
-
-impl<'a> Outer<'a> {
-    /// Starts the session `cockpit` (the one the client shows) on the env's server, and attaches a client of
-    /// `width` x `height`; returns it with the client's name.
-    fn attach(env: &'a TestEnv, width: u16, height: u16) -> (Outer<'a>, String) {
-        tmux_out(env, &["new-session", "-d", "-s", "cockpit", "-x", &width.to_string(), "-y", &height.to_string(), &format!("sleep {}", common::SLEEP_SECONDS)]);
-        let outer = Outer { env, socket: format!("{}-outer", env.tmux_socket()) };
-        let attach = format!("env -u TMUX tmux -L {} attach -t cockpit", env.tmux_socket());
-        let (w, h) = (width.to_string(), height.to_string());
-        outer.run(&["set", "-g", "status", "off", ";", "new-session", "-d", "-s", "o", "-x", &w, "-y", &h, &attach]);
-        let mut client = String::new();
-        wait_until("the client", || {
-            client = tmux_out(env, &["list-clients", "-F", "#{client_name}"]).trim().to_owned();
-            !client.is_empty()
-        });
-        (outer, client)
-    }
-
-    fn run(&self, args: &[&str]) -> String {
-        let out = self.env.command("tmux").args(["-L", &self.socket, "-f", "/dev/null"]).args(args).output().unwrap();
-        assert!(out.status.success(), "outer tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap()
-    }
-
-    fn screen(&self) -> Vec<String> {
-        self.run(&["capture-pane", "-p", "-t", "o"]).lines().map(|l| l.trim_end().to_owned()).collect()
-    }
-
-    fn wait_screen(&self, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    fn keys(&self, keys: &[&str]) {
-        self.run(&[&["send-keys", "-t", "o"][..], keys].concat());
-    }
-}
-
-impl Drop for Outer<'_> {
-    fn drop(&mut self) {
-        let _ = self.env.command("tmux").args(["-L", &self.socket, "kill-server"]).stderr(Stdio::null()).status();
-    }
 }
 
 fn has(rows: &[String], text: &str) -> bool {
@@ -345,79 +153,105 @@ fn the_view_needs_a_terminal_a_pull_request_reference_and_a_client() {
     }
 }
 
-// ---------- the popup that opens it ----------
+// ---------- the popup that opens it, and the confirm ----------
+
+/// The command the confirm gives `run-shell -b`: `cpd tui action merge <ref> --client <client>`, its words quoted for the shell,
+/// its stderr dropped, every `#` doubled: `run-shell` expands formats (the real tmux turns `##` back into `#`, the fake does not),
+/// so the command reaches `cpd` as the action's own argv.
+const START: &str = "cpd tui action merge 'o/r##7' --client '/dev/pts/9' 2>/dev/null";
+
+/// The popup's view, `cpd tui view merge o/r#7 --client /dev/pts/9`, in this process on the 60x8 popup: `events` are what the
+/// User does. What it answered, and the rows of its last frame; the whole script was taken.
+fn answer(fx: &Fx, events: Vec<Event>) -> (Action, Vec<String>) {
+    let backend = SharedBackend::new(60, 8);
+    let mut keys = Keys::script(events);
+    let mut ctx = Ctx::new(&fx.fakes.ports, backend.terminal(), &mut keys);
+    let action = merge::show_with(&mut ctx, &Pull::parse(REF).unwrap(), Some("Add the thing")).unwrap();
+    drop(ctx);
+    assert_eq!(keys.remaining(), 0, "the view ended at the first answer");
+    (action, backend.screen().rows())
+}
+
+/// The cockpit's tmux server on the fake of `fx` and the client [`CLIENT`] (120 x 30) attached to it.
+fn attach(fx: &Fx) {
+    assert!(fx.tmux(&["new-session", "-d", "-s", "cockpit", "-x", "120", "-y", "30"]).status.success());
+    fx.tmux_route.fake().add_client(CLIENT, 120, 30);
+}
+
+/// What the view does with its answer: `finish` on the tmux of `fx`.
+fn finish(fx: &Fx, action: Action) {
+    let tmux = Tmux::new(fx.env.tmux_socket()).with_runner(fx.fakes.runner.weak());
+    merge::finish(&tmux, &Pull::parse(REF).unwrap(), CLIENT, action).unwrap();
+}
 
 #[test]
 fn the_popup_on_a_client_closes_at_once_on_the_confirm_while_gh_is_merging() {
-    let env = env();
-    gh_with(&env, "CLEAN", 0, Some(&release_file(&env)), POLL_OK);
-    fake_cpd(&env);
-    fake_tmux(&env);
-    let (outer, client) = Outer::attach(&env, 120, 30);
-    // what the opener runs: the popup on the client, over the cockpit (`display-popup` returns when the popup closes)
-    let popup = merge::popup_args(&client, (120, 30), REF);
-    let mut open = env.command("tmux");
-    open.args(["-L", env.tmux_socket()]).args(&popup).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut open = common::spawn(&mut open).unwrap();
-    outer.wait_screen("the merge popup", |r| has(r, &pill("Merge")) && has(r, "method: squash"));
-    outer.keys(&["y"]);
+    let fx = fx();
+    gh_route(&fx, Poll::Merged);
+    // `run-shell -b` hands the command to `sh -c`: its record is what tmux would start in the background
+    fx.fake("sh", Reply::ok(""));
+    attach(&fx);
+    // what the opener runs: the popup on the client, over the cockpit
+    let popup = merge::popup_args(CLIENT, (120, 30), REF);
+    assert!(fx.tmux(&popup.iter().map(String::as_str).collect::<Vec<_>>()).status.success());
+    let popups = fx.tmux_state().unwrap().popups();
+    let [opened] = &popups[..] else { panic!("{popups:?}") };
+    assert_eq!(opened.last().unwrap(), &format!("cpd tui view merge 'o/r#7' --client '{CLIENT}'"), "{opened:?}");
+    let (action, rows) = answer(&fx, vec![ch('y')]);
+    assert!(has(&rows, &pill("Merge")) && has(&rows, "method: squash"), "the merge popup: {rows:?}");
 
-    // the popup is gone while `gh pr merge` still blocks: the merge runs in the background, owned by the server
-    wait_until("pr merge to start in the background", || !merges(&env).is_empty());
-    common::wait_until_for("the popup's command to end", CLOSES, || open.try_wait().unwrap().is_some());
-    outer.wait_screen("the popup to be gone", |r| !has(r, &pill("Merge")) && !has(r, "merging"));
-    assert_eq!(call_order(&env), ["pr view", "pr merge"], "the poll waits for the merge");
-    assert!(!action_done(&env).exists());
+    // the view is gone with the confirm, and `gh` has not been called: the merge is the background run's
+    finish(&fx, action);
+    assert_eq!(action, Action::Merge);
+    assert_eq!(args_of(&fx, "gh"), Vec::<Vec<String>>::new(), "the poll waits for the merge");
+    let started = naming(args_of(&fx, "tmux"), "run-shell");
+    let [started] = &started[..] else { panic!("{:?}", args_of(&fx, "tmux")) };
+    assert_eq!(started.last().unwrap(), START);
 
-    release(&env);
-    wait_action_done(&env);
-    let order = call_order(&env);
+    // the background run: the merge, then the poll
+    act(&fx, CLIENT);
+    let order = order_of(args_of(&fx, "gh"));
     assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{order:?}");
     assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "the poll ran after the merge: {order:?}");
-    assert!(tmux_calls(&env, "display-popup").len() == 1, "a success opens no dialog: {:?}", tmux_calls(&env, "display-popup"));
-    assert_eq!(merge_log(&env), Vec::<String>::new());
+    assert!(fx.tmux_state().unwrap().popups().len() == 1, "a success opens no dialog: {:?}", fx.tmux_state().unwrap().popups());
+    assert_eq!(merge_log(&fx.env), Vec::<String>::new());
 }
-
-// ---------- the confirm ----------
 
 #[test]
 fn the_confirm_closes_the_view_at_once_and_the_merge_then_the_poll_run_in_the_background() {
-    for how in ["y", "Enter", "click"] {
-        let env = env();
-        gh_with(&env, "CLEAN", 0, Some(&release_file(&env)), POLL_OK);
-        fake_cpd(&env);
-        fake_tmux(&env);
-        // the view is the server's only session: without another one the server exits with it and the
-        // pending `run-shell -b` job is lost (the real cockpit has other sessions)
-        env.tmux(&["new-session", "-d", "-s", "keep", "sleep 120"]);
-        let pane = start(&env);
-        wait_dialog(&env, &pane);
-        confirm(&env, &pane, how);
+    for (how, events) in [("y", vec![ch('y')]), ("Enter", vec![key(KeyCode::Enter)]), ("click", vec![left_click(4, 6)])] {
+        let fx = fx();
+        gh_route(&fx, Poll::Merged);
+        fx.fake("sh", Reply::ok(""));
+        attach(&fx);
+        let (action, rows) = answer(&fx, events);
+        assert!(has(&rows, &pill("Merge")), "{how}: the dialog: {rows:?}");
 
-        // `gh pr merge` blocks until released: the view must be gone before it ends
-        wait_until_for(&format!("{how}: the view to close while pr merge blocks"), CLOSES, || closed(&env));
-        wait_until(&format!("{how}: pr merge to start"), || !merges(&env).is_empty());
-        assert!(closed(&env), "{how}: the view is gone while pr merge blocks");
+        // the view is gone with the confirm, before any `gh` call: `gh pr merge` is the background run's
+        finish(&fx, action);
+        assert_eq!(action, Action::Merge, "{how}");
+        assert_eq!(args_of(&fx, "gh"), Vec::<Vec<String>>::new(), "{how}: the poll waits for the merge");
+        // the view started the background run with run-shell, and the command line reached `cpd` unchanged
+        let started = naming(args_of(&fx, "tmux"), "run-shell");
+        assert_eq!(started.len(), 1, "{how}: {:?}", args_of(&fx, "tmux"));
+        assert!(started[0].iter().any(|a| a == "-b"), "{how}: in the background");
+        assert_eq!(started[0].last().unwrap(), START, "{how}");
+
+        // the background run: `pr merge`, then the poll
+        act(&fx, CLIENT);
         assert_eq!(
-            merges(&env),
+            merges_of(args_of(&fx, "gh")),
             [["pr", "merge", "7", "--repo", "o/r", "--squash", "--delete-branch", "--match-head-commit", SHA].map(str::to_owned)],
             "{how}"
         );
-        assert_eq!(call_order(&env), ["pr view", "pr merge"], "{how}: the poll waits for the merge");
-        // the view started the background run with run-shell, and the command line reached `cpd` unchanged
-        assert_eq!(action_calls(&env), [["tui", "action", "merge", REF, "--client", CLIENT].map(str::to_owned)], "{how}");
-        assert_eq!(tmux_calls(&env, "run-shell").len(), 1, "{how}: {:?}", env.calls("tmux"));
-        assert!(tmux_calls(&env, "run-shell")[0].iter().any(|a| a == "-b"), "{how}: in the background");
-
-        release(&env);
-        wait_action_done(&env);
-        let order = call_order(&env);
+        let order = order_of(args_of(&fx, "gh"));
         assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{how}: {order:?}");
         assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "{how}: the poll ran after the merge: {order:?}");
         // a success says nothing: no dialog, no message, no log line
-        assert!(tmux_calls(&env, "display-popup").is_empty(), "{how}: {:?}", env.calls("tmux"));
-        assert!(tmux_calls(&env, "display-message").is_empty(), "{how}: {:?}", env.calls("tmux"));
-        assert_eq!(merge_log(&env), Vec::<String>::new(), "{how}");
+        let tmux = args_of(&fx, "tmux");
+        assert!(naming(tmux.clone(), "display-popup").is_empty(), "{how}: {tmux:?}");
+        assert!(naming(tmux.clone(), "display-message").is_empty(), "{how}: {tmux:?}");
+        assert_eq!(merge_log(&fx.env), Vec::<String>::new(), "{how}");
     }
 }
 
