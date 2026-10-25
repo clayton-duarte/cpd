@@ -10,9 +10,9 @@ use super::Pull;
 use cpd_core::atomic;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::host::spawn::{Pid, ProcessSpawn, Spawn};
+use cpd_core::host::spawn::Pid;
+use cpd_core::ports::Ports;
 use serde::Deserialize;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 /// The marker file of `pull`: `<owner>/<repo>#<n>` is `<owner>__<repo>__<n>.json`.
@@ -24,31 +24,29 @@ pub fn path(home: &CpdHome, pull: &Pull) -> PathBuf {
 /// Writes the marker of `pull` for this process (`{"pid": <this pid>, "at": <RFC 3339 now>}`), atomically (a temporary
 /// file, then a rename), replacing any marker there, a stale one included.
 pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_with(home, pull, false)
+    write_on(&Ports::real(), home, pull)
 }
 
 /// [`write`] stamped by the clock of `ports`.
-pub fn write_on(ports: &cpd_core::ports::Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    let _ = (ports, home, pull);
-    todo!("marker::write_on")
-}
-
-/// [`live`] with the pids asked of `ports.spawn`.
-pub fn live_with(ports: &cpd_core::ports::Ports, home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
-    let _ = (ports, home, open);
-    todo!("marker::live_with")
+pub fn write_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(ports, home, pull, false)
 }
 
 /// Rewrites the marker of `pull` as `{"pid", "at", "merged": true}` (hs-d550): `pr merge` succeeded, and the marker
 /// holds until a read stores the merge. Atomic, as [`write`].
 pub fn write_merged(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_with(home, pull, true)
+    write_merged_on(&Ports::real(), home, pull)
 }
 
-fn write_with(home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
+/// [`write_merged`] stamped by the clock of `ports`.
+pub fn write_merged_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(ports, home, pull, true)
+}
+
+fn write_with(ports: &Ports, home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
     let target = path(home, pull);
     let pid = std::process::id();
-    let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+    let at = ports.clock.utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::Internal, format!("Cannot write the merge marker {}: {e}.", target.display()))
             .with("path", target.display().to_string())
@@ -87,9 +85,14 @@ fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
 /// `merged` whose pull request is in `open` (the open rows of `pull_requests`: no read has stored the merge yet). A
 /// stale marker, and a `merged` one whose pull request is not open, are none.
 pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
+    live_with(&Ports::real(), home, open)
+}
+
+/// [`live`] with the pids asked of `ports.spawn`.
+pub fn live_with(ports: &Ports, home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
     markers(home)
         .into_iter()
-        .filter(|(_, pull, marker)| u32::try_from(marker.pid).is_ok_and(|pid| ProcessSpawn.alive(Pid(pid))) || (marker.merged && open.contains(pull)))
+        .filter(|(_, pull, marker)| u32::try_from(marker.pid).is_ok_and(|pid| ports.spawn.alive(Pid(pid))) || (marker.merged && open.contains(pull)))
         .map(|(_, pull, _)| pull)
         .collect()
 }

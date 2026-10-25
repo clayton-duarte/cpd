@@ -9,7 +9,7 @@
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyEventKind, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
@@ -28,7 +28,10 @@ use crate::pill::pill;
 use crate::popup;
 use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::box_widget::SectionTitle;
-use crate::{Capture, run_view};
+use crate::view_ports::Ctx;
+use crate::{Capture, run_view_on};
+use cpd_core::ports::Ports;
+use ratatui::backend::Backend;
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
@@ -302,8 +305,8 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
 }
 
 /// `cpd tui view legend`: draws the legend until a key that does not scroll, or a click.
-pub(crate) fn run() -> Result<Output, CpdError> {
-    run_view("legend", Capture::Mouse, || Ok(()), |terminal, ()| Ok(show(terminal)?))
+pub(crate) fn run(ports: &Ports) -> Result<Output, CpdError> {
+    run_view_on(ports, "legend", Capture::Mouse, || Ok(()), |ctx, ()| Ok(show_with(ctx)?))
 }
 
 /// What `event` does: the kit's scrolling moves `scroll` (↑↓, j/k, PgUp/PgDn, the wheel); whether it closes the legend:
@@ -316,17 +319,12 @@ fn closes(event: &Event, scroll: &mut Scroll) -> bool {
     }
 }
 
-/// [`show`] on a [`Ctx`]: input and frames are the context's.
-pub(crate) fn show_with<B: ratatui::backend::Backend>(ctx: &mut crate::view_ports::Ctx<B>) -> std::io::Result<()> {
-    let _ = ctx;
-    todo!("legend::show_with")
-}
-
-fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+/// Draws the legend until a key that does not scroll, or a click: input and frames are the [`Ctx`]'s.
+pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>) -> std::io::Result<()> {
     let mut scroll = Scroll::default();
     loop {
-        terminal.draw(|f| draw_scrolled(f, f.area(), &mut scroll))?;
-        if closes(&event::read()?, &mut scroll) {
+        ctx.draw(|f| draw_scrolled(f, f.area(), &mut scroll))?;
+        if closes(&ctx.input.read()?, &mut scroll) {
             return Ok(());
         }
     }

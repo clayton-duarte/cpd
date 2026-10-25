@@ -32,16 +32,19 @@ mod view_width_tests;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ratatui::crossterm::event::{self, Event};
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::Event;
 use serde::{Deserialize, Serialize};
 
 use super::cockpit::{client_size, on_client};
 use super::popup;
 use super::viewlog::ViewLog;
-use super::{Capture, run_view};
+use super::view_ports::Ctx;
+use super::{Capture, run_view_on};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use crate::box_widget::spacing;
 use validate::Validator;
@@ -214,16 +217,17 @@ impl Kind {
     }
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
     let parts = args.kind.parts()?;
     let mut ending: Option<(Common, Dialog, Outcome)> = None;
-    run_view(
+    run_view_on(
+        ports,
         "dialog",
         Capture::Mouse,
         move || Ok(parts),
-        |terminal, (common, mut dialog)| {
-            let outcome = show(terminal, &mut dialog)?;
+        |ctx, (common, mut dialog)| {
+            let outcome = show_with(ctx, &mut dialog)?;
             ending = Some((common, dialog, outcome));
             Ok(())
         },
@@ -245,20 +249,14 @@ fn write_result(path: &Path, dialog: &Dialog, outcome: &Outcome) -> Result<(), C
     }
 }
 
-/// Draws and takes input until the dialog closes.
-fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io::Result<Outcome> {
+/// Draws and takes input until the dialog closes: input and frames are the [`Ctx`]'s.
+pub(crate) fn show_with<B: Backend>(ctx: &mut Ctx<B>, dialog: &mut Dialog) -> std::io::Result<Outcome> {
     loop {
-        terminal.draw(|f| dialog.draw(f))?;
-        if let Some(outcome) = dispatch(dialog, event::read()?) {
+        ctx.draw(|f| dialog.draw(f))?;
+        if let Some(outcome) = dispatch(dialog, ctx.input.read()?) {
             return Ok(outcome);
         }
     }
-}
-
-/// [`show`] on a [`Ctx`]: input and frames are the context's.
-pub(crate) fn show_with<B: ratatui::backend::Backend>(ctx: &mut crate::view_ports::Ctx<B>, dialog: &mut Dialog) -> std::io::Result<Outcome> {
-    let _ = (ctx, dialog);
-    todo!("dialog::show_with")
 }
 
 /// What `event` does to `dialog`: the outcome that closes it, if any.

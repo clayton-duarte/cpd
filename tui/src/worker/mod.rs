@@ -21,15 +21,16 @@ pub(crate) mod render;
 mod view;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::Event;
 use ratatui::text::Line;
 
 use super::read::{self, JobStatus, Target, Worker};
 use super::runner::kept;
-use super::{Capture, run_view};
+use super::view_ports::Ctx;
+use super::{Capture, run_view_on};
 use cpd_core::args::PlanArg;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
@@ -37,6 +38,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::{PaneId, Tmux};
 use cpd_core::ids::{AttemptId, JobKey, PlanId};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use view::View;
 
@@ -59,7 +61,7 @@ pub struct Args {
     plan: PlanArg,
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let plan = args.plan.require()?;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
@@ -72,11 +74,12 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     // `plan_not_found`, `attempt_not_found` and `job_not_found` refuse before anything is drawn.
     let snapshot = read::worker(&mut store, plan, &target)?;
     let follow = read::Follow::new(&mut store, &[], snapshot.events_cursor)?;
-    let output = run_view(
+    let output = run_view_on(
+        ports,
         "worker",
         Capture::Mouse,
         || Ok(snapshot),
-        |terminal, snapshot| Ok(event_loop(terminal, &mut store, follow, plan, &target, snapshot)?),
+        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, plan, &target, snapshot)?),
     )?;
     close_pane(&config)?;
     Ok(output)
@@ -97,21 +100,9 @@ struct Stamp {
     modified: Option<SystemTime>,
 }
 
-/// [`event_loop`] on a [`Ctx`]: input, clock and frames are the context's.
-pub(crate) fn event_loop_with<B: ratatui::backend::Backend>(
-    ctx: &mut crate::view_ports::Ctx<B>,
-    store: &mut Store,
-    follow: read::Follow,
-    plan: &PlanId,
-    target: &Target,
-    first: Worker,
-) -> std::io::Result<()> {
-    let _ = (ctx, store, follow, plan, target, first);
-    todo!("worker::event_loop_with")
-}
-
-fn event_loop(
-    terminal: &mut DefaultTerminal,
+/// The loop of the view: input, the clock and frames are the [`Ctx`]'s.
+pub(crate) fn event_loop_with<B: Backend>(
+    ctx: &mut Ctx<B>,
     store: &mut Store,
     mut follow: read::Follow,
     plan: &PlanId,
@@ -121,13 +112,13 @@ fn event_loop(
     let mut view = View::new();
     let mut shown: Option<Stamp> = None;
     let mut snapshot = Some(first);
-    let mut last_check = Instant::now();
+    let mut last_check = ctx.ports.clock.now();
     refresh(&mut view, &mut shown, snapshot.as_ref());
     let mut redraw = true; // the pane is written to only when something changed: the Worker, its file, input, a resize
     loop {
-        if last_check.elapsed() >= CHECK {
+        if ctx.ports.clock.now().saturating_duration_since(last_check) >= CHECK {
             let before = (view.status.clone(), view.header.clone(), view.note.clone(), shown.clone());
-            last_check = Instant::now();
+            last_check = ctx.ports.clock.now();
             // a failed poll or read keeps the snapshot, the error is the note, the next check tries again (runner::kept)
             let mut error = None;
             let retry = !view.note.is_empty();
@@ -143,14 +134,14 @@ fn event_loop(
             redraw |= before != (view.status.clone(), view.header.clone(), view.note.clone(), shown.clone());
         }
         if redraw {
-            terminal.draw(|f| view.draw(f))?;
+            ctx.draw(|f| view.draw(f))?;
             redraw = false;
         }
-        if !event::poll(TICK)? {
+        if !ctx.input.poll(TICK)? {
             continue;
         }
         redraw = true;
-        match event::read()? {
+        match ctx.input.read()? {
             Event::Key(key) => {
                 if view.key(key) {
                     return Ok(());

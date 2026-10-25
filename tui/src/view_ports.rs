@@ -1,20 +1,24 @@
 //! The ports of the views: what a view's loop reads besides the store, so a test runs it on `ManualClock` with scripted
-//! input and a `TestBackend` and no terminal (docs/implementing.md, "Ports, Spawn and run_with"). STUBS: every body is
-//! `todo!()` or does nothing, until the implementation Job writes it; the red tests are `view_ports_tests`.
+//! input and a `TestBackend` and no terminal (docs/implementing.md, "Ports, Spawn and run_with"); the red tests are
+//! `view_ports_tests`.
 //!
 //! The old names stay and call the `_with` forms with the real ports: [`Ports::real`], and the real [`Input`] (crossterm's
-//! `poll` and `read`) and [`Tty`] (stdin and stdout, `enable_raw_mode`) the implementation Job adds.
+//! `poll` and `read`: [`CrosstermInput`]) and [`Tty`] (stdin and stdout, `enable_raw_mode`: [`StdTty`]).
 
-use std::io::{self, Write};
-use std::time::Duration;
+use std::io::{self, IsTerminal, Write};
+use std::time::{Duration, SystemTime};
 
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::Event;
+use ratatui::crossterm::event::{
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 
 use crate::runner::{Capture, ViewError};
-use cpd_core::error::CpdError;
+use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 
@@ -36,6 +40,33 @@ pub trait Tty {
     fn raw_off(&mut self) -> io::Result<()>;
 }
 
+/// The real input: crossterm's `poll` and `read` on this process's terminal.
+pub struct CrosstermInput;
+
+impl Input for CrosstermInput {
+    fn poll(&mut self, wait: Duration) -> io::Result<bool> {
+        event::poll(wait)
+    }
+    fn read(&mut self) -> io::Result<Event> {
+        event::read()
+    }
+}
+
+/// The real terminal facts: stdin and stdout, and crossterm's raw mode.
+pub struct StdTty;
+
+impl Tty for StdTty {
+    fn is_terminal(&self) -> bool {
+        io::stdin().is_terminal() && io::stdout().is_terminal()
+    }
+    fn raw_on(&mut self) -> io::Result<()> {
+        enable_raw_mode()
+    }
+    fn raw_off(&mut self) -> io::Result<()> {
+        disable_raw_mode()
+    }
+}
+
 /// What a loop of a view runs on: the ports, the terminal it draws on and the input it waits for. It counts its draws.
 pub struct Ctx<'a, B: Backend> {
     pub ports: &'a Ports,
@@ -51,8 +82,9 @@ impl<'a, B: Backend> Ctx<'a, B> {
 
     /// Draws one frame; the loops draw only through this, so `draws` counts the writes to the pane.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> io::Result<()> {
-        let _ = render;
-        todo!("Ctx::draw")
+        self.terminal.draw(render).map_err(|e| io::Error::other(e.to_string()))?;
+        self.draws += 1;
+        Ok(())
     }
 
     /// How many frames were drawn.
@@ -63,6 +95,7 @@ impl<'a, B: Backend> Ctx<'a, B> {
 
 /// Puts the terminal back as it was, on `Drop`: the reporting `capture` turned on is written off to `out`, then the
 /// alternate screen is left (written to `out`) and raw mode is turned off (`tty`). A panic and an `Err` pass through it too.
+/// ratatui's own panic hook restores only raw mode and the alternate screen, never the mouse and focus reporting.
 pub struct Restore<'a, W: Write> {
     capture: Capture,
     tty: &'a mut dyn Tty,
@@ -77,14 +110,21 @@ impl<'a, W: Write> Restore<'a, W> {
 
 impl<W: Write> Drop for Restore<'_, W> {
     fn drop(&mut self) {
-        // STUB: restores nothing.
-        let _ = (&self.capture, &mut self.tty, &mut self.out);
+        // Nothing can be done about a failure here, and `drop` may run while a panic unwinds.
+        match self.capture {
+            Capture::Keys => {}
+            Capture::Mouse => drop(execute!(self.out, DisableMouseCapture)),
+            Capture::MouseAndFocus => drop(execute!(self.out, DisableFocusChange, DisableMouseCapture)),
+        }
+        drop(execute!(self.out, LeaveAlternateScreen));
+        drop(self.tty.raw_off());
     }
 }
 
 /// [`crate::run_view`] on injected ports: refuses `not_a_terminal` when `tty` says there is none (nothing written, `prepare`
 /// not run); else `prepare`, then raw mode on and the alternate screen and `capture` written to `out`, then `body` on a
 /// [`Ctx`]; whatever way `body` ends the [`Restore`] runs.
+#[allow(clippy::too_many_arguments)]
 pub fn run_view_with<B, W, P>(
     ports: &Ports,
     tty: &mut dyn Tty,
@@ -100,9 +140,38 @@ where
     B: Backend,
     W: Write,
 {
-    let _ = (ports, tty, out, terminal, input, name, capture, prepare, body);
-    todo!("run_view_with")
+    if !tty.is_terminal() {
+        return Err(crate::not_a_terminal(&format!("tui view {name}")));
+    }
+    let prepared = prepare()?;
+    let terminal_failed = |e: io::Error| {
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view {name} failed: {e}."))
+            .with("command", format!("tui view {name}"))
+    };
+    tty.raw_on().map_err(terminal_failed)?;
+    let restore = Restore::new(capture, tty, out);
+    let on = |out: &mut W| -> io::Result<()> {
+        execute!(out, EnterAlternateScreen)?;
+        match capture {
+            Capture::Keys => Ok(()),
+            Capture::Mouse => execute!(out, EnableMouseCapture),
+            Capture::MouseAndFocus => execute!(out, EnableMouseCapture, EnableFocusChange),
+        }
+    };
+    on(restore.out).map_err(terminal_failed)?;
+    let mut ctx = Ctx::new(ports, terminal, input);
+    let result = body(&mut ctx, prepared);
+    drop(ctx);
+    drop(restore);
+    match result {
+        Ok(()) => Ok(Output::Owned),
+        Err(ViewError::Terminal(e)) => Err(terminal_failed(e)),
+        Err(ViewError::Cpd(e)) => Err(e),
+    }
 }
+
+/// How long a view in a pane that failed waits before it exits.
+pub(crate) const BACKOFF: Duration = Duration::from_secs(3);
 
 /// [`crate::backed_off`] on injected ports: a failed view in a pane (`on_terminal`) says its error and "Starting again in 3 s."
 /// on `err` and naps the back-off on the clock before it returns the result; without a terminal the result is returned at once.
@@ -112,25 +181,26 @@ pub fn backed_off_with(
     err: &mut dyn Write,
     result: Result<Output, CpdError>,
 ) -> Result<Output, CpdError> {
-    let _ = (ports, on_terminal, err);
-    let _ = result;
-    todo!("backed_off_with")
+    if let Err(e) = &result {
+        if on_terminal {
+            drop(writeln!(err, "{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs()));
+            ports.clock.sleep(BACKOFF);
+        }
+    }
+    result
 }
 
 /// The spinner frame now, on the clock of `ports` (`palette::frame` of `ports.clock.utc()`).
 pub fn frame_now(ports: &Ports) -> usize {
-    let _ = ports;
-    todo!("frame_now")
+    crate::palette::frame(SystemTime::from(ports.clock.utc()))
 }
 
 /// The wall time now in Unix milliseconds, on the clock of `ports`.
 pub fn wall_ms(ports: &Ports) -> u64 {
-    let _ = ports;
-    todo!("wall_ms")
+    u64::try_from(ports.clock.utc().unix_timestamp_nanos() / 1_000_000).unwrap_or(0)
 }
 
 /// Whether the snooze that ends at `end` is over, on the clock of `ports`; no snooze is never over.
 pub fn snooze_over(ports: &Ports, end: Option<time::OffsetDateTime>) -> bool {
-    let _ = (ports, end);
-    todo!("snooze_over")
+    end.is_some_and(|end| ports.clock.utc() >= end)
 }

@@ -59,14 +59,22 @@ impl Pump {
     }
     /// A pump with no input thread: `signals` come out of [`Pump::wait_with`] in order, then `Due` (a test's pump).
     pub fn scripted(signals: Vec<Signal>) -> Pump {
-        let _ = signals;
-        todo!("Pump::scripted")
+        let (send, recv) = mpsc::channel();
+        for signal in signals {
+            let _ = send.send(signal);
+        }
+        Pump { send, recv }
     }
     /// [`Pump::wait`] on `clock`: a queued signal is returned at once; else the wait naps on the clock up to `until` (none
     /// when it has passed) and returns `Due`.
     pub fn wait_with(&self, clock: &dyn cpd_core::clock::Clock, until: Option<Instant>) -> Signal {
-        let _ = (clock, until);
-        todo!("Pump::wait_with")
+        if let Ok(signal) = self.recv.try_recv() {
+            return signal;
+        }
+        if let Some(wait) = until.map(|at| at.saturating_duration_since(clock.now())).filter(|d| !d.is_zero()) {
+            clock.sleep(wait);
+        }
+        Signal::Due
     }
     pub fn waker(&self) -> Waker {
         Waker { send: self.send.clone() }

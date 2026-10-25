@@ -117,7 +117,7 @@ pub mod view_ports;
 #[cfg(test)]
 mod view_ports_tests;
 
-pub use runner::{Capture, ViewError, run_view};
+pub use runner::{Capture, ViewError, run_view, run_view_on};
 
 use std::ffi::OsString;
 
@@ -125,6 +125,7 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 /// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
@@ -224,38 +225,34 @@ pub enum View {
 }
 
 pub fn run(args: Args, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+    run_with(&Ports::real(), args, version, run_command, restart)
+}
+
+/// [`run`] on `ports`: the views the ports reach wait through their clock and read their time from it.
+pub fn run_with(ports: &Ports, args: Args, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, version, run_command, restart),
-        Some(Command::View(view)) => backed_off(match view {
+        Some(Command::View(view)) => backed_off(ports, match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
-            View::Worker(args) => worker::run(args),
+            View::Worker(args) => worker::run(ports, args),
             View::History(args) => history::run(args),
-            View::Legend => widgets::legend::run(),
-            View::Logs(args) => logs::run(args),
-            View::Merge(args) => merge::run(args),
-            View::Dialog(args) => dialog::run(args),
+            View::Legend => widgets::legend::run(ports),
+            View::Logs(args) => logs::run(ports, args),
+            View::Merge(args) => merge::run(ports, args),
+            View::Dialog(args) => dialog::run(ports, args),
             View::Chat => chat::run(),
         }),
         Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), a.pull.as_deref(), &a.client, run_command)),
     }
 }
 
-/// How long a view in a pane that failed waits before it exits.
-const BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
-
 /// A view that fails exits, and the cockpit's `pane-died` hook starts it again at once (contract §6.1), so a
-/// persistent failure would be a tight loop. In a pane the failure is shown, and the view waits [`BACKOFF`] before
+/// persistent failure would be a tight loop. In a pane the failure is shown, and the view waits [`view_ports::BACKOFF`] before
 /// it exits. Without a terminal no hook is involved: the error is returned at once.
-fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
-    if let Err(e) = &result {
-        if on_a_terminal() {
-            eprintln!("{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs());
-            std::thread::sleep(BACKOFF);
-        }
-    }
-    result
+fn backed_off(ports: &Ports, result: Result<Output, CpdError>) -> Result<Output, CpdError> {
+    view_ports::backed_off_with(ports, on_a_terminal(), &mut std::io::stderr(), result)
 }
 
 /// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.
