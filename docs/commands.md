@@ -311,7 +311,28 @@ Idempotent: read-only.
  "markdown": "- [hs-d7] one engine per machine"}
 ```
 
-### 3.4 `context decide`, `context note`, `context ask`
+### 3.4 `context search`
+
+```
+cpd context search <query> [--context <id>]
+```
+
+Searches the Context's curated records by topic and short form against the query string (hs-d655: on-demand retrieval). The Context is `--context`, else the selected Plan's (§1.3).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+| Flag | Meaning |
+|---|---|
+| `<query>` | search string to match against topics and short forms of curated records |
+
+Effects: none. Output: records with curated topics or short forms matching the query, in topic order, then index order. `markdown` renders results; `records` is the list of matching `{id, topic, short}` entries.
+
+Idempotent: read-only.
+
+### 3.5 `context decide`, `context note`, `context ask`
 
 ```
 cpd context decide <text> [--supersedes <record>] [--context <id>]
@@ -339,7 +360,7 @@ Effects: the record write above (one transaction), with kind `decision` (letter 
 
 Idempotent: a retry is recognised (above); otherwise each call inserts a record, by design (records are never edited).
 
-### 3.5 `context answer`
+### 3.6 `context answer`
 
 ```
 cpd context answer <question> <text> [--context <id>]
@@ -360,11 +381,11 @@ Effects: the record write with kind `answer` (letter `a`) and `question` = `<que
 
 Idempotent: a retry is recognised; a second, different answer is refused. Contexts are machine-local, so only this machine answers.
 
-### 3.6 `context sync`
+### 3.7 `context sync`
 
 Removed by Plan manager B1 (hs-a1): Contexts are machine-local; records live in the database. The command is now unknown (`usage`, exit 2); engine E6 is removed with it (contract §3.7).
 
-### 3.7 `context rename`
+### 3.8 `context rename`
 
 ```
 cpd context rename <id> --title <text>
@@ -384,7 +405,7 @@ Effects: an unchanged title: `"already": true`, nothing written. Otherwise **row
 
 Idempotent: yes.
 
-### 3.8 `context archive`
+### 3.9 `context archive`
 
 ```
 cpd context archive <id>
@@ -409,7 +430,7 @@ Effects, in this order (all or nothing):
 
 `closed` lists the panes closed in step 2. Idempotent: yes; a Context that is archived already (and whose cascade has nothing to archive) returns `"already": true`, writes nothing and closes nothing.
 
-### 3.9 `context unarchive`
+### 3.10 `context unarchive`
 
 ```
 cpd context unarchive <id>
@@ -429,7 +450,7 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 
 `archived` lists the objects changed (their `archived_at` is now null); `closed` is always empty. Idempotent: yes; nothing archived: `"already": true`, nothing written.
 
-### 3.10 `context manager`
+### 3.11 `context manager`
 
 ```
 cpd context manager [--context <c>] [--by-user]
@@ -460,7 +481,7 @@ The command never moves the chat slot (hs-d103); `session open <manager>` does (
 
 `started` is true when this call registered the Manager or started its pane. Idempotent: yes; a Manager with a pane returns `"started": false` and writes nothing.
 
-### 3.11 `context pending`
+### 3.12 `context pending`
 
 ```
 cpd context pending [--context <c>] [--markdown]
@@ -499,7 +520,7 @@ With `--markdown` the output is the same data as markdown: `# Pending work in <c
 
 Idempotent: yes; it only reads.
 
-### 3.12 `context distill`
+### 3.13 `context distill`
 
 ```
 cpd context distill [--context <c>] [--batch <n>]
@@ -547,7 +568,7 @@ Failures, after the lock is taken. Each appends **one** `error` Event `{source: 
 
 Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
-### 3.13 `context owner`
+### 3.14 `context owner`
 
 ```
 cpd context owner <login> [--context <c>]
@@ -579,7 +600,7 @@ Effects: **rows and Events**, one transaction with the checks and the UPDATE on 
 
 Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
 
-### 3.14 `context delete`
+### 3.15 `context delete`
 
 ```
 cpd context delete <id> [--yes]
@@ -627,7 +648,7 @@ Idempotent: yes; a Context already deleted returns `"already": true` and writes 
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `context_delete.rs` expects no Session with `context = <id>`, but the Leads' rows stay (tombstoned Plans reference them), and `plan_rows` as under `plan delete` counts the Leads and the Plans' `plan-deleted` Events; the Manager and every other Session are what is gone.
 
-### 3.15 `context curation` (internal)
+### 3.16 `context curation` (internal)
 
 ```
 cpd context curation [--context <c>] [--limit <n>]
@@ -657,7 +678,7 @@ Effects: none. Output: `retire`, the first n `pending` rows of `record_retiremen
 
 Idempotent: read-only.
 
-### 3.16 `context retire` (internal)
+### 3.17 `context retire` (internal)
 
 ```
 cpd context retire [--context <c>] [--approve <id,...>] [--reject <id,...>]
@@ -688,7 +709,7 @@ Effects: **one transaction**, all or nothing (a refusal writes nothing). **Rows:
 
 Idempotent: no. A rerun finds the rows decided and is refused `curation_not_pending`.
 
-### 3.17 `context docs` (internal)
+### 3.18 `context docs` (internal)
 
 ```
 cpd context docs [--context <c>] [--send <id,...>] [--dismiss <id,...>]
