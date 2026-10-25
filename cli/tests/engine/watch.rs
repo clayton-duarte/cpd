@@ -3,8 +3,6 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 use crate::common;
-#[path = "../common/checkout.rs"]
-mod checkout;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -2945,102 +2943,144 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     assert!(!engine_log(&fx).contains("E6"), "{}", engine_log(&fx));
 }
 
-// ---------- scripts/install-cpd.sh (Finding 5) ----------
+// ---------- cpd install (Finding 5; `scripts/install-cpd.sh` is a 2-line bootstrap since #401) ----------
+//
+// The install is `cpd_core::install::run` over the `Ports` of an `Fx`: the checkout is a clone through the git route, the
+// built and the installed `cpd` are routes of the runner by path, `tmux` is the tmux route, `HOME` and `CPD_HOME` are the
+// env's own, time is the `ManualClock`. No script, no `cargo`, no process, no sleep. The same contract is also pinned in
+// `core/src/install/{migration,adapter,followup}_tests.rs` (the tests of `install_script.rs`'s other groups).
 
-/// Runs `scripts/install-cpd.sh` with a fake `cargo` that "builds" a fake
-/// `cpd`, in `env`: the fake `cpd` answers `config` with the private tmux
-/// socket, and records `watch --ensure` with the windows of the work session
-/// at that moment. Returns the script's stderr and the fake's calls.
-fn install(env: &TestEnv) -> (String, Vec<Vec<String>>) {
-    let (out, calls) = install_with(env, OPENS);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    (String::from_utf8_lossy(&out.stderr).into_owned(), calls)
-}
-
-/// The `store` object of a fake build's `--version`: the store opens.
+/// The `store` object of a build's `--version`: the store opens.
 const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
 
-/// `install`, where the fake build's `--version` reports `store` (a JSON literal: the verdict
-/// object or `null`), run from a checkout whose `origin/main` holds the same migrations as the
-/// tree. Returns the output.
-fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<String>>) {
-    let socket = env.tmux_socket();
-    let built = env.fake(
-        "cpd-built",
-        &format!(
-            r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
-config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) [ "$2" = --check ] && {{ echo '{{"ok":true}}'; exit 0; }}
-  if [ "$2" = --mark-restart ]; then echo '{{"ok":true,"marked":true,"engine_pid":1}}'; exit 0; fi
-  tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
-  l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
-  sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
-  until ! flock -n "$l" true; do :; done
-  echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
-esac"#,
-            windows = env.root().join("windows-at-ensure").display()
-        ),
-    );
-    let target = env.root().join("target");
-    let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
-    let checkout = checkout::Checkout::new(env, &["0001-initial.sql"]);
-    let out = env
-        .command(checkout.script())
-        .env("CARGO", cargo)
-        .env("CARGO_TARGET_DIR", &target)
-        .output()
-        .unwrap();
-    // The fake engine the script's `watch --ensure` started holds the lock for the script's check only.
-    if let Ok(pid) = fs::read_to_string(env.cpd_home().join("engine.pid")) {
-        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+/// What one run of the install left: its exit and its stderr.
+struct Installed {
+    exit: i32,
+    stderr: String,
+}
+
+/// A checkout (a clone of an origin whose `origin/main` holds the migrations of the tree and an adapter with a `test/`
+/// an install must not copy), a built `cpd` whose `--version` reports `store`, and an installed `cpd` that answers the
+/// follow-ups with the env's private tmux socket.
+struct InstallRig {
+    fx: Ip,
+    install: cpd_core::install::Install,
+}
+
+impl InstallRig {
+    /// The rig whose built `cpd` reports `store` (a JSON literal: the verdict object or `null`).
+    fn new(store: &str) -> InstallRig {
+        let fx = Ip::with_ports();
+        let root = fx.env.root().to_path_buf();
+        let origin = cpd_core::fakes::git::Repo::init(&fx.universe, &root.join("repos/install-origin"));
+        for script in ["install-cpd.sh", "cargo.sh", "tag-version.sh"] {
+            origin.write(&format!("scripts/{script}"), &format!("{script}\n"));
+        }
+        for file in ["package.json", "extension.ts", "lib/cpd.ts", "lib/adapter.ts", "test/cpd.test.ts"] {
+            origin.write(&format!("pi/{file}"), &format!("{file}\n"));
+        }
+        origin.write("core/src/store/migrations/0001-initial.sql", "0001-initial.sql\n");
+        origin.commit("install files");
+        let clone = root.join("repos/install-clone");
+        fx.git(&root, &["clone", "-q", origin.dir().to_str().unwrap(), clone.to_str().unwrap()]);
+
+        let target_dir = root.join("target");
+        fs::create_dir_all(target_dir.join("release")).unwrap();
+        let (built, installed, tag) = (target_dir.join("release/cpd"), fx.env.home().join(".local/bin/cpd"), clone.join("scripts/tag-version.sh"));
+        fs::write(&built, "built cpd\n").unwrap();
+        let socket = fx.env.tmux_socket();
+        let version = format!(r#"{{"ok":true,"version":"0.0.0","store":{store}}}"#);
+        let config = format!(r#"{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}"#);
+        let at = |path: PathBuf, args: &'static [&'static str]| move |c: &Call| Path::new(&c.program) == path && (args.is_empty() || c.args == args);
+        let _ = (*fx.fakes.runner)
+            .clone()
+            .on("cpd", at(built, &["--version"]), Reply::ok(&version))
+            .on("cpd", at(installed.clone(), &["config"]), Reply::ok(&config))
+            .on("cpd", at(installed, &["watch", "--check"]), Reply::ok(r#"{"ok":true}"#))
+            .on("tag-version.sh", at(tag, &[]), Reply::ok(""));
+        let install = cpd_core::install::Install {
+            root: clone,
+            target_dir,
+            home: fx.env.home().to_path_buf(),
+            cpd_home: CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap(),
+            pid: 4242,
+            lock_wait: cpd_core::install::DEFAULT_LOCK_WAIT,
+        };
+        InstallRig { fx, install }
     }
-    (out, env.calls("cpd-built"))
+
+    /// Runs the install on the `Fx`'s ports.
+    fn run(&self) -> Installed {
+        let mut stderr = Vec::new();
+        let exit = cpd_core::install::run(&self.fx.fakes.ports, &self.install, &mut stderr);
+        self.fx.git_route.assert_supported();
+        Installed { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
+    }
+
+    /// [`InstallRig::run`] of an install that must succeed: its stderr.
+    fn run_ok(&self) -> String {
+        let run = self.run();
+        assert_eq!(run.exit, 0, "{}", run.stderr);
+        run.stderr
+    }
+
+    /// The arguments of every call of the built and the installed `cpd`, in order.
+    fn calls(&self) -> Vec<Vec<String>> {
+        let (built, installed) = (self.install.target_dir.join("release/cpd"), self.install.home.join(".local/bin/cpd"));
+        let ours = |c: &Call| Path::new(&c.program) == built || Path::new(&c.program) == installed;
+        self.fx.fakes.runner.calls().into_iter().filter(ours).map(|c| c.args).collect()
+    }
+
+    /// `<HOME>/.local/share/cpd`, where the adapter goes.
+    fn share(&self) -> PathBuf {
+        self.install.home.join(".local/share/cpd")
+    }
 }
 
 #[test]
 fn install_leaves_a_server_without_an_engine_alone() {
-    let env = TestEnv::new();
-    let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "other", "sleep", "600"]);
+    let rig = InstallRig::new(OPENS);
+    let out = rig.fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "other", "sleep", "600"]);
     assert!(out.status.success());
 
-    let (stderr, calls) = install(&env);
+    let stderr = rig.run_ok();
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
+    assert_eq!(rig.calls(), [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
 }
 
 #[test]
 fn install_refuses_a_build_that_cannot_open_the_store_before_replacing_anything() {
-    let env = TestEnv::new();
-    let out = env.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
+    let refusing = r#"{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}"#;
+    let rig = InstallRig::new(refusing);
+    let out = rig.fx.tmux(&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"]);
     assert!(out.status.success());
 
-    let refusing = r#"{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}"#;
-    let (out, calls) = install_with(&env, refusing);
+    let out = rig.run();
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    let stderr = &out.stderr;
+    assert_eq!(out.exit, 1, "{stderr}");
     assert!(stderr.contains("cpd install refused: this build cannot open "), "{stderr}");
     assert!(stderr.contains("cpd.db: The database was migrated by a newer cpd."), "{stderr}");
     assert!(stderr.contains("merge main into this branch, then install again"), "{stderr}");
-    assert!(!env.home().join(".local/bin/cpd").exists());
-    assert!(!env.home().join(".local/share/cpd/pi").exists());
+    assert!(!rig.fx.env.home().join(".local/bin/cpd").exists());
+    assert!(!rig.fx.env.home().join(".local/share/cpd/pi").exists());
     // Only --version ran: no `tui --respawn`, no `watch --ensure`.
-    assert_eq!(calls, [vec!["--version"]]);
+    assert_eq!(rig.calls(), [vec!["--version"]]);
 }
 
 #[test]
 fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
     for store in [OPENS, "null"] {
-        let env = TestEnv::new();
-        let (out, _) = install_with(&env, store);
-        assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
-        assert!(env.home().join(".local/bin/cpd").exists());
+        // One `Fx` at a time (the process-wide lock): the first is dropped before the second is made.
+        let rig = InstallRig::new(store);
+        let out = rig.run();
+        assert_eq!(out.exit, 0, "{store}: {}", out.stderr);
+        assert!(rig.fx.env.home().join(".local/bin/cpd").exists());
     }
 }
 
-// ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------
+// ---------- the adapter swap of `cpd install` (pi-ci-W9) ----------
 
 /// The names under `dir`, recursively, relative to it, sorted.
 fn tree(dir: &Path) -> Vec<String> {
@@ -3068,12 +3108,12 @@ fn names(dir: &Path) -> Vec<String> {
 
 #[test]
 fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
-    let env = TestEnv::new();
-    install(&env);
+    let rig = InstallRig::new(OPENS);
+    rig.run_ok();
 
-    // `install` runs the script from the fake checkout (`Checkout::new`): compare with its `pi/`.
-    let checkout = env.root().join("repos/install-clone");
-    let share = env.home().join(".local/share/cpd");
+    // The checkout is the fake one of the rig: compare with its `pi/`.
+    let checkout = &rig.install.root;
+    let share = rig.share();
     let adapter = share.join("pi");
     let expected: Vec<String> = tree(&checkout.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
     assert!(expected.contains(&"extension.ts".to_string()) && expected.contains(&"lib/cpd.ts".to_string()), "{expected:?}");
@@ -3088,106 +3128,61 @@ fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
     assert_eq!(names(&share), ["pi".to_string(), target]);
 }
 
-/// Puts a `python3` first on the install's `PATH` that runs the real one with an audit hook recording each
-/// rename(2) it makes (`os.rename` and `os.replace` both raise the `os.rename` audit event) as
-/// `<pid>\t<src>\t<dst>` in `<root>/renames`. Returns that log.
-fn record_renames(env: &TestEnv) -> PathBuf {
-    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|dir| dir.join("python3"))
-        .find(|p| p.is_file())
-        .expect("python3 on PATH (the install requires it)");
-    let log = env.root().join("renames");
-    let site = env.root().join("python-site");
-    fs::create_dir_all(&site).unwrap();
-    fs::write(
-        site.join("sitecustomize.py"),
-        format!(
-            r#"import os, sys
-def _record(event, args):
-    if event == "os.rename":
-        with open({log:?}, "a") as f:
-            f.write(f"{{os.getpid()}}\t{{os.fsdecode(args[0])}}\t{{os.fsdecode(args[1])}}\n")
-sys.addaudithook(_record)
-"#,
-            log = log.display().to_string()
-        ),
-    )
-    .unwrap();
-    env.fake("python3", &format!("PYTHONPATH='{}' exec '{}' \"$@\"", site.display(), real.display()));
-    log
-}
-
-/// The renames `log` ([`record_renames`]) holds, in order, as `(pid, src, dst)` with the paths relative to
-/// `share` and the scratch link `pi.link.<pid of the script>` as `pi.link.$$`.
-fn renames(log: &Path, share: &Path) -> Vec<(u32, String, String)> {
-    let name = |path: &str| {
-        let name = Path::new(path).strip_prefix(share).unwrap_or_else(|_| panic!("{path} is not under {}", share.display())).display().to_string();
-        match name.strip_prefix("pi.link.") {
-            Some(pid) if pid.parse::<u32>().is_ok() => "pi.link.$$".to_string(),
-            _ => name,
-        }
-    };
-    fs::read_to_string(log)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| {
-            let [pid, src, dst] = line.split('\t').collect::<Vec<_>>()[..] else { panic!("a rename record `{line}`") };
-            (pid.parse().unwrap(), name(src), name(dst))
-        })
-        .collect()
-}
+// The old two tests below recorded each rename(2) of the script's python through an audit hook. In process there is no
+// such hook and no fs port: the renames are asserted by the tree they leave (the Lead's decision on research section 5,
+// `tests-mock-mig-engine.md` row of `install_*`): the moves the old assertions forbade would each leave a trace in it.
 
 #[test]
 fn install_replaces_an_installed_adapter_as_a_whole_by_one_rename() {
-    let env = TestEnv::new();
-    let share = env.home().join(".local/share/cpd");
+    let rig = InstallRig::new(OPENS);
+    let share = rig.share();
     let adapter = share.join("pi");
-    // An installed adapter as an earlier install left it: `pi` -> `pi.<id>`. (One `Checkout` per `TestEnv`, so the
-    // first version is laid out by hand; the install swaps the link over it.)
+    // An installed adapter as an earlier install left it: `pi` -> `pi.<id>`; the install swaps the link over it.
     let first = "pi.20200101T000000-1";
     fs::create_dir_all(share.join(first)).unwrap();
     fs::write(share.join(first).join("package.json"), "{}").unwrap();
     fs::write(share.join(first).join("stale.ts"), "").unwrap();
     std::os::unix::fs::symlink(first, &adapter).unwrap();
-    let log = record_renames(&env);
 
-    let (out, _) = install_with(&env, OPENS);
+    rig.run_ok();
 
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     // `pi` is never missing: the only rename that touches it is one rename(2) of the new link over it
-    // (docs/implementing.md "The adapter swap"), which the kernel does atomically.
-    let renames: Vec<(String, String)> = renames(&log, &share).into_iter().map(|(_, src, dst)| (src, dst)).collect();
-    assert_eq!(renames, [("pi.link.$$".to_string(), "pi".to_string())]);
-    assert_ne!(fs::read_link(&adapter).unwrap().to_string_lossy(), first, "pi points to the new version");
+    // (docs/implementing.md "The adapter swap"), which the kernel does atomically. What that leaves: the link is the
+    // new version (named by the virtual UTC second and the pid), no `pi.legacy` (the migration's move aside), no scratch
+    // link or temporary directory, and the old version is whole where it was (nothing renamed or moved it).
+    let new = fs::read_link(&adapter).unwrap().to_string_lossy().into_owned();
+    assert_ne!(new, first, "pi points to the new version");
+    assert!(new.starts_with("pi.") && new.ends_with("-4242"), "{new}");
     assert!(!adapter.join("stale.ts").exists(), "the old adapter was not replaced as a whole");
     assert!(adapter.join("package.json").exists());
+    assert!(share.join(first).join("stale.ts").exists(), "the old version is untouched, kept as the displaced one");
+    let mut expected = ["pi".to_string(), first.to_string(), new];
+    expected.sort();
+    assert_eq!(names(&share), expected, "no scratch link or directory is left");
 }
 
 #[test]
 fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process() {
-    let env = TestEnv::new();
-    let share = env.home().join(".local/share/cpd");
+    let rig = InstallRig::new(OPENS);
+    let share = rig.share();
     let adapter = share.join("pi");
     fs::create_dir_all(adapter.join("old")).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     fs::write(adapter.join("stale.ts"), "").unwrap();
     fs::write(adapter.join("old/f.ts"), "").unwrap();
-    let log = record_renames(&env);
 
-    let (out, _) = install_with(&env, OPENS);
+    rig.run_ok();
 
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    // The migration is two renames of one process, back to back (docs/implementing.md "The adapter swap"): the
-    // directory aside as a whole, then the link over it, so the one window `pi` is missing holds no process start-up.
-    let renames = renames(&log, &share);
-    let pids: Vec<u32> = renames.iter().map(|(pid, _, _)| *pid).collect();
-    let moves: Vec<(&str, &str)> = renames.iter().map(|(_, src, dst)| (src.as_str(), dst.as_str())).collect();
-    assert_eq!(moves, [("pi", "pi.legacy"), ("pi.link.$$", "pi")]);
-    assert_eq!(pids[0], pids[1], "the two renames run in two processes: {renames:?}");
+    // The migration is two renames of one process (the install itself, in process), back to back (docs/implementing.md
+    // "The adapter swap"): the directory aside as a whole (`pi.legacy`), then the link over it. What that leaves:
     assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is a symlink afterwards");
     assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
     assert!(share.join("pi.legacy/stale.ts").exists() && share.join("pi.legacy/old/f.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
+    let new = fs::read_link(&adapter).unwrap().to_string_lossy().into_owned();
+    let mut expected = ["pi".to_string(), "pi.legacy".to_string(), new];
+    expected.sort();
+    assert_eq!(names(&share), expected, "no scratch link or directory is left");
 }
 
 // ---------- a caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----------
