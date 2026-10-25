@@ -763,12 +763,12 @@ fn a_test_commands_table_with_a_list_is_read() {
 /// `pre-merge` hook must not find the slot variable set nor leave a slot lock behind.
 #[test]
 fn no_gate_takes_a_test_slot_lock_or_sets_cpd_test_slot() {
-    let fx = fixture_kind(&[], "open", None);
-    let seen = fx.env.root().join("gate-slot.txt");
+    let fx = git_fixture_kind(&[], "open");
+    let seen = fx.fx.env.root().join("gate-slot.txt");
     // The open Job's Gate needs the PR's stored title and a `gh` that reports no pull request yet.
-    fx.env.sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
-    fx.env.fake_gh("case \"$1 $2\" in \"pr list\") echo '[]' ;; *) exit 9 ;; esac");
-    fx.env.repo_policy(
+    fx.fx.env.sql("UPDATE prs SET title = 'Pay' WHERE plan = 'pay' AND key = 'repo'");
+    fx.fx.fake_gh(Reply::ok("[]"));
+    fx.fx.env.repo_policy(
         "acme",
         "pay",
         &format!("[pr]\ngate = \"local\"\n[hooks.pre-merge]\ngate = \"echo [$CPD_TEST_SLOT] > {}\"\n", seen.display()),
