@@ -3,18 +3,23 @@
 //! own: the driver calls [`merge`] at A8; engine E2 calls [`recover_attempt`]
 //! for each orphaned Attempt.
 //!
-//! No Gate runs here (R19): a merge is checked by the quick check at submit,
-//! the tamper check (step 4) and a clean rebase (step 5).
+//! The Gates run here (contract §7.4 step 6, hs-d679): `gate.merge` (the repo's
+//! `pre-commit`) at every non-review Job merge, and `gate.pr` (the repo's
+//! `pre-merge`) at an `open` or `update` Job merge, in the Attempt worktree at
+//! HEAD, while the Attempt is still `merging` (the tree shows it yellow).
 
 mod recover;
+
+use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::attempt::ledger::{self, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
-use crate::git::{self, run::run};
-use crate::home::CpdHome;
+use crate::git::{self, run::run, HookOutcome, Pipeline};
+use crate::home::{CpdHome, Hook};
+use crate::policy::Gate;
 use crate::ids::{AttemptId, PlanId};
 use crate::ports::Ports;
 use crate::store::Store;
@@ -68,7 +73,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("status", target.status));
     }
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, &ctx.config.host, &target)? };
+    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &ctx.config.host, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
@@ -127,7 +132,7 @@ fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(store: &mut Store, home: &CpdHome, host: &crate::ids::HostName, target: &Attempt) -> Result<Stepped, CpdError> {
+fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::HostName, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -184,12 +189,6 @@ fn steps(store: &mut Store, home: &CpdHome, host: &crate::ids::HostName, target:
                 return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
             }
         }
-        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.7 submit step 1, §7.4 step 8b): it has no
-        // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
-        if target.kind == "open" && pull_request_is_merged(store, target)? {
-            let pulled = open_pull_request(store, target)?;
-            return Ok(Stepped { end: End::Merged { sha: old }, stale: None, push: None, pulled: Some(pulled) });
-        }
         // 5. Rebase in the Attempt worktree, never in the Lead worktree; skipped when the
         // Attempt already contains `old` (hs-d139), so a merge of the base survives. An `open` or
         // `update` Job never rebases: the Gate ran on the submitted HEAD, and a rebase would drop its
@@ -208,7 +207,35 @@ fn steps(store: &mut Store, home: &CpdHome, host: &crate::ids::HostName, target:
                 return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail }));
             }
         }
-        // 6. Removed by R19: no Gate at the merge.
+        // 6. The Gates (hs-d679), while the Attempt is still `merging`. An `open` or `update` Job's base check
+        // runs first, so nothing is pushed or opened when it refuses.
+        if cpd_kind {
+            let (pr, _, _) = pr_of_job(store, target)?;
+            let again = format!("cpd attempt submit {}", target.id);
+            match store.read(|conn| crate::pr::base_check(conn, &target.plan, repo, &target.worktree, &pr, submitted, &again)) {
+                Ok(()) => {}
+                Err(e) if e.code() == ErrorCode::BaseConflict => {
+                    return Ok(Stepped::ends(End::Failed { cause: Failure::MergeConflict, detail: e.message().to_owned() }));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        if policy.gate.merge == Gate::Local {
+            if let Some(end) = run_gate(home, config, target, Hook::PreCommit, &policy.hooks.pre_commit)? {
+                return Ok(Stepped::ends(end));
+            }
+        }
+        if cpd_kind && policy.gate.pr == Gate::Local {
+            if let Some(end) = run_gate(home, config, target, Hook::PreMerge, &policy.hooks.pre_merge)? {
+                return Ok(Stepped::ends(end));
+            }
+        }
+        // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.7 submit step 1, §7.4 step 8b): it has no
+        // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
+        if target.kind == "open" && pull_request_is_merged(store, target)? {
+            let pulled = open_pull_request(store, target)?;
+            return Ok(Stepped { end: End::Merged { sha: old }, stale: None, push: None, pulled: Some(pulled) });
+        }
         // 7. Cancel check again: the last safe point.
         if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok(Stepped::ends(End::Cancelled));
@@ -260,6 +287,38 @@ fn steps(store: &mut Store, home: &CpdHome, host: &crate::ids::HostName, target:
             );
             return Ok(Stepped::ends(End::Failed { cause: Failure::CasLost, detail }));
         }
+    }
+}
+
+/// Runs the Gate `hook` for `target` in its Attempt worktree at HEAD (§7.4 step 6, hs-d679). `None` when it passed or has no
+/// commands; `Some(end)` when it failed (`gate_failed`) or could not be judged (`gate_error`), carrying the hook tail and log.
+fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipeline: &Pipeline) -> Result<Option<End>, CpdError> {
+    if pipeline.is_empty() {
+        return Ok(None);
+    }
+    let log = home.hook_log(&target.plan, &target.id, hook);
+    let timeout = Duration::from_secs(u64::from(config.timeouts.gate_minutes) * 60);
+    let operation = git::Operation { branch: &target.lead_branch };
+    match git::run_hook(hook, pipeline, &target.worktree, Some(&operation), timeout, &log) {
+        Ok(result) => {
+            let tail = result.tail.unwrap_or_default();
+            let log = log.display();
+            match result.outcome {
+                HookOutcome::Passed => Ok(None),
+                HookOutcome::Failed { exit } => Ok(Some(End::Failed {
+                    cause: Failure::GateFailed,
+                    detail: format!("{} failed (exit {exit}). log: {log}\ntail:\n{tail}", hook.as_str()),
+                })),
+                HookOutcome::Error(why) => Ok(Some(End::Failed {
+                    cause: Failure::GateError,
+                    detail: format!("{} could not be judged ({why}). log: {log}\ntail:\n{tail}", hook.as_str()),
+                })),
+            }
+        }
+        Err(e) => Ok(Some(End::Failed {
+            cause: Failure::GateError,
+            detail: format!("{} could not run: {}. log: {}", hook.as_str(), e.message(), log.display()),
+        })),
     }
 }
 
