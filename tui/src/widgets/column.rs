@@ -151,6 +151,8 @@ fn truncate(text: &str, max: usize) -> String {
 /// yellow only when the PR is `clean`, ready to merge. An `active` one (a PR of the chat slot's Plan) is the blue block, bold,
 /// across both lines, with no colour of its own.
 /// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
+/// Its colour is [`Dot::working`]: the red loader when `plan_failed`, else the bright pair of the owning Plan's phase
+/// (`plan_phase`; `None`: cyan, hs-d622).
 pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
@@ -174,7 +176,7 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     // the colour of a mark that has a meaning, and the colourless text: bright and 15 when the PR is owned (clickable)
     let mark = |m| if owned { palette::fg_clickable(m) } else { palette::fg(m) };
     let text = if owned { palette::clickable_text() } else { palette::read_only_text() };
-    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed, None), frame, false));
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::working(pr.plan_failed, pr.plan_phase), frame, false));
     let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + look.conflict.map_or(0, |(word, _)| 1 + word.chars().count());
     let mut spans = vec![
         "  ".into(),

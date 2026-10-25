@@ -230,7 +230,9 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 -- the tree's rule (`PlanHead::counts.failed >= 1`, tree.rs): the Plan has a failed Job
                 COALESCE((SELECT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'failed')
                             FROM prs r JOIN plans p ON p.id = r.plan
-                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0)
+                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
+                (SELECT p.phase FROM prs r JOIN plans p ON p.id = r.plan
+                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
@@ -257,7 +259,10 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             lead_working: r.get(11)?,
             plan_failed: r.get(13)?,
-            plan_phase: None,
+            plan_phase: r
+                .get::<_, Option<String>>(14)?
+                .map(|p| Phase::parse(&p).ok_or_else(|| bad_row(format!("{what} has owning Plan phase {p:?}"))))
+                .transpose()?,
             merging: false,
             repo,
             number,
