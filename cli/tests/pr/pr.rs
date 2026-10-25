@@ -717,6 +717,435 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
 }
 
+// ------------------------------------------------------------------ the opener's merge (restored, in-process)
+//
+// `pr open` queues the PR's `open` Job; its Attempt's merge (contract §7.4/§7.7, `cpd_core::merge::merge`, run here by
+// `Poll::merge`) is what runs the Gate, pushes the Lead Branch and opens or adopts the pull request. Git, `gh` and the
+// Gate's `sh` are fakes: the Gate's hooks answer by [`Poll::sh`].
+
+/// `gh pr list` answering one pull request of the Lead Branch in `state`.
+fn list_of(state: &str) -> Reply {
+    Reply::ok(&format!("[{{\"number\": 812, \"url\": \"{URL}\", \"state\": \"{state}\"}}]\n"))
+}
+
+/// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
+fn poll_fx_with_marked_hook() -> (Poll, PathBuf) {
+    let fx = poll_fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
+    let touched = marker.clone();
+    fx.sh(move |_| {
+        fs::write(&touched, "").unwrap();
+        Reply::ok("")
+    });
+    (fx, marker)
+}
+
+/// `git <args>` in `dir`, through the fake ports of a test: for a hook that does what a shell command would.
+fn git_in_hook(ports: &cpd_core::ports::Ports, dir: &Path, args: &[&str]) {
+    let call = Call {
+        tool: "git".to_owned(),
+        program: "git".to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: Vec::new(),
+        cwd: Some(dir.to_path_buf()),
+        deadline: Duration::from_secs(60),
+        stdin: None,
+        stderr_to: None,
+    };
+    let out = ports.runner.run(&call).unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+const MERGED_LIST_STATE: &str = "MERGED";
+
+#[test]
+fn open_gates_pushes_creates_the_pr_and_records_it() {
+    let fx = poll_fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate ran on {{ branch }} in $(basename $PWD) at $(git rev-parse HEAD)\"\n");
+    let (attempt, worktree, tip) = fx.submitted_opener();
+    let at = tip.clone();
+    fx.sh(move |call| Reply::ok(&format!("gate ran on {OPENER_BRANCH} in {} at {at}\n", basename(call))));
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip.clone() });
+    // The Gate ran once, in the Attempt's worktree at the tip (`branch` is the Attempt's branch), and wrote its log.
+    assert_eq!(fx.commands(), [format!("echo gate ran on {OPENER_BRANCH} in $(basename $PWD) at $(git rev-parse HEAD)")]);
+    assert_eq!(fx.calls("sh")[0].cwd.as_deref(), Some(worktree.as_path()));
+    assert_eq!(fx.open_gate_log(), format!("gate ran on {OPENER_BRANCH} in {} at {tip}\n", worktree.file_name().unwrap().to_string_lossy()));
+    // Pushed, by rule P: no upstream written to the repo's config (G1).
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip.clone()));
+    let config = fx.git_output(&fx.repo, &["config", "--get-regexp", "^branch\\."]);
+    assert!(config.stdout.is_empty(), "{}", String::from_utf8_lossy(&config.stdout));
+    // gh: look for an existing PR (twice: before the Gate's push, and to open it), then create it with the Jobs table as its body.
+    let calls = fx.gh_calls();
+    let list = ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"];
+    assert_eq!(calls[0], list);
+    assert_eq!(calls[1], list);
+    assert_eq!(calls[2][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
+    let body = &calls[2][9];
+    assert_eq!(calls[2][8], "--body");
+    assert!(body.contains("| api | The \\| API | merged | `"), "{body}");
+    assert!(body.contains(&fx.merged_sha), "{body}");
+    // Rows and the Event, in one transaction.
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1, row.2.as_deref()), ("deploy", Some(812), Some(URL)));
+    assert!(row.3.is_some(), "the PR has its opening time");
+    // The pull request's row (D6), from the URL `gh pr create` printed, and the PR points to it.
+    assert!(row.4.is_some(), "prs.pull_request is set");
+    assert_eq!(
+        fx.shown_pull_request(),
+        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": REPO_TITLE, "draft": false, "state": "open",
+               "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
+               "created_at": "opened", "merged_at": null})
+    );
+    let opened = fx.events("pr-opened");
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
+    let events = fx.events("plan-phase");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
+    assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
+}
+
+#[test]
+fn open_fails_loud_when_gh_cannot_find_the_pull_request_it_created() {
+    let fx = poll_fx("dispatch");
+    fx.lookup(&[None]);
+    let (attempt, _, _) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    let End::Failed { detail, .. } = end else { panic!("{end:?}") };
+    assert!(detail.contains("gh_failed"), "{detail}");
+    assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+#[test]
+fn open_adopts_a_pr_an_earlier_run_created() {
+    let fx = poll_fx("dispatch");
+    fx.gh.list.set(list_of("OPEN"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.plan_row().1, Some(812));
+    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().0, "deploy");
+}
+
+#[test]
+fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
+    let (fx, marker) = poll_fx_with_marked_hook();
+    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+    let remote_before = fx.remote_branch("cpd/pay");
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    // The opener's merge runs its Gate before it finds the pull request merged (contract §7.7, hs-d340: only steps 5 and 8
+    // are skipped), where the `pr open` of this test's old form skipped it; no push, no pull request created.
+    assert!(marker.exists(), "the pre-merge hook ran");
+    assert_eq!(fx.commands().len(), 1);
+    assert_eq!(fx.remote_branch("cpd/pay"), remote_before);
+    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
+    // The PR and the Plan, as `pr poll` leaves them.
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1, row.2.as_deref()), ("done", Some(812), Some(URL)));
+    assert!(row.4.is_some() && row.5.is_some(), "{row:?}");
+    assert_eq!(fx.pr_status("repo"), "merged");
+    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "merged".into()));
+    assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
+    let merged = fx.events("pr-merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert!(fx.events("pr-opened").is_empty());
+    assert_eq!(fx.events("plan-phase")[0].1["to"], "deploy");
+    let done = fx.events("plan-done");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].1["prs"][0]["key"], "repo");
+
+    // Again: already, nothing more.
+    let txns = fx.txns();
+    let again = fx.pr("open").ok();
+    assert_eq!((again["already"].as_bool(), again["phase"].as_str()), (Some(true), Some("done")));
+    assert_eq!((fx.txns(), fx.events("plan-done").len()), (txns, 1));
+}
+
+#[test]
+fn open_adopting_a_merged_pull_request_supersedes_the_pending_reviews() {
+    let (fx, marker) = poll_fx_with_marked_hook();
+    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+    insert_pending_reviews(&fx.env, "pay");
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert!(marker.exists(), "the Gate of the opener's merge ran (§7.7)");
+    assert_reviews_superseded_before_done(&fx.env, "pay");
+}
+
+#[test]
+fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_pr_is_not_open() {
+    let fx = poll_fx("dispatch");
+    fx.add_waiting_web();
+    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!((fx.pr_status("repo").as_str(), fx.phase().as_str()), ("merged", "dispatch"));
+    assert_eq!(fx.pr_status("web"), "waiting");
+    assert_eq!(fx.events("pr-merged").len(), 1);
+    assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
+}
+
+#[test]
+fn open_adopting_a_merged_pull_request_updates_the_row_the_poll_stored_open() {
+    let fx = poll_fx("dispatch");
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                 VALUES ('acme/pay', 812, '{URL}', 'As the poll wrote it', 0, 'open', 'approved', 'passed', 'github time', NULL, 'poll time')"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    fx.gh.list.set(list_of(MERGED_LIST_STATE));
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
+    let (attempt, _, _) = fx.submitted_opener();
+
+    fx.merge(&attempt);
+
+    assert_eq!(fx.pr_data().3, "merged");
+    assert_eq!(fx.pr_status("repo"), "merged");
+    let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[test]
+fn open_adopts_an_open_pull_request_of_a_lead_branch_that_is_behind_its_base() {
+    let (fx, marker) = poll_fx_with_marked_hook();
+    fx.gh.list.set(list_of("OPEN"));
+    fx.advance_base("base.txt", "base\n");
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip.clone() });
+    assert!(marker.exists(), "the Gate ran");
+    assert_eq!((fx.plan_row().0.as_str(), fx.pr_status("repo").as_str()), ("deploy", "open"));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
+}
+
+#[test]
+fn open_adopts_the_pull_request_a_concurrent_open_created_when_its_create_fails() {
+    let fx = poll_fx("dispatch");
+    // `gh pr create` fails because another opener of the PR created it: the lookup now finds it.
+    fx.gh.list.then(Reply::ok("[]\n"));
+    fx.gh.list.then(list_of("OPEN"));
+    fx.gh.create.set(Reply::exit(1, "", "a pull request for branch cpd/pay already exists\n"));
+    let (attempt, _, tip) = fx.submitted_opener();
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip });
+    assert_eq!(fx.plan_row().1, Some(812));
+    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
+    assert_eq!(calls, ["list", "list", "create", "list", "graphql"]);
+    assert_eq!(fx.plan_row().0, "deploy");
+}
+
+#[test]
+fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_nothing() {
+    let fx = poll_fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate\"\n");
+    let (attempt, _, tip) = fx.submitted_opener();
+    // Another opener commits meanwhile: its rows and the pull request GitHub now lists.
+    let (home, gh) = (fx.home.clone(), fx.gh.clone());
+    fx.sh(move |_| {
+        Store::open(&home, 5000)
+            .unwrap()
+            .write("pr open", |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                       VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
+                     UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{URL}', pr_opened_at = 'opened',
+                            pull_request = (SELECT id FROM pull_requests) WHERE plan = 'pay';"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+        gh.list.set(list_of("OPEN"));
+        Reply::ok("")
+    });
+    let before = fx.remote_branch("cpd/pay");
+    assert_eq!(before, Some(fx.lock_pushed.clone()));
+
+    let end = fx.merge(&attempt);
+
+    // The merge ends all the same, adopting what the other opener recorded: no `gh pr create`, nothing recorded twice.
+    assert_eq!(end, End::Merged { sha: tip.clone() });
+    assert_eq!(fx.plan_row().0, "dispatch", "the other opener's rows stay as they are: its own poll moves the Plan");
+    assert_eq!(fx.pr_status("repo"), "open");
+    assert!(fx.events("pr-opened").is_empty() && fx.events("plan-phase").is_empty(), "written once, by the other opener");
+    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
+}
+
+#[test]
+fn open_again_is_already_and_touches_nothing() {
+    let fx = poll_fx("dispatch");
+    let (attempt, _, _) = fx.submitted_opener();
+    fx.merge(&attempt);
+    let first = fx.plan_row();
+    let calls = fx.gh_calls().len();
+    let txns = fx.txns();
+
+    let again = fx.pr("open").ok();
+
+    assert_eq!((again["already"].as_bool(), again["phase"].as_str(), again["pr"]["status"].as_str()), (Some(true), Some("deploy"), Some("open")));
+    assert_eq!(again["pr"]["pr"]["number"], 812);
+    assert_eq!((fx.gh_calls().len(), fx.txns()), (calls, txns));
+    assert_eq!(fx.plan_row(), first);
+    assert_eq!(fx.events("plan-phase").len(), 1);
+}
+
+#[test]
+fn open_by_hand_goes_on_when_the_open_job_failed_was_cancelled_or_merged_and_counts_it_for_nothing() {
+    for status in ["failed", "cancelled", "merged"] {
+        let fx = poll_fx("dispatch");
+        fx.open_job(status);
+
+        let out = fx.pr("open").ok();
+
+        assert_eq!((out["job"].as_str(), out["status"].as_str()), (Some("open-repo-2"), Some("queued")), "{status}: {out}");
+        assert_eq!(open_jobs(&fx), [("open-repo".to_owned(), status.to_owned()), ("open-repo-2".to_owned(), "queued".to_owned())], "{status}");
+        assert_eq!(fx.plan_row().0, "dispatch", "{status}");
+    }
+}
+
+#[test]
+fn open_does_not_fetch_the_base_again_after_the_gate_so_a_base_that_moves_then_refuses_nothing() {
+    let fx = poll_fx("dispatch");
+    fx.hooks("pre-merge = \"move the base\"\n");
+    let (attempt, _, tip) = fx.submitted_opener();
+    // The base moves, in a conflicting way, while the Gate runs: B was read once, before it (hs-d326).
+    let (ports, main) = (fx.fakes.ports.clone(), fx.repo.clone());
+    fx.sh(move |_| {
+        fs::write(main.join("api.txt"), "late\n").unwrap();
+        git_in_hook(&ports, &main, &["add", "-A"]);
+        git_in_hook(&ports, &main, &["commit", "-q", "-m", "late"]);
+        git_in_hook(&ports, &main, &["push", "-q", "origin", "main"]);
+        Reply::ok("")
+    });
+
+    let end = fx.merge(&attempt);
+
+    assert_eq!(end, End::Merged { sha: tip.clone() });
+    assert_eq!(fx.plan_row().0, "deploy");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
+}
+
+#[test]
+fn both_hooks_see_no_cpd_variable() {
+    let fx = poll_fx("dispatch");
+    // `cpd` is run with CPD_HOME and more in its environment, and none of it reaches a hook.
+    fx.hooks("pre-commit = \"env\"\npre-merge = \"env\"\n");
+    fx.sh(|_| Reply::ok(""));
+    fx.export("CPD_SOMETHING", "x");
+    let (attempt, _, _) = fx.submitted_opener();
+
+    fx.merge(&attempt);
+
+    let hooks = fx.calls("sh");
+    assert_eq!(hooks.len(), 2, "pre-commit and pre-merge");
+    for call in hooks {
+        let set: Vec<&String> = call.envs.iter().filter(|(k, v)| k.starts_with("CPD_") && v.is_some()).map(|(k, _)| k).collect();
+        assert!(set.is_empty(), "{set:?}");
+        assert!(call.envs.iter().any(|(k, v)| k == "CPD_HOME" && v.is_none()), "CPD_HOME is withheld: {:?}", call.envs);
+    }
+}
+
+#[test]
+fn open_an_unknown_plan_is_plan_not_found() {
+    let fx = poll_fx("dispatch");
+    let run = fx.cpd(&["pr", "open", "--plan", "nope"]);
+    assert_eq!(code(&run), ("plan_not_found".into(), 4));
+}
+
+#[test]
+fn open_push_and_rebase_run_no_r_for_another_prs_orphaned_merge() {
+    // Nobody but E2 and guard U runs R (hs-d243), and guard U only for its own PR's
+    // Attempts: this pi has no install, so asking it for a catalog would fail.
+    for command in ["open", "push", "rebase"] {
+        let fx = poll_fx(if command == "open" { "dispatch" } else { "deploy" });
+        fx.fake_pi(Reply::exit(1, "", ""));
+        // The fake git has no `ls-files` (the Gate hides the Lead worktree's untracked files with it): no file is untracked.
+        let _ = (*fx.fakes.runner).clone().on("git", |call| call.args.iter().any(|a| a == "ls-files"), Reply::ok(""));
+        orphaned_merge(&fx);
+
+        let run = fx.pr(command);
+        assert_eq!(run.exit, 0, "{command}: {}", run.stdout);
+
+        let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE id = 'x-a1'", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(status, "merging", "{command}");
+    }
+}
+
+/// Plan `oth` on the same repo whose driver died right after its merge's compare-and-swap (§7.4 step 8): the Attempt is
+/// `merging`, its commit is on `cpd/oth`, and the Ledger knows nothing of it.
+fn orphaned_merge(fx: &Poll) {
+    let oth = PlanId::parse("oth").unwrap();
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("oth.log") };
+    let (lead, made, tip) = fx.scoped(|| {
+        let lead = create_lead_worktree(&fx.repo, &oth, "main", &setup).unwrap().path;
+        let attempt = AttemptId::parse("x-a1").unwrap();
+        let made = create_attempt_worktree(&fx.repo, &lead, &oth, &attempt, &setup).unwrap();
+        (lead, made.clone(), made.path)
+    });
+    fs::write(tip.join("x.txt"), "x\n").unwrap();
+    fx.git(&tip, &["add", "-A"]);
+    fx.git(&tip, &["commit", "-q", "-m", "x"]);
+    let sha = fx.git(&tip, &["rev-parse", "HEAD"]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead2', 'lead', 'ctx', 'oth', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('oth', 'ctx', 'Other', 'dispatch', 'lead2', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                   VALUES ('oth', 'repo', '{repo}', 'main', 'dispatch', 'cpd/oth', '{lead}', cpd_txn(), 't', 't');",
+                repo = fx.repo.display(),
+                lead = lead.display()
+            ))?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                 VALUES ('oth', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                params!["f".repeat(64), tx.id()],
+            )?;
+            tx.execute(
+                "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
+                                       submitted_sha, submitted_at, started_at)
+                 VALUES ('oth', 'x-a1', 'x', 1, 'S2', 'ladder', 'merging', ?1, ?2, ?3, ?4, 't', 't')",
+                params![made.branch, made.path.to_str().unwrap(), made.base_sha, sha],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/oth", &sha, &made.base_sha]);
+}
+
 #[test]
 fn open_without_a_selected_plan_is_plan_required() {
     let fx = poll_fx("dispatch");
@@ -1228,6 +1657,8 @@ impl Poll {
 }
 
 const OPENER_ATTEMPT: &str = "open-repo-a1";
+/// The branch of Attempt `open-repo-a1`, what `{{ branch }}` is in the Gate of its merge.
+const OPENER_BRANCH: &str = "cpd/pay--open-repo-a1";
 
 /// The `sh` of the Gate's hooks, answering by a closure.
 struct Sh(Box<dyn Fn(&Call) -> Reply + Send + Sync>);
