@@ -9,13 +9,15 @@
 //! runs the engine until a state it can read (a file, a row) holds. A step that never says so ends the test after
 //! [`MAX_NAPS`] naps, with a panic: virtual time, no wall clock.
 
+use std::ffi::OsString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use cpd_core::clock::{Clock, ManualClock, timestamp};
 use cpd_core::error::CpdError;
-use cpd_core::host::runner::Reply;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::output::Output;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::{jobs, locked_fingerprint};
@@ -23,7 +25,7 @@ use cpd_core::ports::Ports;
 use serde_json::json;
 use time::OffsetDateTime;
 
-use super::fx::Fx;
+use super::fx::{Fx, exit_code};
 
 /// The Plan of [`Fx::engine_plan`].
 pub const PLAN: &str = "pay";
@@ -42,11 +44,20 @@ struct Stepped {
     inner: ManualClock,
     until: Arc<AtomicBool>,
     step: Mutex<Step>,
+    /// The thread that runs the engine, and what to do when another thread reads the clock ([`Fx::watch_gated`]).
+    engine_thread: ThreadId,
+    on_other_thread: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Clock for Stepped {
     fn now(&self) -> Instant {
-        self.inner.now()
+        let now = self.inner.now();
+        if let Some(hook) = &self.on_other_thread
+            && std::thread::current().id() != self.engine_thread
+        {
+            hook();
+        }
+        now
     }
     fn sleep(&self, d: Duration) {
         let nap = self.inner.naps().len() + 1;
@@ -75,10 +86,36 @@ impl Fx {
     /// What the engine's own calls get when a test does not care: tmux has no server, and `cpd pr poll` (E5, through the
     /// runner, from the executable the engine recorded: [`ENGINE_EXE`]) finds no pull request.
     pub fn engine_routes(&self) {
-        self.fakes.spawn.set_self_exe(ENGINE_EXE);
-        self.fake("tmux", Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"));
+        self.engine_routes_without_poll();
         let poll = json!({"ok": true, "polled": 0, "rate_limit": {"remaining": 5000, "reset_at": "2030-01-01T00:00:00.000Z"}});
         self.fake("cpd", Reply::ok(&poll.to_string()));
+    }
+
+    /// [`Fx::engine_routes`] with the poll run for real, in this process: `cpd pr poll` is [`Fx::cpd_runs_in_process`], so the
+    /// poll's own `gh` calls go to the `gh` of the `FakeRunner` (script it with [`Fx::fake_gh`] or [`Fx::route_fn`]).
+    pub fn engine_routes_polling(&self) {
+        self.engine_routes_without_poll();
+        self.cpd_runs_in_process();
+    }
+
+    fn engine_routes_without_poll(&self) {
+        self.fakes.spawn.set_self_exe(ENGINE_EXE);
+        self.fake("tmux", Reply::exit(1, "", "no server running on /tmp/tmux-1/testkit\n"));
+    }
+
+    /// Makes every call of `cpd` through the `FakeRunner` a `run_with` of this `Fx`'s ports, on the calling thread: the
+    /// reply is what the command wrote to stdout and its exit code. The call's environment and directory are not applied
+    /// (the process's are the `Fx`'s, set once; `CPD_HOME` is the same for the engine and the command it runs).
+    pub fn cpd_runs_in_process(&self) {
+        // The runner is held weakly: the route lives in the runner's own script and calls it back.
+        let ports = Ports { clock: self.fakes.ports.clock.clone(), runner: self.fakes.runner.weak(), spawn: self.fakes.ports.spawn.clone() };
+        let _ = (*self.fakes.runner).clone().route("cpd", Arc::new(CpdRoute { ports }));
+    }
+
+    /// Answers every call of `program` with `reply(call)`, in the thread that makes it: a script that depends on the call or
+    /// on what the test changed since the last one.
+    pub fn route_fn(&self, program: &str, reply: impl Fn(&Call) -> Reply + Send + Sync + 'static) {
+        let _ = (*self.fakes.runner).clone().route(program, Arc::new(FnRoute(Box::new(reply))));
     }
 
     /// Context `ctx` and Plan `pay` in `dispatch` (PR `repo` in `dispatch`, its Lead Session `lead1` stopped, the Tier
@@ -143,8 +180,27 @@ impl Fx {
     /// `cpd watch` in `CPD_HOME` on this `Fx`'s ports, `step` running before each nap passes (with its 1-based number): it
     /// returns whether that nap is the last. What `step` reads is the state after the tick that came before the nap.
     pub fn watch_steps(&self, step: impl FnMut(usize) -> bool + Send + 'static) -> Result<Output, CpdError> {
+        self.watch_steps_on(step, None)
+    }
+
+    /// [`Fx::watch_steps`] where `poll_ended` runs each time a thread other than the test's reads the engine's clock. The
+    /// engine's only other thread is E5's poll, and it reads the clock once, to stamp the end of the poll, as the last thing
+    /// it does before it hands the result over: a `step` that waits for what `poll_ended` signals stops the engine's
+    /// virtual time while a poll runs, so the poll ends at a time the test knows (the engine's own thread would otherwise
+    /// nap through virtual time while the poll thread is starting).
+    pub fn watch_gated(&self, step: impl FnMut(usize) -> bool + Send + 'static, poll_ended: impl Fn() + Send + Sync + 'static) -> Result<Output, CpdError> {
+        self.watch_steps_on(step, Some(Box::new(poll_ended)))
+    }
+
+    fn watch_steps_on(&self, step: impl FnMut(usize) -> bool + Send + 'static, on_other_thread: Option<Box<dyn Fn() + Send + Sync>>) -> Result<Output, CpdError> {
         let until = Arc::new(AtomicBool::new(false));
-        let stepped = Stepped { inner: (*self.fakes.clock).clone(), until: until.clone(), step: Mutex::new(Box::new(step)) };
+        let stepped = Stepped {
+            inner: (*self.fakes.clock).clone(),
+            until: until.clone(),
+            step: Mutex::new(Box::new(step)),
+            engine_thread: std::thread::current().id(),
+            on_other_thread,
+        };
         let ports = Ports { clock: Arc::new(stepped), runner: self.fakes.ports.runner.clone(), spawn: self.fakes.ports.spawn.clone() };
         cpd_engine::watch::run_with(&ports, &until)
     }
@@ -220,5 +276,30 @@ impl Fx {
             let mut stmt = conn.prepare("SELECT key, status FROM jobs WHERE kind = ?1 ORDER BY key")?;
             Ok(stmt.query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })
+    }
+}
+
+/// `cpd` run by `run_with` on the ports it holds.
+struct CpdRoute {
+    ports: Ports,
+}
+
+impl Handler for CpdRoute {
+    fn handle(&self, call: &Call) -> Reply {
+        let argv = std::iter::once(call.program.clone()).chain(call.args.iter().cloned()).map(OsString::from);
+        let mut stdout = Vec::new();
+        let code = cpd::run_with(&self.ports, argv, &mut stdout);
+        Reply::Exit { code: exit_code(code), stdout, stderr: Vec::new(), takes: Duration::ZERO }
+    }
+}
+
+type Reply1 = Box<dyn Fn(&Call) -> Reply + Send + Sync>;
+
+/// A [`Handler`] that is a closure.
+struct FnRoute(Reply1);
+
+impl Handler for FnRoute {
+    fn handle(&self, call: &Call) -> Reply {
+        (self.0)(call)
     }
 }

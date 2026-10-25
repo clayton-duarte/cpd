@@ -446,7 +446,7 @@ fn bare_with_store() -> TestEnv {
 }
 
 /// The number of `code`, which `ExitCode` does not give.
-fn exit_code(code: ExitCode) -> i32 {
+pub(super) fn exit_code(code: ExitCode) -> i32 {
     (0..=u8::MAX).find(|n| ExitCode::from(*n) == code).map(i32::from).expect("an ExitCode is a byte")
 }
 
