@@ -4793,3 +4793,27 @@ Output when on with auto-end:
 ```
 
 Idempotent: yes; read-only.
+
+## 26. `test`
+
+The logic behind `scripts/test-changed` and `scripts/tests.sh`, which become thin (`exec cpd test …`). The selection and the name classification are pure over `git diff` and `cargo metadata` output, read through the `Runner`; the commands start `cargo` through `scripts/cargo.sh` (the bootstrap that builds cpd). Callers: Manager, Lead, Worker; not cockpit, not internal. The command tree is pinned by `cli/tests/tooling/interface.rs`, and [docs/interface.md](interface.md) is regenerated.
+
+### 26.1 `test changed`
+
+```
+cpd test changed [--dry-run] [<base>]
+```
+
+Runs the Rust tests the changed files can reach: exactly the selection of docs/implementing.md "The scoped loop" (changed files from the merge base of `<base>`, default `origin/main`, to the working tree and untracked files; crate and reverse dependencies as `-p`; `cli/tests/<area>/<module>.rs` as `--test <area> -E 'test(/^<module>::/)'`; root-level inputs as `--workspace`; docs, `pi/` and other scripts select nothing). `--dry-run` prints the one command on stdout and runs nothing, exit 0. Nothing selected: `test-changed: nothing to run` on stderr, exit 0. Otherwise the exit status is nextest's. `scripts/test-changed [--dry-run] [<base>]` stays as `exec cpd test changed "$@"`.
+
+### 26.2 `test run`
+
+```
+cpd test run <name>...
+```
+
+Runs the named tests and exits non-zero when any failed or did not run. A name is a pi name, `pi/test/<file>.test.ts::<title>` (the file's path, `::`, the exact `node:test` title; run with `node --test --test-name-pattern=<title> <file>`, and refused when the title is in no `test(` or `it(` call of the file), or a Rust name as nextest filters it (run with `nextest run --workspace --no-fail-fast`). Both run filtered, so neither takes a test slot. Runs from the repo root, whatever the cwd. No name is a `usage` error.
+
+### 26.3 The `scripts/tests.sh` contract
+
+`.config/cpd.toml` `[tests]` keeps calling `scripts/tests.sh build`, `scripts/tests.sh list <test>` and `scripts/tests.sh run <tests>` (contract §7.7); that argument contract does not change. `build` (`nextest run --workspace --no-run`, then `npm run typecheck`) and `list` stay in the shell; `run` becomes `exec cpd test run "$@"` once `cpd test` passes its tests. Until then the shell stays whole, so the TDD checks of cpd work while the change is in flight.
