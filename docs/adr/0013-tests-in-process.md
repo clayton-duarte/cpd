@@ -34,7 +34,7 @@ Replace every external subprocess with an in-process fake or mock behind a trait
 | **`Runner`** | Every subprocess (tmux, git, gh, pi, node, sh, cpd) | `SystemRunner` = `deadline::output` | `FakeRunner` scripts `Output`s by program file name; routes `tmux` and `git` (in-process handlers, added by PRs port-tmux and port-git) | `&dyn Runner` / `_with` forms; `Tmux::with_runner` | `core/src/host/runner.rs`; deadline on the `ManualClock`; `deadline.rs` tests are the real contract tests |
 | **`Spawn` / `Procs`** | Long-lived children, signals | `std::process::Child`, `nix::sys::signal::kill`, `/proc/<pid>/…` | `FakeSpawn` tracks pids, `kill` marks dead, stubs signal delivery | Builders in tests, records in the fake tmux route (pane pids are fake) and `FakeSpawn` state | `core/src/host/spawn.rs` (new); drivers, session panes, pollers, `kill(pid, 0)` |
 
-**Tmux and git are not ports.** They are routes of the `FakeRunner`, chosen by the program's file name (`tmux`, `git`): the fake tmux of `cli/src/fakes/tmux` and the fake git are in-process handlers that take what a `Command` carries (argv, env, cwd). `Tmux::with_program` and `CPD_TEST_GIT` go away. (Lead decision of 2026-10-25, refining this ADR.)
+**Tmux and git are not ports.** They are routes of the `FakeRunner`, chosen by the program's file name (`tmux`, `git`): the tmux route of `cli/src/fakes/tmux` and the git route (`GitRoute`, not a `Git` trait or a `FakeGit`) are in-process handlers that take what a `Command` carries (argv, env, cwd). `Tmux::with_program` and `CPD_TEST_GIT` go away. (Lead decision of 2026-10-25, refining this ADR.)
 
 ## Entry points and thin mains
 
@@ -300,7 +300,7 @@ One row per file with held tests, grouped by area and PR. Counts by `rg -c '#\[(
 | File | Tests | Deleted | Target | PR |
 |---|---|---|---|---|
 | harness.rs | 34 | – | integration (TestEnv behaviour) | mig-tooling |
-| install_script.rs | 51 | – | integration (fake tmux, fake git) | mig-tooling |
+| install_script.rs | 51 | – | integration (tmux route, git route) | mig-tooling |
 | fake_tmux.rs | 57 | – | integration (fake-tmux binary) | mig-tooling |
 | cargo_script.rs | 12 | – | unit (sccache, cargo.sh) | mig-tooling |
 | slot.rs | 14 | – | integration (clock) | mig-tooling |
