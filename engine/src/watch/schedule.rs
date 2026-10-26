@@ -163,16 +163,20 @@ pub(super) fn run(engine: &mut Engine) {
     if ready.is_empty() {
         return;
     }
-    let catalog = match engine.catalog() {
-        Ok(catalog) => catalog,
-        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
-    };
     let allocations = match engine.store.read(|conn| allocations(conn, &ready)) {
         Ok(allocations) => allocations,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
     for ((plan, key), allocation) in ready.into_iter().zip(allocations) {
         let about = About::Job(plan.clone(), key.clone());
+        // The Job's PR repo key sets its models: one catalog per distinct `[model]` table, a key that does not resolve fails its Job.
+        let catalog = match engine.catalog_of_job(&plan, key.as_str()) {
+            Ok(catalog) => catalog,
+            Err(e) => {
+                engine.fail(Step::E3, about, &e);
+                continue;
+            }
+        };
         let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
         match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
             Ok(started) => {

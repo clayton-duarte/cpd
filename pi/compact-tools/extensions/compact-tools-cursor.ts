@@ -9,8 +9,9 @@
  * after the last keystroke, on a visible phase in that same colour. The cursor blinks as before while idle.
  */
 import { Editor } from "@earendil-works/pi-tui";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { onTick } from "./compact-tools-clock.ts";
-import { editorFocused } from "./compact-tools-editor.ts";
+import { editorFocused, editorFocusGains } from "./compact-tools-editor.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { fgOpen } from "./compact-tools-indices.ts";
 
@@ -45,6 +46,8 @@ const paintMarkers = (rows: string[], index: number): string[] =>
 export class CursorController {
 	private stopTick: (() => void) | undefined;
 	private phase = 0;
+	/** The focus gains the last render has seen. */
+	private gains = 0;
 	private bound = false;
 	/** The wall clock of the last keystroke; the cursor stays solid until PERIOD_MS of idle have passed. */
 	private lastKeystrokeAt = Number.NEGATIVE_INFINITY;
@@ -54,9 +57,13 @@ export class CursorController {
 		this.release();
 		this.phase = 0;
 		this.bound = true;
+		this.subscribe();
 		hookMethod(Editor.prototype, "render", "editor.cursor", (self, args, original) =>
 			this.render(self, args, original));
+		// CustomEditor takes some keys before Editor does; Editor's wrapper skips it so a key holds the cursor once.
 		hookMethod(Editor.prototype, "handleInput", "editor.cursor.input", (self, args, original) =>
+			self instanceof CustomEditor ? original.apply(self, args) : this.input(self, args, original));
+		hookMethod(CustomEditor.prototype, "handleInput", "custom-editor.cursor.input", (self, args, original) =>
 			this.input(self, args, original));
 	}
 
@@ -72,10 +79,21 @@ export class CursorController {
 		this.lastKeystrokeAt = Number.NEGATIVE_INFINITY;
 	}
 
+	/** One phase per tick, the render reads it; the shared clock holds no timer while the pane is unfocused. */
+	private subscribe(): void {
+		this.stopTick ??= onTick(() => {
+			// The cursor stays solid while a keystroke is held; the blink counts only idle time.
+			if (Date.now() - this.lastKeystrokeAt < PERIOD_MS) return;
+			this.phase += 1;
+			this.tui?.requestRender?.();
+		}, PERIOD_MS);
+	}
+
 	private input(self: unknown, args: unknown[], original: (...args: unknown[]) => unknown): unknown {
 		const result = original.apply(self, args);
-		if (!this.bound || !editorFocused()) return result;
+		if (!this.bound) return result;
 		this.lastKeystrokeAt = Date.now();
+		this.subscribe();
 		this.tui?.requestRender?.();
 		return result;
 	}
@@ -94,15 +112,13 @@ export class CursorController {
 			this.release();
 			return stripMarkers(rows);
 		}
-		if (!this.stopTick) {
-			// Start lazily on the first render while focused: one phase per tick, the render reads it.
-			this.stopTick = onTick(() => {
-				// The cursor stays solid while a keystroke is held; the blink counts only idle time.
-				if (Date.now() - this.lastKeystrokeAt < PERIOD_MS) return;
-				this.phase += 1;
-				tui?.requestRender?.();
-			}, PERIOD_MS);
+		// A focus gain draws the cursor on its visible phase, in the colour it had (6.9).
+		const gains = editorFocusGains();
+		if (gains !== this.gains) {
+			this.gains = gains;
+			this.phase -= this.phase % 2;
 		}
+		this.subscribe();
 		const index = CYCLE[Math.floor(this.phase / 2) % CYCLE.length]!;
 		// While a keystroke is held the cursor stays solid in the current cycle colour.
 		if (Date.now() - this.lastKeystrokeAt < PERIOD_MS) return paintMarkers(rows, index);

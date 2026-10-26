@@ -47,6 +47,7 @@ use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
 
+pub mod causes;
 pub mod cockpit;
 pub mod engine;
 pub mod fx;
@@ -897,8 +898,8 @@ impl TestEnv {
             write_executable(&path, &format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"));
         }
         // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
-        fs::create_dir_all(env.cpd_home().join("policy/owners")).expect("create the owners directory");
-        fs::write(env.cpd_home().join("policy/owners/acme.toml"), "").expect("write the acme owner file");
+        fs::create_dir_all(env.cpd_home().join("policy/acme")).expect("create the acme directory");
+        fs::write(env.cpd_home().join("policy/acme/owner.toml"), "").expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
@@ -939,20 +940,22 @@ impl TestEnv {
 
     /// Replaces the owner `owner`'s policy file (every test env has `acme`, an empty one) with `toml`.
     pub fn owner_policy(&self, owner: &str, toml: &str) {
-        fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
+        let dir = self.cpd_home().join("policy").join(owner);
+        fs::create_dir_all(&dir).expect("create the owner policy directory");
+        fs::write(dir.join("owner.toml"), toml).expect("write the owner policy file");
     }
 
     /// Replaces the repo `<owner>/<name>`'s policy file (contract §8.3), creating its directories, with `toml`.
     pub fn repo_policy(&self, owner: &str, name: &str, toml: &str) {
-        let dir = self.cpd_home().join("policy/repos").join(owner);
+        let dir = self.cpd_home().join("policy").join(owner);
         fs::create_dir_all(&dir).expect("create the repo policy directory");
         fs::write(dir.join(format!("{name}.toml")), toml).expect("write the repo policy file");
     }
 
-    /// A `keyed_repo` whose repo policy file is removed: its repo is unconfigured (`repo_unconfigured`).
+    /// A `keyed_repo` whose repo policy file is removed: its repo has no repo scope (it inherits its owner).
     pub fn unconfigured_repo(&self, name: &str) -> PathBuf {
         let repo = self.keyed_repo(name);
-        let _ = fs::remove_file(self.cpd_home().join(format!("policy/repos/acme/{name}.toml")));
+        let _ = fs::remove_file(self.cpd_home().join(format!("policy/acme/{name}.toml")));
         repo
     }
 
@@ -996,7 +999,8 @@ impl TestEnv {
     /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `PLANNOTATOR_*`, `GH_*`, `GITHUB_*`, `SSH_*`,
     /// the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case),
     /// `TMUX`, `TMUX_PANE` and `ZDOTDIR` removed, then
-    /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR` and git's config set. It runs in the env's
+    /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR`, `TZ` (a POSIX rule: jiff reads `TZ` first, so no child reads
+    /// /etc/localtime and every child draws times in EST/EDT) and git's config set. It runs in the env's
     /// process group, which the teardown stops: a process that leaves it (`setsid`) is
     /// stopped only when cpd records it ([`TEARDOWN_SH`]).
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
@@ -1037,6 +1041,7 @@ impl TestEnv {
             ("CPD_HOME", self.cpd_home().into()),
             ("HOME", self.home().into()),
             ("TMUX_TMPDIR", self.tmux_tmpdir().into()),
+            ("TZ", "EST5EDT,M3.2.0,M11.1.0".into()),
             ("FAKE_TMUX_SERVER_PID", std::process::id().to_string().into()),
             // E15 would run the helper at the first tick of every engine a test starts (contract §1.2 test overrides).
             ("CPD_TEST_MODELS_DISCOVERY", "off".into()),
@@ -1087,6 +1092,19 @@ impl TestEnv {
     pub fn write_config(&self, text: &str) {
         fs::create_dir_all(self.cpd_home()).expect("create CPD_HOME");
         fs::write(self.cpd_home().join("config.toml"), text).expect("write config.toml");
+    }
+
+    /// The Tier models the tests use, `p/opus`, `p/sonnet`, `p/haiku` and `p/gemini`, as the machine policy's `[model]`
+    /// (`policy/host.toml`, appended to what it holds; a `host.toml` with a `[model]` is left as it is), (pro-d27).
+    pub fn write_models(&self) {
+        let path = self.cpd_home().join("policy").join("host.toml");
+        fs::create_dir_all(path.parent().unwrap()).expect("create the policy directory");
+        let held = fs::read_to_string(&path).unwrap_or_default();
+        if held.contains("[model]") {
+            return;
+        }
+        let model = "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
+        fs::write(&path, format!("{held}{model}")).expect("write host.toml");
     }
 
     /// `config.toml` of machine `m1` on this env's private tmux server. `extra` is more TOML
@@ -1196,7 +1214,7 @@ impl TestEnv {
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
-        if !self.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+        if !self.cpd_home().join(format!("policy/acme/{name}.toml")).exists() {
             self.repo_policy("acme", &name, "");
         }
         url

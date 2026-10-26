@@ -71,8 +71,9 @@ fn drawn(fx: &Fx, width: u16, height: u16) -> Vec<String> {
         .env
         .read(|c| c.query_row("SELECT name, archived_at IS NOT NULL, file FROM sessions WHERE id = 'l1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))));
     let text = std::fs::read_to_string(file).unwrap();
+    let zone = cpd_core::clock::Clock::zone(&*fx.fakes.ports.clock);
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| cpd_tui::draw_history(&name, archived, &text, f)).unwrap();
+    terminal.draw(|f| cpd_tui::draw_history(&name, archived, &text, &zone, f)).unwrap();
     let mut rows = Screen::from_buffer(terminal.backend().buffer()).rows();
     while rows.last().is_some_and(String::is_empty) {
         rows.pop();
@@ -91,11 +92,11 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
         [
             "",
             " old lead (archived, read-only)",
-            " 16:33:44 you",
+            " 12:33:44 you",
             "       Plan the API.",
-            " 16:33:44 agent",
+            " 12:33:44 agent",
             "       Here is the plan.",
-            " 16:33:44 → bash cpd plan show",
+            " 12:33:44 → bash cpd plan show",
             "         󰘌 ok",
         ]
     );
@@ -134,7 +135,7 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
             let rows = s.rows();
             assert!(rows.get(2).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
             // the uniform 1-cell pad: row 0 and row 3 blank, the title in row 1, the body in row 2
-            assert_eq!(rows, ["", " old lead (archived, read-only)", " 16:33:44 you", ""]);
+            assert_eq!(rows, ["", " old lead (archived, read-only)", " 12:33:44 you", ""]);
         }),
         Step::ch('G'),
         Step::look(|s| assert!(s.contains("󰘌 ok"), "the end again: {:?}", s.rows())),

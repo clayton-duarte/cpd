@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::cache;
 use super::file::Config;
+use crate::policy::model::Models;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -115,7 +116,7 @@ fn tail(bytes: &[u8]) -> String {
     lines[lines.len().saturating_sub(60)..].join("\n")
 }
 
-/// The Tier catalog for the configured models, from the installed pi.
+/// The Tier catalog for the `models` of a policy key, from the installed pi.
 ///
 /// Errors: `pi_not_found`, `catalog_failed` (the module did not run or did not
 /// print valid JSON), `tier_model_unknown` (a configured model is not in pi's
@@ -125,36 +126,36 @@ fn tail(bytes: &[u8]) -> String {
 /// per pi version (commands.md §14.3): read when the cache holds the configured
 /// models under the installed pi's version; otherwise computed from pi and
 /// written in one transaction, replacing what was cached.
-pub fn load(config: &Config) -> Result<Catalog, CpdError> {
+pub fn load(config: &Config, models: &Models) -> Result<Catalog, CpdError> {
     // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
     let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
-    load_with(config, &mut store)
+    load_with(models, &mut store)
 }
 
 /// [`load`] through a `store` the caller already holds, so the catalog does not
 /// open a second one (flock, pragmas, schema hash).
-pub fn load_with(config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
-    load_from(&locate_pi()?, config, store)
+pub fn load_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+    load_from(&locate_pi()?, models, store)
 }
 
-fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
-    let models = [config.tiers.o.as_str(), config.tiers.s.as_str(), config.tiers.h.as_str()];
-    if let Some(cached) = cache::read(store, &pi.version, models, &config.tiers.g)? {
+fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+    let refs = [models.o.as_str(), models.s.as_str(), models.h.as_str()];
+    if let Some(cached) = cache::read(store, &pi.version, refs, &models.g)? {
         return Ok(cached);
     }
-    let catalog = read(pi, config, NODE_DEADLINE)?;
+    let catalog = read(pi, models, NODE_DEADLINE)?;
     cache::write(store, &catalog)?;
     Ok(catalog)
 }
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
-pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    read_with(&*Ports::current().runner, pi, config, deadline)
+pub fn read(pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catalog, CpdError> {
+    read_with(&*Ports::current().runner, pi, models, deadline)
 }
 
 /// [`read`] on `runner`.
-pub fn read_with(runner: &dyn Runner, pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h), (Letter::G, &config.tiers.g)];
+pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catalog, CpdError> {
+    let tiers = [(Letter::O, &models.o), (Letter::S, &models.s), (Letter::H, &models.h), (Letter::G, &models.g)];
     let node = node();
     let mut cmd = Command::new(&node);
     cmd.args(["--input-type=module", "-e", MODULE, "--"])
@@ -243,18 +244,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", &home.config()).unwrap();
+        let models = crate::policy::default_policy().model.clone();
         let tier = |model: &str| TierModel { model: model.to_owned(), efforts: vec![0, 1, 2] };
         let cached = Catalog {
             pi_version: "9.9.9".into(),
-            o: tier(&config.tiers.o),
-            s: tier(&config.tiers.s),
-            h: tier(&config.tiers.h),
-            g: TierModel { model: config.tiers.g.clone(), efforts: vec![] },
+            o: tier(&models.o),
+            s: tier(&models.s),
+            h: tier(&models.h),
+            g: TierModel { model: models.g.clone(), efforts: vec![] },
         };
         cache::write(&mut store, &cached).unwrap();
 
         // pi's entry points do not exist: a cache miss would fail in `read`.
-        assert_eq!(load_from(&pi(), &config, &mut store).unwrap(), cached);
+        assert_eq!(load_from(&pi(), &models, &mut store).unwrap(), cached);
     }
 }

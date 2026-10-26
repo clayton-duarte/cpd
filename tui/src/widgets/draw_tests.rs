@@ -376,7 +376,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         ("red:", palette::NEEDS_YOU, Dot::Red),
         ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
         ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
-        ("blue:", palette::NEEDS_YOU, Dot::Blue),
+        ("cyan:", palette::NEEDS_YOU, Dot::Cyan),
         ("white:", palette::NEEDS_YOU, Dot::White),
     ] {
         let cell = &buf[glyph_at(text)];
@@ -386,7 +386,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.fg, want.style.fg.unwrap_or_default(), "{text}");
     }
     let precedence = format!(
-        "red > yellow > magenta > blue > white > {} > {} > {} > {}",
+        "red > yellow > magenta > cyan > white > {} > {} > {} > {}",
         palette::SPINNER[0],
         palette::WAITING,
         palette::IDLE,

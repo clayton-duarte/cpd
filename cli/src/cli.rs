@@ -14,9 +14,11 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, models, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, models, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
+
+use crate::install;
 
 /// The build's version string: `<Cargo.toml version>-<commit>`: the short hash the build was given in `CPD_COMMIT`, `dev` when it was given none.
 pub fn version() -> &'static str {
@@ -62,6 +64,9 @@ pub enum Command {
     /// Policies (commands.md §22)
     #[command(subcommand)]
     Policy(policy::Command),
+    /// MCP servers (commands.md §24)
+    #[command(subcommand)]
+    Mcp(mcp::Command),
     /// Sessions and their tmux panes (commands.md §10)
     #[command(subcommand)]
     Session(session::Command),
@@ -87,6 +92,8 @@ pub enum Command {
     /// The model lists pi can offer (commands.md §14.5)
     #[command(subcommand)]
     Models(models::Command),
+    /// Install the cpd built from a checkout (commands.md §14.4)
+    Install(install::Args),
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
@@ -169,16 +176,18 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
+        Command::Mcp(c) => mcp::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Incident(c) => incident::run(c),
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART),
-        Command::Doctor(a) => doctor::run(a),
+        Command::Doctor(a) => doctor::run(a, &ports.clock.zone()),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
         Command::Models(c) => models::run(c),
+        Command::Install(a) => install::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(ports, c)),
@@ -240,8 +249,8 @@ const RESTART: cpd_tui::Restart =
     cpd_tui::Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
 
 /// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
-fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe()))
+fn restart_failed(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(zone)))
 }
 
 /// [`cpd_tui::Restart::now`]: the restart, logging nothing.
@@ -380,7 +389,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 14);
+        assert_eq!(fields["protocol"], cpd_core::events::PROTOCOL);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

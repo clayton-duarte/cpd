@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 49
+-- cpd-migration: breaking after 50
 -- The two Gate causes of an Attempt at the merge (contract §3.4, §7.4 step 6; hs-d679): `gate_failed` when
 -- `gate.merge` or `gate.pr` exits non-zero, and `gate_error` when the Gate cannot be judged (killed, at the
 -- timeout, or hook_invalid). `ALTER TABLE` cannot change a CHECK, so `attempts` is rebuilt as `waiting-state`

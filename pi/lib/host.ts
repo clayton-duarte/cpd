@@ -6,6 +6,7 @@ import { DEFAULT_TIMING, type Schedule, type Spawn, type Timing } from "./follow
 import type { Exec, ModelCtx, PiApi } from "./pi.ts";
 import type { Validation } from "./reload.ts";
 import { appendLog, reloadLogPath } from "./reload.ts";
+import { boldPhi } from "./phi.ts";
 import { Rendering } from "./render.ts";
 import type { Run } from "./run.ts";
 
@@ -93,7 +94,7 @@ export function createHost(pi: PiApi, options: Options): Host {
           try {
             appendLog(reloadLogPath(host.env.CPD_HOME || join(homedir(), ".cpd"), id), line);
           } catch (e) {
-            host.ctx?.ui.notify(`cpd: cannot write the adapter log: ${toCpdError(e).message}`, "error");
+            host.ctx?.ui.notify(boldPhi(`φ: cannot write the adapter log: ${toCpdError(e).message}`), "error");
           }
         };
         const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ");

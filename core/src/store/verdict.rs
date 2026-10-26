@@ -180,12 +180,6 @@ fn decide(
             return Err(order(named.name, &after, unknown));
         }
     }
-    // Unreachable when the build's order check holds (§4.5 A2 check 2); it fails loudly anyway.
-    if let Some(floor) = floor {
-        if let Some(named) = pending.iter().find(|n| n.name < floor) {
-            return Err(order(named.name, &[floor], unknown));
-        }
-    }
     Ok(Start::Named)
 }
 
@@ -200,12 +194,16 @@ pub fn refuse_user_version(version: i64) -> Result<(), CpdError> {
 }
 
 /// `store_too_new` (§4.5): the store has a breaking migration this cpd does not
-/// know, or a later scheme. `floor` is the store's newest breaking migration.
+/// know, or a later scheme. `floor` is the store's newest breaking migration; the
+/// message names it when it is known, so an operator can see which one this binary lacks.
 fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
-    CpdError::new(
-        ErrorCode::StoreTooNew,
-        format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
-    )
+    let message = match floor {
+        Some(floor) => format!(
+            "The database was migrated by a newer cpd (schema {version}): it applied migration {floor}, which this cpd does not know. Upgrade cpd."
+        ),
+        None => format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
+    };
+    CpdError::new(ErrorCode::StoreTooNew, message)
     .with("user_version", version)
     .with("floor", floor)
     .with("unknown", unknown)
@@ -462,6 +460,20 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
     }
 
+    /// hs-d704: the `store_too_new` refusal names the floor migration, so an operator
+    /// can see which migration this binary lacks.
+    #[test]
+    fn the_store_too_new_message_names_the_floor_migration() {
+        let (_dir, home) = tmp_home();
+        let newer = breaking(ADD_B);
+        drop(open_named(&home, &[ADD_A, newer]).unwrap());
+        let verdict = judge(&home, &[ADD_A]);
+        let err = verdict.refusal().expect("a store whose floor the binary lacks is refused");
+        assert_eq!(err.code(), ErrorCode::StoreTooNew);
+        assert!(err.message().contains(ADD_B.name), "the message names the floor migration: {}", err.message());
+        assert_eq!(err.details()["floor"], ADD_B.name);
+    }
+
     #[test]
     fn the_floor_is_the_breaking_migration_with_the_highest_seq() {
         // `a` breaking, then `b` additive: a binary that knows `a` and lacks `b` opens.
@@ -473,6 +485,54 @@ mod tests {
         assert!(verdict.opens(), "{verdict:?}");
         assert_eq!(verdict.unknown, [ADD_B.name]);
         open_named(&home, &older).unwrap();
+    }
+
+    /// hs-d697: a live store applied the breaking migration under its old
+    /// `20261025T2300-queue-failed` name, before the migrations that sort after it
+    /// existed. Restoring that name (body unchanged) opens the store and does not
+    /// re-apply the migration; before the restore this binary lacks the floor.
+    #[test]
+    fn a_store_whose_floor_is_the_restored_queue_failed_name_opens_and_is_not_reapplied() {
+        let (_dir, home) = tmp_home();
+        // Build a live store as what it was: applied only the migrations up to the restored name.
+        // The prefix is ordered by name (contract §4.5 O1), so slice to the first migration after the floor.
+        let upto = schema::NAMED.iter().position(|n| n.name > "20261025T2300-queue-failed").unwrap();
+        drop(open_named(&home, &schema::NAMED[..upto]).unwrap());
+        // Every later migration, breaking or not, is still pending whatever lands after it.
+        let verdict = judge(&home, schema::NAMED);
+        assert!(verdict.opens(), "{verdict:?}");
+        assert!(verdict.unknown.is_empty(), "{verdict:?}");
+
+        let mut store = open_named(&home, schema::NAMED).unwrap();
+        let queue: Vec<String> =
+            applied(&mut store).into_iter().map(|(name, ..)| name).filter(|name| name.contains("queue-failed")).collect();
+        assert_eq!(queue, ["20261025T2300-queue-failed"], "the restored name stays applied; it is not applied again under a new name");
+    }
+
+    /// hs-d710 part 1: hs and mac-pro applied the queue-failed migration with
+    /// `breaking after 47` (checksum 91fbcf72); origin/main moved its first line
+    /// to 48 (checksum 2f41ed9d), so a binary built from main refuses those
+    /// stores with `migration_changed`. Restoring the header opens them.
+    #[test]
+    fn a_store_that_applied_the_live_queue_failed_text_opens() {
+        let (_dir, home) = tmp_home();
+        let file = include_str!("migrations/20261025T2300-queue-failed.sql");
+        let applied = format!("-- cpd-migration: breaking after 47\n{}", file.split_once('\n').unwrap().1);
+        let mut named: Vec<Named> = schema::NAMED.to_vec();
+        let entry = named.iter_mut().find(|n| n.name == "20261025T2300-queue-failed").expect("the queue-failed migration is in the list");
+        *entry = Named { sql: Box::leak(applied.into_boxed_str()), ..*entry };
+        drop(open_named(&home, &named).unwrap());
+        let checksum: String = Connection::open(home.db())
+            .unwrap()
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE name = '20261025T2300-queue-failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(checksum, "91fbcf723d8e4961ca0d99fa1dec8fc6b27a4d7251e48f9755352c5a4b179a0d");
+        let verdict = judge(&home, schema::NAMED);
+        assert!(verdict.opens(), "{verdict:?}");
     }
 
     #[test]
@@ -526,14 +586,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_additive_migration_before_the_floor_is_migration_order() {
+    fn a_pending_additive_migration_before_the_floor_opens_and_is_applied() {
         let (_dir, home) = tmp_home();
         let floor = breaking(ADD_B);
         drop(open_named(&home, &[floor]).unwrap());
-        let (code, details) = refusal(&judge(&home, &[ADD_A, floor]));
-        assert_eq!(code, ErrorCode::MigrationOrder);
-        assert_eq!(details["name"], ADD_A.name);
-        assert_eq!(details["applied_after"], json!([ADD_B.name]));
+        let list = [ADD_A, floor];
+        let verdict = judge(&home, &list);
+        assert!(verdict.opens(), "{verdict:?}");
+        assert_eq!(verdict.pending_names(), [ADD_A.name]);
+        let mut store = open_named(&home, &list).unwrap();
+        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
+        assert_eq!(names, [floor.name, ADD_A.name], "the store applied the floor first, then the pending additive a by O2");
     }
 
     #[test]

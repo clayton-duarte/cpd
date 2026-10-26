@@ -157,7 +157,7 @@ test("hideThinkingBlock true in settings.json starts the view folded", () => {
 		assert.ok(label, "the hidden label is set");
 		assert.equal(plain(label), "Thinking…");
 		assert.ok(!label.includes(LEFT) && !label.includes(RIGHT), "no pill");
-		assert.equal(label, `${ESC}37mThinking…${ESC}39m`, "plain text 7: no bold, no faint");
+		assert.equal(label, `${ESC}37m${ESC}3mThinking…${ESC}23m${ESC}39m`, "plain text 7, italic label: no bold, no faint");
 	} finally {
 		controller.dispose();
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

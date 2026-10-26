@@ -73,6 +73,7 @@ fn steps(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<i32, S
     check_migrations(ports, install)?;
     adapter::preflight(install)?;
     check_verdict(ports, install)?;
+    migrate_config(ports, install, err)?;
     let dest = replace_binary(install)?;
     let displaced = adapter::swap(ports, install)?;
     adapter::verify(install)?;
@@ -152,6 +153,33 @@ fn check_verdict(ports: &Ports, install: &Install) -> Result<(), Stop> {
         _ => "",
     };
     Err(refused(format!("this build cannot open {}: {}{fix}", install.cpd_home.db().display(), field("message"))))
+}
+
+/// The config migration and validation (contract §3.7, commands.md §14.4 step 4): the built binary runs
+/// `config --migrate` with the caller's `CPD_HOME`; a refusal leaves the config and the installed binary as
+/// they are. Each applied migration is reported on stderr.
+fn migrate_config(ports: &Ports, install: &Install, err: &mut dyn Write) -> Result<(), Stop> {
+    let built = install.target_dir.join("release/cpd");
+    let config = install.cpd_home.config();
+    let mut cmd = Command::new(&built);
+    cmd.args(["config", "--migrate"]).env("CPD_HOME", install.cpd_home.root());
+    let out = ports.runner.output(&mut cmd, "cpd", VERSION_DEADLINE);
+    let text = |out: &Output| format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let out = match out {
+        Ok(out) if out.status.success() => out,
+        Ok(out) => return Err(refused(format!("this build cannot migrate {}: {}", config.display(), follow_up::describe(&text(&out))))),
+        Err(e) => return Err(refused(format!("this build cannot migrate {}: {e:?}", config.display()))),
+    };
+    let json: Option<serde_json::Value> = serde_json::from_slice(&out.stdout).ok();
+    if json.as_ref().and_then(|v| v.get("ok")).and_then(|ok| ok.as_bool()) != Some(true) {
+        return Err(refused(format!("this build cannot migrate {}: {}", config.display(), follow_up::describe(&text(&out)))));
+    }
+    if let Some(names) = json.as_ref().and_then(|v| v.get("migrated")).and_then(|m| m.as_array()) {
+        for name in names.iter().filter_map(|name| name.as_str()) {
+            let _ = writeln!(err, "cpd install: config.toml migrated: {name}");
+        }
+    }
+    Ok(())
 }
 
 /// The binary replace: a copy at `.cpd.tmp.<pid>` of the destination's directory, mode 755, renamed over the

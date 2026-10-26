@@ -1,4 +1,5 @@
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+import { italic } from "../../lib/italic.ts";
 import { pill as sharedPill } from "../../lib/pill.ts";
 import { indicatorGlyph, type RowStatus } from "./compact-tools-core.ts";
 
@@ -87,5 +88,13 @@ export function statusPill(status: RowStatus, text: string): string {
 
 /** The Thinking title pill, read-only grey 7. */
 export function thinkingPill(text: string): string {
-	return pill(INDEX.grey, text);
+	return pill(INDEX.grey, italic(text));
+}
+
+/** The one place for the label's literal. */
+export const THINKING_LABEL = "Thinking…";
+
+/** Working words: italic only when they are exactly the Thinking label (hs: italic label only). */
+export function workingWords(words: string): string {
+	return words === THINKING_LABEL ? italic(words) : words;
 }

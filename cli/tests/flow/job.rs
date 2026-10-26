@@ -49,9 +49,10 @@ const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S"
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.
 fn setup(env: &TestEnv) {
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+        "version = 1\nmachine = \"m1\"\n",
     )
     .unwrap();
     env.fake_pi("exit 0");
@@ -69,7 +70,9 @@ fn setup(env: &TestEnv) {
         })
         .collect();
     fixture(env, &rows);
-    fixture(env, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'm1');");
+    // The Context's owner is the key of the PRs' policy, where a Job's Tier models are set: its file is empty.
+    env.owner_policy("acme", "");
+    fixture(env, "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Context', 'acme', 't', 'm1');");
 }
 
 /// Plan `id` in `phase`, with its Lead session, moved there one phase at a time.
@@ -1750,16 +1753,16 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
 }
 
-// ---------- Tier rules (hs-d554): Workers use only H3 and S0-S3 ----------
+// ---------- Tier rules (pro-d53, hs-d554): Workers use only H0-H4 and S0-S3 ----------
 
-/// The refusal of hs-d554: `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
+/// The refusal of pro-d53 (hs-d554 for the cost reason): `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
 fn not_allowed(run: &Run, tier: &str) {
     let e = refused(run, "tier_not_allowed", 2);
     assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], "H3, S0-S3", "{run:?}");
-    assert_eq!(e["details"]["rule"], "hs-d554", "{run:?}");
+    assert_eq!(e["details"]["allowed"], "H0-H4, S0-S3", "{run:?}");
+    assert_eq!(e["details"]["rule"], "pro-d53", "{run:?}");
     let message = e["message"].as_str().unwrap();
-    for part in ["hs-d554", "cost", "H3, S0-S3"] {
+    for part in ["pro-d53", "hs-d554", "cost", "H0-H4, S0-S3"] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
@@ -1770,22 +1773,22 @@ fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
     let (txns, evs, rows) = (count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs"));
-    for tier in ["O1", "O3", "S4", "S5", "H0", "H1", "H2"] {
+    for tier in ["O1", "O3", "S4", "S5"] {
         not_allowed(&job_add(&fx, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    for tier in ["O1", "O3", "S4", "S5", "H0", "H1", "H2"] {
+    for tier in ["O1", "O3", "S4", "S5"] {
         not_allowed(&stub_add(&fx, "pl", "k", &["--tier", tier]), tier);
     }
     assert_eq!((count(&fx.env, "txns"), count(&fx.env, "events"), count(&fx.env, "jobs")), (txns, evs, rows));
 }
 
 #[test]
-fn add_accepts_h3_and_s0_to_s3() {
+fn add_accepts_h0_to_h3_and_s0_to_s3() {
     let fx = Fx::new();
     setup(&fx.env);
     plan(&fx.env, "pl", "plan");
-    for tier in ["H3", "S0", "S1", "S2", "S3"] {
+    for tier in ["H0", "H1", "H2", "H3", "S0", "S1", "S2", "S3"] {
         let key = format!("j-{}", tier.to_lowercase());
         assert_eq!(job_add(&fx, "pl", &key, tier, &[]).ok()["job"]["tier"], tier);
         assert_eq!(job_row(&fx.env, "pl", &key, "tier"), tier);
@@ -1806,7 +1809,7 @@ fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let fx = Fx::new();
     drafted(&fx);
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "S4", "S5", "H0", "H2"] {
+    for tier in ["O1", "O3", "S4", "S5"] {
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier], "pl"), tier);
         not_allowed(&job(&fx, &["edit", "b", "--tier", tier, "--title", "New"], "pl"), tier);
     }
@@ -1816,10 +1819,10 @@ fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
 }
 
 #[test]
-fn edit_accepts_h3_and_s0_to_s3() {
+fn edit_accepts_h0_to_h3_and_s0_to_s3() {
     let fx = Fx::new();
     drafted(&fx);
-    for tier in ["S0", "S1", "S2", "H3", "S3"] {
+    for tier in ["H0", "H1", "H2", "S0", "S1", "S2", "H3", "S3"] {
         assert_eq!(job(&fx, &["edit", "b", "--tier", tier], "pl").ok()["fields"], json!(["tier"]), "{tier}");
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), tier);
     }
@@ -1837,7 +1840,7 @@ fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_
     assert_eq!(job(&fx, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
     assert_eq!(job_row(&fx.env, "pl", "b", "tier"), "S3");
     // Second pass: Tiers that were allowed before hs-d554.
-    for stored in ["S4", "H2"] {
+    for stored in ["S4"] {
         fixture(&fx.env, &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"));
         assert_eq!(job(&fx, &["edit", "b", "--title", &format!("Renamed {stored}")], "pl").ok()["fields"], json!(["title"]));
         assert_eq!(job_row(&fx.env, "pl", "b", "tier"), stored);
@@ -1855,7 +1858,7 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
     engine(&fx.env, "pl", "a", "failed");
     engine(&fx.env, "pl", "c", "running");
     let (txns, evs) = (count(&fx.env, "txns"), count(&fx.env, "events"));
-    for tier in ["O1", "O3", "O5", "S4", "S5", "H2"] {
+    for tier in ["O1", "O3", "O5", "S4", "S5"] {
         not_allowed(&job(&fx, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
@@ -1902,8 +1905,8 @@ fn a_job_tier_g0_is_tier_invalid_and_says_write_gx() {
 }
 
 #[test]
-fn retry_accepts_h3_and_s0_to_s3() {
-    for tier in ["S0", "S3", "H3"] {
+fn retry_accepts_h0_to_h3_and_s0_to_s3() {
+    for tier in ["H0", "H1", "H2", "S0", "S3", "H3"] {
         let fx = Fx::new();
         drafted(&fx);
         lock(&fx.env, "pl");

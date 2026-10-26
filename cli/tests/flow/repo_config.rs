@@ -1,5 +1,5 @@
 //! The repo's policy file as its configuration (contract §8.3, commands.md §22.1): the
-//! `repo_unconfigured` refusal and the repo-only domains `hooks`, `test-commands` and `protected`,
+//! optional file (a repo without one inherits its owner) and the repo-only domains `hooks`, `test-commands` and `protected`,
 //! the command tree, in this process (`Fx::with_ports`), against a temporary `$CPD_HOME`; the repo of `pr add` is a repo of the fake git.
 
 use crate::common;
@@ -25,16 +25,36 @@ fn real(fx: &Fx, rel: &str) -> String {
 }
 
 #[test]
-fn policy_show_of_a_repo_without_a_file_is_repo_unconfigured() {
+fn policy_show_of_a_repo_without_a_file_shows_the_owner_policy() {
     let fx = fx();
-    let run = fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"]);
-    let error = refused(&run, "repo_unconfigured", 3);
-    assert_eq!(error["details"]["repo"], "acme/shop");
-    assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{run:?}");
+    fx.env.owner_policy("acme", "[tests]\ntext = \"Owner tests.\"\n");
+    let out = show(&fx);
+    let policy = &out["policy"];
+    assert_eq!(policy["tests"]["source"], format!("owner:{}", real(&fx, "acme/owner.toml")), "{out}");
+    assert_eq!(policy["tests"]["text"], "Owner tests.", "{out}");
+    assert_eq!(
+        policy["hooks"],
+        json!({"source": "default", "audience": [], "text": "", "keys": {
+            "pre-start": {"value": [], "source": "default"},
+            "pre-commit": {"value": [], "source": "default"},
+            "pre-merge": {"value": [], "source": "default"}}})
+    );
+    assert_eq!(
+        policy["test-commands"],
+        json!({"source": "default", "audience": [], "text": "", "keys": {
+            "build": {"value": null, "source": "default"},
+            "run": {"value": null, "source": "default"},
+            "list": {"value": null, "source": "default"}}})
+    );
+    assert_eq!(
+        policy["protected"],
+        json!({"source": "default", "audience": [], "text": "", "keys": {"paths": {"value": [], "source": "default"}}})
+    );
+    assert_eq!(out["files"], json!([real(&fx, "acme/owner.toml")]), "the owner file and no repo file");
 }
 
 #[test]
-fn pr_add_of_a_repo_without_a_file_is_repo_unconfigured() {
+fn pr_add_of_a_repo_without_a_file_succeeds() {
     let fx = fx();
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Payments', 'acme', 't', 't');
@@ -43,13 +63,18 @@ fn pr_add_of_a_repo_without_a_file_is_repo_unconfigured() {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
            VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead1', 't');",
     );
-    // A keyed repo whose policy file is removed: unconfigured.
     let repo = fx.keyed_repo("shop");
-    fs::remove_file(fx.env.cpd_home().join("policy/repos/acme/shop.toml")).unwrap();
-    let run = fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]);
-    let error = refused(&run, "repo_unconfigured", 3);
-    assert_eq!(error["details"]["repo"], "acme/shop");
-    assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{run:?}");
+    let out = fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pl"]).ok();
+    assert_eq!(out["pr"]["name"], "shop", "{out}");
+}
+
+#[test]
+fn a_repo_without_a_file_shows_the_same_defaults_as_an_empty_file() {
+    let fx = fx();
+    let without = show(&fx);
+    fx.env.repo_policy("acme", "shop", "");
+    let empty = show(&fx);
+    assert_eq!(without["policy"], empty["policy"]);
 }
 
 #[test]
@@ -89,7 +114,7 @@ fn policy_show_prints_the_hooks_test_commands_and_protected_of_the_repo_file() {
          [protected]\npaths = [\"verify.sh\", \"scripts/ci/\"]\n",
     );
     let out = show(&fx);
-    let src = format!("repo:{}", real(&fx, "repos/acme/shop.toml"));
+    let src = format!("repo:{}", real(&fx, "acme/shop.toml"));
     let policy = &out["policy"];
     assert_eq!(
         policy["hooks"],
@@ -145,7 +170,7 @@ fn hooks_test_commands_and_protected_in_an_owner_file_are_policy_invalid() {
         fx.env.owner_policy("acme", toml);
         let run = fx.cpd(&["policy", "show", "--owner", "acme"]);
         let error = refused(&run, "policy_invalid", 1);
-        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/owners/acme.toml"), "{domain}: {run:?}");
+        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/acme/owner.toml"), "{domain}: {run:?}");
         assert_eq!(error["details"]["key"], domain, "{run:?}");
         assert!(error["message"].as_str().unwrap().contains("exposed to repo only"), "{domain}: {run:?}");
     }
@@ -170,7 +195,7 @@ fn an_invalid_hooks_or_test_commands_table_is_policy_invalid() {
         fx.env.repo_policy("acme", "shop", toml);
         let run = fx.cpd(&["policy", "show", "--owner", "acme", "--repo", "shop"]);
         let error = refused(&run, "policy_invalid", 1);
-        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/repos/acme/shop.toml"), "{toml}: {run:?}");
+        assert!(error["details"]["file"].as_str().unwrap().ends_with("policy/acme/shop.toml"), "{toml}: {run:?}");
         assert!(error["details"]["key"].as_str().unwrap().starts_with(domain), "{toml}: {run:?}");
     }
 }

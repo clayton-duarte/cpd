@@ -608,7 +608,7 @@ pub(crate) fn tmux_version_with(ports: &Ports, home: &CpdHome, config: &Config, 
     if !older_version(&server, &installed) {
         // A restart that is no longer needed (done by hand, or by the engine): a failure it left is said once.
         if server == installed {
-            match (restart.failed)(home) {
+            match (restart.failed)(home, &ports.clock.zone()) {
                 Ok(Some(failed)) => eprintln!("cpd: {failed}"),
                 Ok(None) => {}
                 Err(e) => eprintln!("cpd: {}", e.message()),

@@ -42,6 +42,15 @@ pub struct PrRow {
     /// The PR's stored shape (`prs.shape`, hs-d497): `tdd`, `docs`, `config`, or `free` for a PR that existed before
     /// migration `job-kinds`.
     pub shape: String,
+    /// The head branch of the pull request cpd adopted (`prs.head_ref`, pro-n8); null for a cpd PR.
+    pub head_ref: Option<String>,
+}
+
+impl PrRow {
+    /// The branch every push, fetch, `gh pr list --head` and merged check names: `head_ref` of an adopted PR, else the Lead Branch.
+    pub fn remote_branch(&self) -> &str {
+        self.head_ref.as_deref().unwrap_or(&self.lead_branch)
+    }
 }
 
 #[cfg(test)]
@@ -61,11 +70,12 @@ impl PrRow {
             name: None,
             title: None,
             shape: "free".to_owned(),
+            head_ref: None,
         }
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String));
+type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String, Option<String>));
 
 /// The needs of every PR of `plan` by PR key, each list sorted, as keys of the Plan (contract §2.2).
 pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
@@ -83,23 +93,23 @@ pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, V
 pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
     let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
-        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape
+        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape, head_ref
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?)))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?)))
         })?
         .collect::<rusqlite::Result<_>>()?;
     raw.into_iter()
-        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape))| {
+        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape, head_ref))| {
             let needs = needs.remove(&key).unwrap_or_default();
             let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
             };
-            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape })
+            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape, head_ref })
         })
         .collect()
 }

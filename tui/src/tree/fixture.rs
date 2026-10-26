@@ -35,7 +35,6 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         dot: Dot::glyph(state),
         archived_at: None,
         asleep_at: None,
-        last_activity: 0,
     }
 }
 
@@ -68,7 +67,6 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
             all_merged_at: None,
             done_at: None,
             archived_at: None,
-            last_activity: 0,
         },
         sessions,
     }
@@ -87,7 +85,7 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         archived_at: None,
         plans,
         archived_managers: Vec::new(),
-        last_activity: 0,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
     }
 }
 
@@ -132,7 +130,7 @@ pub fn sample() -> Tree {
                     session("l-ship", "ship lead", Working, None, Place::Chat),
                     vec![
                         session("f-idle", "ship fork", Idle, None, Place::Parked),
-                        shown(session("f-blocked", "ship review", Blocked, Some("cpd: Worker question"), Place::Parked), Dot::Red),
+                        shown(session("f-blocked", "ship review", Blocked, Some("φ: Worker question"), Place::Parked), Dot::Red),
                     ],
                 ),
                 plan("sketch", "alpha", Phase::Plan, [4, 0, 0, 0, 0, 0], session("l-sketch", "sketch", Idle, None, Place::Parked), vec![]),

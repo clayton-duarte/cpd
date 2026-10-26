@@ -166,3 +166,71 @@ test("session shutdown restores the fullscreen mode's own input handling", async
 	s.send(FOCUS_OUT);
 	assert.equal(tui.selectionPressActive, false, "the fullscreen renderer still handles the report itself");
 });
+
+/** The editor's rows with the border/cursor of its first render after `act`. */
+const cursorDrawn = (rows: string[]) => rows.some((row) => row.includes("\x1b_pi:fc\x07"));
+
+test("in fullscreen mode a keystroke focuses a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		assert.deepEqual(s.border(), ["97"], "before any input");
+		s.send("x");
+		const rows = s.editor.render(30);
+		assert.ok(s.editor.getText().includes("x"), "the key was taken");
+		assert.ok(cursorDrawn(rows), `the cursor cell is drawn: ${readable(rows.join("\n"))}`);
+		assert.deepEqual(s.border(), ["94"], "the first render after the key");
+	} finally { s.shutdown(); }
+});
+
+test("a keystroke focuses the pane again after a focus out report", async () => {
+	const s = await real("fullscreen");
+	try {
+		s.send(FOCUS_IN);
+		s.send(FOCUS_OUT);
+		assert.deepEqual(s.border(), ["97"], "after focus out");
+		s.send("x");
+		assert.deepEqual(s.border(), ["94"], "after a key");
+	} finally { s.shutdown(); }
+});
+
+test("in fullscreen mode a left button press on the input focuses a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		assert.deepEqual(s.border(), ["97"], "before any input");
+		s.send("\x1b[<0;5;2M");
+		assert.deepEqual(s.border(), ["94"], "the first render after the press");
+	} finally { s.shutdown(); }
+});
+
+test("in fullscreen mode a left button press above the input focuses a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		const above = { render: () => ["above"], invalidate() {} };
+		s.tui.children.unshift(above as never);
+		assert.deepEqual(s.border(), ["97"], "before any input");
+		s.send("\x1b[<0;5;1M");
+		assert.deepEqual(s.border(), ["94"], "the first render after the press on the row above");
+	} finally { s.shutdown(); }
+});
+
+test("in fullscreen mode a wheel turn, a mouse move, a button release and a right button press do not focus a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		for (const data of ["\x1b[<64;5;2M", "\x1b[<35;5;2M", "\x1b[<0;5;2m", "\x1b[<2;5;2M"]) {
+			s.send(data);
+			assert.deepEqual(s.border(), ["97"], `after ${readable(data)}`);
+		}
+	} finally { s.shutdown(); }
+});
+
+test("a key that an extension shortcut takes focuses a pane that reported nothing", async () => {
+	const s = await real("fullscreen");
+	try {
+		(s.editor as { onExtensionShortcut?: (data: string) => boolean }).onExtensionShortcut = () => true;
+		assert.deepEqual(s.border(), ["97"], "before any input");
+		s.send("\x1bb");
+		const rows = s.editor.render(30);
+		assert.ok(cursorDrawn(rows), `the cursor cell is drawn: ${readable(rows.join("\n"))}`);
+		assert.deepEqual(s.border(), ["94"], "the first render after the shortcut key");
+	} finally { s.shutdown(); }
+});

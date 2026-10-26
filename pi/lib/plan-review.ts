@@ -5,7 +5,7 @@ export const ENTRY_TYPE = "cpd-plan-review";
 export const DECISION_TYPE = "cpd-plan-decision";
 /** The summary message of a Plan review in chat (§15.5 "Opening" step 4). */
 export const SUMMARY_TYPE = "cpd-plan-summary";
-export const REVIEW_LABEL = "cpd: plan review";
+export const REVIEW_LABEL = "φ: plan review";
 
 export type EntryStatus = "pending" | "approved" | "rejected" | "superseded" | "lost";
 /** Where the User decides: `chat` (the dialog) or plannotator, which alone has a page id. An entry without `surface` is a plannotator one (written before the chat review existed); it keeps that shape. */

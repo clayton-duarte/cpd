@@ -175,20 +175,30 @@ fn a_lead_in_the_slot_alone_is_no_manager() {
 // ---------- rows ----------
 
 #[test]
-fn the_rows_are_the_contexts_live_plans_in_created_order() {
+fn the_pulse_rows_are_in_tree_order_by_lead_dot_tier_then_newest_first() {
     let (_dir, mut store) = base();
+    // `p0` is the oldest Plan and its Lead has an open magenta Inbox item; `t1` and `t2` share one created_at.
     let mut s = plan("p0", "ctx", "2026-01-01T00:00:00.000Z", "idle");
+    s += &plan("p3", "ctx", "2026-01-02T00:00:05.000Z", "idle");
+    s += &plan("t1", "ctx", "2026-01-02T00:00:03.000Z", "idle");
+    s += &plan("t2", "ctx", "2026-01-02T00:00:03.000Z", "idle");
     s += &plan("arch", "ctx", "2026-01-02T00:00:02.000Z", "idle");
-    s += &plan_done("old", "ctx", "2026-01-02T00:00:03.000Z", "2026-10-18T14:09:59.999Z");
+    s += &plan_done("old", "ctx", "2026-01-02T00:00:03.500Z", "2026-10-18T14:09:59.999Z");
     s += &plan_done("new", "ctx", "2026-01-02T00:00:04.000Z", "2026-10-18T14:10:00.000Z");
+    s += "INSERT INTO inbox_items (kind, urgency, subject, context, plan, session, label, opened_at)
+          VALUES ('dialog', 'magenta', 'session:l-p0', 'ctx', 'p0', 'l-p0', 'p0 asks you', '2026-10-18T15:00:00.000Z');";
+    // The newest Event names the oldest-created tied Plan: Events never reorder.
+    s += &ev("15:06:00.000", "job-merged", "p1");
+    s += &ev("15:01:00.000", "job-merged", "p3");
     sql(&mut store, &s);
     sql(&mut store, "UPDATE plans SET archived_at = '2026-10-18T15:00:00.000Z' WHERE id = 'arch';");
     let p = read(&mut store, 12);
     let ids: Vec<&str> = p.rows.iter().map(|r| r.plan.as_str()).collect();
-    assert_eq!(ids, ["p0", "p1", "p2", "new"]);
+    assert_eq!(ids, ["p0", "p3", "new", "t1", "t2", "p2", "p1"]);
     assert_eq!(p.context, ctx("ctx"));
     assert_eq!(row(&p, "p1").lead.as_str(), "l-p1");
     assert_eq!(row(&p, "p1").dot, Dot::Idle);
+    assert_eq!(row(&p, "p0").dot, Dot::Magenta);
     assert!(row(&p, "p1").buckets.len() == 12);
 }
 
@@ -236,7 +246,7 @@ fn only_a_leads_turns_count_and_so_does_a_side_fork() {
     s += &turn("15:06:02.000", "l-p1", "idle"); // not a turn
     s += &turn("15:06:03.000", "w-1", "working"); // a worker's
     sql(&mut store, &s);
-    assert_eq!(read(&mut store, 12).rows[0].buckets[11].count, 2);
+    assert_eq!(row(&read(&mut store, 12), "p1").buckets[11].count, 2);
 }
 
 #[test]

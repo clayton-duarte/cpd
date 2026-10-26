@@ -29,7 +29,7 @@ function apply(params: string, paint: Paint): string | undefined {
 		const n = Number(parts[i]);
 		if (parts[i]!.includes(":")) return parts[i];
 		if (n === 0) { paint.fg = undefined; paint.bg = undefined; }
-		else if (n === 1 || n === 4 || (n >= 22 && n <= 24)) continue;
+		else if (n === 1 || n === 3 || n === 4 || (n >= 22 && n <= 24)) continue;
 		else if (n === 7 || n === 27) continue; // reverse video: checked as pill structure in refused()
 		else if (n === 30) return parts[i]; // the cockpit never draws index 0 as text
 		else if (n >= 31 && n <= 37) paint.fg = n - 30;

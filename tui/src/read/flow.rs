@@ -3,6 +3,7 @@
 //! draws); a Plan's Jobs with its open Escalations, its latest Plan review and
 //! its first PR ([`flow`], `plan show`); and which Plan the chat slot holds.
 
+use cpd_core::attempt::ledger::Stored;
 use std::collections::BTreeMap;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -21,7 +22,7 @@ use cpd_core::store::Store;
 
 use super::tree::visible_items;
 use super::shared::{
-    AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, plan_heads, tier,
+    AttemptStatus, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, SHOWN_STATUS, bad_row, id, stored_cause, plan_heads, tier,
     value_enum,
 };
 
@@ -216,7 +217,7 @@ pub struct AttemptNode {
     pub origin: Origin,
     pub status: AttemptStatus,
     pub outcome: Option<Outcome>,
-    pub cause: Option<Cause>,
+    pub cause: Option<Stored>,
     pub worker: Option<WorkerRef>,
     pub started_at: String,
     pub submitted_at: Option<String>,
@@ -440,7 +441,7 @@ fn attempts(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<Att
             origin: Origin::parse(&format!("{what} has origin"), &origin)?,
             status: AttemptStatus::parse(&format!("{what} has status"), &status)?,
             outcome: outcome.map(|o| Outcome::parse(&format!("{what} has outcome"), &o)).transpose()?,
-            cause: cause.map(|c| Cause::parse(&format!("{what} has cause"), &c)).transpose()?,
+            cause: cause.map(|c| stored_cause(&format!("{what} has cause"), &c)).transpose()?,
             started_at: r.get(8)?,
             submitted_at: r.get(9)?,
             ended_at: r.get(10)?,

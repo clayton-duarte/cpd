@@ -3,7 +3,7 @@ export type Wanted = { state: "working" | "stopped" } | { state: "idle"; reply?:
 
 export const LABEL_MAX = 80;
 
-/** Blocked means it needs the human (commands.md §15.4): `human` = the User has to act (`dialog`, `cpd: plan review`); `agent` = another agent handles it (`cpd: Worker question`). */
+/** Blocked means it needs the human (commands.md §15.4): `human` = the User has to act (`dialog`, `φ: plan review`); `agent` = another agent handles it (`φ: Worker question`). */
 export type Kind = "human" | "agent";
 
 type Open = { key: string; label: string; kind: Kind };

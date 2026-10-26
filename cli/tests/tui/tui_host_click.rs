@@ -21,7 +21,7 @@ const CHECKOUT: &str = "~/projects/cpd";
 /// The tmux client the StatusBar's click names.
 const CLIENT: &str = "c1";
 /// The report of a click with no host Manager.
-const NO_MANAGER: &str = "cpd: no host Manager: apply dotfiles";
+const NO_MANAGER: &str = "φ: no host Manager: apply dotfiles";
 
 fn home(env: &TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()

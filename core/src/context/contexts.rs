@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, HostName, MachineName, OwnerLogin, RecordId, RecordKind};
+use crate::ids::{ContextId, MachineName, OwnerLogin, RecordId, RecordKind};
 use crate::policy::{PolicyKey, resolve};
 use crate::store::Store;
 
@@ -76,7 +76,6 @@ pub struct Written {
 /// only place they live (contract §4.6). Every write is one transaction.
 pub struct Contexts<'a> {
     machine: MachineName,
-    host: HostName,
     store: &'a mut Store,
 }
 
@@ -89,7 +88,7 @@ enum Next {
 
 impl<'a> Contexts<'a> {
     pub fn new(config: &Config, store: &'a mut Store) -> Contexts<'a> {
-        Contexts { machine: config.machine.clone(), host: config.host.clone(), store }
+        Contexts { machine: config.machine.clone(), store }
     }
 
     /// `context new` (commands.md §3.1): the Context's row and `context-created`.
@@ -130,7 +129,7 @@ impl<'a> Contexts<'a> {
         if let Some(row) = self.store.read(|conn| existing(conn))? {
             return Ok((row, true));
         }
-        let link = match resolve(home, &self.host, &PolicyKey::Owner(owner.clone())) {
+        let link = match resolve(home, &PolicyKey::Owner(owner.clone())) {
             Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && confirm_fallback => true,
             other => other.map(|_| false)?,
         };

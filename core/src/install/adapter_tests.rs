@@ -132,7 +132,13 @@ impl Rig {
     fn built_says_no_store(&self) {
         let built = self.built();
         let says = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
-        (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["--version"], Reply::ok(says));
+        let migrated = r#"{"ok":true,"migrated":[]}"#;
+        let version = built.clone();
+        let migrate = built;
+        (*self.fakes.runner)
+            .clone()
+            .on("cpd", move |c| Path::new(&c.program) == version && c.args == ["--version"], Reply::ok(says))
+            .on("cpd", move |c| Path::new(&c.program) == migrate && c.args == ["config", "--migrate"], Reply::ok(migrated));
     }
 
     /// Runs the install on the rig's ports.
@@ -558,7 +564,7 @@ fn an_install_carries_the_compact_tools_extension_listed_in_its_package_json_and
     let pi = rig.share().join("pi");
     let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(pi.join("package.json")).unwrap()).unwrap();
     let extensions: Vec<&str> = manifest["pi"]["extensions"].as_array().unwrap().iter().map(|e| e.as_str().unwrap()).collect();
-    assert_eq!(extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"], "the installed package.json");
+    assert_eq!(extensions, ["./extension.ts", "./mcp-extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"], "the installed package.json");
     for entry in &extensions {
         assert!(pi.join(entry).is_file(), "the installed entry {entry} resolves");
     }

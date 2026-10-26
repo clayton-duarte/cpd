@@ -125,10 +125,11 @@ fn pay() -> Pay {
     fx.git(&repo, &["push", "-q", "origin", "main"]);
 
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
+    fx.env.write_models();
     fs::write(
         home.config(),
         format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{}\"\n",
             fx.env.tmux_socket()
         ),
     )
