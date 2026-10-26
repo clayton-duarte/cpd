@@ -2714,7 +2714,7 @@ The theme file is `pi/themes/dango.json` (`name` "dango"), declared in `pi/packa
 | `userMessageText` | 7 | read-only text, as every body text |
 | `customMessageBg` | "" | no fill (A4) |
 | `customMessageText` | 7 | read-only text |
-| `customMessageLabel` | 5 | cpd's blocks are magenta |
+| `customMessageLabel` | 5 | cpd's blocks are magenta; the text is italic `ESC[3m`…`ESC[23m` (hook on `Theme.fg`, dango only, off when compact-tools style is `off`) |
 | `toolPendingBg` | "" | no fill; only pills are blocks |
 | `toolSuccessBg` | "" | no fill |
 | `toolErrorBg` | "" | no fill |
@@ -2723,7 +2723,7 @@ The theme file is `pi/themes/dango.json` (`name` "dango"), declared in `pi/packa
 | `mdHeading` | 7 | read-only text (bold) |
 | `mdLink` | 15 | clickable text |
 | `mdLinkUrl` | 8 | muted |
-| `mdCode` | 6 | cyan |
+| `mdCode` | 6 | cyan; the text is italic `ESC[3m`…`ESC[23m` (hook on `Theme.fg`, dango only, off when compact-tools style is `off`) |
 | `mdCodeBlock` | 7 | read-only text |
 | `mdCodeBlockBorder` | 8 | line |
 | `mdQuote` | 8 | muted |
@@ -2735,21 +2735,23 @@ The theme file is `pi/themes/dango.json` (`name` "dango"), declared in `pi/packa
 | `toolDiffContext` | 8 | muted |
 | `syntaxComment` | 8 | muted |
 | `syntaxKeyword` | 4 | blue (magenta is cpd's) |
-| `syntaxFunction` | 6 | cyan |
+| `syntaxFunction` | 6 | cyan; the text is italic `ESC[3m`…`ESC[23m` (hook on `Theme.fg`, dango only, off when compact-tools style is `off`) |
 | `syntaxVariable` | 7 | read-only text |
 | `syntaxString` | 2 | green |
 | `syntaxNumber` | 3 | yellow |
-| `syntaxType` | 6 | cyan |
+| `syntaxType` | 6 | cyan; the text is italic `ESC[3m`…`ESC[23m` (hook on `Theme.fg`, dango only, off when compact-tools style is `off`) |
 | `syntaxOperator` | 7 | read-only text |
 | `syntaxPunctuation` | 8 | muted |
 | `thinkingOff` | 8 | muted (unused by the chat input since the input widget, §6.9; still a valid value) |
 | `thinkingMinimal` | 8 | muted |
 | `thinkingLow` | 4 | blue |
-| `thinkingMedium` | 6 | cyan |
+| `thinkingMedium` | 6 | cyan; not italic (the Thinking fold's body stays upright, a later PR enforces it) |
 | `thinkingHigh` | 3 | yellow |
 | `thinkingXhigh` | 3 | yellow |
 | `thinkingMax` | 3 | yellow (`thinkingOff` … `thinkingMax` are all unused by the chat input) |
 | `bashMode` | 2 | green meaning (unused by the chat input since the input widget, §6.9; still a valid value) |
+
+**Italic in the palette** (User, 2026-10-25, Context record pro-d38). The theme JSON holds colours only (pi's schema has no `style` key), so italic is SGR 3 (`ESC[3m` … `ESC[23m`) added by cpd's code. One hook on pi's exported `Theme.fg`, installed by cpd's `compact-tools` extension, wraps only four theme tokens (`customMessageLabel`, `mdCode`, `syntaxFunction` and `syntaxType`) in italic, for the theme named `dango` only, and is off when the `compact-tools` style is `off`. The Thinking block's body is upright whatever the hook does (a later PR enforces it).
 
 **How the extensions paint** (hs-d545, User; design choice of the Plan). Every colour pi and cpd's pi extensions draw is one of 0-15 as an **indexed SGR**: 30-37, 90-97, 40-47, 100-107, `38;5;n` and `48;5;n` with n below 16, and the resets 39 and 49. Never RGB (`38;2`, `48;2`), hex, OKLCH or a derived value: no brightening, no dimming (no SGR 2 faint; muted is 8), no contrast band, no colour mixing, no glow or pulse ramp, no diff background tint, no SGR 7 (reverse). Only the cockpit's existing elements appear: pills, `╭─` lines and `│ ` rails, the toggles `╰󰬦 expand` / `╰󰬬 collapse`, dots and spinner glyphs, text. Colour animations stop (a glyph-frame spinner stays, painted in one fixed index). `pi/lib/render.ts` and `pi/compact-tools/` paint with explicit SGR taken from **one module of named indices** (as `pi/lib/render.ts` does today), so they draw the palette under any pi theme; the theme above covers pi's own elements.
 
@@ -2768,7 +2770,7 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Element | Hit target | Colour |
 |---|---|---|
 | cpd's block: lead `╭─` | no | fg 8, `ESC[90m` |
-| cpd's pill (`cpd` alone, commands.md §15.9) | no | 5 inverted, caps 5: `ESC[35m` U+E0B6 `ESC[7m`…`ESC[27m` `ESC[35m` U+E0B4 `ESC[39m` (hs-d594) |
+| cpd's pill (`cpd` alone, commands.md §15.9) | no | caps 5: `ESC[35m` U+E0B6 `ESC[7m`, text italic `ESC[3m` `ESC[7m` `cpd` `ESC[23m` `ESC[27m` `ESC[35m` U+E0B4 `ESC[39m` (hs-d594) |
 | cpd's block: the first sentence after the pill (outside it) | no | fg 7, `ESC[37m` |
 | Terminator row ` ╰󰬪` (a fold-template element that cannot fold, §6.9) | no | the whole row fg 8, `ESC[90m`: the space, `╰` and the glyph |
 | Chat balloon borders and tails `╭ ─ ╮ │ ╰ ╯` (§6.9) | no | fg 8, `ESC[90m`; the text inside keeps the terminal's look (7), neither recoloured nor inverted |
@@ -2787,7 +2789,7 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Working label: the pill in the input's top border, the frame inside it | no | pill 6 inverted (frame included), caps U+E0B6/U+E0B4 fg 6 (hs-d594) |
 | Diff added / removed text | no | fg 2 / 1, `ESC[32m` / `ESC[31m`, no background tint |
 | Thinking text | no | fg 7, never italic; emphasis words (`*em*`, `_em_`, `***both***`) drawn as the surrounding text, bold and inline code unchanged |
-| **A Lead's or Manager's mention in assistant text** (hs-d544, User, 2026-10-22; owner Plan `pi-theme`; commands.md §15.14) | no | fg 5, text and not a block: `ESC[35m`…`ESC[39m`; only in the pane of a Lead or a Manager |
+| **A Lead's or Manager's mention in assistant text** (hs-d544, User, 2026-10-22; owner Plan `pi-theme`; commands.md §15.14) | no | text, italic, and not a block: `ESC[3m` `ESC[35m` <id> `ESC[39m` `ESC[23m`; only in the pane of a Lead or a Manager |
 
 **Pills are read-only, so 0-7 only** (hs-d557 item 5): the caps and the block of every pi pill are a base colour (7 for Thinking, 5 for cpd, 6 / 2 / 1 for tools), the text is 0, the lead, rails and lines (`╭ │ ╰`) are always 8, the toggles `󰬦 expand` and `󰬬 collapse` always 7, metadata 8. No pill uses 8-15.
 
