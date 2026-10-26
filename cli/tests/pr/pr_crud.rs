@@ -248,12 +248,12 @@ fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
 #[test]
 fn add_in_dispatch_appends_the_pr() {
     let fx = crud("dispatch");
-    let out = fx.add("late", &fx.pay, &[]).ok();
+    let out = fx.add("late", &fx.pay, &["--no-needs"]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
     assert_eq!(fx.events("pr-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
-    assert_eq!(fx.add("late", &fx.pay, &[]).ok()["pr"]["appended"], true);
+    assert_eq!(fx.add("late", &fx.pay, &["--no-needs"]).ok()["pr"]["appended"], true);
 }
 
 // ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
@@ -275,6 +275,7 @@ impl Crud {
     fn add_shape(&self, key: &str, shape: Option<&str>) -> Run {
         let mut args = vec!["add", key, "--repo", self.pay.to_str().unwrap(), "--title", "Add retries"];
         args.extend(shape.into_iter().flat_map(|s| ["--shape", s]));
+        args.push("--no-needs");
         self.add_with_stubs("pay-1", &args)
     }
 }
@@ -713,7 +714,7 @@ fn legacy(status: &str) -> Legacy {
 #[test]
 fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     let Legacy { fx, origin, lead, sha } = legacy("merged");
-    let out = fx.add("fix", &fx.pay, &[]).ok();
+    let out = fx.add("fix", &fx.pay, &["--no-needs"]).ok();
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/fix");
 
     assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
@@ -726,7 +727,7 @@ fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch");
 
     // A second PR finds nothing to move.
-    fx.add("more", &fx.pay, &[]).ok();
+    fx.add("more", &fx.pay, &["--no-needs"]).ok();
 }
 
 #[test]
@@ -960,7 +961,7 @@ fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
 #[test]
 fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
     let fx = crud("dispatch");
-    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("api", &fx.pay, &["--no-needs"]).ok();
     open_pr(&fx, Reply::ok("{}\n"));
 
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
@@ -979,7 +980,7 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
 #[test]
 fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
     let fx = crud("dispatch");
-    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("api", &fx.pay, &["--no-needs"]).ok();
     open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
     let writes = fx.writes();
 

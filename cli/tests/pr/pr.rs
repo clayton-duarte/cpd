@@ -3790,11 +3790,11 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
 }
 
 #[test]
-fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
+fn pr_add_on_a_plan_in_dispatch_with_no_needs_has_no_needs() {
     let f = added("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.fx.keyed_repo("other").canonicalize().unwrap();
-    let out = f.add("fix", &other, &[]).ok();
+    let out = f.add("fix", &other, &["--no-needs"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(f.needs_of("fix").is_empty());
 }

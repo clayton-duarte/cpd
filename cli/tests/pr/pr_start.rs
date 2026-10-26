@@ -107,6 +107,8 @@ impl Fx {
         let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
+        } else {
+            args.push("--no-needs");
         }
         self.cpd(&args).ok();
         self.cancel_stub(key, "pay");
