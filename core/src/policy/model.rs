@@ -7,7 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::domain::{HasText, Set};
 use super::load::policy_invalid;
+use super::PolicyKey;
 use crate::error::CpdError;
+use crate::home::CpdHome;
+use crate::ids::{OwnerLogin, PlanId, PrKey};
 
 /// The four resolved model refs of a policy: the `model` domain's value.
 ///
@@ -30,6 +33,28 @@ impl Models {
     pub fn of(policy: &super::Policy) -> Models {
         policy.model.clone()
     }
+}
+
+/// The models of the Job `job` of `plan`: its PR's repo key (contract §8.3 "Models" (5)). A Worker Attempt, a Job's
+/// Tier check, the ladder and the `open` and `update` Jobs read them here. A key that does not resolve is its error.
+pub fn models_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Models, CpdError> {
+    Ok(Models::of(&crate::pr::policy_of_job(conn, home, plan, job)?))
+}
+
+/// The models of the PR `key` of `plan`: [`models_of_job`] for a PR.
+pub fn models_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Models, CpdError> {
+    Ok(Models::of(&crate::pr::policy_of_pr(conn, home, plan, key)?))
+}
+
+/// The models of Context `context`: its owner's key, or, for a Context with no owner, the machine layer over the
+/// built-in default. A Lead, a Manager, the title writer and the distiller read them here.
+pub fn models_of_context(conn: &rusqlite::Connection, home: &CpdHome, context: &str) -> Result<Models, CpdError> {
+    let owner: Option<String> = conn.query_row("SELECT owner FROM contexts WHERE id = ?1", [context], |r| r.get(0))?;
+    let resolved = match owner {
+        Some(owner) => super::resolve(home, &PolicyKey::Owner(OwnerLogin::parse(&owner)?))?,
+        None => super::resolve_machine(home)?,
+    };
+    Ok(Models::of(&resolved.policy))
 }
 
 impl HasText for Models {

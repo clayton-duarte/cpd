@@ -23,14 +23,14 @@ fn pi() -> PiInstall {
     }
 }
 
-fn config() -> Config {
-    Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("config.toml")).unwrap().0
+fn models() -> crate::policy::model::Models {
+    crate::policy::default_policy().model.clone()
 }
 
 /// Runs the node program on the scripted reply; the runner is returned to read the record.
 fn read(reply: Reply) -> (FakeRunner, Result<super::Catalog, CpdError>) {
     let runner = FakeRunner::new(ManualClock::new()).on("node", |_| true, reply);
-    let result = read_with(&runner, &pi(), &config_models(&config()), DEADLINE);
+    let result = read_with(&runner, &pi(), &models(), DEADLINE);
     (runner, result)
 }
 
@@ -54,17 +54,17 @@ fn read_with_asks_the_runner_for_node_running_the_module_on_pis_entries_and_the_
     let args = &calls[0].args;
     assert_eq!(&args[..2], ["--input-type=module", "-e"]);
     assert!(args[2].contains("getSupportedThinkingLevels"), "the embedded module");
-    let config = config();
+    let models = models();
     assert_eq!(
         &args[3..],
         [
             "--".to_owned(),
             "/nonexistent/coding-agent.js".to_owned(),
             "/nonexistent/pi-ai.js".to_owned(),
-            format!("O={}", config.tiers.o),
-            format!("S={}", config.tiers.s),
-            format!("H={}", config.tiers.h),
-            format!("G={}", config.tiers.g),
+            format!("O={}", models.o),
+            format!("S={}", models.s),
+            format!("H={}", models.h),
+            format!("G={}", models.g),
         ]
     );
 }
@@ -160,7 +160,7 @@ fn read_with_maps_a_model_with_no_usable_level_to_catalog_failed() {
 fn read_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
     let runner = FakeRunner::new(clock.clone()).on("node", |_| true, Reply::ok(&levels()).takes(Duration::from_secs(31)));
-    let err = read_with(&runner, &pi(), &config_models(&config()), DEADLINE).unwrap_err();
+    let err = read_with(&runner, &pi(), &models(), DEADLINE).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], "node");
     assert_eq!(err.details()["deadline_seconds"], 30);

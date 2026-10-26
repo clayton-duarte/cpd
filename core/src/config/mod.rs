@@ -23,7 +23,7 @@ use crate::home::CpdHome;
 use crate::output::Output;
 
 pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
-pub use file::{Config, Events, Inbox, Source, Sources, Tiers, TickSeconds, Timeouts, Tmux, Watch};
+pub use file::{Config, Events, Inbox, Source, Sources, TickSeconds, Timeouts, Tmux, Watch};
 pub use repo::RepoTests;
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
@@ -60,7 +60,7 @@ pub fn tiers(args: TiersArgs) -> Result<Output, CpdError> {
         }
         None => (None, crate::policy::resolve_machine(&env.home)?),
     };
-    let catalog = catalog::load_models_with(&Models::of(&resolved.policy), &mut env.store)?;
+    let catalog = catalog::load_with(&Models::of(&resolved.policy), &mut env.store)?;
     let mut out = json!({
         "pi_version": catalog.pi_version,
         "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h, "G": catalog.g},

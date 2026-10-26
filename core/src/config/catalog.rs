@@ -116,7 +116,7 @@ fn tail(bytes: &[u8]) -> String {
     lines[lines.len().saturating_sub(60)..].join("\n")
 }
 
-/// The Tier catalog for the configured models, from the installed pi.
+/// The Tier catalog for the `models` of a policy key, from the installed pi.
 ///
 /// Errors: `pi_not_found`, `catalog_failed` (the module did not run or did not
 /// print valid JSON), `tier_model_unknown` (a configured model is not in pi's
@@ -126,26 +126,15 @@ fn tail(bytes: &[u8]) -> String {
 /// per pi version (commands.md §14.3): read when the cache holds the configured
 /// models under the installed pi's version; otherwise computed from pi and
 /// written in one transaction, replacing what was cached.
-pub fn load(config: &Config) -> Result<Catalog, CpdError> {
+pub fn load(config: &Config, models: &Models) -> Result<Catalog, CpdError> {
     // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
     let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
-    load_with(config, &mut store)
+    load_with(models, &mut store)
 }
 
 /// [`load`] through a `store` the caller already holds, so the catalog does not
 /// open a second one (flock, pragmas, schema hash).
-pub fn load_with(config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
-    load_models_with(&config_models(config), store)
-}
-
-/// The models of `config.toml`'s `[tiers]`, until the policies' `[model]` replace them.
-pub fn config_models(config: &Config) -> Models {
-    let t = &config.tiers;
-    Models { o: t.o.clone(), s: t.s.clone(), h: t.h.clone(), g: t.g.clone() }
-}
-
-/// [`load_with`] for the `models` of a policy key.
-pub fn load_models_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+pub fn load_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
     load_from(&locate_pi()?, models, store)
 }
 
@@ -255,18 +244,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", &home.config()).unwrap();
+        let models = crate::policy::default_policy().model.clone();
         let tier = |model: &str| TierModel { model: model.to_owned(), efforts: vec![0, 1, 2] };
         let cached = Catalog {
             pi_version: "9.9.9".into(),
-            o: tier(&config.tiers.o),
-            s: tier(&config.tiers.s),
-            h: tier(&config.tiers.h),
-            g: TierModel { model: config.tiers.g.clone(), efforts: vec![] },
+            o: tier(&models.o),
+            s: tier(&models.s),
+            h: tier(&models.h),
+            g: TierModel { model: models.g.clone(), efforts: vec![] },
         };
         cache::write(&mut store, &cached).unwrap();
 
         // pi's entry points do not exist: a cache miss would fail in `read`.
-        assert_eq!(load_from(&pi(), &config_models(&config), &mut store).unwrap(), cached);
+        assert_eq!(load_from(&pi(), &models, &mut store).unwrap(), cached);
     }
 }

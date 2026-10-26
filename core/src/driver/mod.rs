@@ -57,7 +57,8 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let Env { home, config, mut store, .. } = Env::open()?;
-    let catalog = load_catalog(&config)?;
+    let models = store.read(|conn| crate::policy::model::models_of_job(conn, &home, &plan, args.key.as_str()))?;
+    let catalog = load_catalog(&config, &models)?;
     let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
     // A manual dispatch asks for the linear Attempt; the starter refuses it (CasLost) when a sibling
     // of the PR is live, so two Attempts never share the workflow worktree (hs-d680/hs-d682/hs-d683).
