@@ -180,12 +180,6 @@ fn decide(
             return Err(order(named.name, &after, unknown));
         }
     }
-    // Unreachable when the build's order check holds (§4.5 A2 check 2); it fails loudly anyway.
-    if let Some(floor) = floor {
-        if let Some(named) = pending.iter().find(|n| n.name < floor) {
-            return Err(order(named.name, &[floor], unknown));
-        }
-    }
     Ok(Start::Named)
 }
 
