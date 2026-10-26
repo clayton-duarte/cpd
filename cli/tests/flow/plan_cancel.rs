@@ -1,71 +1,42 @@
-//! `plan cancel` (commands.md §4.12, E1), run as the built binary against a temporary `$CPD_HOME`,
-//! a private tmux server, a fake `pi`-less cockpit (a fake `cpd` for the panes) and a fake `gh`.
-//! Jobs, Attempts and PR rows that only the engine reaches are written straight into the database.
+//! `plan cancel` (commands.md §4.12, E1), in this process (`Fx::with_ports`) against a temporary `$CPD_HOME`: tmux and git are
+//! the fake routes of the `FakeRunner`, `gh` is a scripted reply of it, and the wait for the stopped Attempts naps on the
+//! `ManualClock` (`Fx::on_nap` plays the engine that ends them). Jobs, Attempts and PR rows that only the engine reaches are
+//! written straight into the database.
 
 use crate::common;
 
-use std::fs;
-use std::process::Stdio;
+use std::path::Path;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, WATCH_OK, refused, wait_until};
-use cpd_core::error::CpdError;
+use common::fx::Fx;
+use common::{Run, refused};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{Store, WriteTxn};
+use cpd_core::host::runner::{Call, Reply};
+use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 // ---------- fixtures ----------
 
-fn store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
+fn events(fx: &Fx, kind: &str) -> Vec<Value> {
+    fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
+fn has_pane(fx: &Fx, session: &str) -> bool {
+    fx.panes().iter().any(|p| p.session == session)
 }
 
-fn fixture(env: &TestEnv, sql: &str) {
-    store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
+fn pane_of(fx: &Fx, session: &str) -> String {
+    fx.panes().into_iter().find(|p| p.session == session).unwrap().pane
 }
 
-fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
-    env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
+/// `gh pr <sub> ...`.
+fn gh_pr(sub: &'static str) -> impl Fn(&Call) -> bool + Send + Sync + 'static {
+    move |call| call.args.first().is_some_and(|a| a == "pr") && call.args.get(1).is_some_and(|a| a == sub)
 }
 
-/// The cockpit: session `cpd`, window `main` with a tree pane and the placeholder in the chat slot.
-fn cockpit(env: &TestEnv) {
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
-}
-
-/// The panes of the private server: `(pane, @cpd_session)`.
-fn panes(env: &TestEnv) -> Vec<(String, String)> {
-    let out = env.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{@cpd_session}"]);
-    String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .map(|l| {
-            let (pane, session) = l.split_once('\t').unwrap();
-            (pane.to_owned(), session.to_owned())
-        })
-        .collect()
-}
-
-fn has_pane(env: &TestEnv, session: &str) -> bool {
-    panes(env).iter().any(|p| p.1 == session)
-}
-
-/// Where the fake `session run <id>` writes its environment: it exists once the pane runs.
-fn wait_for_pane(env: &TestEnv, session: &str) {
-    let path = env.root().join(format!("pane-{session}.env"));
-    wait_until("the pane's session run", || path.exists() && fs::read_to_string(&path).is_ok_and(|t| t.contains("CPD_SESSION")));
+/// `gh` says every pull request is open and takes everything else.
+fn gh_says_open(fx: &Fx) {
+    let _ = (*fx.fakes.runner).clone().on("gh", gh_pr("view"), Reply::ok("{\"state\":\"OPEN\"}\n"));
+    fx.fake_gh(Reply::ok(""));
 }
 
 /// Plan `pay` in phase `dispatch` with its Lead and a side fork (both with a live pane), three PRs
@@ -77,23 +48,19 @@ fn wait_for_pane(env: &TestEnv, session: &str) {
 /// | `web` | `open` | `acme/web#22`, merged by the poller | |
 /// | `ui` | `waiting` | none | |
 ///
-/// `gh` is a fake that records its calls and says every pull request is open.
-fn setup(env: &TestEnv) -> (String, String) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    env.fake_cpd_panes(WATCH_OK);
-    env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
-    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    let lead = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
+/// `gh` is whatever the test scripted before; [`setup`] scripts [`gh_says_open`].
+fn world(fx: &Fx) -> (String, String) {
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+    let lead = fx.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
     for key in ["api", "web", "ui"] {
-        let repo = env.keyed_repo(key);
-        env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+        let repo = fx.keyed_repo(key);
+        fx.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
         // The stub the shape lays out is cancelled, as a Lead cancels a stub it does not need: these Jobs are the table's.
-        env.cpd(&["job", "cancel", &format!("{key}-config"), "--reason", "a stub of the template", "--plan", "pay"]).ok();
+        fx.cpd(&["job", "cancel", &format!("{key}-config"), "--reason", "a stub of the template", "--plan", "pay"]).ok();
+        fx.cpd(&["job", "cancel", &format!("open-{key}"), "--reason", "a stub of the template", "--plan", "pay"]).ok();
     }
-    wait_for_pane(env, &lead);
-    let fork = env.cpd(&["session", "fork", &lead]).ok()["session"]["id"].as_str().unwrap().to_owned();
-    wait_for_pane(env, &fork);
+    let fork = fx.cpd(&["session", "fork", &lead]).ok()["session"]["id"].as_str().unwrap().to_owned();
 
     // The Jobs and PRs reach their states the way the engine moves them, one legal step at a time.
     let pull_request = |repo: &str, number: i64, state: &str| {
@@ -132,8 +99,7 @@ fn setup(env: &TestEnv) -> (String, String) {
         )
     };
     let fingerprint = "f".repeat(64);
-    fixture(
-        env,
+    fx.env.sql(
         &format!(
             "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
              {d}{q}{f}{r}{m}
@@ -165,88 +131,77 @@ fn setup(env: &TestEnv) -> (String, String) {
     (lead, fork)
 }
 
-/// What the engine does for the stopped Attempts: ends them `cancelled`, and their Jobs.
-fn engine_ends_attempts(env: &TestEnv) {
-    fixture(
-        env,
-        "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE status <> 'ended';
-         UPDATE jobs SET status = 'cancelled' WHERE status = 'running';",
-    );
+fn setup(fx: &Fx) -> (String, String) {
+    gh_says_open(fx);
+    world(fx)
 }
 
-/// `cpd plan cancel` running in the background, so the test can play the engine while it waits.
-fn spawn_cancel(env: &TestEnv, extra: &[&str]) -> std::process::Child {
+
+/// What the engine does for the stopped Attempts: ends them `cancelled`, and their Jobs.
+const ENDS_ATTEMPTS: &str = "UPDATE attempts SET status = 'ended', outcome = 'cancelled', cause = 'cancel_requested', ended_at = 't' WHERE status <> 'ended';
+         UPDATE jobs SET status = 'cancelled' WHERE status = 'running';";
+
+/// Runs `plan cancel`, and plays the engine: at the command's first nap (it waits for the stopped Attempts on the
+/// `ManualClock`, after the stop requests are recorded) the Attempts end, by SQL on a connection of the hook's own.
+fn cancel_with_engine(fx: &mut Fx, extra: &[&str]) -> Run {
+    let home = fx.env.cpd_home();
+    fx.on_nap(move |_| ends_attempts(&home));
     let mut args = vec!["plan", "cancel", "--plan", "pay"];
     args.extend(extra);
-    env.command(CPD).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()
+    fx.cpd(&args)
 }
 
-fn finish(child: std::process::Child) -> Run {
-    let out = child.wait_with_output().unwrap();
-    Run {
-        exit: out.status.code().unwrap(),
-        stdout: String::from_utf8(out.stdout).unwrap(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+fn ends_attempts(home: &Path) {
+    let mut store = Store::open(&CpdHome::resolve(Some(home.into()), None).unwrap(), 5000).unwrap();
+    common::sql(&mut store, ENDS_ATTEMPTS);
 }
 
-/// Runs `plan cancel`, and ends the running Attempt as soon as the stop request is recorded.
-fn cancel_with_engine(env: &TestEnv, extra: &[&str]) -> Run {
-    let child = spawn_cancel(env, extra);
-    wait_until("the stop request", || env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'job-cancel-requested'") == 1);
-    engine_ends_attempts(env);
-    finish(child)
+fn job_status(fx: &Fx, key: &str) -> String {
+    fx.env.query(&format!("SELECT status FROM jobs WHERE key = '{key}'"))
 }
 
-fn job_status(env: &TestEnv, key: &str) -> String {
-    env.query(&format!("SELECT status FROM jobs WHERE key = '{key}'"))
+fn pr_status(fx: &Fx, key: &str) -> String {
+    fx.env.query(&format!("SELECT status FROM prs WHERE key = '{key}'"))
 }
 
-fn pr_status(env: &TestEnv, key: &str) -> String {
-    env.query(&format!("SELECT status FROM prs WHERE key = '{key}'"))
-}
-
-fn gh_closes(env: &TestEnv) -> Vec<Vec<String>> {
-    env.calls("gh").into_iter().filter(|c| c[..2] == ["pr", "close"]).collect()
+fn gh_closes(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("gh").into_iter().map(|c| c.args).filter(|a| a[..2] == ["pr", "close"]).collect()
 }
 
 // ---------- the command ----------
 
 #[test]
 fn cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan() {
-    let env = TestEnv::new();
-    let (lead, fork) = setup(&env);
-    let (lead_pane, fork_pane) = (
-        panes(&env).into_iter().find(|p| p.1 == lead).unwrap().0,
-        panes(&env).into_iter().find(|p| p.1 == fork).unwrap().0,
-    );
+    let mut fx = Fx::with_ports();
+    let (lead, fork) = setup(&fx);
+    let (lead_pane, fork_pane) = (pane_of(&fx, &lead), pane_of(&fx, &fork));
 
-    let out = cancel_with_engine(&env, &["--reason", "abandoned"]).ok();
+    let out = cancel_with_engine(&mut fx, &["--reason", "abandoned"]).ok();
 
     // Jobs: every one not merged ends cancelled; the running one by the engine.
     for key in ["d", "q", "f", "r"] {
-        assert_eq!(job_status(&env, key), "cancelled", "{key}");
+        assert_eq!(job_status(&fx, key), "cancelled", "{key}");
     }
-    assert_eq!(job_status(&env, "m"), "merged");
+    assert_eq!(job_status(&fx, "m"), "merged");
     let mut cancelled: Vec<&str> = out["cancelled"].as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
     cancelled.sort();
     assert_eq!(cancelled, ["d", "f", "q", "r"]);
-    assert_eq!(env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "abandoned");
-    assert_eq!(events(&env, "job-cancelled").iter().filter(|e| e["data"]["reason"] == "abandoned").count(), 3);
-    assert_eq!(events(&env, "job-cancel-requested").len(), 1);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 0);
+    assert_eq!(fx.env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "abandoned");
+    assert_eq!(events(&fx, "job-cancelled").iter().filter(|e| e["data"]["reason"] == "abandoned").count(), 3);
+    assert_eq!(events(&fx, "job-cancel-requested").len(), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 0);
 
     // The open Escalation expired.
-    assert_eq!(env.query::<String>("SELECT status FROM escalations"), "expired");
-    assert_eq!(events(&env, "escalation-expired")[0]["data"], json!({"escalation": "r-a1-q1", "reason": "abandoned"}));
+    assert_eq!(fx.env.query::<String>("SELECT status FROM escalations"), "expired");
+    assert_eq!(events(&fx, "escalation-expired")[0]["data"], json!({"escalation": "r-a1-q1", "reason": "abandoned"}));
 
     // Pull requests: the open one is closed, the merged one and the waiting PR are not touched.
-    assert_eq!(gh_closes(&env), [["pr", "close", "11", "--repo", "acme/api"]]);
+    assert_eq!(gh_closes(&fx), [["pr", "close", "11", "--repo", "acme/api"]]);
     assert_eq!(out["closed_prs"], json!([{"pr": "api", "number": 11}]));
-    assert_eq!((pr_status(&env, "api").as_str(), pr_status(&env, "web").as_str(), pr_status(&env, "ui").as_str()), ("open", "merged", "waiting"));
+    assert_eq!((pr_status(&fx, "api").as_str(), pr_status(&fx, "web").as_str(), pr_status(&fx, "ui").as_str()), ("open", "merged", "waiting"));
 
     // The Lead and its fork lose their panes.
-    assert!(!has_pane(&env, &lead) && !has_pane(&env, &fork));
+    assert!(!has_pane(&fx, &lead) && !has_pane(&fx, &fork));
     let mut closed: Vec<&str> = out["closed"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
     closed.sort();
     let mut panes_closed = vec![lead_pane.as_str(), fork_pane.as_str()];
@@ -256,65 +211,66 @@ fn cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan() {
     // The Plan and its Sessions are archived: the Plan holds no port.
     assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions WHERE archived_at IS NULL"), 0);
-    assert_eq!(events(&env, "plan-archived").len(), 1);
-    assert_eq!(events(&env, "session-archived").len(), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions WHERE archived_at IS NULL"), 0);
+    assert_eq!(events(&fx, "plan-archived").len(), 1);
+    assert_eq!(events(&fx, "session-archived").len(), 2);
     assert!(out.get("already").is_none());
 }
 
 #[test]
 fn reason_defaults_to_plan_cancelled() {
-    let env = TestEnv::new();
-    setup(&env);
-    cancel_with_engine(&env, &[]).ok();
-    assert_eq!(env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "plan cancelled");
+    let mut fx = Fx::with_ports();
+    setup(&fx);
+    cancel_with_engine(&mut fx, &[]).ok();
+    assert_eq!(fx.env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "plan cancelled");
 }
 
 #[test]
 fn a_rerun_writes_nothing_and_calls_nothing() {
-    let env = TestEnv::new();
-    setup(&env);
-    cancel_with_engine(&env, &[]).ok();
+    let mut fx = Fx::with_ports();
+    setup(&fx);
+    cancel_with_engine(&mut fx, &[]).ok();
     // The poller has read the closure since.
-    fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
-    let (events_before, calls) = (env.query::<i64>("SELECT count(*) FROM events"), env.calls("gh").len());
+    fx.env.sql("UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
+    let (events_before, calls) = (fx.env.query::<i64>("SELECT count(*) FROM events"), fx.calls("gh").len());
 
-    let again = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
+    let again = fx.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
     assert_eq!(again, json!({"ok": true, "cancelled": [], "closed_prs": [], "closed": [], "archived": [], "already": true}));
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
-    assert_eq!(env.calls("gh").len(), calls);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events_before);
+    assert_eq!(fx.calls("gh").len(), calls);
 }
 
 #[test]
 fn a_rerun_finishes_what_a_failed_run_left() {
-    let env = TestEnv::new();
-    let (lead, _) = setup(&env);
-    // gh fails: the Jobs are cancelled, the pull request is not closed, nothing is archived.
-    env.fake_gh("echo 'HTTP 502' >&2; exit 1");
-    let failed = cancel_with_engine(&env, &[]);
+    let mut fx = Fx::with_ports();
+    // gh fails (for `pr close`, and for the `pr view` that follows it), then works again.
+    fx.fake_once("gh", Reply::exit(1, "", "HTTP 502\n"));
+    fx.fake_once("gh", Reply::exit(1, "", "HTTP 502\n"));
+    gh_says_open(&fx);
+    let (lead, _) = world(&fx);
+    // The Jobs are cancelled, the pull request is not closed, nothing is archived.
+    let failed = cancel_with_engine(&mut fx, &[]);
     let error = refused(&failed, "gh_failed", 1);
     assert_eq!(error["details"]["argv"], json!(["gh", "pr", "close", "11", "--repo", "acme/api"]));
-    assert_eq!(job_status(&env, "q"), "cancelled");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
-    assert!(has_pane(&env, &lead), "the Lead is closed after the pull requests");
+    assert_eq!(job_status(&fx, "q"), "cancelled");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
+    assert!(has_pane(&fx, &lead), "the Lead is closed after the pull requests");
 
     // gh works again: the rest is done.
-    env.fake_gh("exit 0");
-    let out = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
+    let out = fx.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
     assert_eq!(out["cancelled"], json!([]));
     assert_eq!(out["closed_prs"], json!([{"pr": "api", "number": 11}]));
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert!(!has_pane(&env, &lead));
+    assert!(!has_pane(&fx, &lead));
 }
 
 #[test]
 fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
-    let env = TestEnv::new();
-    setup(&env);
+    let mut fx = Fx::with_ports();
+    setup(&fx);
     // Job `x` is running with no Attempt: a bad row, on which `job cancel` fails after the Jobs before it.
-    fixture(
-        &env,
+    fx.env.sql(
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', 'api', 'x', 'Job x', 'S2', 'Goal.', 'Context.', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, cpd_txn(), 't');
@@ -323,51 +279,48 @@ fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
             "f".repeat(64)
         ),
     );
-    let first = env.cpd(&["plan", "cancel", "--plan", "pay"]);
+    let first = fx.cpd(&["plan", "cancel", "--plan", "pay"]);
     assert_eq!(first.error()["code"], "store_failed", "{first:?}");
-    assert_eq!((job_status(&env, "d").as_str(), job_status(&env, "q").as_str(), job_status(&env, "f").as_str()), ("cancelled", "cancelled", "cancelled"));
-    assert_eq!(events(&env, "job-cancel-requested").len(), 1, "the running Job before it has its request");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
-    assert!(gh_closes(&env).is_empty(), "nothing after the failure ran");
+    assert_eq!((job_status(&fx, "d").as_str(), job_status(&fx, "q").as_str(), job_status(&fx, "f").as_str()), ("cancelled", "cancelled", "cancelled"));
+    assert_eq!(events(&fx, "job-cancel-requested").len(), 1, "the running Job before it has its request");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
+    assert!(gh_closes(&fx).is_empty(), "nothing after the failure ran");
 
     // The Attempt of `x` exists now: the rerun asks for both stops, and finishes.
-    fixture(
-        &env,
+    fx.env.sql(
         "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
          VALUES ('pay', 'x-a1', 'x', 1, 'S2', 'ladder', 'running', 'cpd/pay--x-a1', '/w', 't');",
     );
-    let child = spawn_cancel(&env, &[]);
-    wait_until("the second stop request", || events(&env, "job-cancel-requested").len() == 2);
-    engine_ends_attempts(&env);
-    let out = finish(child).ok();
+    let out = cancel_with_engine(&mut fx, &[]).ok();
+    assert_eq!(events(&fx, "job-cancel-requested").len(), 2, "the second stop request");
     assert_eq!(out["cancelled"], json!(["x"]), "`r` was asked before");
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
-    assert_eq!(gh_closes(&env).len(), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
+    assert_eq!(gh_closes(&fx).len(), 1);
 }
 
 #[test]
 fn a_plan_with_nothing_left_to_cancel_is_only_archived() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    setup(&fx);
     for key in ["d", "q", "f", "r"] {
-        env.cpd(&["job", "cancel", key, "--reason", "No.", "--plan", "pay"]).ok();
+        fx.cpd(&["job", "cancel", key, "--reason", "No.", "--plan", "pay"]).ok();
     }
-    engine_ends_attempts(&env);
-    fixture(&env, "UPDATE escalations SET status = 'expired', expired_at = 't'; UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
-    let out = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
+    fx.env.sql(ENDS_ATTEMPTS);
+    fx.env.sql("UPDATE escalations SET status = 'expired', expired_at = 't'; UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
+    let out = fx.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
     assert_eq!(out["cancelled"], json!([]));
     assert_eq!(out["closed_prs"], json!([]));
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert!(gh_closes(&env).is_empty());
+    assert!(gh_closes(&fx).is_empty());
 }
 
 // ---------- a `tdd` PR's last test and impl Jobs do not stop a plan cancel (hs-d573, rule B2) ----------
 
 /// Adds to the Plan of [`setup`] a started `tdd` PR `tdd` whose only `test` and `impl` Jobs are `tdd-tests` and
 /// `tdd-impl` (`impl_status`, `queued` or `running` with its Attempt `tdd-impl-a1`), and a queued `open` Job `tdd-open`.
-fn add_tdd_pr(env: &TestEnv, impl_status: &str) {
-    let repo = env.keyed_repo("tdd");
+fn add_tdd_pr(fx: &Fx, impl_status: &str) {
+    let repo = fx.keyed_repo("tdd");
     let fingerprint = "f".repeat(64);
     let job = |key: &str, kind: &str, tests: &str| {
         format!(
@@ -383,8 +336,7 @@ fn add_tdd_pr(env: &TestEnv, impl_status: &str) {
     } else {
         ""
     };
-    fixture(
-        env,
+    fx.env.sql(
         &format!(
             "INSERT INTO prs (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
                VALUES ('pay', 'tdd', '{repo}', 'main', 'dispatch', 'tdd', 'cpd/pay/tdd', '/wt/tdd', 't', cpd_txn(), 't');
@@ -397,117 +349,115 @@ fn add_tdd_pr(env: &TestEnv, impl_status: &str) {
     );
 }
 
-fn cancel_by_hand_is_refused_shape_incomplete(env: &TestEnv) {
-    let before = env.query::<i64>("SELECT count(*) FROM events");
-    let error = refused(&env.cpd(&["job", "cancel", "tdd-impl", "--reason", "No.", "--plan", "pay"]), "shape_incomplete", 3);
+fn cancel_by_hand_is_refused_shape_incomplete(fx: &Fx) {
+    let before = fx.env.query::<i64>("SELECT count(*) FROM events");
+    let error = refused(&fx.cpd(&["job", "cancel", "tdd-impl", "--reason", "No.", "--plan", "pay"]), "shape_incomplete", 3);
     assert_eq!(error["details"]["missing"], json!(["impl"]));
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before, "a refusal writes nothing");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), before, "a refusal writes nothing");
 }
 
 #[test]
 fn a_tdd_pr_with_its_last_test_and_impl_jobs_does_not_stop_a_plan_cancel() {
-    let env = TestEnv::new();
-    setup(&env);
-    add_tdd_pr(&env, "queued");
-    cancel_by_hand_is_refused_shape_incomplete(&env);
-    assert_eq!(job_status(&env, "tdd-impl"), "queued");
+    let mut fx = Fx::with_ports();
+    setup(&fx);
+    add_tdd_pr(&fx, "queued");
+    cancel_by_hand_is_refused_shape_incomplete(&fx);
+    assert_eq!(job_status(&fx, "tdd-impl"), "queued");
 
-    cancel_with_engine(&env, &[]).ok();
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
+    cancel_with_engine(&mut fx, &[]).ok();
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
     for key in ["tdd-tests", "tdd-impl", "tdd-open"] {
-        assert_eq!(env.query::<String>(&format!("SELECT cancel_reason FROM jobs WHERE key = '{key}'")), "plan cancelled", "{key}");
+        assert_eq!(fx.env.query::<String>(&format!("SELECT cancel_reason FROM jobs WHERE key = '{key}'")), "plan cancelled", "{key}");
     }
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
-    fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
-    assert_eq!(env.cpd(&["plan", "cancel", "--plan", "pay"]).ok()["already"], true);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    fx.env.sql("UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
+    assert_eq!(fx.cpd(&["plan", "cancel", "--plan", "pay"]).ok()["already"], true);
 }
 
 #[test]
 fn a_plan_cancel_stops_a_running_last_impl_job_of_a_tdd_pr_without_the_shape_check() {
-    let env = TestEnv::new();
-    setup(&env);
-    add_tdd_pr(&env, "running");
-    cancel_by_hand_is_refused_shape_incomplete(&env);
+    let mut fx = Fx::with_ports();
+    setup(&fx);
+    add_tdd_pr(&fx, "running");
+    cancel_by_hand_is_refused_shape_incomplete(&fx);
 
     // `r` and `tdd-impl` both run: two stop requests, then the engine ends the Attempts.
-    let child = spawn_cancel(&env, &[]);
-    wait_until("both stop requests", || events(&env, "job-cancel-requested").len() == 2);
-    engine_ends_attempts(&env);
-    finish(child).ok();
-    let requested: Vec<Value> = events(&env, "job-cancel-requested").iter().map(|e| e["job"].clone()).collect();
+    cancel_with_engine(&mut fx, &[]).ok();
+    assert_eq!(events(&fx, "job-cancel-requested").len(), 2, "both stop requests");
+    let requested: Vec<Value> = events(&fx, "job-cancel-requested").iter().map(|e| e["job"].clone()).collect();
     assert!(requested.contains(&json!("tdd-impl")), "{requested:?}");
-    assert_eq!(job_status(&env, "tdd-impl"), "cancelled");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
-}
-
-// ---------- refusals ----------
-
-#[test]
-fn an_unknown_plan_is_plan_not_found() {
-    let env = TestEnv::new();
-    setup(&env);
-    refused(&env.cpd(&["plan", "cancel", "--plan", "nope"]), "plan_not_found", 4);
+    assert_eq!(job_status(&fx, "tdd-impl"), "cancelled");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
 }
 
 #[test]
 fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
-    let env = TestEnv::new();
-    setup(&env);
-    fixture(
-        &env,
+    let mut fx = Fx::with_ports();
+    setup(&fx);
+    fx.env.sql(
         &format!(
             "INSERT INTO plan_reviews (plan, id, number, status, fingerprint, requested_at)
              VALUES ('pay', 'r1', 1, 'pending', '{}', 't');",
             "f".repeat(64)
         ),
     );
-    let before: i64 = env.query("SELECT max(id) FROM events");
-    cancel_with_engine(&env, &[]).ok();
+    let before: i64 = fx.env.query("SELECT max(id) FROM events");
+    cancel_with_engine(&mut fx, &[]).ok();
 
     // The review is closed, with one Event, before the Jobs are cancelled; the Job is cancelled and the Plan archived.
     let (status, decided_at): (String, Option<String>) =
-        env.read(|c| c.query_row("SELECT status, decided_at FROM plan_reviews WHERE plan = 'pay' AND id = 'r1'", [], |r| Ok((r.get(0)?, r.get(1)?))));
+        fx.env.read(|c| c.query_row("SELECT status, decided_at FROM plan_reviews WHERE plan = 'pay' AND id = 'r1'", [], |r| Ok((r.get(0)?, r.get(1)?))));
     assert_eq!(status, "superseded");
     assert!(decided_at.is_some());
-    let closed = events(&env, "plan-review");
+    let closed = events(&fx, "plan-review");
     assert_eq!(closed.len(), 1, "{closed:?}");
     assert_eq!((&closed[0]["data"]["review"], &closed[0]["data"]["status"]), (&json!("r1"), &json!("superseded")));
     assert!(closed[0]["text"].as_str().unwrap().contains("cancelled"), "{}", closed[0]["text"]);
-    let first_cancel: i64 = env.query(&format!("SELECT min(id) FROM events WHERE kind LIKE 'job-cancel%' AND id > {before}"));
-    let review_event: i64 = env.query("SELECT id FROM events WHERE kind = 'plan-review'");
+    let first_cancel: i64 = fx.env.query(&format!("SELECT min(id) FROM events WHERE kind LIKE 'job-cancel%' AND id > {before}"));
+    let review_event: i64 = fx.env.query("SELECT id FROM events WHERE kind = 'plan-review'");
     assert!(before < review_event && review_event < first_cancel, "the review closes first");
-    assert_eq!(job_status(&env, "q"), "cancelled");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    assert_eq!(job_status(&fx, "q"), "cancelled");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
 
     // A rerun is already done and writes nothing.
-    fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
-    let events_before = env.query::<i64>("SELECT count(*) FROM events");
-    let again = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
+    fx.env.sql("UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
+    let events_before = fx.env.query::<i64>("SELECT count(*) FROM events");
+    let again = fx.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
     assert_eq!(again["already"], true);
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events_before);
 }
 
 #[test]
 fn the_lead_in_the_chat_slot_blocks_and_nothing_is_written() {
-    let env = TestEnv::new();
-    cockpit(&env);
-    let (lead, _) = setup(&env);
-    env.cpd(&["session", "open", &lead]).ok();
-    let before = env.query::<i64>("SELECT count(*) FROM events");
-    let error = refused(&env.cpd(&["plan", "cancel", "--plan", "pay"]), "in_chat_slot", 3);
+    let fx = Fx::with_ports();
+    fx.cockpit();
+    let (lead, _) = setup(&fx);
+    fx.cpd(&["session", "open", &lead]).ok();
+    let before = fx.env.query::<i64>("SELECT count(*) FROM events");
+    let error = refused(&fx.cpd(&["plan", "cancel", "--plan", "pay"]), "in_chat_slot", 3);
     assert_eq!(error["details"]["next"], "cpd session park");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before);
-    assert_eq!(job_status(&env, "q"), "queued");
-    assert!(gh_closes(&env).is_empty());
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), before);
+    assert_eq!(job_status(&fx, "q"), "queued");
+    assert!(gh_closes(&fx).is_empty());
 }
 
 #[test]
 fn a_gh_failure_for_a_pull_request_already_closed_is_not_a_failure() {
-    let env = TestEnv::new();
-    setup(&env);
+    let mut fx = Fx::with_ports();
     // `gh pr close` fails (a merged pull request cannot be closed); `gh pr view` says it is merged.
-    env.fake_gh("case \"$1 $2\" in\n\"pr close\") echo 'already merged' >&2; exit 1;;\n\"pr view\") echo '{\"state\":\"MERGED\"}';;\nesac\nexit 0");
-    cancel_with_engine(&env, &[]).ok();
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    let _ = (*fx.fakes.runner).clone().on("gh", gh_pr("close"), Reply::exit(1, "", "already merged\n"));
+    let _ = (*fx.fakes.runner).clone().on("gh", gh_pr("view"), Reply::ok("{\"state\":\"MERGED\"}\n"));
+    fx.fake_gh(Reply::ok(""));
+    world(&fx);
+    cancel_with_engine(&mut fx, &[]).ok();
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
 }
 
+// ---------- refusals ----------
+
+#[test]
+fn an_unknown_plan_is_plan_not_found() {
+    let fx = Fx::new();
+    fx.env.write_config("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n");
+    refused(&fx.cpd(&["plan", "cancel", "--plan", "nope"]), "plan_not_found", 4);
+}

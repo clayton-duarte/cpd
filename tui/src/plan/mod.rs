@@ -24,12 +24,14 @@ pub(crate) mod pulse;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::{Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -38,22 +40,24 @@ use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
 use crate::box_widget::spacing;
+use crate::dialog::scroll::Scroll;
 use crate::palette;
 use super::background::Background;
 use super::viewlog::ViewLog;
 use crate::trace::Trace;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse};
 use super::pace::{self, Reads};
-use crate::pump::{Pump, Schedule, Signal, SAFETY};
-use crate::read::watch::Watch;
+use crate::pump::{Feed, Schedule, Signal, SAFETY};
 use super::runner::{ViewError, kept};
-use super::{Capture, RunCommand, run_view};
+use super::view_ports::{Ctx, Input as ViewInput, Tty, frame_now, run_view_with, wall_ms};
+use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 /// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
@@ -141,11 +145,17 @@ struct Snapshot {
 
 /// One read of the store for a pane `width` columns wide at `now_ms` (Unix ms).
 fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdError> {
-    snapshot_timed(store, width, now_ms, false)
+    snapshot_timed(&Ports::current(), store, width, now_ms, false)
 }
 
-/// [`snapshot`], timing its layout when `timed`.
-fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Result<Snapshot, CpdError> {
+/// [`snapshot`]'s chart, with the spinner frame and the time read on the clock of `ports`.
+#[cfg(test)]
+pub(crate) fn snapshot_with(ports: &Ports, store: &mut Store, width: u16) -> Result<Option<Centre>, CpdError> {
+    Ok(snapshot_timed(ports, store, width, now_ms(ports), false)?.centre)
+}
+
+/// [`snapshot`], timing its layout when `timed`; the frame and the timing are read on the clock of `ports`.
+fn snapshot_timed(ports: &Ports, store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Result<Snapshot, CpdError> {
     // Read first: whatever the later reads see is at least this new, so following from here loses nothing.
     let cursor = store.read(highest_id)?;
     if let Some(manager) = read::manager_slot(store)? {
@@ -156,10 +166,10 @@ fn snapshot_timed(store: &mut Store, width: u16, now_ms: i64, timed: bool) -> Re
     }
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None, layout: Duration::ZERO }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
-    let frame = palette::frame(SystemTime::now());
-    let began = timed.then(Instant::now);
+    let frame = frame_now(ports);
+    let began = timed.then(|| ports.clock.now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
-    let layout = began.map_or(Duration::ZERO, |b| b.elapsed());
+    let layout = began.map_or(Duration::ZERO, |b| ports.clock.now().saturating_duration_since(b));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None, layout })
 }
 
@@ -237,8 +247,8 @@ struct Ui {
     /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
     /// chart may have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
-    /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
-    pulse_offset: usize,
+    /// Pulse's scroll (reset whenever the Context of the Pulse changes).
+    pulse_scroll: Scroll,
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
@@ -280,7 +290,15 @@ impl Ui {
             window = rows;
         }
         self.body = window.inner(MARGIN);
-        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset);
+        pulse::draw(f.buffer_mut(), self.body, pulse, &mut self.pulse_scroll);
+    }
+
+    /// Draws what `snap` holds: Pulse, or the chart of the Plan in the chat slot.
+    fn draw_snapshot(&mut self, f: &mut Frame, snap: &Snapshot) {
+        match snap.pulse.as_ref() {
+            Some(pulse) => self.draw_pulse(f, pulse),
+            None => self.draw(f, snap.centre.as_ref()),
+        }
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -305,7 +323,7 @@ impl Ui {
 
 /// The Plans' scroll offsets in `$CPD_HOME/run/tui/plan-scroll.json` (commands.md §13.2, hs-d254): a JSON object
 /// `{"<plan id>": [x, y]}`. The view's own state, not Ledger state: the one file a view writes.
-struct Offsets {
+pub(crate) struct Offsets {
     path: PathBuf,
     /// What the file holds, as far as this view knows; a write is due when the offsets differ from it.
     saved: HashMap<PlanId, (u16, u16)>,
@@ -317,7 +335,7 @@ struct Offsets {
 const SAVE_EVERY: Duration = Duration::from_secs(1);
 
 impl Offsets {
-    fn at(home: &CpdHome) -> Offsets {
+    pub(crate) fn at(home: &CpdHome) -> Offsets {
         // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
         let path = home.run_dir().join("tui").join("plan-scroll.json");
         Offsets { path, saved: HashMap::new(), written: None }
@@ -325,7 +343,7 @@ impl Offsets {
 
     /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
     /// `{"<plan id>": [x, y]}`.
-    fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
+    pub(crate) fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
         let text = match fs::read(&self.path) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
@@ -344,26 +362,28 @@ impl Offsets {
 
     /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
     /// since the last write. A failure is returned and leaves the offsets unsaved, so the next call retries.
+    #[cfg(test)]
     fn save(&mut self, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
-        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at.elapsed() < SAVE_EVERY)) {
+        self.save_with(&Ports::real(), offsets, now)
+    }
+
+    /// [`Offsets::save`] with the second counted on the clock of `ports`.
+    pub(crate) fn save_with(&mut self, ports: &Ports, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+        let at_now = ports.clock.now();
+        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at_now.saturating_duration_since(at) < SAVE_EVERY)) {
             return Ok(());
         }
-        self.written = Some(Instant::now());
+        self.written = Some(at_now);
         self.write(offsets).map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
         self.saved.clone_from(offsets);
         Ok(())
     }
 
-    /// Replaces the file: a temporary file beside it, then a rename.
+    /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
         let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
         let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
-        let dir = self.path.parent().unwrap_or(Path::new("."));
-        fs::create_dir_all(dir)?;
-        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
-        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        cpd_core::atomic::write_atomic(&self.path, text)
     }
 }
 
@@ -384,35 +404,96 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
     job.current_attempt().map(|a| a.id.clone())
 }
 
-pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    run_view(
+/// The view's first frame for `store` at `now_ms` (Unix ms), drawn on `f` as `run` draws it: one snapshot, at the corner of its
+/// chart, with nothing selected. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_first_frame(store: &mut Store, f: &mut Frame, now_ms: i64) -> Result<(), CpdError> {
+    let snap = snapshot(store, f.area().width, now_ms)?;
+    Ui::default().draw_snapshot(f, &snap);
+    Ok(())
+}
+
+pub(super) fn run(ports: &Ports, run_command: RunCommand) -> Result<Output, CpdError> {
+    run_view_on(
+        ports,
         "plan",
         Capture::Mouse,
         || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let width = ratatui::crossterm::terminal::size()
-                .map_err(|e| {
-                    CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
-                        .with("command", "tui view plan")
-                })?
-                .0;
-            let snap = snapshot(&mut store, width, now_ms())?;
-            let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
-            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
-            // the reads after the first run on the reader thread, with a store of its own (R4)
-            let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-            Ok((home, snap, poll, reader, actions))
+            prepare(ports, CpdHome::from_env()?, run_command, || {
+                Ok(ratatui::crossterm::terminal::size()
+                    .map_err(|e| {
+                        CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
+                            .with("command", "tui view plan")
+                    })?
+                    .0)
+            })
         },
-        |terminal, (home, mut snap, poll, reader, actions)| show(terminal, &home, &mut snap, poll, reader, &actions),
+        |ctx, prepared| {
+            let feed = Feed::real(prepared.home.root());
+            show_with(ctx, feed, prepared)
+        },
     )
 }
 
-/// Now, in Unix ms.
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+/// What the view starts from: the home, the first snapshot, the follow's reader and the actions of the keys and clicks.
+pub struct Prepared {
+    home: CpdHome,
+    snap: Snapshot,
+    poll: Duration,
+    reader: Arc<Mutex<pace::Owned<read::Follow>>>,
+    actions: Arc<Actions>,
+}
+
+/// The first snapshot of `home` for a pane `width` columns wide (`width` is asked after the store opened, as `run` does), and
+/// the rest `show_with` starts from.
+pub fn prepare(
+    ports: &Ports,
+    home: CpdHome,
+    run_command: RunCommand,
+    width: impl FnOnce() -> Result<u16, CpdError>,
+) -> Result<Prepared, CpdError> {
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let snap = snapshot_timed(ports, &mut store, width()?, now_ms(ports), false)?;
+    let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
+    // the reads after the first run on the reader thread, with a store of its own (R4)
+    let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
+    Ok(Prepared { home, snap, poll, reader, actions })
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn. The loop is driven by `input`
+/// (nothing is read on a thread, nothing waits in real time) and watches no directory: it polls.
+pub fn run_on<B: Backend, W: io::Write>(
+    ports: &Ports,
+    run_command: RunCommand,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn ViewInput,
+) -> Result<Output, CpdError> {
+    let width = terminal.size().map(|size| size.width);
+    run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "plan",
+        Capture::Mouse,
+        || {
+            prepare(ports, CpdHome::from_env()?, run_command, || {
+                width.map_err(|e| CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}.")))
+            })
+        },
+        |ctx, prepared| show_with(ctx, Feed::driven(), prepared),
+    )
+}
+
+/// Now, in Unix ms, on the clock of `ports`.
+fn now_ms(ports: &Ports) -> i64 {
+    wall_ms(ports) as i64
 }
 
 /// Starts `ui` from the offsets file: an unreadable or invalid file starts empty and is replaced at the next write. Returns
@@ -425,23 +506,21 @@ fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<Strin
     loaded.err().map(|reason| format!("scroll positions reset: {reason}")).into_iter().collect()
 }
 
-/// Draws, follows Events and takes input until the terminal fails.
-fn show(
-    terminal: &mut ratatui::DefaultTerminal,
-    home: &CpdHome,
-    snap: &mut Snapshot,
-    poll: Duration,
-    reader: Arc<Mutex<pace::Owned<read::Follow>>>,
-    actions: &Arc<Actions>,
-) -> Result<(), ViewError> {
+/// Draws, follows Events and takes input until the terminal fails. The loop's one wait is `feed`'s pump: a test's is
+/// scripted (signals, the `ManualClock` of `ctx.ports`, reads and Worker actions inline, no watcher) and `ctx.input` is not
+/// read; the end of a script is `Signal::InputFailed`.
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -> Result<(), ViewError> {
+    let Prepared { home, mut snap, poll, reader, actions } = prepared;
+    let (ports, home, snap, actions) = (ctx.ports, &home, &mut snap, &actions);
+    let Feed { pump, watch } = feed;
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
     let log = ViewLog::of(home, "plan");
     let mut trace = Trace::new(std::env::var("CPD_TUI_TRACE").ok().as_deref());
-    let epoch = Instant::now();
+    let epoch = ports.clock.now();
     // a log that cannot be written is the view's error line: a lasting state
     let write = |ui: &mut Ui, line: &str| {
-        if let Err(why) = log.append(line) {
+        if let Err(why) = log.append_with(ports, line) {
             ui.error = Some(why);
         }
     };
@@ -451,24 +530,23 @@ fn show(
     // a failed poll is made again at the next read, a failed snapshot likewise; both are shown (runner::kept), the
     // snapshot's error first, then the watcher's (lasting)
     let (mut snapshot_error, mut follow_error) = (None, None);
-    let pump = Pump::new(event::read);
-    let (watch, watch_error) = match Watch::start(home.root(), pump.waker()) {
-        Ok(w) => (Some(w), None),
+    let (watch, watch_error) = match watch {
+        Ok(w) => (w, None),
         Err(e) => (None, Some(format!("no commit watcher: {}; polling every {} ms", e.message(), poll.as_millis()))),
     };
     let _watch = watch; // lives as long as the loop
-    let mut schedule = Schedule::new(Instant::now(), if watch_error.is_some() { poll } else { SAFETY });
+    let mut schedule = Schedule::new(ports.clock.now(), if watch_error.is_some() || pump.is_driven() { poll } else { SAFETY });
     if watch_error.is_some() {
         ui.error = watch_error.clone();
     }
-    let mut taken = Instant::now();
+    let mut taken = ports.clock.now();
     // the reads run on the reader thread (R4), one at a time: `schedule` asks for none while one is out
-    let mut reads = Reads::<Read>::with_waker(pump.waker());
+    let mut reads = Reads::<Read>::on(&pump);
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
     // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
     // from there ([`Actions::report`]), so the view only draws again
-    let mut worker = Background::<()>::with_waker(pump.waker());
+    let mut worker = Background::<()>::on(&pump);
     loop {
         while worker.finished().is_some() {
             redraw = true;
@@ -478,6 +556,7 @@ fn show(
             let shown = ui.error.clone();
             kept(done.poll, &mut follow_error);
             if let Some(result) = done.snapshot {
+                ctx.snapshot_read();
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let next = kept(result.map(|s| {
@@ -489,23 +568,23 @@ fn show(
                     *snap = next;
                     let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                     if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                        ui.pulse_offset = 0;
+                        ui.pulse_scroll = Scroll::default();
                     }
                     if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
                         ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
-                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                        if let Err(e) = offsets.save_with(ports, &ui.remembered, true) {
                             ui.error = Some(e);
                         }
                     }
                 }
-                taken = Instant::now();
+                taken = ports.clock.now();
             }
             ui.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| watch_error.clone());
             redraw |= ui.error != shown;
         }
-        if let Some(kind) = schedule.take(Instant::now()) {
-            let width = terminal.size().map_or(0, |s| s.width);
-            let (timed, shared) = (trace.is_on(), Arc::clone(&reader));
+        if let Some(kind) = schedule.take(ports.clock.now()) {
+            let width = ctx.terminal.size().map_or(0, |s| s.width);
+            let (timed, shared, ports) = (trace.is_on(), Arc::clone(&reader), ports.clone());
             let watching = Watching::of(snap.centre.as_ref(), snap.pulse.as_ref());
             let retry = snapshot_error.is_some();
             reads.request(move || {
@@ -515,30 +594,25 @@ fn show(
                     changed = changes.pulls || changes.events.iter().any(|e| watching.concerns(e));
                 });
                 let snapshot = (changed || kind.force || retry)
-                    .then(|| pace::Owned::read(&shared, |store, _| snapshot_timed(store, width, now_ms(), timed)));
+                    .then(|| pace::Owned::read(&shared, |store, _| snapshot_timed(&ports, store, width, now_ms(&ports), timed)));
                 Read { poll, snapshot }
             });
         }
-        let frame = palette::frame(SystemTime::now());
+        let frame = frame_now(ports);
         if let Some(c) = snap.centre.as_mut() {
             redraw |= c.turn_traced(frame, &mut trace);
         }
         // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
         if let Some(c) = snap.centre.as_ref() {
             ui.remember(&c.plan.plan);
-            if let Err(e) = offsets.save(&ui.remembered, false) {
+            if let Err(e) = offsets.save_with(ports, &ui.remembered, false) {
                 redraw |= ui.error.as_deref() != Some(e.as_str());
                 ui.error = Some(e);
             }
         }
         if redraw {
             let (drawn, written) = trace.draw(epoch, &log, frame, || {
-                terminal
-                    .draw(|f| match snap.pulse.as_ref() {
-                        Some(pulse) => ui.draw_pulse(f, pulse),
-                        None => ui.draw(f, snap.centre.as_ref()),
-                    })
-                    .map(drop)
+                ctx.draw(|f| ui.draw_snapshot(f, snap))
             });
             drawn?;
             if let Err(why) = written {
@@ -547,12 +621,17 @@ fn show(
             redraw = false;
         }
         // block until a signal, or the next clock the screen needs (R3)
-        let now = Instant::now();
-        let wall_ms = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let now = ports.clock.now();
+        let wall_ms = wall_ms(ports);
         // a scroll offset not yet saved (held back by SAVE_EVERY) wakes the loop when it may be written
         let save_at = offsets.due_at(&ui.remembered);
         let until = crate::pump::wake(now, wall_ms, &needs(snap, taken), [schedule.deadline(now), save_at].into_iter().flatten().min());
-        let input = match pump.wait(until) {
+        let signal = if pump.is_driven() {
+            pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out() || worker.busy())
+        } else {
+            pump.wait(until)
+        };
+        let input = match signal {
             Signal::Input(input) => input,
             Signal::InputFailed(e) => return Err(e.into()),
             Signal::Commit => {
@@ -561,9 +640,9 @@ fn show(
             }
             Signal::Read => continue,
             Signal::Due => {
-                if snap.pulse.is_some() && Instant::now() >= taken + PULSE_REFRESH {
+                if snap.pulse.is_some() && ports.clock.now() >= taken + PULSE_REFRESH {
                     schedule.force(); // the window moves and the ages tick: not an Event
-                    taken = Instant::now();
+                    taken = ports.clock.now();
                 }
                 continue;
             }
@@ -576,14 +655,14 @@ fn show(
             Input::Resize(..) => schedule.force(), // the bucket count changes
             Input::Mouse(m) if snap.pulse.is_some() => {
                 let Some(pulse) = snap.pulse.as_ref() else { continue };
-                let height = usize::from(ui.body.height);
                 match m.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        lead = pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), m.column, m.row)
+                        lead = pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), m.column, m.row)
                             .map(|i| pulse.rows[i].lead.clone());
                     }
-                    MouseEventKind::ScrollUp => ui.pulse_offset = pulse::scroll(ui.pulse_offset, false, pulse.rows.len(), height),
-                    MouseEventKind::ScrollDown => ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, pulse.rows.len(), height),
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        ui.pulse_scroll.mouse(m);
+                    }
                     _ => {}
                 }
             }
@@ -782,6 +861,7 @@ mod tests {
     use ratatui::buffer::Buffer;
 
     use super::*;
+    use crate::dialog::scroll::WHEEL_ROWS;
     use crate::read::{JobNode, JobStatus, PrNode, PrStatus};
     use cpd_core::config::Tier;
     use cpd_core::ids::{ContextId, JobKey, PrKey, SessionId};
@@ -1093,12 +1173,12 @@ mod tests {
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
-            pulse::row_at(ui.body, ui.pulse_offset, pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
+            pulse::row_at(ui.body, ui.pulse_scroll.offset(), pulse.rows.len(), 5, y).map(|i| pulse.rows[i].lead.to_string())
         };
         assert_eq!(lead(&ui, 2).as_deref(), Some("lead-bb"));
-        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
-        ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
-        assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
+        ui.pulse_scroll.by(WHEEL_ROWS as isize);
+        ui.pulse_scroll.by(WHEEL_ROWS as isize);
+        assert_eq!(ui.pulse_scroll.offset(), 3, "clamped at the last row");
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
         assert!(rows[1].starts_with("  dd  "), "{:?}", rows[1]);
         assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));

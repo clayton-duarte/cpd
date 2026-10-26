@@ -2,36 +2,37 @@
 
 use super::*;
 
-/// A `tmux` that records its arguments, one per line, in `<dir>/calls` and lists one attached client of 100 x 30. It
-/// writes no dialog outcome, so a dialog's result is the "no usable result" error of a popup closed some other way.
-fn recording_tmux(dir: &tempfile::TempDir) -> (Tmux, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-    let calls = dir.path().join("calls");
-    let program = dir.path().join("tmux");
-    let script = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
-         case \" $* \" in *\" list-clients \"*) echo '1 100 30';; *\" display \"*) echo '100 30';; esac\n",
-        calls = calls.display()
-    );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    (Tmux::new("test").with_program(&program), calls)
+use std::sync::Arc;
+
+use cpd_core::clock::ManualClock;
+use cpd_core::fakes::tmux::TmuxRoute;
+use cpd_core::host::runner::FakeRunner;
+
+/// A fake tmux (the `tmux` route of a `FakeRunner`) with a server in `dir` and one attached client, `c1`, of 100 x 30. Its
+/// popup writes no dialog outcome, so a dialog's result is the "no usable result" error of a popup closed some other way.
+/// The runner records every call, to read the popup's argv back with [`popup_of`].
+fn recording_tmux(dir: &tempfile::TempDir) -> (Tmux, Arc<FakeRunner>) {
+    let route = Arc::new(TmuxRoute::new());
+    let runner = Arc::new(FakeRunner::new(ManualClock::new()).route("tmux", route.clone()));
+    let tmux = Tmux::with_tmpdir("test", dir.path()).with_runner(runner.clone());
+    tmux.run(&["new-session", "-d", "-s", "cockpit", "-x", "100", "-y", "30", "sleep 1"].map(str::to_owned)).unwrap();
+    route.fake().add_client("c1", 100, 30);
+    (tmux, runner)
 }
 
-/// The arguments of the `display-popup` call in `calls`.
-fn popup_of(calls: &Path) -> Vec<String> {
-    let text = std::fs::read_to_string(calls).unwrap();
-    let popup: Vec<String> = text.lines().skip_while(|l| *l != "display-popup").map(str::to_owned).collect();
-    assert_eq!(popup.first().map(String::as_str), Some("display-popup"), "{text}");
-    popup
+/// The arguments of the `display-popup` call the runner saw, from `display-popup` on.
+fn popup_of(runner: &FakeRunner) -> Vec<String> {
+    let calls = runner.calls();
+    let call = calls.iter().find(|c| c.args.iter().any(|a| a == "display-popup")).unwrap_or_else(|| panic!("no display-popup in {calls:?}"));
+    call.args.iter().skip_while(|a| *a != "display-popup").cloned().collect()
 }
 
 #[test]
 fn show_error_opens_a_text_popup_titled_with_what_failed_and_saying_why() {
     let dir = tempfile::tempdir().unwrap();
-    let (tmux, calls) = recording_tmux(&dir);
+    let (tmux, runner) = recording_tmux(&dir);
     let _ = show_error(&tmux, "session open l-ship", "no_cockpit: No cockpit.");
-    let popup = popup_of(&calls);
+    let popup = popup_of(&runner);
     assert!(!popup.contains(&"-T".to_owned()), "the popup passes no tmux title: the view draws it once: {popup:?}");
     let command = popup.last().unwrap();
     assert!(command.starts_with("cpd tui view dialog text --title='session open l-ship' --out="), "{command}");
@@ -41,7 +42,7 @@ fn show_error_opens_a_text_popup_titled_with_what_failed_and_saying_why() {
 #[test]
 fn a_failed_command_of_a_view_is_a_log_line_and_the_error_dialog() {
     let dir = tempfile::tempdir().unwrap();
-    let (tmux, calls) = recording_tmux(&dir);
+    let (tmux, runner) = recording_tmux(&dir);
     let home = cpd_core::home::CpdHome::resolve(Some(dir.path().join("home").into()), None).unwrap();
     let log = ViewLog::of(&home, "plan");
     let err = CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached.");
@@ -49,7 +50,7 @@ fn a_failed_command_of_a_view_is_a_log_line_and_the_error_dialog() {
     let logged = std::fs::read_to_string(dir.path().join("home/run/tui/plan.log")).unwrap();
     let first = logged.lines().next().unwrap();
     assert!(first.ends_with(" failed: Open Worker: tmux_failed: No tmux client is attached."), "{logged}");
-    let popup = popup_of(&calls);
+    let popup = popup_of(&runner);
     assert!(popup.last().unwrap().ends_with("--body='tmux_failed: No tmux client is attached.'"), "{popup:?}");
 }
 
@@ -119,15 +120,15 @@ fn the_popup_opens_without_tmuxs_border_and_without_a_tmux_title() {
     assert_eq!(popup_args((42, 6), command), ["display-popup", "-E", "-B", "-w", "42", "-h", "6", command]);
     // the popup the kit opens on the newest client, and on a named one (a client of 100 x 30)
     let dir = tempfile::tempdir().unwrap();
-    let (tmux, calls) = recording_tmux(&dir);
+    let (tmux, runner) = recording_tmux(&dir);
     let _ = show_error(&tmux, "session open l-ship", "no_cockpit: No cockpit.");
-    let popup = popup_of(&calls);
+    let popup = popup_of(&runner);
     assert_eq!(popup[..7], ["display-popup", "-E", "-B", "-w", "42", "-h", "6"], "{popup:?}");
     assert!(!popup.contains(&"-T".to_owned()), "{popup:?}");
     let dir = tempfile::tempdir().unwrap();
-    let (tmux, calls) = recording_tmux(&dir);
+    let (tmux, runner) = recording_tmux(&dir);
     let _ = show_error_on(&tmux, "c1", "session open l-ship", "no_cockpit: No cockpit.");
-    let popup = popup_of(&calls);
+    let popup = popup_of(&runner);
     assert_eq!(popup[..9], ["display-popup", "-c", "c1", "-E", "-B", "-w", "42", "-h", "6"], "{popup:?}");
     assert!(!popup.contains(&"-T".to_owned()), "{popup:?}");
 }

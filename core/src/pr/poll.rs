@@ -4,7 +4,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
@@ -28,6 +28,7 @@ use crate::config::Tier;
 use crate::job::open::{self, Cause};
 use crate::plan::fingerprint::load_prs;
 use crate::lock;
+use crate::ports::Ports;
 use crate::output::Output;
 use crate::policy::Checks;
 use crate::store::WriteTxn;
@@ -76,16 +77,16 @@ struct Outcome {
     done: Vec<PlanId>,
 }
 
-pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
-    let mut env = Env::open()?;
+pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open_with(ports)?;
     let selected = args.plan.plan;
     if let Some(id) = &selected {
         env.plan(id)?;
     }
-    let _lock = take_lock(&env.home.pr_poll_lock())?;
+    let _lock = take_lock_with(&env.ports, &env.home.pr_poll_lock())?;
     let root = env.home.root().to_owned();
 
-    let search = gh::search_open(&root)?;
+    let search = gh::search_open(&*env.ports.runner, &root)?;
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
@@ -111,7 +112,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         })
         .collect();
     let keys: Vec<(String, i64)> = candidates.iter().map(|row| (row.repo.clone(), row.number)).collect();
-    let read = gh::read_absent(&root, &keys)?;
+    let read = gh::read_absent(&*env.ports.runner, &root, &keys)?;
     let mut seen: Vec<Listed> = search.prs.iter().filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number))).cloned().collect();
     for (row, read) in candidates.iter().zip(read) {
         let found = listed_in(row);
@@ -180,9 +181,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
+/// `flock` on `path`, waiting at most [`LOCK_WAIT`] on `ports.clock`: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
+pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
@@ -190,12 +191,12 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
-    let deadline = Instant::now() + LOCK_WAIT;
+    let deadline = ports.clock.now() + LOCK_WAIT;
     loop {
         if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
             return Ok(file);
         }
-        if Instant::now() >= deadline {
+        if ports.clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::LockTimeout,
                 format!("Another pr poll held {} for longer than {}s.", path.display(), LOCK_WAIT.as_secs()),
@@ -203,7 +204,7 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
             .with("lock", path.display().to_string())
             .with("waited_seconds", LOCK_WAIT.as_secs()));
         }
-        std::thread::sleep(RETRY);
+        ports.clock.sleep(RETRY);
     }
 }
 
@@ -241,6 +242,7 @@ fn apply(
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
+                crate::incident::end_if_until_pr_merged(tx)?;
                 unstack_stacked_on(tx, plan, key)?;
             } else if let Some(checks) = checks_of(checks, plan, key) {
                 if tell(tx, plan, key, checks, &change)? {
@@ -472,43 +474,32 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 }
 
 /// A merged PR with what its clean-up removes.
-struct Merged {
-    plan: PlanId,
-    pr: PrKey,
-    repo: String,
-    lead_branch: String,
-    lead_worktree: Option<String>,
+pub(super) struct Merged {
+    pub(super) plan: PlanId,
+    pub(super) pr: PrKey,
+    pub(super) repo: String,
+    pub(super) lead_branch: String,
+    pub(super) lead_worktree: Option<String>,
     /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
-    pull_request: Option<(String, i64)>,
-    attempts: Vec<Attempt>,
+    pub(super) pull_request: Option<(String, i64)>,
+    pub(super) attempts: Vec<Attempt>,
     /// Whether this poll reports its failures: it merged in this poll, or it is cancelled and no `cleanup_failed`
     /// Event of it exists yet (the poll that first sees it).
-    fresh: bool,
+    pub(super) fresh: bool,
 }
 
 /// An Attempt of one of the PR's Jobs.
-struct Attempt {
-    id: AttemptId,
-    branch: String,
-    worktree: String,
-    ended: bool,
+pub(super) struct Attempt {
+    pub(super) id: AttemptId,
+    pub(super) branch: String,
+    pub(super) worktree: String,
+    pub(super) ended: bool,
 }
 
 impl Merged {
-    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead
-    /// worktree, or a gate worktree of the PR (contract §7.1).
+    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead worktree (contract §7.1).
     fn on_disk(&self) -> bool {
-        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists()) || self.has_gate_worktree()
-    }
-
-    /// Whether `<repo-parent>` holds an entry named as a gate worktree of this PR.
-    fn has_gate_worktree(&self) -> bool {
-        // The path of pid 0 ends in `gate-0`; without the `0` it is the name every gate worktree of the PR starts with.
-        let Ok(path) = git::gate_worktree_path(Path::new(&self.repo), &self.plan, &self.pr, 0) else { return false };
-        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return false };
-        let Some(prefix) = name.strip_suffix('0') else { return false };
-        let Ok(entries) = fs::read_dir(dir) else { return false };
-        entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.starts_with(prefix)))
+        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists())
     }
 }
 
@@ -631,25 +622,23 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
     clean(merged)
 }
 
-/// Removes the Attempt worktrees of the PR that are on disk, then its gate worktrees whose
-/// pid is dead, then its Lead worktree, first brought up to date by rule S. Each removal
-/// runs in the PR's repo, so the order does not matter; a failure does not stop the others.
-/// What it did not remove.
-fn clean(merged: &Merged) -> Vec<Failure> {
+/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree, first
+/// brought up to date by rule S. Each removal runs in the PR's repo, so the order does not
+/// matter; a failure does not stop the others. What it did not remove.
+pub(super) fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
     for attempt in &merged.attempts {
+        // A linear Attempt runs in the workflow worktree on the Lead Branch: `remove_merged_lead` below handles it
+        // (with the dirty/unpushed keep), never `discard_worktree` (hs-d680).
+        if git::worktree::is_linear(&attempt.branch, &merged.lead_branch) {
+            continue;
+        }
         if Path::new(&attempt.worktree).exists()
             && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
         {
             failures.push((attempt.worktree.clone(), reason(&e)));
         }
-    }
-    // A gate worktree whose pid lives belongs to a Gate still running: it stays (§7.2).
-    if merged.has_gate_worktree()
-        && let Err(e) = git::sweep_gate_worktrees(repo, &merged.plan, &merged.pr)
-    {
-        failures.push((merged.repo.clone(), reason(&e)));
     }
     if let Some(lead) = &merged.lead_worktree {
         // Rule S first, so a tree a merge left stale is not kept as dirty. Every stop of it is

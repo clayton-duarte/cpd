@@ -25,6 +25,7 @@ const OPEN_PLACEHOLDER: &str = "Added by cpd when the PR starts: merges the base
 const OPEN_NEEDS: &str = "every other Job of the PR";
 
 /// The `open` Job a PR that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
+/// Only for a PR whose Plan holds no `open` Job (an older PR): a template's opener stub is a real Job and is shown as its own row.
 struct OpenPlaceholder<'a> {
     pr: &'a PrRow,
     tier: &'a str,
@@ -226,8 +227,8 @@ struct Shown<'a> {
 /// Specs; `later` is a phase after `plan`, where the drafts are marked. `jobs` include the cancelled ones: they are
 /// in the table, in no graph and with no Spec.
 fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, open_tier: &str, shown: &Shown) {
-    // A PR that has not started has no `open` Job yet: its placeholder is the last row and the last section.
-    let placeholder = (pr.status == "waiting").then_some(OpenPlaceholder { pr, tier: open_tier });
+    // A PR that has not started, and whose Plan holds no `open` Job (an older PR), has no opener stub: its placeholder is the last row and the last section.
+    let placeholder = (pr.status == "waiting" && !jobs.iter().any(|j| j.kind == "open")).then_some(OpenPlaceholder { pr, tier: open_tier });
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),

@@ -17,6 +17,7 @@ use serde_json::json;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::exe::Exe;
+use crate::host::spawn::Launch;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::{Output, to_line};
 
@@ -43,13 +44,13 @@ pub enum Command {
 pub struct Scope {
     /// Events of this Plan
     #[arg(long, value_name = "id")]
-    plan: Option<PlanId>,
+    pub(crate) plan: Option<PlanId>,
     /// Events of this Context
     #[arg(long, value_name = "id")]
-    context: Option<ContextId>,
+    pub(crate) context: Option<ContextId>,
     /// Events for this Session (§5.3's rule)
     #[arg(long, value_name = "id")]
-    session: Option<SessionId>,
+    pub(crate) session: Option<SessionId>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -70,16 +71,16 @@ pub struct ListArgs {
 #[derive(clap::Args, Debug)]
 pub struct FollowArgs {
     #[command(flatten)]
-    scope: Scope,
+    pub(crate) scope: Scope,
     /// Only this kind (repeatable)
     #[arg(long = "kind", value_name = "kind")]
-    kinds: Vec<Kind>,
+    pub(crate) kinds: Vec<Kind>,
     /// Start after this id [default: the highest id now]; 0 replays everything
     #[arg(long, value_name = "id", value_parser = clap::value_parser!(i64).range(0..))]
-    since: Option<i64>,
+    pub(crate) since: Option<i64>,
     /// Exit once everything committed at the start has been printed
     #[arg(long)]
-    until_idle: bool,
+    pub(crate) until_idle: bool,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
@@ -102,12 +103,39 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
     Ok(Output::success(json!({"events": events, "next": next})))
 }
 
+/// [`follow`] on the ports of `env` (`env.ports.clock` for the poll's nap, `env.ports.spawn` for the exe it restarts
+/// from) and the writer `out` for its lines, not the process's stdout: what a test of the loop calls.
+/// `out` failing with `BrokenPipe` ends it as the reader's end does. With no `self_exe` to watch there is no restart.
+pub fn follow_in(env: &mut Env, args: FollowArgs, out: &mut dyn Write) -> Result<Output, CpdError> {
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    follow_loop(env, args, out, &|| false, &argv)
+}
+
 /// `events follow` (§11.2, §5.4): prints each Event as a line, in id order,
 /// until killed, until stdout closes, or (`--until-idle`) until it has printed
 /// what was committed when it started.
 fn follow(args: FollowArgs) -> Result<Output, CpdError> {
-    let Env { mut store, config, .. } = Env::open()?;
-    let exe = Exe::current()?;
+    let mut env = Env::open()?;
+    let mut stdout = std::io::stdout().lock();
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    follow_loop(&mut env, args, &mut stdout, &|| reader_gone(&std::io::stdout()), &argv)
+}
+
+/// The loop of [`follow`] and [`follow_in`]: `gone` says whether the reader went away without a write (G1), and `argv`
+/// is the command line (without the program name) a restart on a new install repeats with `--since` moved on. A test
+/// of the end by `gone` or of the restart calls it; `follow` passes the process's own.
+pub fn follow_loop(
+    env: &mut Env,
+    args: FollowArgs,
+    out: &mut dyn Write,
+    gone: &dyn Fn() -> bool,
+    argv: &[OsString],
+) -> Result<Output, CpdError> {
+    let Env { store, config, ports, .. } = env;
+    let exe = match ports.spawn.self_exe() {
+        Ok(path) => Some(Exe::at(path)?),
+        Err(_) => None,
+    };
     let Scope { plan, context, session } = args.scope;
     let (selection, mut cursor, until) = store.read(|conn| {
         let selection = Selection::resolve(conn, plan, context, session, args.kinds)?;
@@ -129,7 +157,6 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
     let until = args.until_idle.then_some(until);
 
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-    let mut stdout = std::io::stdout().lock();
     // `PRAGMA data_version` when the last query ran; none before the first.
     let mut seen: Option<i64> = None;
     // `PRAGMA schema_version` when the store verdict was last computed; none before the first.
@@ -159,7 +186,7 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
                 let Some(last) = batch.last() else { break };
                 let next = last.id;
                 let lines: String = batch.iter().map(to_line).collect();
-                if let Err(e) = print(&mut stdout, &lines) {
+                if let Err(e) = print(&mut *out, &lines) {
                     return e.map(|()| Output::Owned);
                 }
                 cursor = next;
@@ -171,14 +198,18 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
         if until.is_some() {
             return Ok(Output::Owned);
         }
-        if reader_gone(&stdout) {
+        if gone() {
             return Ok(Output::Owned);
         }
         // A new install: the same follower again, after the last Event printed (hs-d140). Returns only on failure.
-        if exe.replaced() {
-            return Err(exe.exec(restart_args(std::env::args_os().skip(1), cursor)));
+        if let Some(exe) = exe.as_ref().filter(|exe| exe.replaced()) {
+            let args = restart_args(argv.iter().cloned(), cursor).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+            let launch = Launch { program: exe.path().display().to_string(), args, ..Launch::default() };
+            let e = ports.spawn.exec(&launch);
+            return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", exe.path().display()))
+                .with("path", exe.path().display().to_string()));
         }
-        std::thread::sleep(poll);
+        ports.clock.sleep(poll);
     }
 }
 
@@ -201,7 +232,7 @@ fn restart_args(args: impl Iterator<Item = OsString>, cursor: i64) -> Vec<OsStri
 
 /// Writes `lines` and flushes. `Err(Ok(()))` when the reader is gone (EPIPE: the normal end of a follower);
 /// `Err(Err(_))` for any other write error: `internal`, as no I/O error code exists and the database is not at fault.
-fn print(out: &mut impl Write, lines: &str) -> Result<(), Result<(), CpdError>> {
+fn print(out: &mut (impl Write + ?Sized), lines: &str) -> Result<(), Result<(), CpdError>> {
     out.write_all(lines.as_bytes()).and_then(|()| out.flush()).map_err(|e| match e.kind() {
         std::io::ErrorKind::BrokenPipe => Ok(()),
         _ => Err(CpdError::new(ErrorCode::Internal, format!("Cannot write to stdout: {e}."))),
@@ -248,6 +279,17 @@ mod tests {
     #[test]
     fn a_closed_reader_ends_the_follower_without_an_error() {
         assert!(matches!(print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"), Err(Ok(()))));
+    }
+
+    /// What the follower's `stdout` being a pipe whose reader went away comes to, with no process: a pipe of this
+    /// process (nothing is written to it, so no `SIGPIPE`), and a file, which has no reader to lose.
+    #[test]
+    fn a_pipe_whose_reader_is_gone_is_gone_and_a_file_is_not() {
+        let (reader, writer) = nix::unistd::pipe().unwrap();
+        assert!(!reader_gone(&writer), "the reader is still there");
+        drop(reader);
+        assert!(reader_gone(&writer));
+        assert!(!reader_gone(&tempfile::tempfile().unwrap()));
     }
 
     fn restarted(args: &[&str], cursor: i64) -> Vec<String> {

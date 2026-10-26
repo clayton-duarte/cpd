@@ -85,7 +85,7 @@ The parent shared by two or more Plans: the shared knowledge between Plans that 
 _Avoid_: project, folder, epic
 
 **Context record**:
-One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`.
+One typed, append-only entry of a Context's knowledge: a decision (which may supersede another), a note, a question, an answer, a Plan, or a Brief. Written only through `cpd context …`. An Axiom is not a Context record: it lives in AGENTS.md.
 _Avoid_: wiki page, memory
 
 **Context store**:
@@ -93,7 +93,7 @@ A Context's records, held only in the machine's database (tables `contexts` and 
 _Avoid_: wiki, notes folder
 
 **Distilled Context** (hs-d549, hs-d551; replacing hs-d194; the pilot of Epic B, auxiliary agents):
-A curated, cpd-rendered digest of a Context's **records in force** (every decision, note, question and answer no decision supersedes), kept so that a Lead's or Manager's first message stays small. The distiller (**not the digest engine**) runs once per batch of records: for each uncurated record it classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records) and documentation candidates. The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The **Context digest** is rendered by cpd on demand from the curations, with no model: it lists topics by their newest relevant record (from the last `context_recent_days` days, open questions, and records cited by briefs), then the topic list. It is at most 32 KB; over that, cpd drops the oldest lines and ends with pointers to `cpd context show --topic`. The digest is derived, never a Context record: the records stay the truth. The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand, and `cpd context show --digest` prints it. A first message holds the digest plus the uncurated records (at most 20 raw). Not the Manager's turn-start digest of Plan Events (below).
+The curator at work: the distiller runs once per batch of uncurated records, and for each classifies it into a topic, compresses it into a short form (for machines), and proposes retirements (duplicate, superseded, documented records) and documentation candidates. The distiller writes curations and proposals (checked structurally by cpd), which the User approves through Inbox items. The records stay the truth. The Context is retrieved on demand with `cpd context search` (search over all records), `cpd context show --since <seq>` (records after a cursor), and `cpd context show --topic <t>` (curated records of one topic). The engine starts the distiller when a Context has 20 uncurated records or the newest is 10 minutes old; `cpd context distill` does it on demand. No first message holds a pushed digest or list of records (hs-d655): a Lead's first message is the header, the brief, and pointers to the on-demand commands; a Manager's is the header and pointers.
 _Avoid_: summary, memory, compaction, cite-all, validation, model digest
 
 **Grounded Lead** (retired, hs-d129):
@@ -189,7 +189,7 @@ The human who owns the ticket and talks only to the Lead.
 _Avoid_: operator, owner
 
 **Manager** (new, B3):
-The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It works at the Epic level: holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads with a Brief each, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User talks to it (or a Lead messages it) and receives a **Context update** with a **digest** of its Plans at each turn start; Plan Events never wake it. Leads keep asking the User directly; the Manager never answers for the User. Default Tier `manager_tier` (O5).
+The higher-level Lead of a Context, one live per Context per machine (`cpd context manager`). It works at the Epic level: holds the Context's records and Requirements, splits the User's requirements into Plans, starts their Leads with a Brief each, and knows where each is. Its memory is the Context records, not its chat. It acts only when the User talks to it (or a Lead messages it) and reads the Context on demand; at each turn start it receives a **Context update** with Plan Events since its last turn (created, phase, PR opened or merged, Job failed, done). It reads the full Context with `cpd context show` and searches it with `cpd context search`. Plan Events never wake it. Leads keep asking the User directly; the Manager never answers for the User. Default Tier `manager_tier` (O4).
 _Avoid_: master, supervisor, orchestrator
 
 **Brief** (new, B3):
@@ -240,10 +240,16 @@ _Avoid_: done, completed
 A two-character code naming the model and effort an agent runs at, e.g. `O3` for the Lead or `S1` for a coding Worker.
 _Avoid_: level, profile
 
+## Axioms
+
+**Axiom** (new, hs-d607, hs-d610):
+One of the cpd creator's core rules, applied everywhere and encoded into how cpd works and behaves: to every Context, owner, repo, role and tool. The one source is the global AGENTS.md of the pi that runs cpd (on hs `~/.pi/agent/AGENTS.md`, repo `clayton-duarte/pi-config`), which pi injects into every agent it launches without `--no-context-files`: the Manager, the Lead, the Worker and, since hs-d611, the Distiller. cpd reads no axiom: there is no config key and no record kind, and with no AGENTS.md cpd runs unchanged. An Axiom is not a decision (a dated choice about one Context's work, which a newer decision supersedes, hs-d358), not a note (a fact) and not a Policy (how one owner or repo works, per Scope, with typed keys). A decision, note, Policy, skill, Spec or doc may specialise an axiom but never restate or contradict it: it points to the axiom by its title. An axiom changes only when its creator edits the source.
+_Avoid_: principle, convention, philosophy, rule
+
 ## Policies
 
 **Policy** (changed, hs-d9, hs-d12):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. cpd reads nothing from a repo's tree. `cpd policy show` prints one.
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
 _Avoid_: rules, settings, profile, config
 
 **Domain** (new, hs-d288):

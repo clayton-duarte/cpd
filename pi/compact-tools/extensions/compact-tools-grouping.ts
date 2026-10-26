@@ -10,7 +10,6 @@ import { CLAUDE_RESULT_PREFIX, claudeFailure, lookHint, lookKind, pathOf, type L
 import {
 	CODEX_BULLET,
 	CODEX_INDENT,
-	CODEX_MARGIN,
 	CODEX_PREVIEW_ROWS,
 	CODEX_RESULT_PREFIX,
 	codexDisclosure,
@@ -26,7 +25,6 @@ import {
 import { formatDurationMs, type RowStatus } from "./compact-tools-core.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { getTextResult } from "./compact-tools-invocation.ts";
-import { outputPadLines } from "./compact-tools-layout.ts";
 import { chrome, ink, paintIndicator } from "./compact-tools-indices.ts";
 import type { ToolRuntime } from "./compact-tools-runtime.ts";
 import { findChat, isKind, isSilent } from "./compact-tools-silent.ts";
@@ -359,8 +357,7 @@ export class ToolGroupController {
 		}
 		const groupState = state;
 		const draw = (group: readonly ToolRowLike[], width: number, expanded: boolean) => {
-			const pad = group[0]?.outputPad;
-			return outputPadLines(this.drawCached(group, width + (pad === 0 ? 1 : 0), expanded, groupState), width, pad);
+			return this.drawCached(group, width, expanded, groupState);
 		};
 		if (this.runtime.config.style !== "codex") return new ToolGroupComponent(rows, members, state, draw, () => tui.requestRender());
 		// Codex opens a group to the whole of each call, and closes it from one "− Show less" beneath them.
@@ -370,9 +367,7 @@ export class ToolGroupController {
 		};
 		const footer = (width: number) => {
 			const theme = this.paint?.theme ?? this.context?.ui.theme;
-			const pad = rows[0]?.outputPad;
-			const available = width + (pad === 0 ? 1 : 0);
-			return theme ? outputPadLines([truncateToWidth(ink("dim", codexDisclosure(available, true)), Math.max(1, available), "…")], width, pad) : [];
+			return theme ? [truncateToWidth(ink("dim", codexDisclosure(width, true)), Math.max(1, width), "…")] : [];
 		};
 		const group = new ToolGroupComponent(rows, members, state, draw, toggle, footer);
 		// Read once the group has followed Ctrl+O, which it does as it is made. A call that joins an
@@ -462,7 +457,7 @@ export class ToolGroupController {
 		const bullet = running ? paintIndicator("running", CODEX_BULLET)
 			: statuses.includes("pending") ? paintIndicator("pending", CODEX_BULLET) : ink("dim", CODEX_BULLET);
 		const failed = statuses.filter((status) => status === "error").length;
-		let head = `${CODEX_MARGIN}${bullet} ${theme.bold(running ? "Exploring" : "Explored")}`;
+		let head = `${bullet} ${theme.bold(running ? "Exploring" : "Explored")}`;
 		if (failed > 0) head += theme.bold(ink("error", ` · ${failed} failed`));
 		// Opened, Codex lists the calls themselves in place of the summary; each brings its own blank line.
 		if (expanded) return [];

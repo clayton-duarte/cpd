@@ -22,7 +22,7 @@ const WAITING_GLYPH: &str = "\u{F1853}";
 const HOLLOW: &str = "\u{E3D5}";
 
 const ALL_DOTS: [Dot; 10] =
-    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working, Dot::Fixing, Dot::White, Dot::Blue, Dot::Red, Dot::Yellow, Dot::Magenta];
+    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working(None), Dot::Fixing, Dot::White, Dot::Blue, Dot::Red, Dot::Yellow, Dot::Magenta];
 
 fn is_circle_slice(c: char) -> bool {
     ('\u{F0A9E}'..='\u{F0AA5}').contains(&c)
@@ -76,10 +76,10 @@ fn the_waiting_dot_is_circle_opacity_in_the_waiting_colour() {
 
 #[test]
 fn the_working_dot_turns_through_the_28_moon_alt_phases_in_bright_cyan() {
-    let glyphs: Vec<String> = (0..57).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+    let glyphs: Vec<String> = (0..57).map(|f| dot_span(Dot::Working(None), f, false).content.into_owned()).collect();
     assert_eq!(glyphs, [MOONS, MOONS].concat().into_iter().chain([MOONS[0]]).map(str::to_owned).collect::<Vec<_>>());
     for f in 0..28 {
-        assert_eq!(dot_span(Dot::Working, f, false).style, Style::new().fg(Color::LightCyan), "frame {f}");
+        assert_eq!(dot_span(Dot::Working(None), f, false).style, Style::new().fg(Color::LightCyan), "frame {f}");
     }
 }
 
@@ -114,13 +114,13 @@ fn the_legend_shows_the_moon_alt_glyphs_for_every_dot() {
 fn an_archived_working_or_fixing_dot_and_a_running_jobs_still_icon_are_the_hollow_moon_alt_full() {
     let grey = Style::new().fg(Color::DarkGray);
     for f in 0..28 {
-        for dot in [Dot::Working, Dot::Fixing] {
+        for dot in [Dot::Working(None), Dot::Fixing] {
             assert_eq!(dot_span(dot, f, true), ratatui::text::Span::styled(HOLLOW, grey), "{dot:?} frame {f}: U+E3D5");
         }
     }
     assert_eq!(palette::job_status(JobStatus::Running, false).0, HOLLOW);
-    assert_eq!(dot_span(Dot::Working, 0, false).content, FILLED);
-    assert_eq!(dot_span(Dot::Working, 14, false).content, HOLLOW);
+    assert_eq!(dot_span(Dot::Working(None), 0, false).content, FILLED);
+    assert_eq!(dot_span(Dot::Working(None), 14, false).content, HOLLOW);
 }
 
 #[test]

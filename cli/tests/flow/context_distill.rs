@@ -1,30 +1,48 @@
-//! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced
-//! rebuild (contract §3.7 E9), run as the built binary with a fake `pi` on `PATH`.
+//! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced rebuild (contract §3.7 E9):
+//! every test runs in this process (`Fx::with_ports`). `pi` is a [`FakePi`] route of the
+//! `FakeRunner` that answers from the files the distiller wrote (`batch.md`, ...), `node` is a scripted reply (pi's
+//! catalog), `git grep` is the git route, and the wait on a held `flock` is a real kernel lock on a file of the env
+//! (a lock of ours, not an external program).
 
 use crate::common;
 
 use std::fs::{self, File};
+use std::io::ErrorKind;
+use std::ops::Deref;
 use std::path::PathBuf;
-use std::process::{Child, Stdio};
+use std::sync::Arc;
 
-use common::{CPD, Run, pi_says, TestEnv, refused, wait_until};
-use cpd_core::context::{By, Draft, PlanRef, Record};
+use common::fx::Fx as InProcess;
+use common::pi::{FakePi, says};
+use common::{TestEnv, refused};
+use cpd_core::clock::{Clock, ManualClock};
+use cpd_core::context::{By, Draft, Record};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::{ContextId, RecordId};
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 use time::macros::format_description;
 
 const CONTEXT: &str = "ctx";
 
+/// The in-process env of every test here, and its `FakePi`; it derefs to the env.
 struct Fx {
-    env: TestEnv,
+    fx: InProcess,
+    pi: Arc<FakePi>,
 }
 
-fn fx() -> Fx {
-    let env = TestEnv::new();
+impl Deref for Fx {
+    type Target = InProcess;
+    fn deref(&self) -> &InProcess {
+        &self.fx
+    }
+}
+
+/// The config, `node` (pi's catalog) and pi's install directory of every test here.
+fn configure(fx: &InProcess) {
+    let env = &fx.env;
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -35,9 +53,8 @@ fn fx() -> Fx {
         ),
     )
     .unwrap();
-    env.fake_pi(&pi_says(common::CURATES_ALL));
     // pi's catalog (G has the one level off).
-    env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
+    fx.fake_node(Reply::ok(&format!("{LADDER_LEVELS}\n")));
     let install = env.root().join("install");
     fs::create_dir_all(&install).unwrap();
     fs::write(install.join("current-version"), "1.0.0\n").unwrap();
@@ -46,17 +63,35 @@ fn fx() -> Fx {
         fs::create_dir_all(&dist).unwrap();
         fs::write(dist.join("index.js"), "").unwrap();
     }
-    // The engine's E5 runs `cpd pr poll` at every tick (`start_engine`), through a `gh` that finds no pull requests: the
-    // poll searches count whole ticks (`wait_whole_ticks`).
-    env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
-    env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
-    let fx = Fx { env };
-    fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme"]).ok();
-    fx
 }
 
+/// The Context `ctx`, a `FakePi` that curates everything and the fakes `configure` scripts.
+fn fx() -> Fx {
+    let fx = InProcess::with_ports();
+    configure(&fx);
+    let pi = FakePi::install(&fx);
+    fx.cpd(&["context", "new", CONTEXT, "--title", "Ctx", "--owner", "acme"]).ok();
+    Fx { fx, pi }
+}
+
+fn home(env: &TestEnv) -> CpdHome {
+    CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
+}
+
+fn store(env: &TestEnv) -> Store {
+    Store::open(&home(env), 5000).unwrap()
+}
+
+/// Writes a record straight into the index with a chosen time (the commands write `at` as now).
+fn insert(env: &TestEnv, context: &str, id: &str, at: &str, text: &str, draft: Draft) {
+    let record = Record { id: RecordId::parse(id).unwrap(), at: at.into(), by: By { session: None, plan: None }, text: text.into(), draft };
+    let context = ContextId::parse(context).unwrap();
+    store(env).write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+}
+
+/// `minutes` before the start of the `ManualClock` the commands run on (no wall clock is read).
 fn ago(minutes: i64) -> String {
-    (OffsetDateTime::now_utc() - time::Duration::minutes(minutes))
+    (ManualClock::new().utc() - time::Duration::minutes(minutes))
         .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
         .unwrap()
 }
@@ -67,16 +102,12 @@ impl Fx {
         self
     }
 
-    fn cpd(&self, args: &[&str]) -> Run {
-        self.env.cpd(args)
-    }
-
     fn home(&self) -> CpdHome {
-        CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap()
+        home(&self.env)
     }
 
     fn store(&self) -> Store {
-        Store::open(&self.home(), 5000).unwrap()
+        store(&self.env)
     }
 
     fn digests(&self) -> PathBuf {
@@ -94,11 +125,8 @@ impl Fx {
         names
     }
 
-    /// Writes a record straight into the index with a chosen time (the commands write `at` as now).
     fn insert(&self, context: &str, id: &str, at: &str, text: &str, draft: Draft) {
-        let record = Record { id: RecordId::parse(id).unwrap(), at: at.into(), by: By { session: None, plan: None }, text: text.into(), draft };
-        let context = ContextId::parse(context).unwrap();
-        self.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+        insert(&self.env, context, id, at, text, draft);
     }
 
     fn decide(&self, text: &str) -> String {
@@ -110,7 +138,7 @@ impl Fx {
     }
 
     fn pi_calls(&self) -> usize {
-        self.env.calls("pi").len()
+        self.calls("pi").len()
     }
 
     /// The lines of the Context's `runs.jsonl`.
@@ -130,22 +158,26 @@ impl Fx {
 fn the_distiller_gets_no_cpd_variable() {
     let fx = fx();
     fx.decide("Use sqlite.");
-    fx.env.fake_pi(&format!("env > \"$HOME/pi.env\"\n{}", pi_says(common::CURATES_ALL)));
-    let mut command = fx.env.command(CPD);
-    command.args(["context", "distill", "--context", CONTEXT]).env("CPD_SESSION", "3f0c1b2a-5d4e-4f60-8a7b-9c0d1e2f3a4b").env("CPD_PLAN", "alpha");
-    let out = command.output().unwrap();
-    assert!(out.status.success(), "{out:?}");
-    let env = fs::read_to_string(fx.env.home().join("pi.env")).unwrap();
-    assert!(env.lines().any(|l| l == "PI_SKIP_VERSION_CHECK=1"), "{env}");
-    let names: Vec<&str> = env.lines().filter_map(|l| l.split_once('=')).map(|(n, _)| n).filter(|n| n.starts_with("CPD_")).collect();
-    assert!(names.is_empty(), "{names:?}");
+    let run = fx.cpd_with(fx.env.root(), &["context", "distill", "--context", CONTEXT], &[("CPD_SESSION", "3f0c1b2a-5d4e-4f60-8a7b-9c0d1e2f3a4b"), ("CPD_PLAN", "alpha")]);
+    assert_eq!(run.exit, 0, "{}", run.stdout);
+    // The environment pi is started with: the runner's `envs` set a variable, or remove it (`None`).
+    let calls = fx.calls("pi");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let envs = &calls[0].envs;
+    assert!(envs.contains(&("PI_SKIP_VERSION_CHECK".to_owned(), Some("1".to_owned()))), "{envs:?}");
+    let set: Vec<&str> = envs.iter().filter(|(n, v)| n.starts_with("CPD_") && v.is_some()).map(|(n, _)| n.as_str()).collect();
+    assert!(set.is_empty(), "{set:?}");
+    // Every `CPD_` variable of the process (the two above, `CPD_HOME`) is withheld from the child.
+    for name in ["CPD_SESSION", "CPD_PLAN", "CPD_HOME"] {
+        assert!(envs.contains(&(name.to_owned(), None)), "{name} is removed from pi's environment: {envs:?}");
+    }
 }
 
 #[test]
 fn a_failing_pi_is_distill_failed_with_its_stderr_tail() {
     let fx = fx().one_step();
     fx.decide("Use sqlite.");
-    fx.env.fake_pi("echo 'half an answer'; echo 'model unavailable' >&2; exit 7");
+    fx.pi.set(|_| Reply::exit(7, "half an answer\n", "model unavailable\n"));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     let details = &error["details"];
     assert_eq!((details["reason"].clone(), details["exit"].clone()), (json!("exit"), json!(7)), "{details}");
@@ -169,7 +201,7 @@ fn a_failing_pi_is_distill_failed_with_its_stderr_tail() {
 fn output_that_is_not_pi_json_is_distill_failed_output() {
     let fx = fx();
     fx.decide("Use sqlite.");
-    fx.env.fake_pi("echo '# Digest, as the text mode printed it'");
+    fx.pi.set(|_| Reply::ok("# Digest, as the text mode printed it\n"));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     assert_eq!((error["details"]["reason"].clone(), error["details"]["exit"].clone()), (json!("output"), Value::Null));
     assert!(error["message"].as_str().unwrap().contains("line 1"), "{error}");
@@ -182,9 +214,8 @@ fn output_that_is_not_pi_json_is_distill_failed_output() {
 fn pi_that_cannot_start_is_distill_failed_spawn() {
     let fx = fx();
     fx.decide("Use sqlite.");
-    let out = fx.env.command(CPD).args(["context", "distill", "--context", CONTEXT]).env("PATH", "/nonexistent").output().unwrap();
-    let run = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() };
-    let error = refused(&run, "distill_failed", 1);
+    fx.pi.set(|_| Reply::io(ErrorKind::NotFound));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     assert_eq!(error["details"]["reason"], "spawn");
     assert_eq!(error["details"]["exit"], Value::Null);
     assert_eq!(fx.errors().len(), 1);
@@ -257,13 +288,9 @@ fn s(text: &str) -> String {
     text.to_owned()
 }
 
-/// A fake `pi` that keeps a copy of its input files under `$HOME/seen-<name>` and answers `answer` (shell).
-fn pi_keeps_input_and_says(answer: &str) -> String {
-    pi_says(&format!("for f in batch.md known.md docs.md; do cp \"$f\" \"$HOME/seen-$f\"; done\n{answer}"))
-}
-
+/// The file `name` of the distiller's last run, as pi saw it (the `FakePi` keeps a copy of its input files).
 fn seen(fx: &Fx, name: &str) -> String {
-    fs::read_to_string(fx.env.home().join(format!("seen-{name}"))).unwrap_or_else(|e| panic!("the distiller saw no {name}: {e}"))
+    fx.pi.seen(name)
 }
 
 /// The ids of the blocks of a `batch.md`, in file order.
@@ -287,7 +314,7 @@ fn a_step_sends_at_most_60_uncurated_records_and_the_known_short_forms() {
     for n in 1..=61 {
         fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100), &format!("Note number {n}."), Draft::Note);
     }
-    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.pi.curates_all();
 
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(out["distilled"], true, "{out}");
@@ -325,14 +352,13 @@ fn a_valid_output_writes_curations_and_pending_proposals() {
     fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
     fx.insert(CONTEXT, "hs-d3", &ago(70), "Use sqlite with WAL.", Draft::Decision { supersedes: None });
     fx.insert(CONTEXT, "hs-n4", &ago(60), "Locks are flock.", Draft::Note);
-    fx.env.fake_pi(&pi_says(
-        r#"cat <<'EOF'
-{"id":"hs-d1","topic":"storage","short":"sqlite store","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
+    fx.pi.answers(
+        r#"{"id":"hs-d1","topic":"storage","short":"sqlite store","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
 {"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null,"doc":false}
 {"id":"hs-d3","topic":"storage","short":"sqlite WAL again","retire":{"reason":"duplicate","target":"hs-d2"},"doc":false}
 {"id":"hs-n4","topic":"locking","short":"flock locks","retire":null,"doc":true}
-EOF"#,
-    ));
+"#,
+    );
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(out["distilled"], true, "{out}");
     let upto = fx.highest_seq();
@@ -391,16 +417,16 @@ fn plan_with_repos(fx: &Fx, repos: &[&std::path::Path]) {
     ));
 }
 
-/// A git repo `name` with `files` (path, text) committed.
+/// A git repo `name` (of the git route) with `files` (path, text) committed.
 fn repo_with(fx: &Fx, name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let repo = fx.env.git_repo(name).canonicalize().unwrap();
+    let repo = fx.git_repo(name);
     for (path, text) in files {
         let file = repo.join(path);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(file, text).unwrap();
     }
-    fx.env.git(&repo, &["add", "-A"]);
-    fx.env.git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "docs"]);
+    fx.git(&repo, &["add", "-A"]);
+    fx.git(&repo, &["commit", "-q", "-m", "docs"]);
     repo
 }
 
@@ -415,7 +441,7 @@ fn docs_md_lists_the_grep_hits_of_the_contexts_repos() {
     // `a` has two PRs: its hits are listed once.
     plan_with_repos(&fx, &[&a, &b, &a]);
     let _ = elsewhere;
-    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.pi.curates_all();
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let docs = seen(&fx, "docs.md");
     let (hit_a, hit_b) = (format!("{}:docs/design.md", a.display()), format!("{}:README.md", b.display()));
@@ -431,17 +457,17 @@ fn no_repair_turn_and_no_contradictions_section() {
     let fx = fx().one_step();
     fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
     // Output that is no JSON line: invalid. With one step of the ladder, one pi run; no repair turn.
-    fx.env.fake_pi(&pi_says("echo '# Digest'; echo 'Cites [hs-d1].'"));
+    fx.pi.answers("# Digest\nCites [hs-d1].\n");
     refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
-    assert_eq!(fx.pi_calls(), 1, "a failure climbs the ladder, nothing repairs it: {:?}", fx.env.calls("pi"));
-    assert!(!fx.env.calls("pi").iter().flatten().any(|a| a.contains("missing.md") || a.contains("repair")));
+    assert_eq!(fx.pi_calls(), 1, "a failure climbs the ladder, nothing repairs it: {:?}", fx.calls("pi"));
+    assert!(!fx.calls("pi").iter().flat_map(|call| &call.args).any(|a| a.contains("missing.md") || a.contains("repair")));
     for gone in ["repair-prompt.md", "missing.md", "problem.md", "records.md"] {
         assert!(!fx.digests().join(gone).exists(), "{gone}");
     }
     let prompt = fs::read_to_string(fx.digests().join("prompt.md")).unwrap();
     assert!(!prompt.contains("Contradictions"), "{prompt}");
 
-    fx.env.fake_pi(&pi_says(common::CURATES_ALL));
+    fx.pi.curates_all();
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let runs = fx.runs();
     assert_eq!(runs.len(), 2, "one line per pi run: {runs:?}");
@@ -459,9 +485,9 @@ fn line(id: &str, topic: &str, short: &str, retire: &str) -> String {
     format!(r#"{{"id":"{id}","topic":"{topic}","short":"{short}","retire":{retire},"doc":false}}"#)
 }
 
-/// A fake `pi` that answers `lines`.
+/// The text of the answer of a pi that answers `lines`.
 fn pi_answers(lines: &[String]) -> String {
-    pi_says(&format!("cat <<'EOF'\n{}\nEOF", lines.join("\n")))
+    format!("{}\n", lines.join("\n"))
 }
 
 fn two_decisions(fx: &Fx) {
@@ -496,12 +522,20 @@ fn a_retirement_whose_target_left_force_meanwhile_is_dropped_and_the_curations_s
     // The fake pi has the User approve hs-d2's retirement (hs-d2 leaves force) while it runs, then proposes
     // hs-d3 as a duplicate of hs-d2 (which was in force when the batch was checked... and is not when it is written)
     // and hs-n4 as a duplicate of hs-d1 (still in force).
-    let approve = format!("CPD_HOME='{}' '{CPD}' context retire --context ctx --approve hs-d2 >/dev/null", fx.env.cpd_home().display());
-    fx.env.fake_pi(&pi_says(&format!(
-        "{approve}\ncat <<'EOF'\n{}\n{}\nEOF",
+    // `cpd context retire` runs in this process, on the same ports, as the pi child's `cpd` did on the same store; the
+    // runner is held weakly (the route lives in its script).
+    let ports = cpd_core::ports::Ports { runner: fx.fakes.runner.weak(), ..fx.fakes.ports.clone() };
+    let answer = pi_answers(&[
         line("hs-d3", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d2"}"#),
         line("hs-n4", "locking", "flock", r#"{"reason":"duplicate","target":"hs-d1"}"#),
-    )));
+    ]);
+    fx.pi.set(move |_| {
+        let mut out = Vec::new();
+        let argv = ["cpd", "context", "retire", "--context", "ctx", "--approve", "hs-d2"].map(std::ffi::OsString::from);
+        let code = cpd::run_with(&ports, argv, &mut out);
+        assert_eq!(code, std::process::ExitCode::SUCCESS, "{}", String::from_utf8_lossy(&out));
+        says(&answer)
+    });
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     assert_eq!(out.exit, 0, "a dropped proposal is not an error: {}{}", out.stdout, out.stderr);
     assert_eq!(
@@ -528,7 +562,7 @@ fn batch_n_sends_at_most_n_records() {
     for n in 1..=12 {
         fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note number {n}."), Draft::Note);
     }
-    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.pi.curates_all();
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT, "--batch", "5"]).ok();
     assert_eq!(out["distilled"], true, "{out}");
     assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n1", "hs-n2", "hs-n3", "hs-n4", "hs-n5"], "the 5 oldest");
@@ -548,7 +582,7 @@ fn batch_md_stops_at_49152_bytes_and_always_holds_the_first_record() {
     for n in 1..=6 {
         fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &"x".repeat(10_000), Draft::Note);
     }
-    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.pi.curates_all();
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n1", "hs-n2", "hs-n3", "hs-n4"], "the bytes bound the batch, not the 60");
     // The rest goes in the next run.
@@ -603,7 +637,7 @@ fn a_short_over_120_bytes_rejects_its_line_and_the_other_lines_are_curated() {
     let fx = fx().one_step();
     notes(&fx, 4);
     // hs-n2: 121 bytes. hs-n3: 120 bytes of 3-byte characters... 40 of them, which is 120 bytes and valid.
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n1", "notes", "one", "null"),
         line("hs-n2", "notes", &"x".repeat(121), "null"),
         line("hs-n3", "notes", &"€".repeat(40), "null"),
@@ -616,7 +650,7 @@ fn a_short_over_120_bytes_rejects_its_line_and_the_other_lines_are_curated() {
     assert_eq!(curated_events(&fx)[0]["curated"], 3);
     assert!(fx.errors().is_empty(), "a run with accepted lines is no failure");
     // The next run takes the rejected record.
-    fx.env.fake_pi(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
+    fx.pi.answers(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
     let again = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!((again["curated"].clone(), rejected_of(&again)), (json!(1), vec![]), "{again}");
     assert_eq!(curation_rows(&fx).len(), 4);
@@ -628,7 +662,7 @@ fn a_duplicate_target_newer_than_the_record_rejects_only_that_line() {
     two_decisions(&fx);
     fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
     // hs-d1 (older) a duplicate of hs-d2 (newer): the first is kept, so that line is rejected.
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
         line("hs-d2", "storage", "sqlite WAL", "null"),
         line("hs-n3", "locking", "flock", "null"),
@@ -641,7 +675,7 @@ fn a_duplicate_target_newer_than_the_record_rejects_only_that_line() {
     assert_eq!(retirement_rows(&fx), vec![], "the rejected line proposes nothing");
 
     // The newer one a duplicate of the older is accepted.
-    fx.env.fake_pi(&pi_answers(&[line("hs-d1", "storage", "sqlite", "null")]));
+    fx.pi.answers(&pi_answers(&[line("hs-d1", "storage", "sqlite", "null")]));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(curation_rows(&fx).len(), 3);
 }
@@ -651,7 +685,7 @@ fn two_records_naming_each_other_as_duplicates_keep_only_the_newer_records_line(
     let fx = fx().one_step();
     two_decisions(&fx);
     fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
         line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
         line("hs-n3", "locking", "flock", "null"),
@@ -666,7 +700,7 @@ fn two_records_naming_each_other_as_duplicates_keep_only_the_newer_records_line(
 fn a_topic_outside_lowercase_digits_and_hyphen_rejects_only_that_line() {
     let fx = fx().one_step();
     notes(&fx, 4);
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n1", "storage-2", "digits and hyphen", "null"),
         line("hs-n2", "Storage", "upper case", "null"),
         line("hs-n3", &"a".repeat(40), "forty characters", "null"),
@@ -678,7 +712,7 @@ fn a_topic_outside_lowercase_digits_and_hyphen_rejects_only_that_line() {
     assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n3"]);
 
     // Over 40 characters, a space, and a non-ASCII topic are each one rejected line.
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n2", &"a".repeat(41), "41 characters", "null"),
         line("hs-n4", "two words", "a space", "null"),
     ]));
@@ -692,7 +726,7 @@ fn a_superseded_target_that_is_not_newer_rejects_only_that_line() {
     two_decisions(&fx);
     fx.insert(CONTEXT, "hs-n3", &ago(70), "Locks are flock.", Draft::Note);
     // hs-d2 is superseded by hs-d1, which is older (a lower seq): that line is rejected.
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-d1", "storage", "sqlite", "null"),
         line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"superseded","target":"hs-d1"}"#),
         line("hs-n3", "locking", "flock", "null"),
@@ -703,7 +737,7 @@ fn a_superseded_target_that_is_not_newer_rejects_only_that_line() {
     assert_eq!(retirement_rows(&fx), vec![]);
 
     // The other way round is accepted.
-    fx.env.fake_pi(&pi_answers(&[line("hs-d2", "storage", "sqlite WAL", "null")]));
+    fx.pi.answers(&pi_answers(&[line("hs-d2", "storage", "sqlite WAL", "null")]));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(curation_rows(&fx).len(), 3);
 }
@@ -717,7 +751,7 @@ fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
     plan_with_repos(&fx, &[&a]);
     let (own, other) = (format!("{}:docs/wal.md", a.display()), format!("{}:docs/design.md", a.display()));
     // hs-d1 names a path that is no hit; hs-d2 names a real hit of its own; hs-n3 names a hit of hs-d1.
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-d1", "storage", "sqlite", &format!(r#"{{"reason":"documented","target":"{}:docs/invented.md"}}"#, a.display())),
         line("hs-d2", "storage", "sqlite WAL", &format!(r#"{{"reason":"documented","target":"{own}"}}"#)),
         line("hs-n3", "locking", "flock", &format!(r#"{{"reason":"documented","target":"{other}"}}"#)),
@@ -733,7 +767,7 @@ fn a_documented_target_that_is_not_a_grep_hit_rejects_only_that_line() {
 fn an_unknown_id_is_ignored_and_a_repeated_id_leaves_its_record_uncurated() {
     let fx = fx().one_step();
     notes(&fx, 4);
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n1", "notes", "one", "null"),
         line("hs-n1", "notes", "one again", "null"),
         line("hs-zz", "notes", "unknown", "null"),
@@ -752,12 +786,12 @@ fn an_unknown_id_is_ignored_and_a_repeated_id_leaves_its_record_uncurated() {
 fn a_record_missing_from_the_output_stays_uncurated_and_the_run_succeeds() {
     let fx = fx().one_step();
     notes(&fx, 3);
-    fx.env.fake_pi(&pi_answers(&[line("hs-n1", "notes", "one", "null"), line("hs-n3", "notes", "three", "null")]));
+    fx.pi.answers(&pi_answers(&[line("hs-n1", "notes", "one", "null"), line("hs-n3", "notes", "three", "null")]));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!((out["curated"].clone(), out["remaining"].clone()), (json!(2), json!(1)), "{out}");
     assert_eq!(curated_ids(&fx), ["hs-n1", "hs-n3"]);
     // The next run takes it.
-    fx.env.fake_pi(&pi_keeps_input_and_says(&format!("echo '{}'", line("hs-n2", "notes", "two", "null"))));
+    fx.pi.answers(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n2"]);
     assert_eq!(curation_rows(&fx).len(), 3);
@@ -767,7 +801,7 @@ fn a_record_missing_from_the_output_stays_uncurated_and_the_run_succeeds() {
 fn a_run_with_no_accepted_line_is_distill_invalid_listing_every_rejection() {
     let fx = fx().one_step();
     notes(&fx, 3);
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n1", "Notes", "bad topic", "null"),
         line("hs-n2", "notes", &"x".repeat(121), "null"),
         "this is not JSON".to_owned(),
@@ -799,7 +833,7 @@ fn the_rejected_lines_are_in_the_output_the_run_log_and_the_kept_raw_text() {
         line("hs-n2", "notes", &"x".repeat(121), "null"),
         line("hs-n3", "notes", "three", "null"),
     ];
-    fx.env.fake_pi(&pi_answers(&answer));
+    fx.pi.answers(&pi_answers(&answer));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(rejected_of(&out), [(Some(s("hs-n2")), 2)], "{out}");
     assert_eq!(out["rejected"][0]["id"], "hs-n2");
@@ -816,7 +850,7 @@ fn the_rejected_lines_are_in_the_output_the_run_log_and_the_kept_raw_text() {
 fn a_clean_run_removes_the_kept_raw_text() {
     let fx = fx().one_step();
     notes(&fx, 3);
-    fx.env.fake_pi(&pi_answers(&[
+    fx.pi.answers(&pi_answers(&[
         line("hs-n1", "notes", "one", "null"),
         line("hs-n2", "notes", &"x".repeat(121), "null"),
         line("hs-n3", "notes", "three", "null"),
@@ -825,7 +859,7 @@ fn a_clean_run_removes_the_kept_raw_text() {
     let kept = invalid_file(&fx);
     assert!(kept.exists(), "a run with a rejected line keeps its raw text");
     // The next run takes hs-n2 and is clean: the kept file goes, replaced by nothing.
-    fx.env.fake_pi(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
+    fx.pi.answers(&pi_answers(&[line("hs-n2", "notes", "two", "null")]));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(rejected_of(&out), vec![], "{out}");
     assert!(!kept.exists(), "{kept:?}");
@@ -834,21 +868,16 @@ fn a_clean_run_removes_the_kept_raw_text() {
     assert_eq!(rejected_of(runs.last().unwrap()), vec![], "{runs:?}");
 }
 
-/// A fake `pi` whose last message stopped with `length` after `answer` (shell).
-fn pi_cut_after(answer: &str) -> String {
-    pi_says(answer).replace(r#""stopReason":"stop""#, r#""stopReason":"length""#)
-}
-
 #[test]
 fn an_answer_cut_at_the_output_limit_keeps_its_complete_lines_and_logs_its_cost() {
     let fx = fx().one_step();
     notes(&fx, 4);
     // Two complete lines, a third cut in the middle (no newline after it).
-    fx.env.fake_pi(&pi_cut_after(&format!(
-        "cat <<'EOF'\n{}\n{}\nEOF\nprintf '%s' '{{\"id\":\"hs-n3\",\"topic\":\"no'",
+    fx.pi.cut_after(&format!(
+        "{}\n{}\n{{\"id\":\"hs-n3\",\"topic\":\"no",
         line("hs-n1", "notes", "one", "null"),
         line("hs-n2", "notes", "two", "null"),
-    )));
+    ));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(out["curated"], 2, "{out}");
     assert!(out["cut"] == json!(true) || out["run"]["cut"] == json!(true), "the cut is noted in the output: {out}");
@@ -864,7 +893,7 @@ fn a_cut_answer_with_no_complete_line_is_distill_failed() {
     let fx = fx().one_step();
     notes(&fx, 2);
     // Text with no newline at all.
-    fx.env.fake_pi(&pi_cut_after("printf '%s' '{\"id\":\"hs-n1\",\"topic\":\"no'"));
+    fx.pi.cut_after("{\"id\":\"hs-n1\",\"topic\":\"no");
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     assert_eq!(error["details"]["reason"], "output");
     assert!(error["message"].as_str().unwrap().contains("length"), "{error}");
@@ -873,13 +902,13 @@ fn a_cut_answer_with_no_complete_line_is_distill_failed() {
     assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_in"].clone(), runs[0]["cost"].clone()), (json!("failed"), json!(733), json!(0.25)));
 
     // No text at all.
-    fx.env.fake_pi(&pi_cut_after("true"));
+    fx.pi.cut_after("");
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     assert_eq!(error["details"]["reason"], "output");
     assert_eq!(curation_rows(&fx), vec![]);
 
     // A single complete line, cut right after its newline: nothing is dropped, and it is an answer.
-    fx.env.fake_pi(&pi_cut_after(&format!("echo '{}'", line("hs-n1", "notes", "one", "null"))));
+    fx.pi.cut_after(&pi_answers(&[line("hs-n1", "notes", "one", "null")]));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(out["curated"], 1, "{out}");
     assert_eq!(curated_ids(&fx), ["hs-n1"]);
@@ -894,16 +923,17 @@ fn the_distiller_runs_on_gx_with_the_g_model() {
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let tiers: Vec<String> = fx.runs().iter().map(|r| r["tier"].as_str().unwrap().to_string()).collect();
     assert_eq!(tiers, ["GX"]);
-    let calls = fx.env.calls("pi");
-    let at = calls[0].iter().position(|a| a == "--model").expect("--model") + 1;
-    assert_eq!(calls[0][at], "github-copilot/gemini-3.8-flash:off", "{:?}", calls[0]);
+    let calls = fx.calls("pi");
+    let args = &calls[0].args;
+    let at = args.iter().position(|a| a == "--model").expect("--model") + 1;
+    assert_eq!(args[at], "github-copilot/gemini-3.8-flash:off", "{args:?}");
 }
 
 #[test]
 fn a_failed_pi_run_fails_the_run_with_no_second_step() {
     let fx = fx();
     fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
-    fx.env.fake_pi("echo 'model unavailable' >&2; exit 7");
+    fx.pi.set(|_| Reply::exit(7, "", "model unavailable\n"));
     refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
     assert_eq!(fx.pi_calls(), 1, "no next step, no higher Tier");
     assert_eq!(fx.runs().len(), 1);
@@ -929,7 +959,7 @@ fn set_floor(fx: &Fx, floor: u32) {
 /// `n` notes in the Context, oldest first.
 fn floor_notes(fx: &Fx, n: usize) {
     for i in 1..=n {
-        fx.insert(CONTEXT, &format!("hs-n{i}"), &ago(100), &format!("Note number {i}."), Draft::Note);
+        insert(&fx.env, CONTEXT, &format!("hs-n{i}"), &ago(100), &format!("Note number {i}."), Draft::Note);
     }
 }
 
@@ -951,7 +981,7 @@ fn files_named(dir: &std::path::Path, names: &[&str], found: &mut Vec<PathBuf>) 
 
 /// Nothing a skipped run must not leave: no pi call, no row, no Event (compared with `events_before`), no lock or log file.
 fn assert_nothing_done(fx: &Fx, events_before: i64) {
-    assert_eq!(fx.pi_calls(), 0, "the fake pi was never called");
+    assert_eq!(fx.calls("pi").len(), 0, "the fake pi was never called");
     assert_eq!(curation_rows(fx), vec![], "no record_curations row");
     assert_eq!(events_count(fx), events_before, "no Event appended");
     let mut found = Vec::new();
@@ -961,7 +991,7 @@ fn assert_nothing_done(fx: &Fx, events_before: i64) {
 }
 
 fn archive_context(fx: &Fx) {
-    fx.store()
+    store(&fx.env)
         .write("fixture", |tx| {
             tx.execute("UPDATE contexts SET archived_at = '2026-10-20T10:00:00.000Z' WHERE id = ?1", [CONTEXT])?;
             Ok::<(), cpd_core::error::CpdError>(())
@@ -971,7 +1001,7 @@ fn archive_context(fx: &Fx) {
 
 #[test]
 fn an_archived_context_is_skipped_by_distill() {
-    let fx = fx().one_step();
+    let fx = fx();
     set_floor(&fx, 1);
     floor_notes(&fx, 3);
     archive_context(&fx);
@@ -990,7 +1020,7 @@ fn an_archived_context_is_skipped_by_distill() {
 
 #[test]
 fn a_context_under_the_floor_is_skipped_by_distill() {
-    let fx = fx().one_step();
+    let fx = fx();
     set_floor(&fx, 5);
     floor_notes(&fx, 4);
     let before = events_count(&fx);
@@ -1046,4 +1076,40 @@ fn the_floor_counts_retired_and_superseded_records() {
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert!(out.get("skipped").is_none(), "retired and superseded records count: {out}");
     assert_eq!(fx.pi_calls(), 1);
+}
+
+// ---- The kit's `FakePi` (cli/tests/common/pi.rs) ----
+
+#[test]
+fn the_fake_pi_reads_its_inputs_answers_as_pi_json_and_appends_stderr_to_the_log() {
+    use cpd_core::host::runner::{Call, Handler};
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("batch.md"), "[hs-n1] note (2026-01-01)\nText.\n\n[hs-n2] note (2026-01-01)\nMore.\n\n").unwrap();
+    let log = dir.path().join("distill.log");
+    let call = Call {
+        tool: "pi".to_owned(),
+        program: "pi".to_owned(),
+        args: Vec::new(),
+        envs: Vec::new(),
+        cwd: Some(dir.path().to_path_buf()),
+        deadline: Duration::from_secs(1),
+        stdin: None,
+        stderr_to: Some(log.clone()),
+    };
+    let pi = FakePi::new();
+    // The default answer: a curation line per block of batch.md, in the final assistant message of a JSON stream.
+    let Reply::Exit { code, stdout, .. } = pi.handle(&call) else { panic!("pi exits") };
+    let stream = String::from_utf8(stdout).unwrap();
+    assert_eq!(code, 0);
+    assert!(stream.contains(r#""stopReason":"stop""#) && stream.contains("hs-n1") && stream.contains("hs-n2"), "{stream}");
+    assert_eq!(pi.seen("batch.md"), fs::read_to_string(dir.path().join("batch.md")).unwrap());
+    // stderr goes to the log, appended, and not to the reply.
+    pi.set(|_| Reply::exit(7, "", "boom\n"));
+    let Reply::Exit { code, stderr, .. } = pi.handle(&call) else { panic!("pi exits") };
+    assert_eq!((code, stderr), (7, Vec::new()));
+    pi.set(|_| Reply::exit(7, "", "again\n"));
+    pi.handle(&call);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "boom\nagain\n");
 }

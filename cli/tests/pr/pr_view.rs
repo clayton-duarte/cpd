@@ -4,27 +4,41 @@ use crate::common;
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::store::Store;
 use serde_json::json;
 
 const URL: &str = "https://github.com/acme/pay/pull/812";
 
-/// The fake `gh`: `gh/fail`, when present, makes every call fail; else `pr view` and `api` print their files.
-const GH: &str = r#"
-dir="$(dirname "$0")/../gh"
-if [ -e "$dir/fail" ]; then cat "$dir/fail" >&2; exit 1; fi
-case "$1 $2" in
-  "pr view") cat "$dir/view.json" ;;
-  "api repos/{owner}/{repo}/pulls/812/comments"*)
-    cat "$dir/inline.json"
-    # `gh api --paginate` prints every page, one JSON array after the other.
-    for a in "$@"; do if [ "$a" = --paginate ] && [ -e "$dir/inline2.json" ]; then cat "$dir/inline2.json"; fi; done ;;
-  *) echo "unexpected gh call: $*" >&2; exit 9 ;;
-esac
-"#;
+/// The fake `gh`, in-process: `fail`, when set, makes every call fail; else `pr view` and `api` answer with their texts.
+#[derive(Default)]
+struct Gh {
+    fail: Mutex<Option<String>>,
+    /// The second page of inline comments, when set.
+    inline2: Mutex<Option<String>>,
+}
+
+impl Handler for Gh {
+    fn handle(&self, call: &Call) -> Reply {
+        if let Some(fail) = &*self.fail.lock().unwrap() {
+            return Reply::exit(1, "", fail);
+        }
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..2] {
+            ["pr", "view"] => Reply::ok(VIEW),
+            ["api", endpoint] if endpoint.starts_with("repos/{owner}/{repo}/pulls/812/comments") => {
+                // `gh api --paginate` prints every page, one JSON array after the other.
+                let second = self.inline2.lock().unwrap().clone().filter(|_| args.contains(&"--paginate"));
+                Reply::ok(&format!("{INLINE}{}", second.unwrap_or_default()))
+            }
+            _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
+        }
+    }
+}
 
 const VIEW: &str = r#"{
   "state": "OPEN", "mergedAt": null, "title": "Pay the bills", "url": "https://github.com/acme/pay/pull/812",
@@ -40,22 +54,20 @@ const VIEW: &str = r#"{
 
 const INLINE: &str = r#"[{"id": 1893, "user": {"login": "reviewer"}, "path": "src/payout.rs", "body": "This retry never backs off."}]"#;
 
-struct Fx {
-    env: TestEnv,
+struct Pay {
+    fx: Fx,
     home: CpdHome,
+    gh: Arc<Gh>,
 }
 
 /// Plan `pay` with one PR `repo` in `status`; its Lead worktree is a plain directory (the fake `gh` ignores it).
-fn fx(status: &str) -> Fx {
-    let env = TestEnv::new();
+fn fx(status: &str) -> Pay {
+    let fx = Fx::with_ports();
+    let env = &fx.env;
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
-    let gh = env.root().join("gh");
-    fs::create_dir_all(&gh).unwrap();
-    for (name, text) in [("view.json", VIEW), ("inline.json", INLINE)] {
-        fs::write(gh.join(name), text).unwrap();
-    }
-    env.fake_gh(GH);
+    let gh = Arc::new(Gh::default());
+    let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let lead: PathBuf = env.root().join("lead");
     fs::create_dir_all(&lead).unwrap();
     let (columns, values) = match status {
@@ -77,12 +89,12 @@ fn fx(status: &str) -> Fx {
         locked = if status == "open" { "'t'" } else { "NULL" },
     )
     .replace("LEAD", &lead.display().to_string());
-    let fx = Fx { env, home };
-    fx.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
-    fx
+    let pay = Pay { fx, home, gh };
+    pay.store().write("fixture", |tx| tx.execute_batch(&sql).map_err(Into::into)).unwrap();
+    pay
 }
 
-impl Fx {
+impl Pay {
     fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
     }
@@ -91,8 +103,16 @@ impl Fx {
         self.store().read(|c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)).unwrap()
     }
 
-    fn gh(&self, file: &str, text: &str) {
-        fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
+    fn gh_inline2(&self, text: &str) {
+        *self.gh.inline2.lock().unwrap() = Some(format!("{text}\n"));
+    }
+
+    fn gh_fails(&self, stderr: &str) {
+        *self.gh.fail.lock().unwrap() = Some(format!("{stderr}\n"));
+    }
+
+    fn gh_calls(&self) -> Vec<Vec<String>> {
+        self.fx.calls("gh").into_iter().map(|call| call.args).collect()
     }
 }
 
@@ -100,7 +120,7 @@ impl Fx {
 fn view_prints_the_checks_reviews_comments_and_inline_comments() {
     let fx = fx("open");
 
-    let out = fx.env.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+    let out = fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
 
     assert_eq!(
         out,
@@ -115,7 +135,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
             "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}]})
     );
-    let gh = fx.env.calls("gh");
+    let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
     assert_eq!(gh[0][4], "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url");
     assert_eq!(gh[1], ["api", "repos/{owner}/{repo}/pulls/812/comments?per_page=100", "--paginate"]);
@@ -124,9 +144,9 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
 #[test]
 fn view_reads_every_page_of_inline_comments() {
     let fx = fx("open");
-    fx.gh("inline2.json", r#"[{"id": 1894, "user": {"login": "other"}, "path": "src/lib.rs", "body": "Second page."}]"#);
+    fx.gh_inline2(r#"[{"id": 1894, "user": {"login": "other"}, "path": "src/lib.rs", "body": "Second page."}]"#);
 
-    let out = fx.env.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
+    let out = fx.fx.cpd(&["pr", "view", "--pr", "repo", "--plan", "pay"]).ok();
 
     assert_eq!(
         out["inline_comments"],
@@ -138,7 +158,7 @@ fn view_reads_every_page_of_inline_comments() {
 #[test]
 fn view_without_flags_selects_the_plans_only_pr() {
     let fx = fx("open");
-    let out = fx.env.cpd(&["pr", "view", "--plan", "pay"]).ok();
+    let out = fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["key"], "repo");
 }
 
@@ -147,7 +167,7 @@ fn view_writes_nothing_and_appends_no_event() {
     let fx = fx("open");
     let (txns, events) = (fx.count("txns"), fx.count("events"));
 
-    fx.env.cpd(&["pr", "view", "--plan", "pay"]).ok();
+    fx.fx.cpd(&["pr", "view", "--plan", "pay"]).ok();
 
     assert_eq!((fx.count("txns"), fx.count("events")), (txns, events));
 }
@@ -156,19 +176,19 @@ fn view_writes_nothing_and_appends_no_event() {
 fn view_refuses_a_waiting_pr() {
     let fx = fx("waiting");
 
-    let run = fx.env.cpd(&["pr", "view", "--plan", "pay"]);
+    let run = fx.fx.cpd(&["pr", "view", "--plan", "pay"]);
 
     assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("illegal_transition", 3));
-    assert!(fx.env.calls("gh").is_empty());
+    assert!(fx.gh_calls().is_empty());
 }
 
 #[test]
 fn view_reports_a_failing_gh_as_gh_failed() {
     let fx = fx("open");
-    fx.gh("fail", "HTTP 401: bad credentials");
+    fx.gh_fails("HTTP 401: bad credentials");
     let txns = fx.count("txns");
 
-    let run = fx.env.cpd(&["pr", "view", "--plan", "pay"]);
+    let run = fx.fx.cpd(&["pr", "view", "--plan", "pay"]);
 
     assert_eq!((run.error()["code"].as_str().unwrap(), run.exit), ("gh_failed", 1));
     let details = &run.error()["details"];

@@ -9,11 +9,24 @@ use crate::common;
 use std::fs;
 
 use common::TestEnv;
+use common::fx::Fx;
 use serde_json::Value;
 
-/// Context `ctx`, Plan `pay` in `dispatch` with its Lead.
+/// Context `ctx`, Plan `pay` in `dispatch` with its Lead, on an [`Fx`]: the commands run in this process.
+pub(crate) fn fx() -> Fx {
+    let fx = Fx::new();
+    seed(&fx.env);
+    fx
+}
+
+/// [`fx`] on a [`TestEnv`] (the binary), for a test that needs it (`context_pending_waiting`).
 pub(crate) fn env() -> TestEnv {
     let env = TestEnv::new();
+    seed(&env);
+    env
+}
+
+fn seed(env: &TestEnv) {
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"t\"\n").unwrap();
     env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
@@ -22,7 +35,6 @@ pub(crate) fn env() -> TestEnv {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
            VALUES ('pay', 'ctx', 'Pay the bills', 'dispatch', 'lead1', '1999-12-31T00:00:00.000Z', '2000-01-01T00:00:00.000Z');",
     );
-    env
 }
 
 /// A PR of `pay`: `waiting` (not started) or `dispatch` (started); `base` is a branch, or the Lead Branch of a PR it is stacked on.
@@ -65,8 +77,8 @@ pub(crate) fn job(env: &TestEnv, pr: &str, key: &str, status: &str, needs: &[&st
 }
 
 /// `plan render --plan pay`: its output and the text of `plan.md`.
-pub(crate) fn render(env: &TestEnv) -> (Value, String) {
-    let out = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
+pub(crate) fn render(fx: &Fx) -> (Value, String) {
+    let out = fx.cpd(&["plan", "render", "--plan", "pay"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
     (out, text)
 }
@@ -79,19 +91,19 @@ pub(crate) fn row<'a>(text: &'a str, key: &str) -> &'a str {
 }
 
 /// `api` (dispatch) with a live Job `a` and a Job `gone` cancelled with a reason.
-fn with_cancelled_job() -> TestEnv {
-    let env = env();
-    pr(&env, "api", "dispatch", "main", &[]);
-    job(&env, "api", "a", "queued", &[]);
-    job(&env, "api", "gone", "queued", &[]);
-    env.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
-    env
+fn with_cancelled_job() -> Fx {
+    let fx = fx();
+    pr(&fx.env, "api", "dispatch", "main", &[]);
+    job(&fx.env, "api", "a", "queued", &[]);
+    job(&fx.env, "api", "gone", "queued", &[]);
+    fx.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
+    fx
 }
 
 #[test]
 fn cancelled_job_row_shows_status_and_reason() {
-    let env = with_cancelled_job();
-    let (_, text) = render(&env);
+    let fx = with_cancelled_job();
+    let (_, text) = render(&fx);
     let gone = row(&text, "gone");
     assert!(gone.contains("cancelled"), "the status: {gone}");
     assert!(gone.contains("not needed any more"), "the reason: {gone}");
@@ -103,25 +115,25 @@ fn cancelled_job_row_shows_status_and_reason() {
 }
 
 /// `api` live; `old` a started PR whose Jobs are all cancelled, cancelled by `pr cancel`.
-fn with_cancelled_pr(superseded_by: Option<&str>) -> TestEnv {
-    let env = env();
-    pr(&env, "api", "dispatch", "main", &[]);
-    job(&env, "api", "a", "queued", &[]);
-    pr(&env, "old", "dispatch", "main", &[]);
-    job(&env, "old", "o1", "queued", &[]);
-    env.cpd(&["job", "cancel", "o1", "--reason", "dropped with its PR", "--plan", "pay"]).ok();
+fn with_cancelled_pr(superseded_by: Option<&str>) -> Fx {
+    let fx = fx();
+    pr(&fx.env, "api", "dispatch", "main", &[]);
+    job(&fx.env, "api", "a", "queued", &[]);
+    pr(&fx.env, "old", "dispatch", "main", &[]);
+    job(&fx.env, "old", "o1", "queued", &[]);
+    fx.cpd(&["job", "cancel", "o1", "--reason", "dropped with its PR", "--plan", "pay"]).ok();
     let mut args = vec!["pr", "cancel", "old", "--plan", "pay"];
     if let Some(by) = superseded_by {
         args.extend(["--superseded-by", by]);
     }
-    env.cpd(&args).ok();
-    env
+    fx.cpd(&args).ok();
+    fx
 }
 
 #[test]
 fn cancelled_pr_is_listed_with_its_jobs() {
-    let env = with_cancelled_pr(None);
-    let (_, text) = render(&env);
+    let fx = with_cancelled_pr(None);
+    let (_, text) = render(&fx);
     let old = row(&text, "old");
     assert!(old.contains("cancelled"), "the PR's status in its row: {old}");
     assert!(text.find(row(&text, "api")).unwrap() < text.find(old).unwrap(), "after the live PRs:\n{text}");
@@ -134,8 +146,8 @@ fn cancelled_pr_is_listed_with_its_jobs() {
 
 #[test]
 fn superseded_pr_names_its_superseder() {
-    let env = with_cancelled_pr(Some("api"));
-    let (_, text) = render(&env);
+    let fx = with_cancelled_pr(Some("api"));
+    let (_, text) = render(&fx);
     let old = row(&text, "old");
     assert!(old.contains("cancelled"), "{old}");
     assert!(old.contains("superseded by api"), "{old}");
@@ -143,11 +155,11 @@ fn superseded_pr_names_its_superseder() {
 
 #[test]
 fn summary_counts_leave_cancelled_out() {
-    let env = with_cancelled_pr(None);
-    job(&env, "api", "gone", "queued", &[]);
-    env.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
-    let before = env.cpd(&["plan", "show", "--plan", "pay"]).ok();
-    let (out, text) = render(&env);
+    let fx = with_cancelled_pr(None);
+    job(&fx.env, "api", "gone", "queued", &[]);
+    fx.cpd(&["job", "cancel", "gone", "--reason", "not needed any more", "--plan", "pay"]).ok();
+    let before = fx.cpd(&["plan", "show", "--plan", "pay"]).ok();
+    let (out, text) = render(&fx);
     // the PRs counted are those that are not cancelled; the fingerprint is the one of the Plan as before
     assert_eq!(out["prs"], 1, "{out}");
     assert_eq!(out["draft_jobs"], 0, "{out}");

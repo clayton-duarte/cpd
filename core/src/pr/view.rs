@@ -10,6 +10,7 @@ use super::status::{ChecksSummary, PrState, ReviewDecision};
 use super::{Args, Env};
 use crate::error::CpdError;
 use crate::output::Output;
+use crate::ports::Ports;
 
 const COMMAND: &str = "pr view";
 
@@ -17,9 +18,9 @@ fn login(user: &Option<gh::Login>) -> Option<&str> {
     user.as_ref().map(|u| u.login.as_str())
 }
 
-pub(super) fn view(args: Args) -> Result<Output, CpdError> {
+pub(super) fn view(ports: &Ports, args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
-    let mut env = Env::open()?;
+    let mut env = Env::open_with(ports)?;
     let plan = env.plan(&id)?;
     let pr = plan.select(&args.pr)?;
     if !matches!(pr.status.as_str(), "open" | "merged") {
@@ -28,8 +29,8 @@ pub(super) fn view(args: Args) -> Result<Output, CpdError> {
     let number = pr.pull.as_ref().expect("an open or merged PR has its pull request (prs CHECK)").number;
     let lead = pr.lead(&id)?;
 
-    let view = gh::view(lead, number)?;
-    let inline = gh::inline_comments(lead, number)?;
+    let view = gh::view(&*env.ports.runner, lead, number)?;
+    let inline = gh::inline_comments(&*env.ports.runner, lead, number)?;
 
     let state = PrState::of_graphql(&view.state)?;
     let summary = ChecksSummary::of(&current_checks(&view));

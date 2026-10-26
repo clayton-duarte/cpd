@@ -15,12 +15,40 @@ use crate::config::RepoTests;
 use crate::git::hooks::Pipeline;
 use crate::session::Role;
 
-/// `pr.gate`: whether `pr open`, `pr push` and `pr rebase` run the Gate (hs-d292).
+/// A Gate key: `local` runs the Gate, `none` leaves the check to the repo's CI (hs-d292, hs-d679).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Gate {
     Local,
+    None,
+}
+
+/// The deprecated `[pr] gate` alias: `ci` and `none` both map to [`Gate::None`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GateAlias {
+    Local,
     Ci,
+    None,
+}
+
+impl GateAlias {
+    /// The [`Gate`] the deprecated key meant.
+    pub fn gate(self) -> Gate {
+        match self {
+            GateAlias::Local => Gate::Local,
+            GateAlias::Ci | GateAlias::None => Gate::None,
+        }
+    }
+}
+
+/// The `gate` domain: whether the merge and the pull request run the Gate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gates {
+    pub merge: Gate,
+    pub pr: Gate,
+    pub text: String,
 }
 
 /// `pr.feedback.checks`: whether failing checks raise feedback (hs-d292, hs-d283).
@@ -41,7 +69,6 @@ pub struct Feedback {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pr {
-    pub gate: Gate,
     pub feedback: Feedback,
     pub text: String,
 }
@@ -64,8 +91,18 @@ pub struct FeedbackSet {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrSet {
-    pub gate: Option<Gate>,
+    /// The deprecated `[pr] gate` alias; it is converted into the `gate` domain by `parse_scope`.
+    pub gate: Option<GateAlias>,
     pub feedback: Option<FeedbackSet>,
+    pub text: Option<String>,
+}
+
+/// What a scope file's `[gate]` table sets.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatesSet {
+    pub merge: Option<Gate>,
+    pub pr: Option<Gate>,
     pub text: Option<String>,
 }
 
@@ -82,6 +119,12 @@ pub trait HasText {
 }
 
 impl HasText for Pr {
+    fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl HasText for Gates {
     fn text(&self) -> &str {
         &self.text
     }
@@ -188,21 +231,38 @@ pub trait Set {
     fn complete(&self) -> Option<Self::Value>;
 }
 
-/// The typed keys of the `pr` domain, by name.
-pub const GATE: &str = "gate";
+/// The typed keys of the `gate` and `pr` domains, by name.
+pub const MERGE: &str = "merge";
+pub const GATE_PR: &str = "pr";
 pub const FEEDBACK_CHECKS: &str = "feedback.checks";
+
+impl Set for GatesSet {
+    type Value = Gates;
+
+    fn fill(&self, base: &Gates) -> (Gates, Vec<&'static str>) {
+        let left_out = left_out([(MERGE, self.merge.is_none()), (GATE_PR, self.pr.is_none())]);
+        let value = Gates {
+            merge: self.merge.unwrap_or(base.merge),
+            pr: self.pr.unwrap_or(base.pr),
+            text: self.text.clone().unwrap_or_else(|| base.text.clone()),
+        };
+        (value, left_out)
+    }
+
+    fn complete(&self) -> Option<Gates> {
+        Some(Gates { merge: self.merge?, pr: self.pr?, text: self.text.clone()? })
+    }
+}
 
 impl Set for PrSet {
     type Value = Pr;
 
+    /// `[pr] gate` is the deprecated alias, not a key of the `pr` domain: `parse_scope` moves it into
+    /// the `gate` domain of the same file, and an explicit `[gate]` table wins over it.
     fn fill(&self, base: &Pr) -> (Pr, Vec<&'static str>) {
         let checks = self.feedback.as_ref().and_then(|f| f.checks);
-        let left_out = [(GATE, self.gate.is_none()), (FEEDBACK_CHECKS, checks.is_none())]
-            .into_iter()
-            .filter_map(|(name, out)| out.then_some(name))
-            .collect();
+        let left_out = left_out([(FEEDBACK_CHECKS, checks.is_none())]);
         let value = Pr {
-            gate: self.gate.unwrap_or(base.gate),
             feedback: Feedback { checks: checks.unwrap_or(base.feedback.checks) },
             text: self.text.clone().unwrap_or_else(|| base.text.clone()),
         };
@@ -211,7 +271,6 @@ impl Set for PrSet {
 
     fn complete(&self) -> Option<Pr> {
         Some(Pr {
-            gate: self.gate?,
             feedback: Feedback { checks: self.feedback.as_ref()?.checks? },
             text: self.text.clone()?,
         })
@@ -450,12 +509,24 @@ macro_rules! domains {
                     None => default.$field.clone(),
                 },)+
             };
-            super::Resolved { policy, sources }
+            let warnings = layers
+                .iter()
+                .filter_map(|(src, scope)| {
+                    scope.pr.as_ref()?.gate.map(|_| {
+                        format!(
+                            "{src}: the deprecated [pr] gate key is set; use [gate] merge and [gate] pr instead \
+                             (local maps to both local, ci/none to both none)"
+                        )
+                    })
+                })
+                .collect();
+            super::Resolved { policy, sources, warnings }
         }
     };
 }
 
 domains! {
+    gate, Gates, [Lead, Worker], [Machine, Owner, Repo], Gates, GatesSet;
     pr, Pr, [Lead, Worker], [Machine, Owner, Repo], Pr, PrSet;
     deploy, Deploy, [Lead], [Machine, Owner, Repo], Text, TextSet;
     code, Code, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;

@@ -1,6 +1,6 @@
 /**
  * Chat balloon margins (docs/contract.md section 6.9, "Chat balloons"; Plan pi-theme): the agent's balloon has
- * 1 margin column on the left and at least 3 on the right, the user's the opposite; the width is
+ * no outer margin (the root pad supplies the left cell), the user's the opposite and no outer right margin; the width is
  * min(pane - 4, longest row + 4); text wraps at pane - 8; 1 padding column each side, none above or below.
  */
 import "./compact-tools/indicator-harness.ts";
@@ -20,33 +20,33 @@ const SGR = /\x1b\[[0-9;]*m/g;
 const OSC = /\x1b\][^\x07]*\x07/g;
 const plain = (rows: string[]) => rows.map((row) => row.replace(OSC, "").replace(SGR, ""));
 
-test("an agent balloon has one margin column on its left and at least three on its right", async () => {
+test("an agent balloon starts at the padded content edge and leaves at least three columns on its right", async () => {
 	const out = plain(await draw(["agent reply"], "agent", 40));
 	assert.deepEqual(out, [
-		" ╭─────────────╮",
-		" │ agent reply │",
-		" │╭────────────╯",
-		" ╰╯",
+		"╭─────────────╮",
+		"│ agent reply │",
+		"│╭────────────╯",
+		"╰╯",
 	]);
 	const wide = plain(await draw(["x".repeat(60)], "agent", 20));
-	for (const row of wide) assert.ok(row.length <= 17, `three margin columns on the right: ${JSON.stringify(row)}`);
-	assert.ok(wide[0]!.startsWith(" ╭"));
+	for (const row of wide) assert.ok(row.length <= 16, `three margin columns on the right: ${JSON.stringify(row)}`);
+	assert.ok(wide[0]!.startsWith("╭"));
 });
 
-test("a user balloon has one margin column on its right and at least three on its left", async () => {
+test("a user balloon has no outer right margin and at least three columns on its left", async () => {
 	const out = plain(await draw(["user prompt"], "user", 40));
 	const pad = " ".repeat(24);
 	assert.deepEqual(out, [
-		pad + "╭─────────────╮ ",
-		pad + "│ user prompt │ ",
-		pad + "╰────────────╮│ ",
-		pad + "             ╰╯ ",
+		pad + "╭─────────────╮",
+		pad + "│ user prompt │",
+		pad + "╰────────────╮│",
+		pad + "             ╰╯",
 	]);
 	const wide = plain(await draw(["x".repeat(60)], "user", 20));
 	for (const row of wide) {
-		assert.equal(row.length, 20, JSON.stringify(row));
+		assert.equal(row.length, 19, JSON.stringify(row));
 		assert.ok(row.startsWith("   "), `three margin columns on the left: ${JSON.stringify(row)}`);
-		assert.ok(row.endsWith(" ") && !row.endsWith("  "), `one margin column on the right: ${JSON.stringify(row)}`);
+		assert.ok(!row.endsWith(" "), `no outer right margin: ${JSON.stringify(row)}`);
 	}
 });
 
@@ -100,16 +100,16 @@ test("the user's tail starts directly under the last text row", async () => {
 	const out = plain(await draw(["one", "two words"], "user", 30));
 	const last = out.findIndex((row) => row.includes("two words"));
 	const left = out[last]!.indexOf("│");
-	assert.equal(out[last + 1], " ".repeat(left) + "╰" + "─".repeat(10) + "╮│ ");
-	assert.equal(out[last + 2], " ".repeat(left + 11) + "╰╯ ");
+	assert.equal(out[last + 1], " ".repeat(left) + "╰" + "─".repeat(10) + "╮│");
+	assert.equal(out[last + 2], " ".repeat(left + 11) + "╰╯");
 	assert.equal(out.length, last + 3);
 });
 
 test("the agent's tail starts directly under the last text row", async () => {
 	const out = plain(await draw(["one", "two words"], "agent", 30));
 	const last = out.findIndex((row) => row.includes("two words"));
-	assert.equal(out[last + 1], " │╭" + "─".repeat(10) + "╯");
-	assert.equal(out[last + 2], " ╰╯");
+	assert.equal(out[last + 1], "│╭" + "─".repeat(10) + "╯");
+	assert.equal(out[last + 2], "╰╯");
 	assert.equal(out.length, last + 3);
 });
 
@@ -124,7 +124,7 @@ test("no blank row sits above or below a balloon in pi's components", async () =
 		const agent = plain(
 			new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text: "agent reply" }], stopReason: "stop" } as never).render(40),
 		);
-		assert.deepEqual(agent, [" ╭─────────────╮", " │ agent reply │", " │╭────────────╯", " ╰╯"]);
+		assert.deepEqual(agent, ["╭─────────────╮", "│ agent reply │", "│╭────────────╯", "╰╯"]);
 	} finally {
 		shutdown(harness);
 	}

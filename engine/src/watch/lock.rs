@@ -6,6 +6,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use cpd_core::clock::Clock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::lock;
@@ -53,11 +54,13 @@ impl WatchLock {
     /// Marks the engine alive now: the lock file's modification time, which
     /// the next engine reads when this one left no `watch-stopped` (crash,
     /// SIGKILL), to say when it stopped (contract §3.7). No row, no Event.
-    pub(super) fn touch(&self) -> Result<(), CpdError> {
-        self.file.set_modified(SystemTime::now()).map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
+    ///
+    /// The mark is the UTC time `clock` reads (`Clock::utc`).
+    pub(super) fn touch_with(&self, clock: &dyn Clock) -> Result<(), CpdError> {
+        self.file.set_modified(SystemTime::from(clock.utc())).map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
     }
 
-    /// When the engine that held the lock last [`touch`](Self::touch)ed it.
+    /// When the engine that held the lock last [`touch_with`](Self::touch_with)ed it.
     pub(super) fn last_alive(&self) -> Result<SystemTime, CpdError> {
         self.file.metadata().and_then(|m| m.modified()).map_err(|e| failed(&self.path, format!("cannot read when it was alive: {e}")))
     }

@@ -1,13 +1,16 @@
 import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
+import { registerCompactionRatio } from "./compaction-ratio.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
 import { homedir } from "node:os";
-import { primaryCheckoutMove, reasonText as mainReasonText } from "./mainguard.ts";
+import { primaryCheckoutMove, primaryCheckoutWrite, reasonText as mainReasonText } from "./mainguard.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
+import { installChatPad, registerChatPad } from "./pad.ts";
 import { reasonText as secretReasonText, secretBypass } from "./secretguard.ts";
+import { hostApproveBypass, reasonText as hostApproveReasonText } from "./hostapprove.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -18,8 +21,10 @@ import { registerReminderCheck } from "./turns.ts";
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
 
-/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
+/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands, bash writes and edit/write calls: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
+  registerCompactionRatio(); // §15.19: pi's SettingsManager derives the reserve from the compaction ratio
+  registerChatPad(); // §15.9: hook the fullscreen root before pi's first mount, so the pad catches it too
   const host = createHost(pi, options);
 
   // commands.md §15.9: one renderer for every cpd customType; its style is read at `session_start` (startup.ts).
@@ -31,8 +36,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {
     removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
-    // contract §6.1 Q3: an empty status entry makes pi's footer draw one empty last row (only `undefined` deletes it)
-    if (ctx.mode === "tui") ctx.ui.setStatus("cpd-pad", "");
+    // contract §6.1: the uniform 1-cell chat-slot pad replaces the cpd-pad status and header
+    if (ctx.mode === "tui") installChatPad(ctx);
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
@@ -55,11 +60,17 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const role = host.run?.info.role;
     const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
     if (pn) return pn;
+    if (host.run && (event.toolName === "edit" || event.toolName === "write")) {
+      const written = primaryCheckoutWrite(event.toolName, event.input, ctx.cwd, homedir());
+      if (written !== undefined) return { block: true, reason: mainReasonText(written) };
+    }
     if (host.run && event.toolName === "bash" && typeof (event.input as { command?: unknown }).command === "string") {
       const moved = primaryCheckoutMove((event.input as { command: string }).command, ctx.cwd, homedir());
       if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
       const secret = secretBypass((event.input as { command: string }).command);
       if (secret !== undefined) return { block: true, reason: secretReasonText(secret) };
+      const hostApprove = hostApproveBypass((event.input as { command: string }).command);
+      if (hostApprove !== undefined) return { block: true, reason: hostApproveReasonText(hostApprove) };
     }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);

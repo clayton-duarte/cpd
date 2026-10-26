@@ -8,16 +8,16 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::spawn::Pid;
 use crate::lock as flock;
+use crate::ports::Ports;
 
 /// The longest a waiter waits for a holder that says it migrates, counted from
 /// the marker's `started_unix_ms` (contract §4.2). Not a config key.
@@ -49,18 +49,12 @@ impl Marker {
     /// released the `flock` by itself; a marker of a dead pid under a lock
     /// someone else holds is not a migration.
     fn live(&self) -> bool {
-        self.migrating && alive(self.pid)
+        self.migrating && Ports::current().spawn.alive(Pid(self.pid))
     }
 
     fn migrated_for(&self) -> Duration {
         Duration::from_millis(unix_ms().saturating_sub(self.started_unix_ms))
     }
-}
-
-fn alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    // Pid 0 would signal this process group.
-    pid > 0 && matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
 }
 
 fn unix_ms() -> u64 {
@@ -119,18 +113,18 @@ fn failed(what: &str, path: &Path, e: std::io::Error) -> CpdError {
 /// stays held (the holder is in the last steps of its setup): then `lock_timeout` (exit 5) naming the lock
 /// file and the time waited (§4.2). On its first wait for a migration it says
 /// so, once, on stderr.
-pub(super) fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<SetupLock, CpdError> {
-    acquire(home, busy_ms, MIGRATION_WAIT_CEILING)
+pub(super) fn setup_lock(clock: &dyn Clock, home: &CpdHome, busy_ms: u64) -> Result<SetupLock, CpdError> {
+    acquire(clock, home, busy_ms, MIGRATION_WAIT_CEILING)
 }
 
-fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock, CpdError> {
+fn acquire(clock: &dyn Clock, home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock, CpdError> {
     let dir = home.locks_dir();
     fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     // `home.rs` has no method for this lock; it is the store's alone.
     let path = dir.join("store.lock");
     let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
     let busy = Duration::from_millis(busy_ms);
-    let mut deadline = Instant::now() + busy;
+    let mut deadline = clock.now() + busy;
     let mut said = false;
     // The last live marker this wait read: the migrating holder, while it still holds the `flock`.
     let mut seen: Option<Marker> = None;
@@ -183,9 +177,9 @@ fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock,
                     said = true;
                 }
                 // The holder that migrates is not the hang `busy_ms` bounds; a later one gets the whole of it.
-                deadline = Instant::now() + busy;
+                deadline = clock.now() + busy;
             }
-            None if Instant::now() >= deadline => {
+            None if clock.now() >= deadline => {
                 return Err(CpdError::new(
                     ErrorCode::LockTimeout,
                     format!(
@@ -198,7 +192,7 @@ fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock,
             }
             None => {}
         }
-        std::thread::sleep(RETRY);
+        clock.sleep(RETRY);
     }
 }
 
@@ -213,6 +207,7 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+    use crate::clock::SystemClock;
 
     fn home() -> (tempfile::TempDir, CpdHome) {
         let dir = tempfile::tempdir().unwrap();
@@ -237,7 +232,7 @@ mod tests {
     fn a_migrating_holder_past_the_ceiling_is_lock_timeout_naming_it() {
         let (_dir, home) = home();
         let _holder = held(&home, &marker(std::process::id(), unix_ms() - 5_000));
-        let err = acquire(&home, 60_000, Duration::from_secs(1)).err().expect("past the ceiling");
+        let err = acquire(&SystemClock, &home, 60_000, Duration::from_secs(1)).err().expect("past the ceiling");
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
         for part in [&std::process::id().to_string(), "cpd test", "3 to 9", "store.lock"] {
             assert!(err.message().contains(part), "{part}: {err}");
@@ -252,8 +247,8 @@ mod tests {
         let dead = child.id();
         child.wait().unwrap();
         let _holder = held(&home, &marker(dead, unix_ms()));
-        let started = Instant::now();
-        let err = acquire(&home, 200, MIGRATION_WAIT_CEILING).err().expect("the lock is held");
+        let started = std::time::Instant::now();
+        let err = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING).err().expect("the lock is held");
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
         assert!(started.elapsed() < Duration::from_secs(5), "waited {:?}", started.elapsed());
     }
@@ -262,14 +257,14 @@ mod tests {
     fn a_marker_under_a_free_lock_is_cleared_by_the_next_holder() {
         let (_dir, home) = home();
         drop(held(&home, &marker(std::process::id(), unix_ms())));
-        let lock = acquire(&home, 200, MIGRATION_WAIT_CEILING).unwrap();
+        let lock = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING).unwrap();
         assert_eq!(fs::read_to_string(&lock.path).unwrap(), "");
     }
 
     #[test]
     fn dropping_the_lock_empties_its_marker() {
         let (_dir, home) = home();
-        let lock = acquire(&home, 200, MIGRATION_WAIT_CEILING).unwrap();
+        let lock = acquire(&SystemClock, &home, 200, MIGRATION_WAIT_CEILING).unwrap();
         lock.migrating(1, 2).unwrap();
         let written = read_marker(&lock.path).expect("a marker");
         assert!(written.migrating && written.live() && (written.from, written.to) == (1, 2), "{written:?}");

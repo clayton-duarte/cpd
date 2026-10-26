@@ -7,7 +7,7 @@ use serde_json::json;
 use super::row::{self, Role};
 use super::{Env, FirstMessageArgs, not_a_lead};
 use crate::args::SessionArg;
-use crate::context::{ContextRow, digest};
+use crate::context::{manager, ContextRow};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::highest_id;
 use crate::output::Output;
@@ -32,11 +32,11 @@ pub(super) fn first_message(args: FirstMessageArgs) -> Result<Output, CpdError> 
                         |r| r.get(0),
                     )
                     .optional()?;
-                (plan::lead_message(conn, &env.config, &plan, brief.as_deref())?, home.lead_message(plan_id))
+                (plan::lead_message(&plan, brief.as_deref()), home.lead_message(plan_id))
             }
             (None, Role::Manager) => {
                 let context = ContextRow::require(conn, &session.context)?;
-                (digest::manager_message(conn, &env.config, &session.context, &context.title)?, home.manager_message(&session.context))
+                (manager::manager_message(&session.context, &context.title), home.manager_message(&session.context))
             }
             _ => return Err(not_a_lead(&session.id, session.role)),
         };
