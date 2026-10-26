@@ -18,7 +18,7 @@ async function readRecords(host: Host, r: Run, cursor: number) {
 
 /**
  * `before_agent_start` of a Lead or a Manager: one `cpd-context` message added to the run, never a turn. A Lead's is short (new decisions, the board posts, its Plan's opened PRs); a Manager's
- * is the digest (records, board posts, `Plans:`, `Pending work:`, `Errors:`). The board posts are taken last, so a failed read loses none. A failed read is reported once (no turn) and leaves the cursor.
+ * is the turn-start update (records, board posts, `Plans:`, `Pending work:`, `Errors:`). The board posts are taken last, so a failed read loses none. A failed read is reported once (no turn) and leaves the cursor.
  */
 async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: Message } | undefined> {
   const { call } = host;

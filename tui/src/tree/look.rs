@@ -18,6 +18,7 @@ use super::fixture::{archived, sample};
 use super::inbox::item;
 use super::view::{Effect, View};
 use crate::palette::{self, IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED};
+use crate::test_text::rows;
 use cpd_core::inbox::model::{Item, Kind, Urgency};
 
 /// U+F0B26 md-arrow_down_drop_circle_outline: the folded block's arrow.
@@ -41,12 +42,6 @@ fn draw(view: &mut View, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
     terminal.backend().buffer().clone()
-}
-
-fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
-        .collect()
 }
 
 fn pointer(view: &mut View, kind: MouseEventKind, column: u16, row: u16) -> Effect {
@@ -107,10 +102,10 @@ fn an_expanded_context_shows_its_live_rows_then_its_archived_rows_and_closes_wit
     let buf = draw(&mut view, 44, 24);
     let got = rows(&buf);
     let want = [alpha_live(), alpha_archived()].concat();
-    assert_prefixes(&got, 1, &want);
-    assert_eq!(got[1 + want.len()], format!(" ╰{UP} collapse"), "one closing row, the arrow and the word: {got:#?}");
-    assert_eq!(got[2 + want.len()], "", "one empty row between two Contexts: {got:#?}");
-    assert!(got[3 + want.len()].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "the next Context follows: {got:#?}");
+    assert_prefixes(&got, 4, &want);
+    assert_eq!(got[4 + want.len()], format!(" ╰{UP} collapse"), "one closing row, the arrow and the word: {got:#?}");
+    assert_eq!(got[5 + want.len()], "", "one empty row between two Contexts: {got:#?}");
+    assert!(got[6 + want.len()].starts_with(&format!(" ╭{STOPPED} gamma")), "the next Context follows: {got:#?}");
 }
 
 #[test]
@@ -137,14 +132,14 @@ fn folding_a_context_hides_only_its_archived_rows_and_the_live_ones_stay_above_t
     let toggle = find(&got, "collapse") as u16;
     assert_eq!(click(&mut view, 3, toggle), Effect::None, "a view-state change, no command");
     let got = rows(&draw(&mut view, 44, 24));
-    assert_prefixes(&got, 1, &alpha_live());
-    assert_eq!(got[5], format!(" ╰{DOWN} expand"), "the live rows, then the toggle: {got:#?}");
+    assert_prefixes(&got, 4, &alpha_live());
+    assert_eq!(got[8], format!(" ╰{DOWN} expand"), "the live rows, then the toggle: {got:#?}");
     assert!(!got.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "the archived rows are hidden: {got:#?}");
-    assert_eq!(got[6], "", "{got:#?}");
-    assert!(got[7].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{got:#?}");
+    assert_eq!(got[9], "", "{got:#?}");
+    assert!(got[10].starts_with(&format!(" ╭{STOPPED} gamma")), "{got:#?}");
     // and the same click unfolds it
-    assert_eq!(click(&mut view, 3, 5), Effect::None);
-    assert_prefixes(&rows(&draw(&mut view, 44, 24)), 1, &[alpha_live(), alpha_archived()].concat());
+    assert_eq!(click(&mut view, 3, 8), Effect::None);
+    assert_prefixes(&rows(&draw(&mut view, 44, 24)), 4, &[alpha_live(), alpha_archived()].concat());
 }
 
 #[test]
@@ -153,11 +148,11 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
     let got = rows(&draw(&mut view, 44, 24));
     click(&mut view, 3, find(&got, "collapse") as u16);
     let buf = draw(&mut view, 44, 24);
-    is_muted_line(&buf, 5, 1, 12);
-    assert_eq!(buf[(2, 5)].symbol(), DOWN);
+    is_muted_line(&buf, 8, 1, 12);
+    assert_eq!(buf[(2, 8)].symbol(), DOWN);
     // the title row and a live row keep their own actions and fold nothing
-    click(&mut view, 3, 3);
-    assert_eq!(rows(&draw(&mut view, 44, 24))[5], format!(" ╰{DOWN} expand"), "still folded after a click on a live row");
+    click(&mut view, 3, 4);
+    assert_eq!(rows(&draw(&mut view, 44, 24))[8], format!(" ╰{DOWN} expand"), "still folded after a click on a live row");
 }
 
 #[test]
@@ -180,16 +175,16 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     let buf = draw(&mut view, 44, 24);
     let got = rows(&buf);
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
-    assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
-    assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
-    assert_eq!(got[12], " ╰󰬪", "gamma, with no row at all, ends with the terminator: {got:#?}");
-    assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
-    for y in [6, 9] {
+    assert!(got[9].starts_with(&format!(" ╰─{IDLE} ship·f-id")), "alpha's last row ends the block: {got:#?}");
+    assert!(got[2].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
+    assert_eq!(got[12], " ╰󰬪 new", "gamma, with no row at all, ends with the clickable new row: {got:#?}");
+    assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no arrow: {got:#?}");
+    for y in [9, 2] {
         is_muted_line(&buf, y, 1, 3);
     }
-    is_muted_line(&buf, 12, 1, 4);
-    // nothing to fold: a click on the terminator changes nothing
-    assert_eq!(click(&mut view, 2, 12), Effect::None);
+    is_muted_line(&buf, 12, 1, 3);
+    // a live empty Context's new row opens the New Plan popup and folds nothing
+    assert!(matches!(click(&mut view, 2, 12), Effect::Ask(_)), "the new row asks for the New Plan title");
     assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
 
@@ -464,10 +459,13 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
 #[test]
 fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_no_word() {
     const TERMINATOR: &str = "\u{F0B2A}";
-    let empty = View::new(super::fixture::tree(vec![super::fixture::context("gamma", vec![])]), true);
+    // an ARCHIVED empty Context keeps the plain terminator (`plan new` is refused there; hs-d688)
+    let mut gamma = super::fixture::context("gamma", vec![]);
+    gamma.archived_at = Some(super::fixture::WHEN.into());
+    let empty = View::new(super::fixture::tree(vec![gamma]), true);
     let mut with_three = with_inbox(inbox_items(3));
     let mut empty = empty;
-    for (name, buf, y) in [("a Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
+    for (name, buf, y) in [("an archived Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
         let width = buf.area.width;
         let cells: Vec<(u16, &str)> = (0..width).map(|x| (x, buf[(x, y)].symbol())).filter(|(_, s)| *s != " ").collect();
         assert_eq!(cells, [(1, "╰"), (2, TERMINATOR)], "{name}: only the corner and the glyph, no word, no `─`: {:#?}", rows(&buf));

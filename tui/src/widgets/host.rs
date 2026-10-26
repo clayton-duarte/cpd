@@ -6,9 +6,12 @@
 //! -w 0 -c IOAccelerator` and tested on a captured sample only.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::io::BufRead;
 use std::sync::{Arc, Mutex};
+
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner};
+use cpd_core::host::spawn::{Launch, Pid, Signal, Spawn};
+use cpd_core::ports::Ports;
 
 /// CPU %, GPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and any
 /// is `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10). `gpus` has one entry per GPU,
@@ -36,16 +39,17 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn sample(&mut self) -> Usage {
+    /// The usage now; on Linux the GPU tool is started through `ports.spawn`.
+    pub fn sample_with(&mut self, ports: &Ports) -> Usage {
         if cfg!(target_os = "macos") {
-            Usage { cpu: macos_cpu(), gpus: macos_gpus(), mem: macos_mem() }
+            macos_usage_with(&*ports.runner)
         } else {
             let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
             if times.is_some() {
                 self.previous = times;
             }
-            let gpus = self.gpus.get_or_insert_with(Gpus::start).now();
+            let gpus = self.gpus.get_or_insert_with(|| Gpus::start(&ports.spawn)).now();
             Usage { cpu, gpus, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
@@ -55,10 +59,25 @@ fn read_file(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-/// `program`'s stdout when it ran and exited 0.
-fn run(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
+/// `program`'s stdout, run on `runner`, when it ran and exited 0.
+pub(crate) fn run_with(runner: &dyn Runner, program: &str, args: &[&str]) -> Option<String> {
+    let call = Call {
+        tool: program.to_owned(),
+        program: program.to_owned(),
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        envs: Vec::new(),
+        cwd: None,
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    let out = runner.run(&call).ok().filter(|o| o.status.success())?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The macOS [`Usage`] (`ioreg`, `sysctl`, `ps`, `vm_stat`) read through `runner`.
+pub(crate) fn macos_usage_with(runner: &dyn Runner) -> Usage {
+    Usage { cpu: macos_cpu(runner), gpus: macos_gpus(runner), mem: macos_mem(runner) }
 }
 
 /// The GPUs' utilization on Linux, from **one** `nvidia-smi` that prints it every 2 s for as long as the view runs (`-lms`).
@@ -66,28 +85,38 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
 /// adds a reaped child's I/O to its parent's: tui-F1, tui-F2, `cli/tests/it/tui_idle.rs`). A missing tool, or one that fails
 /// or stops, is no GPU: an empty list, never an error. When the view dies without dropping it, the tool's next write finds
 /// no reader and it ends (SIGPIPE).
-#[derive(Debug)]
 struct Gpus {
     /// The latest % of each GPU, by index.
     latest: Arc<Mutex<Vec<Option<u8>>>>,
-    child: Option<Child>,
+    /// The tool's process, and the `Spawn` that started it and kills it when this is dropped.
+    child: Option<(Pid, Arc<dyn Spawn>)>,
+}
+
+impl std::fmt::Debug for Gpus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gpus").field("latest", &self.latest).field("pid", &self.child.as_ref().map(|c| c.0)).finish()
+    }
 }
 
 impl Gpus {
-    fn start() -> Gpus {
+    /// The tool is streamed through `spawn`: stdin from `/dev/null`, stdout piped to the reader, stderr discarded.
+    fn start(spawn: &Arc<dyn Spawn>) -> Gpus {
         let latest = Arc::new(Mutex::new(Vec::new()));
-        let mut child = Command::new("nvidia-smi")
-            .args(["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok();
-        if let Some(out) = child.as_mut().and_then(|c| c.stdout.take()) {
+        let launch = Launch {
+            program: "nvidia-smi".into(),
+            args: ["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"].map(String::from).to_vec(),
+            ..Launch::default()
+        };
+        let streamed = spawn.stream(&launch).ok();
+        let (child, out) = match streamed {
+            Some((pid, out)) => (Some((pid, Arc::clone(spawn))), Some(out)),
+            None => (None, None),
+        };
+        if let Some(out) = out {
             let latest = Arc::clone(&latest);
             std::thread::spawn(move || {
                 let mut by_index = BTreeMap::new();
-                for line in BufReader::new(out).lines() {
+                for line in out.lines() {
                     let Ok(line) = line else { break };
                     if let Some((index, value)) = parse_nvidia_smi_line(&line) {
                         by_index.insert(index, value);
@@ -112,25 +141,25 @@ impl Gpus {
 
 impl Drop for Gpus {
     fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some((pid, spawn)) = self.child.take() {
+            // the reaper of `Spawn::stream` waits for it
+            let _ = spawn.signal(pid, Signal::Kill);
         }
     }
 }
 
-fn macos_gpus() -> Vec<Option<u8>> {
-    run("ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
+fn macos_gpus(runner: &dyn Runner) -> Vec<Option<u8>> {
+    run_with(runner, "ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
 }
 
-fn macos_cpu() -> Option<u8> {
-    let ncpu = run("sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
-    parse_ps(&run("ps", &["-A", "-o", "%cpu="])?, ncpu)
+fn macos_cpu(runner: &dyn Runner) -> Option<u8> {
+    let ncpu = run_with(runner, "sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
+    parse_ps(&run_with(runner, "ps", &["-A", "-o", "%cpu="])?, ncpu)
 }
 
-fn macos_mem() -> Option<u8> {
-    let bytes = run("sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
-    parse_vm_stat(&run("vm_stat", &[])?, bytes)
+fn macos_mem(runner: &dyn Runner) -> Option<u8> {
+    let bytes = run_with(runner, "sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
+    parse_vm_stat(&run_with(runner, "vm_stat", &[])?, bytes)
 }
 
 /// `part` of `whole` as a whole percent, rounded, at most 100; `None` for an empty whole.

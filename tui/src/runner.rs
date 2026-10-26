@@ -3,15 +3,17 @@
 //! the loop, an error, a panic), the mapping of a terminal failure to an error, and the policy for a failed read
 //! ([`kept`]).
 
-use std::io::stdout;
+use std::io::{Stdout, stdout};
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture};
-use ratatui::crossterm::execute;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
+use super::view_ports::{Ctx, CrosstermInput, StdTty, run_view_with};
 use super::{not_a_terminal, on_a_terminal};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 
 /// What a view asks the terminal to report to it, besides keys. Focus reporting without the mouse is not a choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,22 +47,6 @@ impl From<CpdError> for ViewError {
     }
 }
 
-/// Puts the terminal back as it was, on `Drop`: so a panic and an `Err` leave it restored too. ratatui's own panic
-/// hook restores only raw mode and the alternate screen, never the mouse and focus reporting.
-struct Restore(Capture);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        // Nothing can be done about a failure here, and `drop` may run while a panic unwinds.
-        match self.0 {
-            Capture::Keys => {}
-            Capture::Mouse => drop(execute!(stdout(), DisableMouseCapture)),
-            Capture::MouseAndFocus => drop(execute!(stdout(), DisableFocusChange, DisableMouseCapture)),
-        }
-        ratatui::restore();
-    }
-}
-
 /// Runs one view of `cpd tui view <name>`.
 ///
 /// Refuses with `not_a_terminal` when stdin or stdout is no terminal. Then `prepare` takes what the view needs
@@ -74,28 +60,32 @@ pub fn run_view<P>(
     prepare: impl FnOnce() -> Result<P, CpdError>,
     body: impl FnOnce(&mut DefaultTerminal, P) -> Result<(), ViewError>,
 ) -> Result<Output, CpdError> {
+    run_view_on(&Ports::current(), name, capture, prepare, |ctx, prepared| body(&mut ctx.terminal, prepared))
+}
+
+/// [`run_view`] on this process's terminal and input, with `body` on a [`Ctx`] over `ports`: what the views whose loops
+/// wait through the ports run through; a test runs the loop itself through [`run_view_with`].
+pub fn run_view_on<P>(
+    ports: &Ports,
+    name: &str,
+    capture: Capture,
+    prepare: impl FnOnce() -> Result<P, CpdError>,
+    body: impl FnOnce(&mut Ctx<CrosstermBackend<Stdout>>, P) -> Result<(), ViewError>,
+) -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal(&format!("tui view {name}")));
     }
-    let prepared = prepare()?;
-    let terminal_failed = |e: std::io::Error| {
+    let terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| {
         CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view {name} failed: {e}."))
             .with("command", format!("tui view {name}"))
-    };
-    let mut terminal = ratatui::try_init().map_err(terminal_failed)?;
-    let _restore = Restore(capture);
-    match capture {
-        Capture::Keys => {}
-        Capture::Mouse => execute!(stdout(), EnableMouseCapture).map_err(terminal_failed)?,
-        Capture::MouseAndFocus => {
-            execute!(stdout(), EnableMouseCapture, EnableFocusChange).map_err(terminal_failed)?;
-        }
-    }
-    match body(&mut terminal, prepared) {
-        Ok(()) => Ok(Output::Owned),
-        Err(ViewError::Terminal(e)) => Err(terminal_failed(e)),
-        Err(ViewError::Cpd(e)) => Err(e),
-    }
+    })?;
+    // ratatui's `init` does this too: the panic message is printed on the normal screen, not lost with the alternate one.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        previous(info);
+    }));
+    run_view_with(ports, &mut StdTty, &mut stdout(), terminal, &mut CrosstermInput, name, capture, prepare, body)
 }
 
 /// The policy of every view for a failed read: the last good snapshot stays on screen and `error` holds the

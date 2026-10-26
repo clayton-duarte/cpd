@@ -1,10 +1,14 @@
-//! `pr merge` (commands.md §9.10), run as the built binary with a fake `gh` that records its argv.
+//! `pr merge` (commands.md §9.10), run in-process on `run_with` with a stateful `gh` handler that the runner records.
 //! The command needs no Plan, no Context and no database row.
 
 use crate::common;
 
+use std::sync::{Arc, Mutex};
+
+use common::fx::Fx;
 use common::{TestEnv, refused};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::inbox::model::reconcile;
 use cpd_core::inbox::rules::conditions;
 use cpd_core::store::Store;
@@ -13,11 +17,52 @@ use serde_json::json;
 const REF: &str = "acme/api#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
+/// The in-process `gh`: `pr view` answers `before` until `pr merge` ran and `after` from then on, `pr merge` exits
+/// `merge_exit` (saying `merge said no` when it fails), `api graphql` (the poll's) answers `graphql`; any other call exits 9.
+struct Gh {
+    before: String,
+    after: String,
+    merge_exit: i32,
+    graphql: Mutex<Reply>,
+    merged: Mutex<bool>,
+}
+
+impl Gh {
+    fn set_graphql(&self, reply: Reply) {
+        *self.graphql.lock().unwrap() = reply;
+    }
+}
+
+impl Handler for Gh {
+    fn handle(&self, call: &Call) -> Reply {
+        let args: Vec<&str> = call.args.iter().map(String::as_str).collect();
+        match args[..2] {
+            ["pr", "view"] => Reply::ok(&format!("{}\n", if *self.merged.lock().unwrap() { &self.after } else { &self.before })),
+            ["pr", "merge"] => {
+                *self.merged.lock().unwrap() = true;
+                if self.merge_exit == 0 { Reply::ok("") } else { Reply::exit(self.merge_exit, "", "merge said no\n") }
+            }
+            ["api", "graphql"] => self.graphql.lock().unwrap().clone(),
+            _ => Reply::exit(9, "", ""),
+        }
+    }
+}
+
+/// Installs a [`Gh`] on `fx`'s runner and returns it, for the test that changes what the poll's `api graphql` says.
+fn install(fx: &Fx, before: &str, after: &str, merge_exit: i32, graphql: Reply) -> Arc<Gh> {
+    let gh = Arc::new(Gh { before: before.to_owned(), after: after.to_owned(), merge_exit, graphql: Mutex::new(graphql), merged: Mutex::new(false) });
+    let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
+    gh
+}
+
 /// A `gh` that answers `pr view` with `view`, and `pr merge` with `merge_exit`.
-fn gh(env: &TestEnv, view: &str, merge_exit: i32) {
-    env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\"pr view\") echo '{view}'; exit 0;;\n\"pr merge\") echo 'merge said no' >&2; exit {merge_exit};;\nesac\nexit 9"
-    ));
+fn gh(fx: &Fx, view: &str, merge_exit: i32) {
+    install(fx, view, view, merge_exit, Reply::exit(9, "", ""));
+}
+
+/// The argv of every `gh` call so far.
+fn calls(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("gh").into_iter().map(|call| call.args).collect()
 }
 
 fn view(state: &str, merge_state: &str) -> String {
@@ -30,12 +75,12 @@ fn argv(args: &[&str]) -> Vec<String> {
 
 #[test]
 fn a_clean_open_pull_request_is_squash_merged_with_the_head_it_was_checked_at() {
-    let env = TestEnv::new();
-    gh(&env, &view("OPEN", "CLEAN"), 0);
-    let run = env.cpd(&["pr", "merge", REF]);
+    let fx = Fx::with_ports();
+    gh(&fx, &view("OPEN", "CLEAN"), 0);
+    let run = fx.cpd(&["pr", "merge", REF]);
     assert_eq!(run.ok(), json!({"ok": true, "repo": "acme/api", "number": 7, "method": "squash", "branch_deleted": true, "stored": false}));
     assert_eq!(
-        env.calls("gh"),
+        calls(&fx),
         [
             argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
             argv(&["pr", "merge", "7", "--repo", "acme/api", "--squash", "--delete-branch", "--match-head-commit", SHA]),
@@ -47,12 +92,12 @@ fn a_clean_open_pull_request_is_squash_merged_with_the_head_it_was_checked_at() 
 #[test]
 fn a_pull_request_that_is_not_open_and_clean_is_refused_before_any_merge() {
     for (state, merge_state) in [("OPEN", "BLOCKED"), ("OPEN", "DIRTY"), ("OPEN", "UNSTABLE"), ("MERGED", "CLEAN"), ("MERGED", "UNKNOWN"), ("CLOSED", "CLEAN")] {
-        let env = TestEnv::new();
-        gh(&env, &view(state, merge_state), 0);
-        let run = env.cpd(&["pr", "merge", REF]);
+        let fx = Fx::with_ports();
+        gh(&fx, &view(state, merge_state), 0);
+        let run = fx.cpd(&["pr", "merge", REF]);
         let error = refused(&run, "merge_not_clean", 3);
         assert_eq!(error["details"], json!({"repo": "acme/api", "number": 7, "state": state, "merge_state": merge_state}), "{state} {merge_state}");
-        let calls = env.calls("gh");
+        let calls = calls(&fx);
         assert_eq!(calls.len(), 1, "{state} {merge_state}: {calls:?}");
         assert_eq!(calls[0][..2], ["pr", "view"], "{state} {merge_state}");
     }
@@ -60,86 +105,78 @@ fn a_pull_request_that_is_not_open_and_clean_is_refused_before_any_merge() {
 
 #[test]
 fn a_failing_pr_view_is_gh_failed() {
-    let env = TestEnv::new();
-    env.fake_gh("echo 'HTTP 502' >&2; exit 1");
-    let error = refused(&env.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+    let fx = Fx::with_ports();
+    fx.fake_gh(Reply::exit(1, "", "HTTP 502\n"));
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
     assert_eq!(
         error["details"]["argv"],
         json!(["gh", "pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"])
     );
     assert_eq!(error["details"]["exit"], 1);
     assert_eq!(error["details"]["stderr"], "HTTP 502");
-    assert_eq!(env.calls("gh").len(), 1);
+    assert_eq!(calls(&fx).len(), 1);
 }
 
 #[test]
 fn a_pr_view_that_is_not_json_of_the_fields_is_gh_failed() {
-    let env = TestEnv::new();
-    env.fake_gh("echo '{\"state\":\"OPEN\"}'");
-    refused(&env.cpd(&["pr", "merge", REF]), "gh_failed", 1);
-    assert_eq!(env.calls("gh").len(), 1);
+    let fx = Fx::with_ports();
+    fx.fake_gh(Reply::ok("{\"state\":\"OPEN\"}\n"));
+    refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+    assert_eq!(calls(&fx).len(), 1);
 }
 
 #[test]
 fn a_failing_pr_merge_is_gh_failed() {
-    let env = TestEnv::new();
-    gh(&env, &view("OPEN", "CLEAN"), 1);
-    let error = refused(&env.cpd(&["pr", "merge", REF]), "gh_failed", 1);
+    let fx = Fx::with_ports();
+    gh(&fx, &view("OPEN", "CLEAN"), 1);
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "gh_failed", 1);
     assert_eq!(
         error["details"]["argv"],
         json!(["gh", "pr", "merge", "7", "--repo", "acme/api", "--squash", "--delete-branch", "--match-head-commit", SHA])
     );
     assert_eq!(error["details"]["exit"], 1);
     assert_eq!(error["details"]["stderr"], "merge said no");
-    assert_eq!(env.calls("gh").len(), 2);
+    assert_eq!(calls(&fx).len(), 2);
 }
 
 #[test]
 fn a_bad_argument_is_usage_and_gh_is_not_called() {
     for bad in ["foo", "acme/api#x", "acme/api#0", "acme/api", "#7", "acme/#7", "/api#7", "a/b/c#7"] {
-        let env = TestEnv::new();
-        gh(&env, &view("OPEN", "CLEAN"), 0);
-        refused(&env.cpd(&["pr", "merge", bad]), "usage", 2);
-        assert!(env.calls("gh").is_empty(), "{bad}");
+        let fx = Fx::with_ports();
+        gh(&fx, &view("OPEN", "CLEAN"), 0);
+        refused(&fx.cpd(&["pr", "merge", bad]), "usage", 2);
+        assert!(calls(&fx).is_empty(), "{bad}");
     }
-    let env = TestEnv::new();
-    refused(&env.cpd(&["pr", "merge"]), "usage", 2);
+    let fx = Fx::with_ports();
+    refused(&fx.cpd(&["pr", "merge"]), "usage", 2);
 }
 
 const SUBJECT: &str = "pr:acme/api#7";
 const MERGED_AT: &str = "2026-10-21T15:01:30Z";
 
 /// A `gh` that answers `pr view` with `view`, `pr merge` with exit 0, and every `api graphql` call (the poll's) with a failure.
-fn gh_failing_poll(env: &TestEnv, view: &str) {
-    env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\"pr view\") echo '{view}'; exit 0;;\n\"pr merge\") exit 0;;\n\"api graphql\") exit 1;;\nesac\nexit 9"
-    ));
+fn gh_failing_poll(fx: &Fx, view: &str) {
+    install(fx, view, view, 0, Reply::exit(1, "", ""));
 }
 
 fn view_merged_at(state: &str, merge_state: &str, merged_at: Option<&str>) -> String {
     json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": SHA, "title": "Add the thing", "mergedAt": merged_at}).to_string()
 }
 
-/// A `gh` whose `pr view` answers `before` until `pr merge` ran and `after` from then on; `api graphql` runs `graphql` (a shell snippet).
-fn gh_read_back(env: &TestEnv, before: &str, after: &str, graphql: &str) {
-    let flag = env.root().join("merged.flag");
-    env.fake_gh(&format!(
-        "case \"$1 $2\" in\n\"pr view\") if [ -e '{f}' ]; then echo '{after}'; else echo '{before}'; fi; exit 0;;\n\"pr merge\") touch '{f}'; exit 0;;\n\"api graphql\") {graphql};;\nesac\nexit 9",
-        f = flag.display()
-    ));
+/// A `gh` whose `pr view` answers `before` until `pr merge` ran and `after` from then on; `api graphql` answers `graphql`.
+fn gh_read_back(fx: &Fx, before: &str, after: &str, graphql: Reply) -> Arc<Gh> {
+    install(fx, before, after, 0, graphql)
 }
 
 /// The GraphQL search answer listing acme/api#7 with `state`, mergeable UNKNOWN, mergeStateStatus CLEAN.
-fn search_listing(env: &TestEnv, state: &str) -> String {
+fn search_listing(state: &str) -> Reply {
     let node = format!(
         r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     let search = format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
     );
-    let file = env.root().join("listing.json");
-    std::fs::write(&file, search).unwrap();
-    format!("cat '{}'; exit 0", file.display())
+    Reply::ok(&search)
 }
 
 /// A stored open, clean, authored pull request row of acme/api#7, with an open pr-ready item opened as E8 does.
@@ -176,29 +213,32 @@ fn assert_stored_merged(env: &TestEnv, merged_at: Option<&str>) {
 
 #[test]
 fn a_successful_merge_stores_the_merge_and_closes_its_pr_ready_item_when_the_poll_after_it_fails_hs_d526() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
-    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
-    env.cpd(&["pr", "merge", REF]).ok();
-    assert_ne!(env.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
-    assert_stored_merged(&env, None);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
+    gh_read_back(&fx, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), Reply::exit(1, "", ""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    assert_ne!(fx.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
+    assert_stored_merged(env, None);
 }
 
 #[test]
 fn a_precheck_that_reads_merged_stores_the_merge_and_closes_its_pr_ready_item_hs_d526() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
-    gh_failing_poll(&env, &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)));
-    let error = refused(&env.cpd(&["pr", "merge", REF]), "merge_not_clean", 3);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
+    gh_failing_poll(&fx, &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)));
+    let error = refused(&fx.cpd(&["pr", "merge", REF]), "merge_not_clean", 3);
     assert_eq!(error["details"]["state"], "MERGED");
-    assert!(env.calls("gh").iter().all(|c| c[..2] != ["pr", "merge"]), "{:?}", env.calls("gh"));
-    assert_stored_merged(&env, Some(MERGED_AT));
+    assert!(calls(&fx).iter().all(|c| c[..2] != ["pr", "merge"]), "{:?}", calls(&fx));
+    assert_stored_merged(env, Some(MERGED_AT));
 }
 
 #[test]
 fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
     env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
@@ -210,42 +250,41 @@ fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
                    7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
     );
-    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
-    env.cpd(&["pr", "merge", REF]).ok();
-    assert_ne!(env.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
+    gh_read_back(&fx, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), Reply::exit(1, "", ""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    assert_ne!(fx.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
     assert_eq!(env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged");
-    let events = env.cpd(&["events", "list", "--kind", "pr-merged", "--plan", "pay-1"]).ok();
+    let events = fx.cpd(&["events", "list", "--kind", "pr-merged", "--plan", "pay-1"]).ok();
     assert_eq!(events["events"].as_array().unwrap().len(), 1, "{events}");
 }
 
 #[test]
 fn a_poll_that_finds_the_pull_request_merged_closes_its_pr_ready_item_in_the_same_transaction_hs_n404() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
     let node = format!(
         r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"{MERGED_AT}","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     );
     let search = format!(
         r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
     );
-    std::fs::write(env.root().join("search.json"), search).unwrap();
-    let file = env.root().join("search.json");
-    env.fake_gh(&format!("cat '{}'", file.display()));
-    env.cpd(&["pr", "poll"]).ok();
-    assert_stored_merged(&env, None);
+    fx.fake_gh(Reply::ok(&search));
+    fx.cpd(&["pr", "poll"]).ok();
+    assert_stored_merged(env, None);
 }
 
 #[test]
 fn a_poll_whose_search_still_lists_a_stored_merge_open_leaves_it_merged_and_e8_opens_no_pr_ready_hs_d550() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
     let open = view_merged_at("OPEN", "CLEAN", None);
     let merged = view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT));
-    gh_read_back(&env, &open, &merged, "exit 1");
-    env.cpd(&["pr", "merge", REF]).ok();
-    let listing = search_listing(&env, "OPEN");
-    gh_read_back(&env, &open, &merged, &listing);
-    env.cpd(&["pr", "poll"]).ok();
+    let gh = gh_read_back(&fx, &open, &merged, Reply::exit(1, "", ""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    gh.set_graphql(search_listing("OPEN"));
+    fx.cpd(&["pr", "poll"]).ok();
     assert_eq!(env.query::<String>("SELECT state FROM pull_requests WHERE number = 7"), "merged");
     assert_eq!(env.query::<Option<String>>("SELECT merged_at FROM pull_requests WHERE number = 7").as_deref(), Some(MERGED_AT));
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -261,11 +300,12 @@ fn a_poll_whose_search_still_lists_a_stored_merge_open_leaves_it_merged_and_e8_o
 
 #[test]
 fn a_merge_whose_read_back_still_reads_open_stores_nothing_hs_d550() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
     let open = view_merged_at("OPEN", "CLEAN", None);
-    gh_read_back(&env, &open, &open, "exit 1");
-    let out = env.cpd(&["pr", "merge", REF]).ok();
+    gh_read_back(&fx, &open, &open, Reply::exit(1, "", ""));
+    let out = fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(out["stored"], false, "{out}");
     assert_eq!(env.query::<String>("SELECT state FROM pull_requests WHERE number = 7"), "open");
     assert_eq!(env.query::<Option<String>>(&item("closed_at")), None);
@@ -273,27 +313,28 @@ fn a_merge_whose_read_back_still_reads_open_stores_nothing_hs_d550() {
 
 #[test]
 fn a_merge_stores_the_merged_at_its_read_back_reads_hs_d550() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
-    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
-    let out = env.cpd(&["pr", "merge", REF]).ok();
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
+    gh_read_back(&fx, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), Reply::exit(1, "", ""));
+    let out = fx.cpd(&["pr", "merge", REF]).ok();
     assert_eq!(out["stored"], true, "{out}");
-    assert_stored_merged(&env, Some(MERGED_AT));
+    assert_stored_merged(env, Some(MERGED_AT));
 }
 
 #[test]
 fn a_poll_that_lists_a_stored_merge_open_opens_no_write_transaction_hs_d550() {
-    let env = TestEnv::new();
-    row_with_ready_item(&env);
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    row_with_ready_item(env);
     let open = view_merged_at("OPEN", "CLEAN", None);
     let merged = view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT));
-    gh_read_back(&env, &open, &merged, "exit 1");
-    env.cpd(&["pr", "merge", REF]).ok();
-    let listing = search_listing(&env, "OPEN");
-    gh_read_back(&env, &open, &merged, &listing);
+    let gh = gh_read_back(&fx, &open, &merged, Reply::exit(1, "", ""));
+    fx.cpd(&["pr", "merge", REF]).ok();
+    gh.set_graphql(search_listing("OPEN"));
     let row = "SELECT state || '|' || ifnull(merged_at, '') || '|' || changed_at || '|' || merge_state || '|' || review_decision FROM pull_requests WHERE number = 7";
     let (txns, before) = (env.query::<i64>("SELECT count(*) FROM txns"), env.query::<String>(row));
-    env.cpd(&["pr", "poll"]).ok();
+    fx.cpd(&["pr", "poll"]).ok();
     assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "no write transaction");
     assert_eq!(env.query::<String>(row), before);
 }

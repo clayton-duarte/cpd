@@ -138,6 +138,10 @@ pub enum Cause {
     DirtyTarget,
     /// Merge step 4: the diff touches protected paths (§7.5).
     Tampered,
+    /// The merge Gate (`gate.merge` or `gate.pr`) exited non-zero (§7.4 step 6).
+    GateFailed,
+    /// The merge Gate could not be judged: killed, at the timeout, or hook_invalid (§7.4 step 6).
+    GateError,
 }
 
 impl Cause {
@@ -151,6 +155,8 @@ impl Cause {
             Cause::CasLost => "cas_lost",
             Cause::DirtyTarget => "dirty_target",
             Cause::Tampered => "tampered",
+            Cause::GateFailed => "gate_failed",
+            Cause::GateError => "gate_error",
         }
     }
 
@@ -167,6 +173,10 @@ pub enum End {
     Merged { sha: String },
     /// `cancelled` / `cancel_requested`.
     Cancelled,
+    /// The stop incident mode requested (contract §3.4/§3.7): the Attempt ended
+    /// `cancelled` / `cancel_requested` and its Job returns to `queued` at the same
+    /// Tier, as an Interrupted Attempt. Stub: the inc-engine Job implements it.
+    Interrupted,
     /// `failed` / `cause`; `detail` explains it (for `merge_conflict`, the files).
     Failed { cause: Cause, detail: String },
 }
@@ -175,7 +185,7 @@ impl End {
     pub fn outcome(&self) -> &'static str {
         match self {
             End::Merged { .. } => "merged",
-            End::Cancelled => "cancelled",
+            End::Cancelled | End::Interrupted => "cancelled",
             End::Failed { .. } => "failed",
         }
     }
@@ -183,7 +193,7 @@ impl End {
     pub fn cause(&self) -> &'static str {
         match self {
             End::Merged { .. } => "merged",
-            End::Cancelled => "cancel_requested",
+            End::Cancelled | End::Interrupted => "cancel_requested",
             End::Failed { cause, .. } => cause.as_str(),
         }
     }
@@ -263,11 +273,15 @@ pub fn end_opened(
         End::Merged { sha } => Some(sha.as_str()),
         _ => None,
     };
+    // An Interrupted Attempt does not use up a try (contract §3.7): its `driver_pid` is cleared in the same
+    // UPDATE (an `attempts` trigger refuses a second one), so the ladder's `automatic_attempts` leaves it out.
+    let interrupted = matches!(end, End::Interrupted);
     let changed = tx.execute(
         "UPDATE attempts SET status = 'ended', outcome = ?4, cause = ?5, merged_sha = ?6, metrics = ?7,
+                driver_pid = CASE WHEN ?8 THEN NULL ELSE driver_pid END,
                 ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND id = ?2 AND status = ?3",
-        params![plan, id, attempt.status, end.outcome(), end.cause(), merged_sha, metrics.map(Value::to_string)],
+        params![plan, id, attempt.status, end.outcome(), end.cause(), merged_sha, metrics.map(Value::to_string), interrupted],
     )?;
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
@@ -307,6 +321,16 @@ pub fn end_opened(
             };
             ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
+        End::Interrupted => {
+            // The Job has no `cancel_requested_at` (the caller decided that): the stop is incident mode's, and the Job
+            // returns to `queued` at the same Tier with an `attempt-retry` Event naming incident mode (contract §3.7).
+            let next = attempt.tier.to_string();
+            let feedback = format!("Incident mode stopped Attempt {id} of Job {job}.");
+            let text = format!(
+                "Attempt {id} of Job {job} was interrupted by incident mode. The Job is queued again at Tier {next}. Next: {show}"
+            );
+            ("queued", None, NewEvent::attempt_retry(text, "cancelled", "cancel_requested", &next, &feedback))
+        }
         End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
                 let text = format!(
@@ -334,17 +358,24 @@ pub fn end_opened(
         return Err(cas_lost("The Job's status"));
     }
     events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
+    // The transaction that makes the Job `cancelled` also fails or cancels its dependents (contract §3.2 "Cancel", hs-d647).
+    if matches!(end, End::Cancelled) {
+        let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.unwrap_or_default();
+        crate::job::cancel::fail_dependents(tx, &attempt.plan, &attempt.job, &reason)?;
+    }
     Ok(())
 }
 
 /// The automatic Attempts of Job `job` since the last `job retry` (that one
-/// included), for `retry_cap` (§9). An ended Attempt whose driver never started
-/// (`driver_pid` null, §3.4) is not one: it does not use up a try.
+/// included), for `retry_cap` (§9). Only an Attempt that ended `merged` or
+/// `failed` counts; an Interrupted (or otherwise `cancelled`) one never does
+/// (contract §3.7). An ended Attempt whose driver never started (`driver_pid`
+/// null, §3.4) is not one either: it does not use up a try.
 pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Result<i64, CpdError> {
     Ok(tx.query_row(
         "SELECT count(*) FROM attempts WHERE plan = ?1 AND job = ?2
            AND number >= coalesce((SELECT max(number) FROM attempts WHERE plan = ?1 AND job = ?2 AND origin = 'retry'), 1)
-           AND NOT (status = 'ended' AND driver_pid IS NULL)",
+           AND status = 'ended' AND outcome IN ('merged', 'failed') AND driver_pid IS NOT NULL",
         params![plan, job],
         |r| r.get(0),
     )?)
@@ -365,7 +396,11 @@ fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder
         |r| r.get(0),
     )?;
     if never_started {
-        return Ok(Some(attempt.tier));
+        return Ok(Some(ladder.catalog.step_up(attempt.tier).unwrap_or(attempt.tier)));
+    }
+    // hs-n465, hs-d632: the catalog refuses the Attempt's Tier: step to the next valid Worker Tier at or above it, never propagate `tier_invalid`.
+    if !ladder.catalog.is_valid(attempt.tier) {
+        return Ok(ladder.catalog.step_up(attempt.tier));
     }
     if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);

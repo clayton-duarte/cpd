@@ -38,9 +38,6 @@ pub struct Config {
     pub host: HostName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
-    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
-    /// (§7.6 "The test slot", hs-d336, hs-d301).
-    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -48,8 +45,6 @@ pub struct Config {
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
     pub context_distill_tier: Tier,
-    /// The days of curated records the digest takes as relevant (§4.6, §8.2, hs-d549, hs-d551).
-    pub context_recent_days: u32,
     /// The records a Context holds before it is curated (hs-d592).
     pub context_curation_min_records: u32,
     /// The loop-guard breaker trips when more than this many self-started turns run in 600 ms (§3.6, §8.2, hs-d552, hs-d571).
@@ -59,6 +54,18 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
+    /// `context_engine_enabled`: the operator kill switch for the holographic engine.
+    pub context_engine_enabled: bool,
+    /// `""` is beside the binary: see [`Config::context_engine_bridge_path`].
+    pub context_engine_bridge: String,
+    /// `""` is the venv beside the bridge: see [`Config::context_engine_python_path`].
+    pub context_engine_python: String,
+    /// `""` is `$CPD_HOME/engines/holographic`: see [`Config::context_engine_dir`].
+    pub context_engine_dir: String,
+    /// The deadline of one search/sync spawn.
+    pub context_engine_timeout_ms: u32,
+    /// The deadline of a full reindex spawn.
+    pub context_engine_reindex_timeout_ms: u32,
     /// One port per Plan's plannotator review (§6.5).
     pub plannotator_ports: PortRange,
     pub tiers: Tiers,
@@ -136,6 +143,8 @@ pub struct Timeouts {
     pub pi_stop_seconds: u32,
     /// A finished Lead or Manager is put to sleep after this (§3.7 E13).
     pub sleep_seconds: u32,
+    /// An asleep Lead or Manager is archived after this (§3.7 E14, hs-d630).
+    pub archive_sleep_seconds: u32,
 }
 
 /// `watch.tick_seconds`: a decimal of at least 0.1 (§3.7, §8.2), kept in whole milliseconds.
@@ -266,10 +275,10 @@ impl Config {
         let host_default = HostName::parse(machine.as_str()).expect("a machine name is a valid host name");
         let host = r.get("host", host_default, |v| HostName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
-        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
+        // The default is the Tier `docs/research/opener-tier.md` recommends.
         let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
         let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
         let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
@@ -279,10 +288,9 @@ impl Config {
             }
             Ok(tier)
         })?;
-        let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
         let context_curation_min_records = r.get("context_curation_min_records", 25, |v| int(v, 1, u32::MAX))?;
         let loop_guard_turns = r.get("loop_guard_turns", 20, |v| int(v, 1, u32::MAX))?;
-        let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+        let open_tier = r.get("open_tier", Tier::parse("H3").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             tier.check_worker().map_err(|e| e.message().to_owned())?;
             Ok(tier)
@@ -302,6 +310,16 @@ impl Config {
             }
             Ok(dir.to_owned())
         })?;
+
+        let context_engine_enabled = r.get("context_engine_enabled", true, |v| match v {
+            Value::Boolean(b) => Ok(b),
+            other => Err(format!("must be a boolean, not {}", other.type_str())),
+        })?;
+        let context_engine_bridge = r.get("context_engine_bridge", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
+        let context_engine_python = r.get("context_engine_python", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
+        let context_engine_dir = r.get("context_engine_dir", String::new(), |v| Ok(text_of(&v)?.to_owned()))?;
+        let context_engine_timeout_ms = r.get("context_engine_timeout_ms", 30000, |v| int(v, 1, u32::MAX))?;
+        let context_engine_reindex_timeout_ms = r.get("context_engine_reindex_timeout_ms", 600000, |v| int(v, 1, u32::MAX))?;
 
         let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19456 }, |v| {
             PortRange::parse(text_of(&v)?)
@@ -325,6 +343,7 @@ impl Config {
             stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
             pi_stop_seconds: positive(&mut r, "timeouts.pi_stop_seconds", 10)?,
             sleep_seconds: positive(&mut r, "timeouts.sleep_seconds", 3600)?,
+            archive_sleep_seconds: positive(&mut r, "timeouts.archive_sleep_seconds", 86400)?,
         };
         let watch = Watch {
             tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,
@@ -376,17 +395,21 @@ impl Config {
             machine,
             host,
             concurrency,
-            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,
             context_distill_tier,
-            context_recent_days,
             context_curation_min_records,
             loop_guard_turns,
             open_tier,
             lead_pi_packages,
             pi_adapter,
+            context_engine_enabled,
+            context_engine_bridge,
+            context_engine_python,
+            context_engine_dir,
+            context_engine_timeout_ms,
+            context_engine_reindex_timeout_ms,
             plannotator_ports,
             tiers,
             timeouts,
@@ -411,6 +434,51 @@ impl Config {
         })?;
         let bin_dir = exe.parent().expect("an executable path has a parent");
         Ok(bin_dir.join("..").join("share").join("cpd").join("pi"))
+    }
+
+    /// The bridge script's path: `context_engine_bridge`, else
+    /// `<dir of the cpd binary>/../share/cpd/holographic/bridge.py` (contract §8.2).
+    /// Whether the default exists is for the engine to say (`engine_missing`).
+    pub fn context_engine_bridge_path(&self) -> Result<PathBuf, CpdError> {
+        if !self.context_engine_bridge.is_empty() {
+            return Ok(PathBuf::from(&self.context_engine_bridge));
+        }
+        let exe = std::env::current_exe().map_err(|e| {
+            CpdError::new(ErrorCode::ConfigInvalid, format!("cannot find the cpd binary to locate the holographic bridge: {e}."))
+                .with("key", "context_engine_bridge")
+        })?;
+        let bin_dir = exe.parent().expect("an executable path has a parent");
+        Ok(bin_dir.join("..").join("share").join("cpd").join("holographic").join("bridge.py"))
+    }
+
+    /// The interpreter's path: `context_engine_python`, else `<bridge dir>/venv/bin/python`, the
+    /// dotfiles venv (contract §8.2).
+    pub fn context_engine_python_path(&self) -> Result<PathBuf, CpdError> {
+        if !self.context_engine_python.is_empty() {
+            return Ok(PathBuf::from(&self.context_engine_python));
+        }
+        let bridge = self.context_engine_bridge_path()?;
+        let dir = bridge.parent().expect("a bridge path has a parent");
+        Ok(dir.join("venv").join("bin").join("python"))
+    }
+
+    /// The engine's data directory: `context_engine_dir`, else `$CPD_HOME/engines/holographic`.
+    pub fn context_engine_dir(&self, home: &CpdHome) -> PathBuf {
+        if self.context_engine_dir.is_empty() {
+            home.root().join("engines").join("holographic")
+        } else {
+            PathBuf::from(&self.context_engine_dir)
+        }
+    }
+
+    /// The deadline of one search/sync spawn.
+    pub fn context_engine_timeout(&self) -> Duration {
+        Duration::from_millis(u64::from(self.context_engine_timeout_ms))
+    }
+
+    /// The deadline of a full reindex spawn.
+    pub fn context_engine_reindex_timeout(&self) -> Duration {
+        Duration::from_millis(u64::from(self.context_engine_reindex_timeout_ms))
     }
 }
 
@@ -544,4 +612,17 @@ fn model_ref(s: &str) -> Result<String, String> {
 fn tmux_name(s: &str) -> Result<String, String> {
     let ok = (1..=32).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
     if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not 1-32 characters of A-Z a-z 0-9 _ -")) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The retired `@juicesharp/rpiv-ask-user-question` package is no default of `lead_pi_packages`.
+    #[test]
+    fn default_lead_pi_packages_is_plannotator_only() {
+        const PLANNOTATOR: &str = "npm:@plannotator/pi-extension@0.28.17";
+        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", Path::new("/config.toml")).unwrap();
+        assert_eq!(config.lead_pi_packages, [PLANNOTATOR]);
+    }
 }

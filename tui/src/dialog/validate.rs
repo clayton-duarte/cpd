@@ -11,7 +11,7 @@ use cpd_core::ids::PlanId;
 const PLAN_ID_MAX: usize = 24;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Validator {
+pub enum Validator {
     /// A Plan id (contract §2.1): `^[a-z][a-z0-9-]{1,23}$`
     PlanId,
     /// A Context's or Plan's title: 1 to 200 characters

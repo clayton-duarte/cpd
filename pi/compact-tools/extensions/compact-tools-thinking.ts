@@ -19,9 +19,11 @@ import {
 	Key,
 	matchesKey,
 	stripTerminalSequences,
+	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { chrome, fgOpen, ink, paint, TEXT, thinkingPill } from "./compact-tools-indices.ts";
+import { localTime } from "../../lib/time.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
 
@@ -35,6 +37,8 @@ type ThinkingRenderOptions = {
 	styleControlPrefix?: (prefix: string) => string;
 	/** fold: "toggle": the glyphs of the toggle row that replaces the "└ " control row. */
 	toggle?: ToggleGlyphs;
+	/** `HH:MM` in the process's local time, after the toggle's word (hs-d637); omitted and unwrapped when it does not fit. */
+	time?: string;
 };
 
 const NEXT_PHASE: Record<ThinkingPhase, ThinkingPhase> = {
@@ -68,7 +72,7 @@ function splitThinkingSections(markdown: string): ThinkingSection[] {
 	return [{ summary: "Thinking…", detail: normalized.trim() }];
 }
 
-function compactDetail(
+export function compactDetail(
 	detail: string,
 	availableWidth: number,
 	stylePrefix: (prefix: string) => string,
@@ -115,15 +119,20 @@ export function hasThinkingDetail(markdown: string): boolean {
 	return sectionsHaveDetail(splitThinkingSections(markdown));
 }
 
-/** `╰` (rail) then `<glyph> <label>` (toggle), then ` · <hint>` when there is a hint. */
-function toggleRow(
+/** `╰` (rail) then `<glyph> <label>` (toggle), then ` · <time>`, then ` · <hint>` when there is a hint. */
+export function toggleRow(
 	style: (text: string) => string,
 	glyph: string,
 	label: string,
 	hint: string | undefined,
 	availableWidth: number,
+	time?: string,
 ): string[] {
-	const text = paint(TEXT, ` ${label}`) + (hint ? style(" · ") + hint : "");
+	const base = paint(TEXT, ` ${label}`);
+	const dated = time === undefined ? base : base + paint(TEXT, ` · ${time}`);
+	// A narrow row drops the time rather than wrapping it: the toggle row stays as it was.
+	const prefix = time !== undefined && visibleWidth(stripTerminalSequences(dated)) > Math.max(1, availableWidth - 2) ? base : dated;
+	const text = prefix + (hint ? style(" · ") + hint : "");
 	return wrapTextWithAnsi(text, Math.max(1, availableWidth - 2)).map(
 		(line, index) => `${index === 0 ? style("╰") + paint(TEXT, glyph) : "  "}${line}`,
 	);
@@ -153,8 +162,8 @@ function renderThinkingSections(
 			// fold: "toggle": summary is folded, detail is expanded; only a section with detail has a toggle.
 			const controlLines = toggle
 				? detail.length === 0 ? [] : view === "detail"
-					? toggleRow(styleControlPrefix, toggle.collapse, "collapse", sectionControls, availableWidth)
-					: toggleRow(styleControlPrefix, toggle.expand, "expand", undefined, availableWidth)
+					? toggleRow(styleControlPrefix, toggle.collapse, "collapse", sectionControls, availableWidth, options.time)
+					: toggleRow(styleControlPrefix, toggle.expand, "expand", undefined, availableWidth, options.time)
 				: sectionControls
 				? wrapTextWithAnsi(sectionControls, Math.max(1, availableWidth - 2)).map(
 						(line, index) => `${index === 0 ? styleControlPrefix("└ ") : "  "}${line}`,
@@ -205,6 +214,7 @@ function thinkingBehavior(self: ThinkingMessage, args: any[], original: (...args
 	const owner = bound[bound.length - 1];
 	if (!owner) return original.apply(self, args);
 	const clicked = owner.takeClick(self.thinkingVisibilityOverrides);
+	owner.noteTimestamp((args[0] as { timestamp?: number } | undefined)?.timestamp);
 	const piHidden = self.hideThinkingBlock;
 	self.hideThinkingBlock = owner.hidden;
 	let result: unknown;
@@ -232,6 +242,8 @@ export class ThinkingCycleController {
 	private theme: Theme | undefined;
 	private hasToggleableThinking = false;
 	private refreshThinking: (() => void) | undefined;
+	/** The Unix-ms timestamp of the assistant message the wrapper last saw, for the toggle row's `HH:MM` (hs-d637). */
+	private at: number | undefined;
 
 	constructor(pi: ExtensionAPI, enabled: () => boolean = () => true, toggle: () => ToggleGlyphs | undefined = () => undefined) {
 		const transformer = (markdown: string, context: { messageType: string; availableWidth: number }): string => {
@@ -245,6 +257,7 @@ export class ThinkingCycleController {
 			// Derived once per transform: the rail is drawn for every wrapped line of detail.
 			const rail = theme ? chrome : undefined;
 			const toggleGlyphs = toggle();
+			const time = this.at !== undefined && Number.isFinite(this.at) ? localTime(new Date(this.at).toISOString()) : undefined;
 			return renderThinkingSections(sections, thinkingViewForPhase(this.phase), context.availableWidth, {
 				// Keep thinking chrome neutral across themes: effort-level and border colors can
 				// be intentionally vivid and are not content hierarchy colors.
@@ -261,6 +274,7 @@ export class ThinkingCycleController {
 					: () => undefined,
 				styleControlPrefix: rail,
 				toggle: toggleGlyphs,
+				time,
 			});
 		};
 		pi.registerMarkdownTransformer(transformer);
@@ -276,6 +290,11 @@ export class ThinkingCycleController {
 		if (!this.hasToggleableThinking) return false;
 		this.phase = this.phase !== "hidden" && thinkingViewForPhase(this.phase) === "detail" ? "summary" : "detail";
 		return true;
+	}
+
+	/** The updateContent wrapper hands the message's timestamp here; the toggle row reads the latest (hs-d637). */
+	noteTimestamp(timestamp: number | undefined): void {
+		this.at = timestamp;
 	}
 
 	get hidden(): boolean {

@@ -15,6 +15,7 @@ use tui_tree_widget::TreeState;
 use super::rows::{Id, toggle_id};
 use crate::read::Tree;
 use cpd_core::home::CpdHome;
+use cpd_core::ports::Ports;
 
 /// The folds: the file's content, `{"collapsed": ["<context id>", …], "expanded": [["<id>", …], …]}`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,24 +101,27 @@ impl FoldsFile {
 
     /// Writes `folds` when they differ from the file and a second has passed since the last write. A failure is
     /// returned and leaves the folds unsaved, so the next call retries.
+    #[cfg(test)]
     pub fn save(&mut self, folds: &Folds) -> Result<(), String> {
-        if *folds == self.saved || self.written.is_some_and(|at| at.elapsed() < SAVE_EVERY) {
+        self.save_with(&Ports::current(), folds)
+    }
+
+    /// [`FoldsFile::save`] with the second counted on the clock of `ports`.
+    pub fn save_with(&mut self, ports: &Ports, folds: &Folds) -> Result<(), String> {
+        let now = ports.clock.now();
+        if *folds == self.saved || self.written.is_some_and(|at| now.saturating_duration_since(at) < SAVE_EVERY) {
             return Ok(());
         }
-        self.written = Some(Instant::now());
+        self.written = Some(now);
         self.write(folds).map_err(|e| format!("fold state not saved: {}: {e}", self.path.display()))?;
         self.saved.clone_from(folds);
         Ok(())
     }
 
-    /// Replaces the file: a temporary file beside it, then a rename.
+    /// Replaces the file through [`cpd_core::atomic::write_atomic`].
     fn write(&self, folds: &Folds) -> io::Result<()> {
         let text = serde_json::to_vec(folds).map_err(io::Error::other)?;
-        fs::create_dir_all(self.path.parent().unwrap_or(std::path::Path::new(".")))?;
-        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
-        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
-            let _ = fs::remove_file(&tmp);
-        })
+        cpd_core::atomic::write_atomic(&self.path, text)
     }
 }
 

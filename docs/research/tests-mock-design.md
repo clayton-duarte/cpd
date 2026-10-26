@@ -2,6 +2,9 @@
 
 Static design. Nothing run but two throwaway scratch crates (built in `/tmp`, removed) to check Cargo's `CARGO_BIN_EXE` rules. Findings files are `T-<name>` = `docs/research/tests-mock-<name>.md`. **verified** = read in the source or run here; **unverified** = inferred.
 Rule: tests test only our code; tmux, pi, gh, curl, ssh, the network and real waiting are mocked; git is mocked except a few adapter contract tests; no leak, flake, sleep or orphan.
+
+**Superseded by ADR 0013 and pro-d27 for the fake binaries.**
+
 Scope (audit totals, `rg -c '#\[(test|tokio::test)'`): Rust 3,295 = units 1,342 (T-units:6) + engine 191 + store 110 (T-engine:7) + session 167 (T-session:60) + tooling 201 (T-tooling:17) + tui 365 (149 T-tui-a:19-33 + 216 T-tui-b:46) + flow 508 (321 T-flow-a:30 + 187 T-flow-b:6) + pr 411 (217 T-pr-a:23 + 194 T-pr-b); TypeScript about 963 (T-pi: 511 + 452, approximate, unverified against `node --test`). The Gate runs 3,237 Rust tests (`.config/nextest.toml:67`, comment).
 
 ## 1. The fake tmux

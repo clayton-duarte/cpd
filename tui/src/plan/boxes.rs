@@ -1,8 +1,8 @@
 //! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR (a `cancelled` one muted, below
 //! the others, hs-d518),
 //! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
-//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
-//! box's top border.
+//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need a plain box-drawing line from the needed box's bottom border to the needing
+//! box's top border (no arrowhead; hs-d638).
 //!
 //! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling and the clicks
 //! work on it as on one chart (the pills' rectangles are on the whole buffer), and the row of boxes of each of its
@@ -14,19 +14,22 @@ use std::collections::HashSet;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::{Margin, Position, Rect},
     style::Modifier,
     text::{Line, Span},
     widgets::Widget,
 };
 
+use cpd_core::plan::Phase;
+
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
+use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
-/// Rows between two rows of boxes: the run of lines, then the arrowheads.
+/// Rows between two rows of boxes: the run of lines, then the row that reaches the needing box's top border.
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs says (the widget's padding is the space around it).
 const NO_JOBS: &str = "no Jobs";
@@ -41,20 +44,13 @@ impl Widget for ChartBody<'_> {
         if self.chart.pills.is_empty() {
             Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(area, buf);
         }
-        let src = &self.chart.buf;
-        for y in 0..src.area.height.min(area.height) {
-            for x in 0..src.area.width.min(area.width) {
-                buf[(area.x + x, area.y + y)] = src[(x, y)].clone();
-            }
-        }
+        copy_cells(&self.chart.buf, Rect::new(0, 0, area.width, area.height), buf, Position::new(area.x, area.y));
     }
 }
 
-/// The head of an arrow, just above the needing box's top border: `nf-md-arrow_down_thin` (U+F19B3).
-const ARROW: &str = "\u{F19B3}";
 /// Between a box title's repo name and its base: `nf-md-arrow_right_thin` (U+F19B0).
 const TO: &str = "\u{F19B0}";
-/// The needed box's bottom border where an arrow leaves it.
+/// The needed box's bottom border where a line leaves it.
 const EXIT: &str = "┬";
 
 /// The canvas of boxes: the chart of all of them, and the row of boxes (the level, [`levels`]) of each of its columns.
@@ -128,14 +124,16 @@ fn word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󱆭` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
 /// waiting, red when the Plan's Lead `asked` the User, see [`pr_look`]), else the PR's status, muted. While the Plan's Lead
-/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`.
+/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󱆭`. The dot's
+/// colour is [`Dot::working`]: `plan_failed` makes it the red loader, else `lead_phase` (the Plan's phase; `None`: cyan).
 #[cfg(test)]
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
-    title_of(pr, asked, false, frame)
+    title_of(pr, asked, false, None, frame)
 }
 
-/// [`title`] for a Plan that has a failed Job (`plan_failed`): its working Lead's dot is the red loader.
-fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'static> {
+/// [`title`] for a Plan that has a failed Job (`plan_failed`) and is in phase `lead_phase`: its working Lead's dot is
+/// the red loader when a Job failed, else the bright pair of the phase's colour.
+fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, lead_phase: Option<Phase>, frame: usize) -> Line<'static> {
     let read_only = palette::read_only_text();
     let mut spans: Vec<Span<'static>> = vec![
         " ".into(),
@@ -149,7 +147,7 @@ fn title_of(pr: &PrNode, asked: bool, plan_failed: bool, frame: usize) -> Line<'
             let (word, meaning) = word(pull, asked);
             spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
-                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed), frame, false)]);
+                spans.extend([" ".into(), palette::dot_span(Dot::working(plan_failed, lead_phase), frame, false)]);
             }
             spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
@@ -187,7 +185,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .collect();
     // the tree's rule: the Plan has a failed Job
     let plan_failed = jobs.iter().any(|j| j.status == JobStatus::Failed);
-    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, frame)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title_of(p, needs_user.lead_dialog, plan_failed, needs_user.lead_phase, frame)).collect();
     // each box: its walls and padding around the chart, or around `no Jobs`, and at least as wide as its title (the
     // corner, a dash, the title, the corner)
     let size: Vec<(u16, u16)> = charts
@@ -281,9 +279,8 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             }
         }
     }
-    for &(p, c) in &edges {
+    for &(p, _) in &edges {
         buf[(mid(p), bottom(p))].set_symbol(EXIT).set_style(lines);
-        buf[(mid(c), at[c].1 - 1)].set_symbol(ARROW).set_style(lines);
     }
 
     // the pills on the whole buffer; the columns row of boxes by row, box by box, then by each box's own chart columns
@@ -360,6 +357,7 @@ mod tests {
 
     use super::*;
     use crate::plan::flow::{Dir, Selection};
+    use crate::test_text::rows;
     use crate::read::PrState;
     use cpd_core::config::Tier;
     use cpd_core::ids::{JobKey, PrKey};
@@ -401,10 +399,7 @@ mod tests {
     }
 
     fn text(c: &Chart) -> String {
-        (0..c.buf.area.height)
-            .map(|y| (0..c.buf.area.width).map(|x| c.buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows(&c.buf).join("\n")
     }
 
     fn snap(c: &Chart, want: &str) {
@@ -467,7 +462,7 @@ mod tests {
 │ no Jobs                         │
 ╰────────────────┬────────────────╯
                  ╰╮
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ no Jobs                           │
 ╰───────────────────────────────────╯");
@@ -496,7 +491,7 @@ mod tests {
 
     #[test]
     fn the_arrow_glyphs_are_one_cell_wide() {
-        for glyph in [ARROW, TO] {
+        for glyph in [TO] {
             assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
         }
     }
@@ -562,7 +557,7 @@ mod tests {
         let shown = text(&c);
         assert_eq!([('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()), [2, 2, 2, 2], "two boxes, four corners each: {shown}");
         assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
-        // the needed box's bottom border leaves by a ┬, the needing box's top border has the arrowhead above it
+        // the needed box's bottom border leaves by a ┬, the line reaches the needing box's top border
         assert_eq!(shown.matches('┬').count(), 1, "{shown}");
         assert!(shown.lines().any(|l| l.starts_with("╰") && l.contains('┬') && l.ends_with('╯')), "{shown}");
     }
@@ -770,11 +765,11 @@ mod tests {
 │ 󰝦 a│S1─────󰝦 b│S1             │
 ╰─────────────────┬─────────────────╯
                   │
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 c│S1                          │
 ╰───────────────────────────────────╯");
-        // the arrow is in the lines' colour
+        // the exit and the line are in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
         assert_eq!(Some(exit.fg), palette::fg(Meaning::Nothing).fg);
     }
@@ -788,7 +783,7 @@ mod tests {
 │ 󰝦 types│S1─────󰝦 gql│S1             │
 ╰────────────────────┬────────────────────╯
                    ╭─┴────────────────────────────────────╮
-                   󱦳                                      󱦳
+                   │                                      │
 ╭─ docs · docs-repo 󱦰 main · dispatch ╮ ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 readme│S1                       │ │ 󰝦 page│S1                       │
 ╰─────────────────────────────────────╯ ╰───────────────────────────────────╯");
@@ -803,7 +798,7 @@ mod tests {
 │ 󰝦 a│S1                          │ │ 󰝦 d│S1                        │
 ╰─────────────────┬─────────────────╯ ╰────────────────┬────────────────╯
                   ├────────────────────────────────────╯
-                  󱦳
+                  │
 ╭─ web · web-repo 󱦰 main · dispatch ╮
 │ 󰝦 w│S1                          │
 ╰───────────────────────────────────╯");
@@ -817,12 +812,12 @@ mod tests {
 │ no Jobs                       │
 ╰───────────────┬───────────────╯
                 ├─────────────────╮
-                󱦳                 │
+                │                 │
 ╭─ b · b-repo 󱦰 main · dispatch ╮ │
 │ no Jobs                       │ │
 ╰───────────────┬───────────────╯ │
                 ├─────────────────╯
-                󱦳
+                │
 ╭─ c · c-repo 󱦰 main · dispatch ╮
 │ no Jobs                       │
 ╰───────────────────────────────╯");

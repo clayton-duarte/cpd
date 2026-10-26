@@ -16,6 +16,15 @@ mod show;
 mod span;
 mod submit;
 
+#[cfg(test)]
+mod cancel_tests;
+
+#[cfg(test)]
+mod incident_tests;
+
+#[cfg(test)]
+mod submit_tests;
+
 use crate::args::PlanArg;
 use crate::driver;
 use crate::env::Env;

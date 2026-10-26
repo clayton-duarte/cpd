@@ -35,16 +35,27 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Parser;
 use cpd::cli::Cli;
+use cpd_core::clock::{Clock, SystemClock};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard;
 use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
+
+pub mod cockpit;
+pub mod engine;
+pub mod fx;
+pub mod healthy;
+pub mod pi;
+pub mod screen;
+pub mod session;
+pub mod tree;
+pub mod wrapper;
 
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
@@ -84,17 +95,10 @@ pub const TICK_SECONDS: &str = "0.1";
 pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
 
 /// The poll periods of a whole Plan's processes, as test overrides (contract §1.2), for a test that runs an engine or
-/// a Plan end to end: the engine's E5 every tick, A9's kill pauses (the engine's and the drivers'), the drivers (A4, a
-/// review Job's Lead) and the wrappers (pi's file, a fork's source) every 50 ms. What such a test waits for is the
-/// next look of each.
-pub const PLAN_POLLS: [(&str, &str); 6] = [
-    PR_POLL_EVERY_TICK,
-    ("CPD_TEST_DRIVER_POLL", "0.05"),
-    ("CPD_TEST_LEAD_POLL", "0.05"),
-    ("CPD_TEST_KILL_PAUSE", "0.05"),
-    ("CPD_TEST_FILE_POLL", "0.05"),
-    ("CPD_TEST_SOURCE_POLL", "0.05"),
-];
+/// a Plan end to end: the engine's E5 every tick and the wrappers (pi's file, a fork's source) every 50 ms. What such a
+/// test waits for is the next look of each. (The drivers' polls and kill pauses have no override: a test of a driver
+/// runs it in this process on the `ManualClock`.)
+pub const PLAN_POLLS: [(&str, &str); 3] = [PR_POLL_EVERY_TICK, ("CPD_TEST_FILE_POLL", "0.05"), ("CPD_TEST_SOURCE_POLL", "0.05")];
 
 /// The teardown script. It finds nothing by scanning: it stops what the env tracks.
 ///
@@ -108,7 +112,10 @@ pub const PLAN_POLLS: [(&str, &str); 6] = [
 ///   the tmux server once more after them (a driver may have started it again).
 ///
 /// A process that leaves the group (`setsid`, `setpgid`) and that cpd does not record is not
-/// stopped. Each stop is SIGTERM, then SIGKILL to what is left after a grace of 1 s.
+/// stopped, except in an env that had a tmux server (`tmux_used`): there the last step stops every process
+/// that runs with the env's `CPD_HOME` (the server and its panes inherit it), so that a pane of its tmux
+/// never outlives the test, even if `list-panes` failed or the server's SIGHUP came late (a pane the
+/// Gate's leak check, `scripts/gate-run.sh`, found as `zsh -c sleep 120`). Each stop is SIGTERM, then SIGKILL to what is left after a grace of 1 s.
 ///
 /// `sh teardown.sh <pgid>` tears the env down and removes its directory; `sh teardown.sh watch
 /// <pid>` (the reaper, the group's leader) waits until `<pid>` is gone or the directory is, and
@@ -209,11 +216,39 @@ stop_tmux() {
   done
 }
 
+# tmux_used: this env ever had a tmux server: its socket file is there (a server that was killed
+# leaves its socket file behind, so a test that killed its own server still shows).
+tmux_used() {
+  for _s in "$tmuxdir"/tmux-*/"$socket" "$tmuxdir"/tmux-*/"$socket"-*; do
+    [ -S "$_s" ] && return 0
+  done
+  return 1
+}
+
+# tagged: the pids of the processes that run with this env's CPD_HOME, but this one: the tmux server
+# and its panes inherit it from the cpd command or the test that started the server.
+tagged() {
+  if [ "$(uname)" = Darwin ]; then
+    ps -axww -E -o pid=,command= 2>/dev/null | while read -r _p _c; do
+      case " $_c " in *" CPD_HOME=$home "*) [ "$_p" -eq "$$" ] || echo "$_p" ;; esac
+    done
+  else
+    for _e in /proc/[0-9]*/environ; do
+      _p=${_e#/proc/}
+      _p=${_p%/environ}
+      { grep -qzxF "CPD_HOME=$home" "$_e" && [ "$_p" -ne "$$" ] && echo "$_p"; } 2>/dev/null
+    done
+  fi
+}
+
 # teardown PGID: stops the env's group and its tmux server, then what cpd detached (now that
 # nothing is left to start more), then the tmux server again (a driver may have started one
-# since), and removes the directory.
+# since), then, for an env that had a tmux server, every process left with the env's CPD_HOME
+# (a pane that `list-panes` did not give, or that outlived its server's SIGHUP), and removes the directory.
 teardown() {
   unset TMUX
+  _tmux=
+  ! tmux_used || _tmux=1
   stop "-$1"
   stop_tmux
   _r=
@@ -222,6 +257,7 @@ teardown() {
   done
   stop $_r
   stop_tmux
+  [ -z "$_tmux" ] || stop $(tagged)
   # A tmux dir outside the env (a long env path): only this env's socket file goes, never tmux's own directory.
   [ "$tmuxdir" = "$dir/tmux" ] || rm -f "$tmuxdir/tmux-$(id -u)/$socket" "$tmuxdir/tmux-$(id -u)/$socket"-*
   # The fake tmux's state files of this socket and the derived ones (`fake-tmux-<socket>.db*`, `fake-tmux-<socket>-*`).
@@ -342,26 +378,147 @@ const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
 /// it) leaves nothing inconsistent, so it is ignored.
 static SCRIPT_WRITE_VS_SPAWN: RwLock<()> = RwLock::new(());
 
+/// The counter that names the temporary file [`write_executable`] and
+/// [`copy_executable`] rename over their target: unique within this process.
+static TEMP_NAME: AtomicUsize = AtomicUsize::new(0);
+
+/// The path of a temporary file beside `path`, in the same directory so that the
+/// rename over the target never crosses a filesystem.
+fn temp_beside(path: &Path) -> PathBuf {
+    let n = TEMP_NAME.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp-{}-{n}", std::process::id()))
+}
+
 /// Writes the executable script `path` (mode 0755).
 ///
-/// Tests run in parallel threads of one process. `fork` copies every open file
+/// The script is written to a temporary file beside `path` and renamed over it,
+/// never opened in place: a file that is being executed (an ELF for its whole
+/// life, a script until its interpreter has exec'd) cannot be opened for writing
+/// and the open fails with ETXTBSY ("Text file busy"), while a rename over it is
+/// allowed. The rename is atomic, so a reader sees the old or the new file, never
+/// a half-written one.
+///
+/// Tests also run in parallel threads of one process. `fork` copies every open file
 /// descriptor, and close-on-exec acts only at the child's `exec`. A child forked
-/// by a concurrent test while this file is open for writing therefore holds a
-/// write descriptor to it for a moment, and an `exec` of the script in that
-/// moment fails with ETXTBSY ("Text file busy"). So the file is written and
-/// closed under the exclusive lock, and every spawn ([`spawn`], [`output`])
-/// takes the shared lock until the child has exec'd. Never retry instead.
+/// by a concurrent test while the temporary file is open for writing therefore holds
+/// a write descriptor to it for a moment, but that temporary file is never exec'd.
+/// So the temporary file is written and closed under the exclusive lock, and every
+/// spawn ([`spawn`], [`output`]) takes the shared lock until the child has exec'd.
+/// Never retry instead.
 pub fn write_executable(path: &Path, contents: &str) {
     let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
-    fs::write(path, contents).expect("write script");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod script");
+    let temp = temp_beside(path);
+    fs::write(&temp, contents).expect("write script");
+    fs::set_permissions(&temp, fs::Permissions::from_mode(0o755)).expect("chmod script");
+    fs::rename(&temp, path).expect("rename script over its target");
 }
 
 /// Copies the executable `from` to `to` (an install of a binary the test later runs), under
-/// the same exclusive lock and for the same reason as [`write_executable`].
+/// the same exclusive lock and for the same reason as [`write_executable`]: to a temporary
+/// file beside `to` (which `fs::copy` gives the source's mode) and renamed over it, so a
+/// running `to` is never opened for writing.
 pub fn copy_executable(from: &str, to: &Path) {
     let _exclusive = SCRIPT_WRITE_VS_SPAWN.write().unwrap_or_else(PoisonError::into_inner);
-    fs::copy(from, to).expect("copy executable");
+    let temp = temp_beside(to);
+    fs::copy(from, &temp).expect("copy executable");
+    fs::rename(&temp, to).expect("rename executable over its target");
+}
+
+/// A fake holographic bridge (docs/research/context-holographic.md `## Bridge`): a shell script
+/// cpd spawns as `<context_engine_python> <context_engine_bridge> [--db <path>]`, speaking JSON
+/// lines. It logs every request to [`FakeBridge::requests`] and answers each command with the
+/// content of `<responses>/<cmd>` (or `<responses>/<cmd>-<n>`, n from 1, for the nth call of a
+/// repeated command such as `search`). A command with no response file answers `{"ok":true}`.
+/// The caller scripts the engine's answers; a test never runs holographic.
+pub struct FakeBridge {
+    /// The directory the fake and its files live in.
+    pub root: PathBuf,
+    /// The script cpd runs as the bridge.
+    pub script: PathBuf,
+    /// `requests.jsonl`: every request line, in order.
+    pub log: PathBuf,
+    /// One file per command (and `<cmd>-<n>` per repeated call).
+    pub responses: PathBuf,
+    /// `context_engine_dir`: the fake's data directory; the fake ignores it.
+    pub data_dir: PathBuf,
+}
+
+/// The shell body of [`FakeBridge`] (see its documentation).
+const BRIDGE_SHIM: &str = r#"
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
+  no_space=$(printf '%s' "$line" | tr -d ' ')
+  cmd=$(printf '%s' "$no_space" | sed -n 's/.*"cmd":"\([A-Za-z_]*\)".*/\1/p')
+  if [ "$cmd" = "search" ]; then
+    n=$(cat "$resp/count-search" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    printf '%s' "$n" > "$resp/count-search"
+    f="$resp/search-$n"
+    [ -f "$f" ] || f="$resp/search"
+  else
+    f="$resp/$cmd"
+  fi
+  if [ -f "$f" ]; then cat "$f"; else printf '%s\n' '{"ok":true}'; fi
+done
+"#;
+
+impl FakeBridge {
+    /// Writes the fake under `env.root()` and returns it.
+    pub fn new(env: &TestEnv) -> FakeBridge {
+        let root = env.root().join("fake-bridge");
+        let bridge = FakeBridge {
+            script: root.join("bridge.py"),
+            log: root.join("requests.jsonl"),
+            responses: root.join("responses"),
+            data_dir: root.join("engine"),
+            root,
+        };
+        fs::create_dir_all(&bridge.responses).expect("create the fake bridge responses");
+        fs::create_dir_all(&bridge.data_dir).expect("create the fake engine data dir");
+        bridge.install(BRIDGE_SHIM);
+        bridge
+    }
+
+    /// Writes the bridge script with `body` as its shell body (the shim, or a failing one).
+    pub fn install(&self, body: &str) {
+        write_executable(&self.script, &format!("#!/bin/sh\nlog={}\nresp={}\n{body}\n", sh_quote(&self.log.to_string_lossy()), sh_quote(&self.responses.to_string_lossy())));
+    }
+
+    /// Answers the first call of `cmd` with the one-line `json`.
+    pub fn reply(&self, cmd: &str, json: &str) {
+        fs::write(self.responses.join(cmd), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Answers the `n`th (1-based) call of `cmd` with the one-line `json`.
+    pub fn reply_n(&self, cmd: &str, n: usize, json: &str) {
+        fs::write(self.responses.join(format!("{cmd}-{n}")), format!("{json}\n")).expect("write a bridge response");
+    }
+
+    /// Every request line the fake answered, parsed.
+    pub fn requests(&self) -> Vec<Value> {
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("a request line is not JSON ({e}): {line}")))
+            .collect()
+    }
+
+    /// The `cmd` of every request the fake answered, in order.
+    pub fn commands(&self) -> Vec<String> {
+        self.requests().iter().map(|request| request["cmd"].as_str().unwrap_or_default().to_owned()).collect()
+    }
+
+    /// The `config.toml` keys that point cpd at this fake: the bridge, `/bin/sh` as the interpreter,
+    /// and the fake's data directory, with the engine enabled.
+    pub fn config(&self) -> String {
+        format!(
+            "context_engine_enabled = true\ncontext_engine_bridge = \"{}\"\ncontext_engine_python = \"/bin/sh\"\ncontext_engine_dir = \"{}\"\n",
+            self.script.display(),
+            self.data_dir.display()
+        )
+    }
 }
 
 /// `cmd.spawn()`, never overlapping with [`write_executable`]. `Command::spawn`
@@ -378,11 +535,30 @@ pub fn output(cmd: &mut Command) -> io::Result<Output> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()))?.wait_with_output()
 }
 
-/// Makes the file `path` look last modified `by` ago, for a code that waits for a quiet file
-/// (a session file nobody wrote to for a while): set the time, do not sleep until it has passed.
-pub fn backdate(path: &Path, by: Duration) {
-    let file = fs::OpenOptions::new().write(true).open(path).expect("open the file to backdate");
-    file.set_modified(std::time::SystemTime::now() - by).expect("set the modification time");
+/// Like [`output`], but writes `stdin` to the child (then closes it) and bounds
+/// the wait: the child is killed and reaped when it outlives `deadline`, and
+/// `io::ErrorKind::TimedOut` is returned. The bridge tests cannot use [`output`],
+/// which nulls stdin.
+pub fn output_with_stdin(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> io::Result<Output> {
+    use std::io::Write;
+    let mut child = spawn(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()))?;
+    {
+        let mut pipe = child.stdin.take().expect("stdin is piped");
+        let _ = pipe.write_all(stdin);
+        // Dropping the pipe closes it: the child sees EOF.
+    }
+    let done = poll(deadline, || child.try_wait().transpose());
+    match done {
+        Some(status) => {
+            status?;
+            child.wait_with_output()
+        }
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(io::Error::new(io::ErrorKind::TimedOut, "the child did not exit before its deadline"))
+        }
+    }
 }
 
 /// How long [`wait_until`] and [`wait_screen`] wait: the one wait policy of the suite, long
@@ -392,7 +568,7 @@ pub const WAIT: Duration = Duration::from_secs(30);
 /// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
 /// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
 /// ms (a `tmux capture-pane`).
-const POLL: Duration = Duration::from_millis(10);
+pub const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
@@ -400,24 +576,34 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 }
 
 /// [`wait_until`] with its own `timeout`.
-pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
-    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+pub fn wait_until_for(what: &str, timeout: Duration, ready: impl FnMut() -> bool) {
+    wait_until_on(&SystemClock, what, timeout, ready);
+}
+
+/// [`wait_until_for`] on `clock`: a test of the wait itself passes a `ManualClock`, whose time is virtual.
+pub fn wait_until_on(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll_on(clock, timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
 }
 
 /// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
 /// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
 /// [`wait_some`], or its own message); a check that something does not happen within a window
 /// asserts `None`.
-pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
-    let deadline = Instant::now() + timeout;
+pub fn poll<T>(timeout: Duration, ready: impl FnMut() -> Option<T>) -> Option<T> {
+    poll_on(&SystemClock, timeout, ready)
+}
+
+/// [`poll`] on `clock`: the time it reads and the naps it takes are the clock's.
+pub fn poll_on<T>(clock: &dyn Clock, timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = clock.now() + timeout;
     loop {
         if let Some(value) = ready() {
             return Some(value);
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return None;
         }
-        std::thread::sleep(POLL);
+        clock.sleep(POLL);
     }
 }
 
@@ -437,74 +623,16 @@ pub fn wait_for_flock_waiter(path: &Path) {
     });
 }
 
-/// What [`answer_reads`] does after answering a read.
-pub enum Next {
-    /// Put the next FIFO in the file's place: the next read is answered too.
-    Hold,
-    /// Stop answering: the answer has put in the file's place what later reads find.
-    Done,
-}
-
-/// Holds `target`, a file the code under test reads, so that the test is there for each read of it: the rendezvous
-/// for "after the first read failed", where a sleep would be luck. Runs `run` and returns its result with the number
-/// of reads answered.
-///
-/// `target` is replaced by a FIFO (the caller has kept a copy of what it held, to put back). A read of a FIFO blocks
-/// in `open(2)` until a writer opens it: that is the observation of the read. Then `answer(n, file)` runs for the
-/// `n`th read (from 0) with the reader still blocked in the file's other end: what it writes is what the reader
-/// reads, and the reader reads the end of the file once `answer` returns and the file is dropped. After the answer
-/// [`Next::Hold`] puts the next FIFO in place **before** the reader is released, so a retry reads a file of its own
-/// and is answered in its turn: every FIFO is read once, which is what makes the count exact. At most `rounds` reads
-/// are answered; a read after the last gets an empty regular file. The FIFOs are `<target>.held-<n>`.
-pub fn answer_reads<R: Send>(
-    target: &Path,
-    rounds: usize,
-    mut answer: impl FnMut(usize, &mut fs::File) -> Next + Send,
-    run: impl FnOnce() -> R,
-) -> (R, usize) {
-    let held = |n: usize| target.with_extension(format!("held-{n}"));
-    for n in 0..rounds {
-        nix::unistd::mkfifo(&held(n), nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).expect("make a FIFO");
-    }
-    fs::rename(held(0), target).expect("put the first FIFO in place");
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    std::thread::scope(|s| {
-        let served = s.spawn(|| {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut n = 0;
-            while n < rounds && !stop.load(Ordering::SeqCst) {
-                // O_NONBLOCK: the open of a FIFO's write end fails (ENXIO) until a reader has the other end open.
-                let open = || fs::OpenOptions::new().write(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(target).ok();
-                let Some(mut file) = poll(Duration::from_millis(100), open) else { continue };
-                let next = answer(n, &mut file);
-                n += 1;
-                if matches!(next, Next::Done) {
-                    break;
-                }
-                if n < rounds {
-                    fs::rename(held(n), target).expect("put the next FIFO in place");
-                } else {
-                    fs::write(held(n), "").expect("write the empty file");
-                    fs::rename(held(n), target).expect("put the empty file in place");
-                }
-            }
-            n
-        });
-        let result = run();
-        stop.store(true, Ordering::SeqCst);
-        let served = served.join().expect("the thread that answers the reads");
-        for n in 0..=rounds {
-            let _ = fs::remove_file(held(n));
-        }
-        (result, served)
-    })
-}
-
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
-pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
+pub fn wait_some<T>(what: &str, timeout: Duration, ready: impl FnMut() -> Result<T, String>) -> T {
+    wait_some_on(&SystemClock, what, timeout, ready)
+}
+
+/// [`wait_some`] on `clock` (see [`wait_until_on`]).
+pub fn wait_some_on<T>(clock: &dyn Clock, what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
     let mut state = String::new();
-    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
+    poll_on(clock, timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
@@ -652,9 +780,12 @@ fn has_flock() -> bool {
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
-    /// The env's process group: the reaper's pid.
-    pgid: u32,
-    /// The reaper ([`TestEnv::empty`]), until the teardown stops it.
+    /// Whether `TMUX_TMPDIR` is `<root>/tmux` whatever the root's length: set by an `Fx` on fake ports, whose tmux has no
+    /// socket (the 100-character limit of [`tmux_tmpdir_for`] is a real server's) and must not share `/tmp`.
+    pub(crate) tmux_in_root: bool,
+    /// The env's process group: the reaper's pid; none for a [`TestEnv::bare`] env, which starts no process.
+    pgid: Option<u32>,
+    /// The reaper ([`TestEnv::empty`]), until the teardown stops it; none for a [`TestEnv::bare`] env.
     reaper: Mutex<Option<Child>>,
     /// The read-only connection [`TestEnv::read`] reads on, kept open across reads (a new connection parses the whole
     /// schema at its first query: ~10-15 ms a read), with the identity (device, inode) of the `cpd.db` it opened.
@@ -722,7 +853,17 @@ impl TestEnv {
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     /// Where there is no `flock` (macOS) the harness needs perl, for the shim it writes to `bin/`.
     pub fn empty() -> TestEnv {
-        let sqlite3 = sqlite3();
+        TestEnv::build(true)
+    }
+
+    /// [`TestEnv::empty`] without a process: no reaper and no teardown script, so nothing is started and `Drop` only
+    /// removes the directory. For [`fx::Fx`], whose commands run in the test process; a process a command of it starts
+    /// is not stopped by any teardown.
+    pub fn bare() -> TestEnv {
+        TestEnv::build(false)
+    }
+
+    fn build(reaped: bool) -> TestEnv {
         let envs_dir = envs_dir();
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
@@ -730,21 +871,24 @@ impl TestEnv {
             Some(run) => format!("cpdt-{run}-{}-{n}", std::process::id()),
             None => format!("cpdt-{}-{n}", std::process::id()),
         };
-        let script = dir.path().join("teardown.sh");
-        let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
-        fs::write(
-            &script,
-            format!(
-                "dir={}\nsocket={}\ntmuxdir={}\nsqlite3={}\n{TEARDOWN_SH}",
-                sh_quote(&dir.path().to_string_lossy()),
-                sh_quote(&tmux_socket),
-                sh_quote(&tmuxdir.to_string_lossy()),
-                sh_quote(&sqlite3.to_string_lossy())
-            ),
-        )
-        .expect("write teardown script");
-        let reaper = start_reaper(&script);
-        let env = TestEnv { dir, tmux_socket, pgid: reaper.id(), reaper: Mutex::new(Some(reaper)), reader: Mutex::new(None) };
+        let reaper = reaped.then(|| {
+            let sqlite3 = sqlite3();
+            let script = dir.path().join("teardown.sh");
+            let tmuxdir = env_tmux_tmpdir(dir.path(), &tmux_socket);
+            fs::write(
+                &script,
+                format!(
+                    "dir={}\nsocket={}\ntmuxdir={}\nsqlite3={}\n{TEARDOWN_SH}",
+                    sh_quote(&dir.path().to_string_lossy()),
+                    sh_quote(&tmux_socket),
+                    sh_quote(&tmuxdir.to_string_lossy()),
+                    sh_quote(&sqlite3.to_string_lossy())
+                ),
+            )
+            .expect("write teardown script");
+            start_reaper(&script)
+        });
+        let env = TestEnv { dir, tmux_socket, tmux_in_root: false, pgid: reaper.as_ref().map(Child::id), reaper: Mutex::new(reaper), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -782,7 +926,7 @@ impl TestEnv {
         if self.teardown_script().exists() {
             // stderr stays the test's: a failed read of the store shows in its output.
             let mut teardown = Command::new("sh");
-            teardown.arg(self.teardown_script()).arg(self.pgid.to_string()).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null());
+            teardown.arg(self.teardown_script()).arg(self.pgid.expect("a teardown script has a reaper").to_string()).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null());
             let _ = spawn(&mut teardown).and_then(|mut child| child.wait());
         }
         let _ = fs::remove_dir_all(self.root());
@@ -829,6 +973,9 @@ impl TestEnv {
 
     /// The `TMUX_TMPDIR` of this env's private tmux server: in the env, or `/tmp` when its socket path would be too long.
     pub fn tmux_tmpdir(&self) -> PathBuf {
+        if self.tmux_in_root {
+            return self.root().join("tmux");
+        }
         env_tmux_tmpdir(self.root(), self.tmux_socket())
     }
 
@@ -854,33 +1001,48 @@ impl TestEnv {
     /// stopped only when cpd records it ([`TEARDOWN_SH`]).
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
         let mut cmd = Command::new(program);
-        for (key, _) in std::env::vars_os() {
-            let k = key.to_string_lossy();
-            let drop = ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"]
-                .iter()
-                .any(|p| k.starts_with(p))
-                || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
-                || k == "TMUX"
-                || k == "TMUX_PANE"
-                || k == "ZDOTDIR";
-            if drop {
-                cmd.env_remove(&key);
-            }
+        let (remove, set) = self.isolation();
+        for key in remove {
+            cmd.env_remove(key);
         }
+        for (key, value) in set {
+            cmd.env(key, value);
+        }
+        cmd.current_dir(self.root()).stdin(Stdio::null());
+        if let Some(pgid) = self.pgid {
+            cmd.process_group(pgid as i32);
+        }
+        cmd
+    }
+
+    /// The environment of every command run here, as the variables of this process to remove (the `CPD_*`, `PI_*`, ...
+    /// of [`TestEnv::command`]) and the ones to set: the one place that says what isolated means, for the `Command` of
+    /// [`TestEnv::command`] and for the process [`fx::Fx`] runs `cpd` in.
+    pub fn isolation(&self) -> (Vec<OsString>, Vec<(&'static str, OsString)>) {
+        let remove = std::env::vars_os()
+            .map(|(key, _)| key)
+            .filter(|key| {
+                let k = key.to_string_lossy();
+                ["CPD_", "PI_", "GIT_", "XDG_", "PLANNOTATOR_", "GH_", "GITHUB_", "SSH_"].iter().any(|p| k.starts_with(p))
+                    || PROXY_VARS.iter().any(|v| k.eq_ignore_ascii_case(v))
+                    || k == "TMUX"
+                    || k == "TMUX_PANE"
+                    || k == "ZDOTDIR"
+            })
+            .collect();
         let mut paths = vec![self.bin()];
         paths.extend(std::env::split_paths(inherited_path()));
-        cmd.env("PATH", std::env::join_paths(paths).expect("PATH"))
-            .env("CPD_HOME", self.cpd_home())
-            .env("HOME", self.home())
-            .env("TMUX_TMPDIR", self.tmux_tmpdir())
-            .env("FAKE_TMUX_SERVER_PID", std::process::id().to_string())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig"))
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .current_dir(self.root())
-            .stdin(Stdio::null())
-            .process_group(self.pgid as i32);
-        cmd
+        let set = vec![
+            ("PATH", std::env::join_paths(paths).expect("PATH")),
+            ("CPD_HOME", self.cpd_home().into()),
+            ("HOME", self.home().into()),
+            ("TMUX_TMPDIR", self.tmux_tmpdir().into()),
+            ("FAKE_TMUX_SERVER_PID", std::process::id().to_string().into()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+            ("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig").into()),
+            ("GIT_TERMINAL_PROMPT", "0".into()),
+        ];
+        (remove, set)
     }
 
     /// The store of this env's `$CPD_HOME`, opened (migrated) now.
@@ -937,7 +1099,12 @@ impl TestEnv {
     /// Gives `plan` an outline whose `done_when` covers every PR with a draft Job, which a Plan review needs
     /// (commands.md §4.6, §4.13; hs-d502). Run it right before `plan review`; the same outline twice changes nothing.
     pub fn outline_for_review(&self, plan: &str) {
-        let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
+        self.outline_with(plan, |args| self.cpd(args));
+    }
+
+    /// [`TestEnv::outline_for_review`] with the commands run by `cpd` (the binary, or an [`fx::Fx`]'s process).
+    pub fn outline_with(&self, plan: &str, cpd: impl Fn(&[&str]) -> Run) {
+        let shown = cpd(&["plan", "show", "--plan", plan]).ok();
         let mut done_when = serde_json::Map::new();
         for job in shown["jobs"].as_array().expect("plan show lists the jobs") {
             if job["status"] == "draft" {
@@ -947,7 +1114,7 @@ impl TestEnv {
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
         let path = self.root().join(format!("outline-{plan}.json"));
         fs::write(&path, outline.to_string()).expect("write the outline");
-        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
+        cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 
     /// Runs `cpd <args>` from this env's root.
@@ -1290,6 +1457,16 @@ impl Locale {
         }
     }
 
+    /// This locale's variables, to set on a call that runs in this process (`Fx::cpd_with`).
+    pub fn vars(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Locale::Unset => &[],
+            Locale::EmptyLang => &[("LANG", "")],
+            Locale::LangC => &[("LANG", "C")],
+            Locale::LcAllC => &[("LC_ALL", "C")],
+        }
+    }
+
     /// The same as `env` words for `env -i`: what a wrapper script passes to the real tmux.
     pub fn env_words(self) -> &'static str {
         match self {
@@ -1299,6 +1476,17 @@ impl Locale {
             Locale::LcAllC => "LC_ALL=C",
         }
     }
+}
+
+/// What a caller built with `env -i` must pass on for the Gate's tripwire (`scripts/tripwire/tmux`) to know the test:
+/// `NAME='value'` words for `NEXTEST_BINARY_ID` and `NEXTEST_TEST_NAME` (the pair it matches against `allow.txt`; without
+/// them it denies the call as an unidentified caller) and `TMPDIR` (where it logs a denied call for the Gate to print).
+/// Only the variables that are set: the same words, leading space included, for `env -i PATH=... {words} tmux`.
+pub fn tripwire_env_words() -> String {
+    ["NEXTEST_BINARY_ID", "NEXTEST_TEST_NAME", "TMPDIR"]
+        .iter()
+        .filter_map(|key| std::env::var(key).ok().filter(|v| !v.is_empty()).map(|v| format!(" {key}={}", sh_quote(&v))))
+        .collect()
 }
 
 /// The first `tmux` of the real `PATH`.
