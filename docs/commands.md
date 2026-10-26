@@ -3132,7 +3132,7 @@ The lines (`╭`, `│`, `╰`) are colour 8 and the toggle's arrows and words c
 
   | Row | Items | Command each runs |
   |---|---|---|
-  | Inbox item | Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss | `inbox snooze <id> 15m`, `inbox snooze <id> 1h`, `inbox snooze <id> tomorrow`, `inbox dismiss <id>` (§21.3, §21.4) |
+  | Inbox item | Claim (review-requested only), Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss | `inbox claim <id>` (§21.7, review-requested items only), `inbox snooze <id> 15m`, `inbox snooze <id> 1h`, `inbox snooze <id> tomorrow`, `inbox dismiss <id>` (§21.3, §21.4) |
   | Context | New Plan…, Rename…, Copy id, Archive, Delete | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8), `context delete` (§3.14) |
   | Plan | New session…, Rename…, Copy id, Archive, Delete | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10), `plan delete` (§4.14) |
   | Fork (side Session) | Open, Rename…, Fork…, Copy id, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
@@ -4075,7 +4075,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 
 | View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
-| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived`, `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` (and the `context-record`, Job, Attempt, PR, Escalation and Plan review kinds of `tui/src/tree/kinds.rs`: every Event that moves a row the snapshot reads) | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its label (an id, §13.2 "Labels"; the dynamic `title` of a Session is never drawn in the tree, hs-d257), state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). Inside the archive row, after the archived Plans and forks: every archived Manager Session as a muted row (colour 8, fg 8), named `<context>-manager`, with its own dot (rule below) drawn in colour 8, inside each Context's block within the archive row. The Context row's own dot comes only from its live Manager. The **Inbox section** (§13.2) shows the open, visible items (snoozed and dismissed ones are hidden; `engine-down` included, when no live Manager exists), in its order, with each item's `kind`, `urgency`, `label`, `session`, `plan`, `event`, `url` and `opened_at`; and each Session's state and place for the glyphs the Inbox does not give (the spinner, `󰽤`). The Inbox, not the Sessions' state, says who needs the User, so the snapshot no longer reads the Plan's pending review or its pull requests' checks for the dots. Two changes of the Inbox have no Event: a snooze ends by the clock, so the tree also re-reads when the earliest snooze of an open item ends (`snoozed_until`, read with each snapshot), and the engine stops or starts (`engine-down`, never stored), so with each poll of the Events it looks at the engine's lock (§1.4) and re-reads when that changed. It re-reads on no timer. It redraws once per 50 ms frame only while a spinner is on screen (§17 redraw rule), and every second while the Inbox section shows items (an item's age, from `opened_at`). Also read, and written: `run/tui/tree-folds.json`, the Contexts' folds and the archive row's fold, read once at the view's start and rewritten when a fold changes (§13.2, hs-d260), the view's own state |
+| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived`, `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed`, `inbox-claimed` (and the `context-record`, Job, Attempt, PR, Escalation and Plan review kinds of `tui/src/tree/kinds.rs`: every Event that moves a row the snapshot reads) | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its label (an id, §13.2 "Labels"; the dynamic `title` of a Session is never drawn in the tree, hs-d257), state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). Inside the archive row, after the archived Plans and forks: every archived Manager Session as a muted row (colour 8, fg 8), named `<context>-manager`, with its own dot (rule below) drawn in colour 8, inside each Context's block within the archive row. The Context row's own dot comes only from its live Manager. The **Inbox section** (§13.2) shows the open, visible items (snoozed and dismissed ones are hidden; `engine-down` included, when no live Manager exists), in its order, with each item's `kind`, `urgency`, `label`, `session`, `plan`, `event`, `url` and `opened_at`; and each Session's state and place for the glyphs the Inbox does not give (the spinner, `󰽤`). The Inbox, not the Sessions' state, says who needs the User, so the snapshot no longer reads the Plan's pending review or its pull requests' checks for the dots. Two changes of the Inbox have no Event: a snooze ends by the clock, so the tree also re-reads when the earliest snooze of an open item ends (`snoozed_until`, read with each snapshot), and the engine stops or starts (`engine-down`, never stored), so with each poll of the Events it looks at the engine's lock (§1.4) and re-reads when that changed. It re-reads on no timer. It redraws once per 50 ms frame only while a spinner is on screen (§17 redraw rule), and every second while the Inbox section shows items (an item's age, from `opened_at`). Also read, and written: `run/tui/tree-folds.json`, the Contexts' folds and the archive row's fold, read once at the view's start and rewritten when a fold changes (§13.2, hs-d260), the view's own state |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2); when a Manager is in the chat slot, the Context's Plans read through `read::tree()` with each Plan's Lead SessionNode's dot, Job counts, done_at and archived_at; the activity Events of the window, each with its kind of activity for the bar's colour (§13.2 Kinds), and each Plan's latest activity Event; the Attempts not ended or ended inside the window | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot); when a Manager is in the slot, every Event of the Manager's Context and `session-moved` | one box per PR that is not `cancelled`, top to bottom by needs and linked by them, the merged ones first and the others below them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15); with a Manager, Pulse (one row per Plan of the Context). Also read: the Plan's latest Plan review (its status and number)  and each pull request's `url`, for the `󱆭` links (§13.2). Also read: each pull request's `mergeable` and whether its PR has an update Job not ended (`jobs.kind = 'update'`, `queued` or `running`) with its status, for the `conflict`/`updating` title (§13.2, hs-d532), and the Plan's Lead Session's `state`, for the working dot beside the state word (§13.2; hs-d335; the re-read at least every 2 s picks up a change of `state`; see Rates for the redraw rule). A conflict clears with no Event (only becoming `conflicting` appends `pr-feedback`), so the view also re-reads its snapshot when a `pull_requests` row changed (see Rates), with the same coalescing, and the Plan view on no timer (Pulse: see Rates). Not drawn, so not read: open Escalations. Also read, and written: `run/tui/plan-scroll.json`, the Plans' scroll offsets, read once at the view's start and rewritten when an offset changes or the Plan changes (§13.2, hs-d254), the view's own state. |
 | `widgets` (Deploy column) | the `open` rows of `pull_requests` with `authored` 1 (contract §4.4), with their `mergeable` and, for an owned one, its PR's update Job not ended and its status (the ` conflict`/` updating` flag, §13.2, hs-d532) and `merge_state` (the merge icon, §13.2) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); each open pull request's `url` and its owner's Lead (`prs.pull_request` → `plans.lead_session`) with that Lead's `state` (the row's working dot is shown while it is `working`, §13.2; hs-d335); and the host's CPU %, one utilization % per GPU and memory % (`/proc/stat`, `nvidia-smi --query-gpu=index,utilization.gpu --format=csv,noheader,nounits -lms 2000`, one long-running process for the view's life and `/proc/meminfo`; on macOS `ps -A -o %cpu=`, `sysctl -n hw.ncpu`, `ioreg -r -d 1 -w 0 -c IOAccelerator`, `vm_stat` and `sysctl -n hw.memsize`), sampled every 2 s with no Event, the CPU over the time since the last sample (it needs no read of the store) | `pr-opened`, `plan-created`, `session-registered`, `session-moved`, `job-added`, `job-started`, `job-merged`, `job-failed`, `job-cancelled` (of any kind: the update Job's status, hs-d532; the view's filter must cover them, and the fix is in scope if it does not), and a change of a `pull_requests` row (see Rates): pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by that, not by a timer | the machine's name, CPU %, GPU % and memory %, and the open pull requests with their links and owners. While a shown pull request's Lead works the view redraws every 50 ms for the spinner, from data already read, without a read (the re-read stays at least every 2 s, which picks up the Lead's `state`). No engine, slots, Escalations or Events |
 | the StatusBar (tmux's status line; no view, no pane) | the slots, config `concurrency` and the queue: the Attempts not ended, `concurrency`, the Ready Jobs and the `queued` Jobs, read **by the engine** (§12), not by a view | the engine's tick (`watch.tick_seconds`): it runs `tmux set -g @cpd_workers '<text>'` (and `@cpd_workers_short`, `#{w:@cpd_workers}`, `#{w:@cpd_workers_short}`, `@cpd_version`) only when a value changed | `workers N/M · W waiting · Q queued`, or `N/M·W·Q` on a narrow client (User, hs-d198). **A deliberate deviation** from "no tmux option carries state" (User, hs-d149): the options hold display strings and a width, up to one tick late and stale while the engine is stopped; nothing reads them back |
@@ -4288,10 +4288,10 @@ Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single sou
 An item as printed:
 
 ```json
-{"id": 12, "kind": "job-stuck", "urgency": "red", "label": "inbox/core-docs failed", "subject": "job:inbox/core-docs", "context": "building-cpd", "plan": "inbox", "job": "core-docs", "session": null, "record": null, "event": 48311, "url": null, "opened_at": "2026-10-14T21:40:02.114Z", "closed_at": null, "snoozed_until": null, "dismissed_at": null, "age_seconds": 1260}
+{"id": 12, "kind": "job-stuck", "urgency": "red", "label": "inbox/core-docs failed", "subject": "job:inbox/core-docs", "context": "building-cpd", "plan": "inbox", "job": "core-docs", "session": null, "record": null, "event": 48311, "url": null, "opened_at": "2026-10-14T21:40:02.114Z", "closed_at": null, "snoozed_until": null, "dismissed_at": null, "claimed_at": null, "age_seconds": 1260}
 ```
 
-`age_seconds` is `closed_at` (or now, for an open item) minus `opened_at`. The item `engine-down` has `id: null`, `subject: "engine"` and no links.
+`age_seconds` is `closed_at` (or now, for an open item) minus `opened_at`. `dismissed_at` and `claimed_at` are null except for hidden items; `dismissed_at` is set when `inbox dismiss` hides an item for the rest of its life; `claimed_at` is set when `inbox claim` hides a `review-requested` item. The item `engine-down` has `id: null`, `subject: "engine"` and no links.
 
 ### 21.1 `inbox list`
 
@@ -4302,7 +4302,7 @@ cpd inbox list [--context <c>] [--all] [--closed] [--limit <n>]
 | Flag | Meaning |
 |---|---|
 | `--context <c>` | keep the items of that Context (`engine-down` has none, so it is dropped) |
-| `--all` | also list the snoozed and dismissed items, each with `hidden: "snoozed"` or `"dismissed"` |
+| `--all` | also list the snoozed, dismissed and claimed items, each with `hidden: "snoozed"`, `"dismissed"` or `"claimed"` |
 | `--closed` | list closed items instead of open ones, newest `closed_at` first |
 | `--limit <n>` | with `--closed`: at most n items; default 50 (1–5000) |
 
@@ -4311,10 +4311,10 @@ cpd inbox list [--context <c>] [--all] [--closed] [--limit <n>]
 | `--all` and `--closed` are not given together, and `--limit` comes only with `--closed` | `usage` | 2 |
 | `--context` names a Context that exists | `context_not_found` | 4 |
 
-Effects: none; it takes no lock (§4.2). Open visible items come in the order of §2.2 (red, yellow, magenta, blue, cyan, white; oldest `opened_at` first), with `engine-down` first when `locks/watch.lock` is free **and no live Manager Session exists** (role `manager`, not archived; hs-d318, hs-d363: with one, the tree tells it when the engine stays down 60 s, §13.2). A snoozed item whose `snoozed_until` has passed is visible again. `hidden` counts the open items now hidden, whether or not `--all` lists them. `events_cursor` is the highest Event id, so a follower can start from it.
+Effects: none; it takes no lock (§4.2). Open visible items come in the order of §2.2 (red, yellow, magenta, blue, cyan, white; oldest `opened_at` first), with `engine-down` first when `locks/watch.lock` is free **and no live Manager Session exists** (role `manager`, not archived; hs-d318, hs-d363: with one, the tree tells it when the engine stays down 60 s, §13.2). A snoozed item whose `snoozed_until` has passed is visible again. `hidden` counts the open items now hidden by snooze, dismissal or claim, whether or not `--all` lists them; when several apply, the item's `hidden` is `dismissed`, then `claimed`, then `snoozed`. `events_cursor` is the highest Event id, so a follower can start from it.
 
 ```json
-{"ok": true, "engine": {"running": true}, "items": [ {"id": 12, "kind": "job-stuck", "…": "…"} ], "hidden": {"snoozed": 1, "dismissed": 0}, "events_cursor": 48320}
+{"ok": true, "engine": {"running": true}, "items": [ {"id": 12, "kind": "job-stuck", "...": "..."} ], "hidden": {"snoozed": 1, "dismissed": 0, "claimed": 0}, "events_cursor": 48320}
 ```
 
 Idempotent: read-only.
@@ -4363,7 +4363,7 @@ cpd inbox dismiss <id>
 | the item exists | `item_not_found` | 4 |
 | the item is open | `item_closed` | 3 |
 
-Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-dismissed` `{item}`. The item stays hidden for the rest of its life; because an item lives only while its cause holds, a new cause is a new item and shows again.
+Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-dismissed` `{item}`. For a `review-requested` item, the dismissal holds for the pull request forever (C1, contract §2.2 "The team review rule"): an open or closed `review-requested` item with `dismissed_at` or `claimed_at` set suppresses new items for that pull request. For any other kind, the item stays hidden for the rest of its life; because an item lives only while its cause holds, a new cause is a new item and shows again.
 
 ```json
 {"ok": true, "item": {"id": 12, "dismissed_at": "2026-10-14T21:41:02.114Z", "…": "…"}}
@@ -4419,11 +4419,32 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 | the payload holds no message (step 3) | `slack_unparseable` | 1 |
 | pi's modules did not load or no longer have the shape the helper uses (step 1; after a pi upgrade); `details.message` is the thrown error | `slack_helper_failed` | 1 |
 
-Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The credential is read and refreshed inside pi's modules; the helper holds no token.
+Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The `:eyes:` reaction is not placed (C7, §21.7: it awaits a writable Slack integration). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
 **The helper is no Session** (contract §6.11): `--no-mcp` and `cpd mcp attach` (§24.1) do not reach it. It keeps reading the `slack` entry of `<agentDir>/mcp.json`, which therefore stays until a later Plan moves the helper (pro-d10).
 
 **What the User runs once** (`pi mcp login` needs a browser, so it is theirs; cpd never runs it): `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`, then `pi mcp login slack`, then `pi mcp list` shows `slack: connected`. `--exposure hidden` keeps the user-level entry from handing the Slack tools to every Lead and Worker (`docs/research/team-review.md` §3). If Slack refuses pi's dynamic client registration, the User adds `--oauth-client-id` (pi's `pi mcp add` options; unverified for Slack).
+
+### 21.7 `inbox claim`
+
+```
+cpd inbox claim <id>
+```
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the item exists | `item_not_found` | 4 |
+| the item is open | `item_closed` | 3 |
+| the item is not already claimed | (returns ok with `"already": true`, writes nothing) | 0 |
+| the item is `review-requested` and not dismissed (C4) | `not_claimable` | 3 |
+| config `inbox.review_context` is set (C5) | `review_context_unset` | 3 |
+| the Context exists and is not archived (C4) | `context_not_found` | 4 |
+| the Context has a live Manager Session (C4) | `no_manager` | 3 |
+| the team review cache holds a primary post of the pull request (C4) | `post_not_found` | 3 |
+
+Effects, one transaction: **rows** `inbox_items.claimed_at` = now; **Event** `inbox-claimed` `{item}` (C4); one `session-message` Event to the Context's Manager (C4), worded to ask the Manager to start a review of the pull request, containing the URL and the Slack post's channel and `ts_raw`. Output: `{"ok": true, "item": {…, "claimed_at": "…"}, "manager": "<session id>"}` (C4).
+
+Idempotent: yes. An item already claimed returns `"already": true` and writes nothing, with no Event.
 
 ## 22. `policy`
 
