@@ -418,10 +418,14 @@ mod tests {
 
     fn at_frame(width: u16, height: u16, open: &[OpenPr], scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+        // the Inbox section, with no item, is the pane's last rows: the pane is as tall as they and `height` rows are the PRs'
+        let height = height + Shape::new(0, false).height();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, scroll, frame))).unwrap();
-        (terminal.backend().buffer().clone(), out.unwrap())
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, scroll, frame, &[], (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+        let (full, height) = (terminal.backend().buffer().clone(), height - Shape::new(0, false).height());
+        let top = Buffer { area: Rect::new(0, 0, width, height), content: full.content[..usize::from(width) * usize::from(height)].to_vec() };
+        (top, out.unwrap())
     }
 
     fn icons(width: u16, open: &[OpenPr]) -> Vec<MergeIcon> {
@@ -540,7 +544,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
         terminal
             .draw(|f| {
-                draw(f, f.area(), &[], &machine, 0, 0);
+                draw(f, f.area(), &[], &machine, 0, 0, &[], (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default());
                 draw_error(f, f.area(), "no_cockpit: nothing here");
             })
             .unwrap();
