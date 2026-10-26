@@ -126,16 +126,16 @@ test("an empty content shows no body", () => {
 test("a message from the User: `Message from the User`", () => {
   const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
   assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("expand")]);
-  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11): hi there"), closing("collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11 +05:30): hi there"), closing("collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
   const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
   assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("expand")]);
-  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11): hello`)]);
+  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11 +05:30): hello`)]);
   const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
-  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11): hello`)]);
+  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11 +05:30): hello`)]);
 });
 
 // ---- the adapter's errors ----
@@ -159,8 +159,8 @@ const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key
 const context = () => timed(contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!);
 const FULL = [
   "Context ctx: 2 new records since your last turn.",
-  "- hs-n1 note (2026-10-17): note 1",
-  "- hs-n2 note (2026-10-17): note 2",
+  "- hs-n1 note (2026-10-17 UTC): note 1",
+  "- hs-n2 note (2026-10-17 UTC): note 2",
   "",
   "Plans:",
   "- pay-4521: 3 phase changes",
