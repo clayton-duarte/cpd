@@ -173,6 +173,17 @@ thread_local! {
     pub(crate) static LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Test guard that resets the [`LAYOUTS`] counter when dropped, preventing test leaks.
+#[cfg(test)]
+struct LayoutGuard;
+
+#[cfg(test)]
+impl Drop for LayoutGuard {
+    fn drop(&mut self) {
+        LAYOUTS.with(|n| n.set(0));
+    }
+}
+
 /// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says whether the Plan's Lead works (failed pills turn) and asks about a PR.
@@ -740,6 +751,7 @@ mod tests {
 
     #[test]
     fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
+        let _guard = LayoutGuard;
         let mut api = pr("api", &[]);
         let before = layout(&[api.clone()], &[], &NeedsUser::default(), 0).chart;
         api.pull = Some(pull(12, PrState::Open));
