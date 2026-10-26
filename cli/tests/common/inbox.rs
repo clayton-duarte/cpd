@@ -110,6 +110,33 @@ fn context(id: &str) -> String {
     )
 }
 
+/// A Plan of `context` in `phase` and its one PR row, whose Lead is the Session `lead` (insert the Session too). The Plan is
+/// created at `created`.
+pub fn plan_row(id: &str, context: &str, phase: &str, lead: &str, created: &str) -> String {
+    let late = !matches!(phase, "grounding" | "plan");
+    let worktree = if late { "'/wt'" } else { "NULL" };
+    let locked = if late { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
+    let status = if late { "dispatch" } else { "waiting" };
+    format!(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+         VALUES ('{id}', '{context}', 'Plan {id}', '{phase}', '{lead}', '{created}', {locked}, NULL);
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at,
+                          pull_request, created_txn, created_at, started_at, merged_at)
+         VALUES ('{id}', 'repo', '/repo/{id}', 'main', '{status}', 'cpd/{id}', {worktree}, NULL, NULL, NULL,
+                 NULL, cpd_txn(), '{created}', {locked}, NULL);"
+    )
+}
+
+/// An idle Session `id` of `role` in `context` (a Lead's `plan`, or `""`), created at `created`.
+pub fn session_row(id: &str, role: &str, context: &str, plan: &str, created: &str) -> String {
+    let plan = if plan.is_empty() { "NULL".to_owned() } else { format!("'{plan}'") };
+    format!(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('{id}', '{role}', '{context}', {plan}, NULL, '{id} name', '/sessions/{id}.jsonl', '/repo', 'O3',
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '{created}');"
+    )
+}
+
 /// What the engine's E8 would open: an item of the Context `alpha` named `label`.
 pub fn condition(kind: Kind, urgency: Urgency, subject: &str, label: &str) -> Condition {
     Condition {
@@ -250,6 +277,11 @@ fn run_command(argv: Vec<OsString>) -> Result<Output, CpdError> {
 /// pump handing `signals` over in order) and returns every frame it drew, first to last. The script ends the view with
 /// [`gone`].
 pub fn show(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World) -> Vec<Screen> {
+    show_with(fx, height, signals, world, run_command)
+}
+
+/// [`show`] with `run_command` as what a click runs `cpd` through (the in-process command tree, or a test's own).
+pub fn show_with(fx: &Fx, height: u16, signals: Vec<Signal>, world: &World, run_command: cpd_tui::RunCommand) -> Vec<Screen> {
     let backend = SharedBackend::new(W as u16, height);
     let frames = Rc::new(RefCell::new(Vec::new()));
     {
