@@ -534,6 +534,32 @@ mod tests {
         assert_eq!(queue, ["20261025T2300-queue-failed"], "the restored name stays applied; it is not applied again under a new name");
     }
 
+    /// hs-d710 part 1: hs and mac-pro applied the queue-failed migration with
+    /// `breaking after 47` (checksum 91fbcf72); origin/main moved its first line
+    /// to 48 (checksum 2f41ed9d), so a binary built from main refuses those
+    /// stores with `migration_changed`. Restoring the header opens them.
+    #[test]
+    fn a_store_that_applied_the_live_queue_failed_text_opens() {
+        let (_dir, home) = tmp_home();
+        let file = include_str!("migrations/20261025T2300-queue-failed.sql");
+        let applied = format!("-- cpd-migration: breaking after 47\n{}", file.split_once('\n').unwrap().1);
+        let mut named: Vec<Named> = schema::NAMED.to_vec();
+        let entry = named.iter_mut().find(|n| n.name == "20261025T2300-queue-failed").expect("the queue-failed migration is in the list");
+        *entry = Named { sql: Box::leak(applied.into_boxed_str()), ..*entry };
+        drop(open_named(&home, &named).unwrap());
+        let checksum: String = Connection::open(home.db())
+            .unwrap()
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE name = '20261025T2300-queue-failed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(checksum, "91fbcf723d8e4961ca0d99fa1dec8fc6b27a4d7251e48f9755352c5a4b179a0d");
+        let verdict = judge(&home, schema::NAMED);
+        assert!(verdict.opens(), "{verdict:?}");
+    }
+
     #[test]
     fn a_pending_breaking_migration_that_sorts_before_an_applied_one_is_migration_order() {
         let (_dir, home) = tmp_home();

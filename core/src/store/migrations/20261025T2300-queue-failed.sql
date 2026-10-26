@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 48
+-- cpd-migration: breaking after 47
 -- Cancel fails its dependents (hs-d647; contract §3.2 "Cancel", §4.4): a `queued` Job whose need, directly or
 -- transitively, was cancelled becomes `failed` in the transaction that cancels the need, so `jobs_status` must
 -- allow `queued>failed`. Breaking: an old binary that lacks this migration does not know the transition, while
