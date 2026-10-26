@@ -30,7 +30,7 @@ thread_local! {
 
 /// The tmux restart of an engine that is never reached from the cockpit's own server.
 pub const NO_RESTART: Restart = Restart {
-    failed: |_| Ok(None),
+    failed: |_, _| Ok(None),
     clear: |_| Ok(()),
     mark: |_, _, _| Ok(false),
     now: |_, _, _| Ok(RestartOutcome::NotNeeded),
@@ -40,8 +40,8 @@ pub const NO_RESTART: Restart = Restart {
 /// the ports of the test (the server's version is the route's; the pending file is a file of the test's home).
 pub const RESTART: Restart = Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
 
-fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(&cpd_core::clock::TimeZone::system())))
+fn restart_failed(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(zone)))
 }
 
 fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<RestartOutcome, CpdError> {

@@ -157,7 +157,8 @@ pub fn event_loop_with<B: Backend>(
     let mut shown: Option<Stamp> = None;
     let mut snapshot = Some(first);
     let mut last_check = ctx.ports.clock.now();
-    refresh(&mut view, &mut shown, snapshot.as_ref());
+    let zone = ctx.ports.clock.zone();
+    refresh(&mut view, &mut shown, snapshot.as_ref(), &zone);
     let mut redraw = true; // the pane is written to only when something changed: the Worker, its file, input, a resize
     loop {
         if ctx.ports.clock.now().saturating_duration_since(last_check) >= CHECK {
@@ -175,7 +176,7 @@ pub fn event_loop_with<B: Backend>(
                 }
             }
             view.note = error.unwrap_or_default();
-            refresh(&mut view, &mut shown, snapshot.as_ref());
+            refresh(&mut view, &mut shown, snapshot.as_ref(), &zone);
             redraw |= before != (view.status.clone(), view.header.clone(), view.note.clone(), shown.clone());
         }
         if redraw {
@@ -233,7 +234,7 @@ fn header(worker: &Worker) -> String {
 }
 
 /// Takes the foot's status from `snapshot` and re-reads the session file when it is not the one `shown`.
-fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>) {
+fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>, zone: &cpd_core::clock::TimeZone) {
     let Some(worker) = snapshot else { return };
     view.status = foot(worker);
     view.header = header(worker);
@@ -255,7 +256,7 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
             }
             match std::fs::read_to_string(path) {
                 Ok(text) => {
-                    view.set_lines(render::render(&text, &cpd_core::clock::TimeZone::system()));
+                    view.set_lines(render::render(&text, zone));
                     *shown = Some(stamp);
                 }
                 Err(e) => view.note = format!("Cannot read {path}: {e}"),

@@ -34,7 +34,7 @@ fn cells(buf: &Buffer, y: u16) -> Vec<String> {
 
 #[test]
 fn the_logs_popup_rows_keep_one_blank_column_on_each_side() {
-    let mut log = Log::new(vec![event(1, &"long ".repeat(30)), event(2, "short")]);
+    let mut log = Log::new(vec![event(1, &"long ".repeat(30)), event(2, "short")], super::view::test_zone());
     log.fit(H);
     let mut terminal = Terminal::new(TestBackend::new(W, H)).unwrap();
     terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
@@ -43,8 +43,8 @@ fn the_logs_popup_rows_keep_one_blank_column_on_each_side() {
     let (long, short) = (cells(&buf, 3), cells(&buf, 4));
     assert_eq!(long[0].trim(), "", "column 0 is blank: {long:?}");
     assert_eq!(short[0].trim(), "", "column 0 is blank: {short:?}");
-    assert_eq!(long[1], "0", "the text starts in column 1 (the clock): {long:?}");
-    assert_eq!(short[1], "0", "the text starts in column 1 (the clock): {short:?}");
+    assert_eq!(long[1], "1", "the text starts in column 1 (the clock): {long:?}");
+    assert_eq!(short[1], "1", "the text starts in column 1 (the clock): {short:?}");
     let last = usize::from(W) - 2;
     assert_eq!(long.iter().rposition(|c| c.trim() != ""), Some(last), "the cut line ends at column W-2: {long:?}");
     assert_eq!(long[last], "…", "with the `…` inside: {long:?}");

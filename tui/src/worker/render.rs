@@ -98,15 +98,15 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "16:33:44 you  ",
+                "12:33:44 you  ",
                 "      Do it.",
                 "      Now.",
-                "16:33:44 agent",
+                "12:33:44 agent",
                 "      Done.",
                 "      ",
                 "      Really.",
-                "16:33:44 → bash ls -l",
-                "16:33:44 → read a.rs",
+                "12:33:44 → bash ls -l",
+                "12:33:44 → read a.rs",
                 "        󰘌 two",
             ],
             "thinking, the session header and a half-written line are skipped"
@@ -149,7 +149,9 @@ mod tests {
                 continue;
             }
             let role = v["message"]["role"].as_str().unwrap_or("");
-            let ts = v["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("").to_string();
+            // the reference drew the UTC time of day; the fixture is in October, so the local time is EDT, UTC - 4 h
+            let utc = v["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("");
+            let ts = if utc.is_empty() { String::new() } else { format!("{:02}{}", utc[..2].parse::<u32>().unwrap() - 4, &utc[2..]) };
             let empty = Vec::new();
             let content = v["message"]["content"].as_array().unwrap_or(&empty);
             for part in content {

@@ -30,19 +30,21 @@ pub struct Log {
     reveal: bool,
     /// The error of the last failed read (one row), shown in the last row until a read succeeds.
     pub error: Option<String>,
+    /// The zone the rows draw their time of day in: the caller's (the Ports clock's), read once at the edge.
+    zone: cpd_core::clock::TimeZone,
 }
 
 impl Log {
-    pub fn new(events: Vec<Event>) -> Log {
-        Log { events, scroll: Scroll::default(), follow: true, selected: None, reveal: false, error: None }
+    pub fn new(events: Vec<Event>, zone: cpd_core::clock::TimeZone) -> Log {
+        Log { events, zone, scroll: Scroll::default(), follow: true, selected: None, reveal: false, error: None }
     }
 
     /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
     /// the view, which then does not follow until the User scrolls down to the bottom. An `id` that is not among
     /// `events` selects nothing and the view opens at the bottom.
-    pub fn at(events: Vec<Event>, id: i64) -> Log {
+    pub fn at(events: Vec<Event>, id: i64, zone: cpd_core::clock::TimeZone) -> Log {
         let found = events.iter().any(|e| e.id == id);
-        Log { selected: found.then_some(id), reveal: found, ..Log::new(events) }
+        Log { selected: found.then_some(id), reveal: found, ..Log::new(events, zone) }
     }
 
     /// Whether the view shows the bottom, and so follows new Events.
@@ -149,6 +151,12 @@ fn addressed_to_lead(e: &Event) -> bool {
     e.plan.is_some() && (field("source") != Some("watch") || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
 }
 
+/// The zone the tests draw in: `ManualClock`'s (EST5EDT rule), never the machine's.
+#[cfg(test)]
+pub(crate) fn test_zone() -> cpd_core::clock::TimeZone {
+    cpd_core::clock::Clock::zone(&cpd_core::clock::ManualClock::new())
+}
+
 /// The Event's line, as the Dispatch column showed it: its time of day (muted), then its `text`, or its kind when
 /// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
 /// handles it). Cut to `width` columns with `…`.
@@ -182,7 +190,7 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(muted("none yet"))]
     } else {
-        log.visible().iter().map(|e| line(e, usize::from(area.width), &cpd_core::clock::TimeZone::system())).collect()
+        log.visible().iter().map(|e| line(e, usize::from(area.width), &log.zone)).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
     // the Event the view was opened at is the blue block across the popup's whole width, the margins included
@@ -210,7 +218,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
             data: serde_json::json!({}),
         })
         .collect();
-    let mut log = Log::new(events);
+    let mut log = Log::new(events, test_zone());
     log.fit(height);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
@@ -269,7 +277,7 @@ mod tests {
     /// tui-G1: the log's keys are the Worker and history views' (the kit's), `End` and `G` included.
     #[test]
     fn end_and_g_go_to_the_bottom_and_follow_again() {
-        let mut log = Log::new(events(10));
+        let mut log = Log::new(events(10), test_zone());
         log.fit(7);
         assert!(log.key(key(KeyCode::Char('k'))));
         assert!(!log.follows());
@@ -284,7 +292,7 @@ mod tests {
     /// tui-W4: the error of a failed read takes the last row; the Events keep the rows above it.
     #[test]
     fn the_error_takes_the_last_row_until_it_is_cleared() {
-        let mut log = Log::new(events(10));
+        let mut log = Log::new(events(10), test_zone());
         log.fit(7);
         assert_eq!(log.page(), 4);
         log.error = Some("no such table: events".into());
@@ -298,7 +306,7 @@ mod tests {
 
     #[test]
     fn keys_and_the_wheel_scroll_and_scrolling_to_the_bottom_follows_again() {
-        let mut log = Log::new(events(20));
+        let mut log = Log::new(events(20), test_zone());
         // 7 rows: the title with its two empty rows and 4 Events
         assert_eq!(shown(&mut log, 7), ["event 16", "event 17", "event 18", "event 19"]);
         assert!(log.follows());
@@ -323,7 +331,7 @@ mod tests {
 
     #[test]
     fn the_view_follows_at_the_bottom_and_stays_put_when_scrolled_up() {
-        let mut log = Log::new(events(10));
+        let mut log = Log::new(events(10), test_zone());
         shown(&mut log, 7);
         log.push(events(12)[10..].to_vec());
         assert_eq!(shown(&mut log, 7), ["event 8", "event 9", "event 10", "event 11"]);
@@ -343,7 +351,7 @@ mod tests {
 
     #[test]
     fn a_taller_area_that_shows_everything_follows_and_cannot_scroll() {
-        let mut log = Log::new(events(3));
+        let mut log = Log::new(events(3), test_zone());
         assert_eq!(shown(&mut log, 12).len(), 3);
         assert!(log.follows());
         log.scroll_up(5);
@@ -352,7 +360,7 @@ mod tests {
 
     #[test]
     fn the_title_is_a_section_title_between_two_empty_rows_and_the_events_start_under_it() {
-        let mut log = Log::at(events(30), 11);
+        let mut log = Log::at(events(30), 11, test_zone());
         log.fit(8);
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
         terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
@@ -362,7 +370,7 @@ mod tests {
         assert_eq!(row(0).trim_end(), "");
         assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(14)));
         assert_eq!(row(2).trim_end(), "");
-        assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
+        assert!(row(3).starts_with(" 19:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
         assert!(row(5).contains("event 10") && crate::palette::check::is_selected(&got[(0, 5)]));
         assert!(!crate::palette::check::is_selected(&got[(0, 4)]));
@@ -372,7 +380,7 @@ mod tests {
 
     #[test]
     fn the_title_is_a_grey_title_case_pill_inside_the_padding_of_one_column_each_side() {
-        let mut log = Log::at(events(30), 11);
+        let mut log = Log::at(events(30), 11, test_zone());
         log.fit(8);
         let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
         terminal.draw(|f| draw(f, f.area(), &log)).unwrap();

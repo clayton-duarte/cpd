@@ -176,7 +176,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Inbox(c) => inbox::cmd::run_with(ports, c),
         Command::Watch(a) => watch::run(a),
         Command::Tui(a) => cpd_tui::run_with(ports, a, version(), run_command, run_command_on, RESTART),
-        Command::Doctor(a) => doctor::run(a),
+        Command::Doctor(a) => doctor::run(a, &ports.clock.zone()),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
         Command::Install(a) => install::run(ports, a),
@@ -241,8 +241,8 @@ const RESTART: cpd_tui::Restart =
     cpd_tui::Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
 
 /// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
-fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(&cpd_core::clock::TimeZone::system())))
+fn restart_failed(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(zone)))
 }
 
 /// [`cpd_tui::Restart::now`]: the restart, logging nothing.

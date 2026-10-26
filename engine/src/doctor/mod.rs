@@ -37,12 +37,12 @@ fn deadline() -> Duration {
 /// The `tmux_restart` check, present only while a restart of the tmux server is pending or has
 /// failed (contract §6.1): pending is a planned hold, not an error (the engine starts no Attempt
 /// until it has run); a failed restart is a warning with its reason.
-fn tmux_restart(home: &CpdHome) -> Option<Check> {
+fn tmux_restart(home: &CpdHome, zone: &cpd_core::clock::TimeZone) -> Option<Check> {
     let name = "tmux_restart";
     match watch::restart::read(home) {
         Ok(None) => None,
-        Ok(Some(pending)) if pending.failed.is_none() => Some(Check::pass(name, Severity::Warn).message("tmux restart pending").found(pending.describe(&cpd_core::clock::TimeZone::system()))),
-        Ok(Some(pending)) => Some(Check::fail(name, Severity::Warn, pending.describe(&cpd_core::clock::TimeZone::system()))),
+        Ok(Some(pending)) if pending.failed.is_none() => Some(Check::pass(name, Severity::Warn).message("tmux restart pending").found(pending.describe(zone))),
+        Ok(Some(pending)) => Some(Check::fail(name, Severity::Warn, pending.describe(zone))),
         Err(e) => Some(Check::from_error(name, Severity::Warn, &e)),
     }
 }
@@ -51,7 +51,8 @@ fn tmux_restart(home: &CpdHome) -> Option<Check> {
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct Args {}
 
-pub fn run(_args: Args) -> Result<Output, CpdError> {
+/// `zone` is the one prose times are written in, read once at the edge (the Ports clock's).
+pub fn run(_args: Args, zone: &cpd_core::clock::TimeZone) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home);
     let mut store = config.as_ref().ok().map(|c| Store::open(&home, c.timeouts.store_busy_ms.into()));
@@ -78,7 +79,7 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     checks.push(with_config("pi_adapter", Severity::Error, &pi::adapter));
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
     checks.push(state::watch(&home, store.as_mut()));
-    checks.extend(tmux_restart(&home));
+    checks.extend(tmux_restart(&home, zone));
     checks.push(with_config("holographic", Severity::Error, &holographic::holographic));
 
     let failed: Vec<&str> = checks.iter().filter(|c| c.is_error_failure()).map(|c| c.name).collect();
