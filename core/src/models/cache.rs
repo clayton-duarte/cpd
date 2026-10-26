@@ -12,6 +12,7 @@ use time::format_description::well_known::Rfc3339;
 
 use super::helper::{Answer, Entry, Listed, ProviderFailure};
 use crate::clock::timestamp;
+use crate::config::Timeouts;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::lock;
@@ -220,13 +221,13 @@ fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, ap
 /// Writes the good lists of `answer` (contract §3.7 E15), each against its own previous file, under
 /// `locks/models.lock`; a failed or empty one writes nothing, and a provider the answer does not name keeps its file.
 /// Errors: `lock_timeout`, `store_failed`.
-pub fn apply(home: &CpdHome, busy_ms: u32, answer: &Answer) -> Result<Applied, CpdError> {
-    apply_at(home, busy_ms, answer, Ports::current().clock.utc())
+pub fn apply(home: &CpdHome, busy: &Timeouts, answer: &Answer) -> Result<Applied, CpdError> {
+    apply_at(home, busy, answer, Ports::current().clock.utc())
 }
 
 /// [`apply`] with `polled_at` the time `at` (the engine's clock, so a test's virtual time is what the files say).
-pub fn apply_at(home: &CpdHome, busy_ms: u32, answer: &Answer, at: OffsetDateTime) -> Result<Applied, CpdError> {
-    let _lock = take_lock(home, busy_ms)?;
+pub fn apply_at(home: &CpdHome, busy: &Timeouts, answer: &Answer, at: OffsetDateTime) -> Result<Applied, CpdError> {
+    let _lock = take_lock(home, busy.store_busy_ms)?;
     let now = timestamp(at);
     let mut applied = Applied::default();
     for entry in &answer.entries {

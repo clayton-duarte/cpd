@@ -40,7 +40,7 @@ pub(super) fn run(engine: &mut Engine) {
         engine.models.running = None;
         engine.models.last_end = Some(engine.ports.clock.now());
         let at = engine.ports.clock.utc();
-        match answer.and_then(|answer| apply_at(&engine.home, engine.config.timeouts.store_busy_ms, &answer, at)) {
+        match answer.and_then(|answer| apply_at(&engine.home, &engine.config.timeouts, &answer, at)) {
             Ok(applied) => report(engine, &applied),
             Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }

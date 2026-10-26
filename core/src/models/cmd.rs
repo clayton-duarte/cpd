@@ -7,7 +7,7 @@ use time::format_description::well_known::Rfc3339;
 use super::cache::{self, Outcome, Read};
 use super::helper::Helper;
 use super::safe_name;
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::output::Output;
@@ -36,10 +36,9 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 }
 
 fn refresh() -> Result<Output, CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let answer = Helper::new(&config, &home)?.run()?;
-    let applied = cache::apply(&home, config.timeouts.store_busy_ms, &answer)?;
+    let env = Env::open()?;
+    let answer = Helper::new(&env.config, &env.home)?.run()?;
+    let applied = cache::apply(&env.home, &env.config.timeouts, &answer)?;
     let lists: Vec<Value> = applied
         .outcomes
         .iter()
