@@ -6,7 +6,7 @@
   "description": "cpd 2's pi adapter: delivers Events to the Lead, reports agent states, runs the Plan review through plannotator",
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"],
+    "extensions": ["./extension.ts", "./mcp-extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"],
     "skills": ["./skills"],
     "themes": ["./themes"]
   },

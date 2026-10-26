@@ -17,7 +17,8 @@ use crate::read::Tree;
 use cpd_core::home::CpdHome;
 use cpd_core::ports::Ports;
 
-/// The folds: the file's content, `{"collapsed": ["<context id>", …], "expanded": [["<id>", …], …]}`.
+/// The folds: the file's content, `{"collapsed": ["<context id>", …], "expanded": [["<id>", …], …]}`,
+/// plus the archive row's fold under `"archived"` (absent or false = folded; hs-d698, hs-d707).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Folds {
@@ -25,6 +26,15 @@ pub struct Folds {
     collapsed: BTreeSet<Id>,
     /// The archived Contexts the User expanded, each as its one-id path (archived Contexts start folded, hs-d339).
     expanded: BTreeSet<Vec<Id>>,
+    /// The tree root's archive row is expanded (the archived Contexts show); folded by default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    archived: bool,
+}
+
+/// Whether the archive fold is the default (folded): skipped when serialising, so an old file loads and the folded
+/// case stays byte-identical to today.
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 impl Folds {
@@ -35,13 +45,17 @@ impl Folds {
         let open = |c: &&crate::read::ContextNode| opened.contains(&vec![toggle_id(c.id.as_str())]);
         let collapsed = tree.contexts.iter().filter(|c| !c.is_archived() && !open(c)).map(|c| c.id.to_string()).collect();
         let expanded = tree.contexts.iter().filter(|c| c.is_archived() && open(c)).map(|c| vec![c.id.to_string()]).collect();
-        Folds { collapsed, expanded }
+        let archived = tree.contexts.iter().any(crate::read::ContextNode::is_archived) && opened.contains(&vec![super::rows::ARCHIVE.to_owned()]);
+        Folds { collapsed, expanded, archived }
     }
 
     /// Applies the folds to a state that has opened every live Context: the live rows of a Context always show, so its
     /// toggle is closed when collapsed (its archived rows hide) and opened when expanded, and both count as known.
     /// Ids that match no row are harmless.
     pub fn merge(&self, state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>) {
+        if self.archived {
+            state.open(vec![super::rows::ARCHIVE.to_owned()]);
+        }
         let mut apply = |id: &Id, expanded: bool| {
             let context = vec![id.clone()];
             state.open(context.clone());
@@ -142,6 +156,7 @@ mod tests {
         Folds {
             collapsed: collapsed.iter().map(|s| (*s).to_owned()).collect(),
             expanded: expanded.iter().map(|p| p.iter().map(|s| (*s).to_owned()).collect()).collect(),
+            archived: false,
         }
     }
 

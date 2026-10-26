@@ -264,6 +264,9 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
 ///
+/// Creation orders alpha's shiro rows `ship` (newest), `sketch`, then the fork `f-idle` (oldest), so that the tree's order
+/// (tier, then creation newest first; hs-d686, pro-d48) is the seeded one: `f-blocked`, `ship`, `sketch`, `f-idle`.
+///
 /// The Inbox ([`items`]) gives the dots their filled dot: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
 /// have a Manager with an item, which alone fills a Context row's filled dot.
 pub(super) fn populate(env: &mut Env) {
@@ -271,14 +274,14 @@ pub(super) fn populate(env: &mut Env) {
     s += &context("alpha");
     s += &context("beta");
     s += &context("gamma");
-    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", false);
-    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", false);
+    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z", false);
+    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:09.000Z", false);
     s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
     s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
     s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:08.000Z");
-    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("cpd: Worker question"), "2026-01-02T00:00:09.000Z");
+    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:02.000Z");
+    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("φ: Worker question"), "2026-01-02T00:00:09.000Z");
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
@@ -403,52 +406,66 @@ fn the_tree_of_a_prepared_store() {
     assert_eq!(
         screen,
         expected,
-        "the Contexts by dot tier then last activity (beta's magenta Manager, then alpha's shiro Manager with an Event, then gamma with no Manager); alpha's live Plans and forks as one list by tier then last activity (the red fork `ship·f-bl`, the red loader of `ship` in shiro, then `sketch` and the fork `ship·f-id` tied on shiro and creation order); the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
+        "the Contexts by dot tier then creation, newest first (hs-d686, pro-d48: beta's magenta Manager, then alpha and gamma tied on shiro and creation, in Context id order); alpha's live Plans and forks as one list by tier then creation, newest first (the red fork `ship·f-bl`, then shiro: `ship` created last, `sketch`, then the fork `ship·f-id` created first); the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
     );
 }
 
-/// The tree reorders by dot-urgency tier first and last activity second (hs-d686): a magenta Context still leads a shiro
-/// one, whatever its activity; within one tier the row the newer Event names comes first (`context` for a Context,
-/// `plan` for a Plan row).
+/// The tree orders by dot-urgency tier first and creation, newest first, second (hs-d686, pro-d48): a magenta Context still
+/// leads a shiro one, whatever its age; within one tier the newest-created row comes first (`contexts.created_at` for a Context,
+/// `plans.created_at` for a Plan row, the Session's `created_at` for a fork), whichever row an Event names last: Events never
+/// move a row. Every seed gives the newest-created row the oldest Event.
 #[test]
-fn the_tree_orders_live_rows_by_dot_tier_then_last_activity() {
+fn the_tree_orders_live_rows_by_dot_tier_then_newest_first() {
     let mut env = Env::new();
     populate(&mut env);
-    // a newer Event names the Plan `sketch` (and the Context `alpha`), and a newer one still the Context `gamma`, whose
-    // own Event outranks alpha's Manager's.
+    // Events the opposite way to creation: the older-created `alpha`, `ship` get the newest Events
     env.sql(
         "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-         VALUES (cpd_txn(), '2026-01-09T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');
-         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-         VALUES (cpd_txn(), '2026-01-09T00:00:01.000Z', 'context-created', 'gamma', NULL, NULL, 'fixture', '{}');",
+         VALUES (cpd_txn(), '2026-01-09T00:00:00.000Z', 'plan-phase', 'alpha', 'ship', NULL, 'fixture', '{}');
+         UPDATE contexts SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'gamma';
+         UPDATE plans SET created_at = '2026-01-03T00:00:00.000Z' WHERE id = 'ship';
+         UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'sketch';
+         UPDATE sessions SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'f-idle';",
     );
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
-    let mut expected = vec![
-        String::new(),
-        format!(" ╭{NEEDS_YOU} beta"),
-        row(&format!("├─{NEEDS_YOU} rel"), "1"),
-        format!(" ╰─{STOPPED} old"),
-        String::new(),
-        format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A} new".to_owned(),
-        String::new(),
-        format!(" ╭{NEEDS_YOU} alpha"),
-        format!(" ├─{NEEDS_YOU} ship·f-bl"),
-        row(&format!("├─{IDLE} sketch"), "2"),
-        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
-        format!(" ╰─{IDLE} ship·f-id"),
-    ];
+    let beta = || {
+        vec![
+            String::new(),
+            format!(" ╭{NEEDS_YOU} beta"),
+            row(&format!("├─{NEEDS_YOU} rel"), "1"),
+            format!(" ╰─{STOPPED} old"),
+        ]
+    };
+    let gamma = || vec![String::new(), format!(" ╭{STOPPED} gamma"), " ╰\u{F0B2A} new".to_owned()];
+    // within shiro: the fork (newest), then `sketch`, then `ship`: one list of Plans and forks
+    let alpha = || {
+        vec![
+            String::new(),
+            format!(" ╭{NEEDS_YOU} alpha"),
+            format!(" ├─{NEEDS_YOU} ship·f-bl"),
+            format!(" ├─{IDLE} ship·f-id"),
+            row(&format!("├─{IDLE} sketch"), "2"),
+            row(&format!("╰─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        ]
+    };
+    let mut expected = [beta(), gamma(), alpha()].concat();
     expected.extend(inbox_section(46));
     let screen = screen(&draw(&mut env.view(), 46, 20));
     assert_eq!(
         screen,
         expected,
-        "beta's magenta Context stays first though `gamma`'s newer Event outranks it; within shiro `gamma`'s Event puts it above `alpha`, and within alpha the newer `sketch` Event puts it above `ship` (the red fork `ship·f-bl` keeps tier 0)"
+        "beta's magenta Context stays first; within shiro `gamma`, created later, is above `alpha` though alpha has the newer Event; within alpha the red fork `ship·f-bl` is first, then the fork `ship·f-id`, `sketch` and `ship` by creation, newest first, as one list (hs-d686, pro-d48)"
     );
+    // the reverse creation puts `alpha` above `gamma`: the order follows creation, not the Context id
+    env.sql("UPDATE contexts SET created_at = '2026-01-06T00:00:00.000Z' WHERE id = 'alpha';");
+    let mut expected = [beta(), alpha(), gamma()].concat();
+    expected.extend(inbox_section(46));
+    let screen = self::screen(&draw(&mut env.view(), 46, 20));
+    assert_eq!(screen, expected, "`alpha`, created after `gamma`, is above it (hs-d686, pro-d48)");
 }
 
 /// An archived Plan and an archived fork stay after every live row, whatever their dot (hs-d686): `sketch` and the fork
-/// `ship·f-id`, both shiro, follow the live red fork `ship·f-bl` and the live `ship`.
+/// `ship·f-id`, both shiro, follow the live red fork `ship·f-bl` and the live `ship`, themselves by creation, newest first (hs-d686, pro-d48).
 #[test]
 fn an_archived_row_is_last_after_the_live_rows() {
     let mut env = Env::new();
@@ -617,7 +634,11 @@ fn an_empty_live_context_draws_the_clickable_new_row() {
     assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
     // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
     env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
-    let buf = draw(&mut env.view(), 46, 20);
+    let mut view = env.view();
+    let closed = draw(&mut view, 46, 30);
+    let archive = text_rows(&closed).iter().position(|r| r.contains("archive")).expect("the archive row") as u16;
+    click(&mut view, 3, archive);
+    let buf = draw(&mut view, 46, 30);
     let rows = text_rows(&buf);
     let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
     assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));

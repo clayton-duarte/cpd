@@ -159,7 +159,7 @@ fn assert_server_options(s: &Server) {
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
         ("set-titles", "on"),
-        ("set-titles-string", "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}"),
+        ("set-titles-string", "φ · #{?@cpd_machine,#{@cpd_machine},#{host_short}}"),
     ] {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
     }

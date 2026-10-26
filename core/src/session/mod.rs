@@ -21,6 +21,8 @@ mod fork_wait;
 mod history;
 mod moves;
 #[cfg(test)]
+mod phi_label_tests;
+#[cfg(test)]
 mod ports_tests;
 mod reload;
 mod resolve;

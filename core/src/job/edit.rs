@@ -56,7 +56,8 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read(path)).transpose()?;
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
-        env.check_tier(tier)?;
+        let pr = args.pr.clone();
+        env.check_tier(&plan, &args.key, pr.as_ref(), tier)?;
     }
     let edits = Edits {
         title: args.title.map(|t| t.as_str().to_owned()),

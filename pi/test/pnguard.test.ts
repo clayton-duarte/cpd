@@ -12,8 +12,8 @@ const goodEnv = { CPD_SESSION: SESSION, PLANNOTATOR_REMOTE: "1", PLANNOTATOR_URL
 /** The method names of the registry of @plannotator/pi-extension 0.28.17 (plannotator-tool-host.ts:190, REGISTRY_METHODS), under the key of :182. */
 const goodRegistry = () => Object.fromEntries(["add", "remove", "openFor", "openAll", "listText", "close"].map((m) => [m, () => undefined]));
 
-const G1 = "cpd: plannotator waits for the cpd adapter to start";
-const G2 = (cause: string) => `cpd: plannotator needs a link the User can reach; refused: ${cause}`;
+const G1 = "φ: plannotator waits for the cpd adapter to start";
+const G2 = (cause: string) => `φ: plannotator needs a link the User can reach; refused: ${cause}`;
 const G3 = "cpd cannot track plannotator: its review registry changed; plannotator was upgraded and its review registry changed: the pin in pi-config's settings.json and cpd's parser move together";
 
 type Over = { env?: Record<string, string | undefined>; live?: boolean; store?: Record<string, unknown> };

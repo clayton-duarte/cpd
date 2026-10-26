@@ -16,16 +16,17 @@ const FALLBACK: &str = "clayton-duarte";
 fn base() -> Fx {
     let fx = Fx::with_ports();
     fx.env.write_config("version = 1\nmachine = \"t\"\n");
-    fs::write(owners(&fx).join("clayton-duarte.toml"), "[tests]\ntext = \"x\"\n").unwrap();
+    fs::create_dir_all(link(&fx, FALLBACK).parent().unwrap()).unwrap();
+    fs::write(link(&fx, FALLBACK), "[tests]\ntext = \"x\"\n").unwrap();
     fx
 }
 
 fn owners(fx: &Fx) -> PathBuf {
-    fx.env.cpd_home().join("policy/owners")
+    fx.env.cpd_home().join("policy")
 }
 
 fn link(fx: &Fx, owner: &str) -> PathBuf {
-    owners(fx).join(format!("{owner}.toml"))
+    owners(fx).join(owner).join("owner.toml")
 }
 
 fn new_ctx(fx: &Fx, id: &str, owner: &str, flag: bool) -> Run {
@@ -73,7 +74,7 @@ fn f2_confirm_fallback_links_the_owner_to_clayton_duarte() {
     assert_eq!(contexts(&fx)[0]["owner"], "stranger");
     let file = link(&fx, "stranger");
     assert!(is_symlink(&file));
-    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("clayton-duarte.toml"));
+    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("../clayton-duarte/owner.toml"));
     let real = fs::canonicalize(link(&fx, FALLBACK)).unwrap().display().to_string();
     let shown = show(&fx, "stranger").ok();
     assert_eq!(shown["files"].as_array().unwrap().iter().filter(|f| **f == real.as_str()).count(), 1, "{shown}");
@@ -155,10 +156,11 @@ fn f7_removing_the_link_revokes_the_owner() {
 fn f8_a_dangling_symlink_is_unknown_and_the_flag_replaces_it() {
     let fx = base();
     let file = link(&fx, "x");
-    std::os::unix::fs::symlink("missing.toml", &file).unwrap();
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("../missing/owner.toml", &file).unwrap();
     unconfirmed(&new_ctx(&fx, "c1", "x", false));
     new_ctx(&fx, "c1", "x", true).ok();
-    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("clayton-duarte.toml"));
+    assert_eq!(fs::read_link(&file).unwrap(), PathBuf::from("../clayton-duarte/owner.toml"));
     show(&fx, "x").ok();
 }
 
@@ -192,7 +194,7 @@ fn add(fx: &Fx, repo: &Path) -> Run {
 }
 
 fn repo_file(fx: &Fx, owner: &str, name: &str) {
-    let dir = fx.env.cpd_home().join("policy/repos").join(owner);
+    let dir = fx.env.cpd_home().join("policy").join(owner);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(format!("{name}.toml")), "").unwrap();
 }

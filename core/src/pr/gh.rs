@@ -209,6 +209,60 @@ pub fn head_pr(cwd: &Path, head: &str) -> Result<Option<HeadPr>, CpdError> {
     Ok(found.into_iter().max_by_key(|f| f.number))
 }
 
+/// The pull request `pr add --adopt` reads (`gh pr view <n> --json number,url,state,isCrossRepository,headRefName,baseRefName,author`)
+/// and the login of the User (`gh api user --jq .login`), parsed once.
+#[derive(Debug, Deserialize)]
+struct AdoptView {
+    number: i64,
+    url: String,
+    state: String,
+    #[serde(rename = "isCrossRepository")]
+    is_cross_repository: bool,
+    #[serde(rename = "headRefName")]
+    head_ref: String,
+    #[serde(rename = "baseRefName")]
+    base_ref: String,
+    author: Login,
+}
+
+/// A pull request to adopt, as GitHub names it, and who the User is.
+#[derive(Debug)]
+pub struct Adoptable {
+    pub number: i64,
+    pub url: String,
+    /// `OPEN`, `CLOSED` or `MERGED`.
+    pub state: String,
+    pub fork: bool,
+    pub head_ref: String,
+    pub base: String,
+    /// The author's login.
+    pub author: String,
+    /// The login of the User (`gh api user`).
+    pub user: String,
+}
+
+/// Reads the pull request `number` of the repo at `cwd` (gh resolves it through its `origin`) and the User's login.
+pub fn adoptable(cwd: &Path, number: i64) -> Result<Adoptable, CpdError> {
+    let n = number.to_string();
+    let view = ["pr", "view", &n, "--json", "number,url,state,isCrossRepository,headRefName,baseRefName,author"];
+    let v: AdoptView = parse(&view, &run(cwd, &view)?)?;
+    let who = ["api", "user", "--jq", ".login"];
+    let user = run(cwd, &who)?.trim().to_owned();
+    if user.is_empty() {
+        return Err(failed(&who, "gh api user printed no login.".to_owned(), Some(0), ""));
+    }
+    Ok(Adoptable {
+        number: v.number,
+        url: v.url,
+        state: v.state,
+        fork: v.is_cross_repository,
+        head_ref: v.head_ref,
+        base: v.base_ref,
+        author: v.author.login,
+        user,
+    })
+}
+
 /// `gh pr create`. It has no `--json`: the URL is its last stdout line, and the
 /// number is the last path segment of that URL.
 pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) -> Result<PrRef, CpdError> {

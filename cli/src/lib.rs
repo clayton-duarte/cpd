@@ -2,6 +2,7 @@
 //! The shared core is the `cpd-core` crate (`core/`), the cockpit the `cpd-tui` crate (`tui/`).
 
 pub mod cli;
+pub mod install;
 pub mod interface;
 
 #[cfg(feature = "fakes")]

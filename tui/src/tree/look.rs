@@ -156,8 +156,11 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
 }
 
 #[test]
+#[test]
 fn an_archived_context_is_all_archived_rows_folded_it_shows_its_title_and_the_down_arrow() {
     let mut view = View::new(archived(), true);
+    let got = rows(&draw(&mut view, 44, 24));
+    click(&mut view, 3, find(&got, " archive") as u16);
     let got = rows(&draw(&mut view, 44, 24));
     let zeta = find(&got, "zeta");
     assert_eq!(got[zeta + 1], format!(" ╰{DOWN} expand"), "{got:#?}");
@@ -365,7 +368,7 @@ fn tiers() -> [(Urgency, &'static str, Color); 5] {
         (Urgency::Red, "\u{F0362}", palette::color_clickable(Meaning::Failed)),
         (Urgency::Yellow, "\u{F069A}", palette::color_clickable(Meaning::Review)),
         (Urgency::Magenta, "\u{F173A}", palette::color_clickable(Meaning::Planning)),
-        (Urgency::Blue, "\u{F06F1}", palette::color_clickable(Meaning::Notice)),
+        (Urgency::Cyan, "\u{F06F1}", palette::color_clickable(Meaning::Notice)),
         (Urgency::White, "\u{F0366}", palette::color_clickable(Meaning::NotStarted)),
     ]
 }
@@ -394,9 +397,9 @@ fn an_item_row_is_the_muted_line_one_space_its_tier_glyph_in_its_colour_a_space_
 }
 
 #[test]
-fn the_tier_glyphs_are_red_f0362_yellow_f069a_magenta_f173a_blue_f06f1_white_f0366() {
+fn the_tier_glyphs_are_red_f0362_yellow_f069a_magenta_f173a_cyan_f06f1_white_f0366() {
     assert_eq!(
-        [palette::TIER_RED, palette::TIER_YELLOW, palette::TIER_MAGENTA, palette::TIER_BLUE, palette::TIER_WHITE],
+        [palette::TIER_RED, palette::TIER_YELLOW, palette::TIER_MAGENTA, palette::TIER_CYAN, palette::TIER_WHITE],
         ["\u{F0362}", "\u{F069A}", "\u{F173A}", "\u{F06F1}", "\u{F0366}"]
     );
     for (urgency, glyph, colour) in tiers() {
@@ -462,10 +465,13 @@ fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_
     // an ARCHIVED empty Context keeps the plain terminator (`plan new` is refused there; hs-d688)
     let mut gamma = super::fixture::context("gamma", vec![]);
     gamma.archived_at = Some(super::fixture::WHEN.into());
-    let empty = View::new(super::fixture::tree(vec![gamma]), true);
+    let mut empty = View::new(super::fixture::tree(vec![gamma]), true);
+    let closed = rows(&draw(&mut empty, 44, 10));
+    click(&mut empty, 3, find(&closed, " archive") as u16);
     let mut with_three = with_inbox(inbox_items(3));
-    let mut empty = empty;
-    for (name, buf, y) in [("an archived Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
+    let archived_empty = ("an archived Context with no row", draw(&mut empty, 44, 10), 3u16);
+    let inbox = ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16);
+    for (name, buf, y) in [archived_empty, inbox] {
         let width = buf.area.width;
         let cells: Vec<(u16, &str)> = (0..width).map(|x| (x, buf[(x, y)].symbol())).filter(|(_, s)| *s != " ").collect();
         assert_eq!(cells, [(1, "╰"), (2, TERMINATOR)], "{name}: only the corner and the glyph, no word, no `─`: {:#?}", rows(&buf));

@@ -12,7 +12,7 @@ use crate::events::{NewEvent, append};
 use crate::output::Output;
 
 /// The label of a Session the loop guard blocked (contract §3.6).
-pub const LOOP_GUARD_LABEL: &str = "cpd: loop guard";
+pub const LOOP_GUARD_LABEL: &str = "φ: loop guard";
 
 pub(super) fn resume(args: ResumeArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;

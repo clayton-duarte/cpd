@@ -9,7 +9,7 @@ export const guardOf = (r: Run, ctx: Ctx) => ({ idle: ctx.isIdle(), pending: ctx
 /** The command the poll triggers (§15.6): reloads pi after an install. */
 export function registerReloadCommand(host: Host): void {
   host.pi.registerCommand(RELOAD_COMMAND, {
-    description: "cpd: reload pi after an install (runs by itself; does nothing unless pi is idle, unblocked and the editor is empty)",
+    description: "φ: reload pi after an install (runs by itself; does nothing unless pi is idle, unblocked and the editor is empty)",
     async handler(_args: string, ctx: CommandCtx) {
       const r = host.run;
       if (!r) return;

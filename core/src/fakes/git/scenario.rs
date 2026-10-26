@@ -26,6 +26,7 @@ pub(super) struct World {
     pub route: Arc<GitRoute>,
     pub runner: FakeRunner,
     dirs: usize,
+    worktrees: Vec<(PathBuf, PathBuf)>,  // (worktree_path, repo_dir)
 }
 
 pub(super) fn world() -> World {
@@ -36,7 +37,7 @@ pub(super) fn world() -> World {
     let universe = Arc::new(Mutex::new(universe));
     let route = Arc::new(GitRoute::new(universe.clone()));
     let runner = FakeRunner::new(clock.clone()).with_git(&route);
-    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, dirs: 0 }
+    World { tmp: tempfile::tempdir().unwrap(), universe, route, runner, dirs: 0, worktrees: Vec::new() }
 }
 
 pub(super) fn p(path: &Path) -> &str {
@@ -147,12 +148,14 @@ impl World {
     pub fn worktree(&mut self, repo: &Repo, branch: &str, at: &Oid) -> PathBuf {
         let path = self.fresh("wt");
         self.ok(repo.dir(), &["worktree", "add", "--no-track", "-b", branch, p(&path), at.as_str()]);
+        self.worktrees.push((path.clone(), repo.dir().to_path_buf()));
         path
     }
     /// A linked worktree with a detached `HEAD` at `at` (the gate worktree of the product).
     pub fn detached(&mut self, repo: &Repo, at: &Oid) -> PathBuf {
         let path = self.fresh("gate");
         self.ok(repo.dir(), &["worktree", "add", "--detach", p(&path), at.as_str()]);
+        self.worktrees.push((path.clone(), repo.dir().to_path_buf()));
         path
     }
 
@@ -220,6 +223,18 @@ impl World {
     /// The absolute path `git rev-parse --path-format=absolute --git-path <name>` prints in `dir`.
     pub fn git_path(&self, dir: &Path, name: &str) -> PathBuf {
         PathBuf::from(self.ok(dir, &["rev-parse", "--path-format=absolute", "--git-path", name]).trim())
+    }
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        // Remove all worktrees to prevent leaks: git keeps administrative state in .git/worktrees/
+        // that must be cleaned up with `git worktree remove`, not just by deleting the directory.
+        for (wt_path, repo_dir) in &self.worktrees {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(repo_dir).args(&["worktree", "remove", "--force", "--force", p(wt_path)]);
+            let _ = self.runner.output(&mut cmd, "git", Duration::from_secs(60));
+        }
     }
 }
 

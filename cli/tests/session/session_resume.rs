@@ -10,7 +10,7 @@ use common::fx::Fx;
 use common::refused;
 use serde_json::{Value, json};
 
-const GUARD: &str = "cpd: loop guard";
+const GUARD: &str = "φ: loop guard";
 
 fn blocked(fx: &Fx, id: &str, label: &str) {
     fx.env.sql(&format!("UPDATE sessions SET state = 'blocked', state_label = '{label}' WHERE id = '{id}'"));
@@ -52,7 +52,7 @@ fn resume_a_loop_guarded_manager_writes_one_session_resumed_event() {
     let fx = Fx::new();
     setup_with_fork(&fx.env);
     fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_label, state_at, created_at, forked_from)
-         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'blocked', 'cpd: loop guard', 't5', 't5', NULL)",
+         VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'blocked', 'φ: loop guard', 't5', 't5', NULL)",
     );
     let out = fx.cpd(&["session", "resume", "mgr1"]).ok();
     let events = resumed(&fx);

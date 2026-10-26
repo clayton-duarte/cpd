@@ -193,7 +193,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "jobs": ["api-config", "open-api"]})
+               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "head_ref": null, "jobs": ["api-config", "open-api"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
@@ -219,7 +219,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(added[1]["plan"], "pay-1");
     assert_eq!(
         added[1]["data"],
-        json!({"pr": "web", "repo": fx.web.display().to_string(), "base": "main", "title": "Change web", "needs": ["api"], "appended": false})
+        json!({"pr": "web", "repo": fx.web.display().to_string(), "base": "main", "title": "Change web", "head_ref": null, "author": null, "needs": ["api"], "appended": false})
     );
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'web'"), "Change web");
     let shown = fx.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
@@ -248,12 +248,12 @@ fn add_stores_the_realpath_of_the_main_worktree_of_the_repo_given() {
 #[test]
 fn add_in_dispatch_appends_the_pr() {
     let fx = crud("dispatch");
-    let out = fx.add("late", &fx.pay, &[]).ok();
+    let out = fx.add("late", &fx.pay, &["--no-needs"]).ok();
     assert_eq!(out["pr"]["appended"], true);
     assert_eq!(out["pr"]["status"], "waiting");
     assert_eq!(fx.events("pr-added")[0]["data"]["appended"], true);
     // A rerun still says it was appended.
-    assert_eq!(fx.add("late", &fx.pay, &[]).ok()["pr"]["appended"], true);
+    assert_eq!(fx.add("late", &fx.pay, &["--no-needs"]).ok()["pr"]["appended"], true);
 }
 
 // ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
@@ -275,6 +275,7 @@ impl Crud {
     fn add_shape(&self, key: &str, shape: Option<&str>) -> Run {
         let mut args = vec!["add", key, "--repo", self.pay.to_str().unwrap(), "--title", "Add retries"];
         args.extend(shape.into_iter().flat_map(|s| ["--shape", s]));
+        args.push("--no-needs");
         self.add_with_stubs("pay-1", &args)
     }
 }
@@ -561,10 +562,10 @@ fn add_keys_the_repo_before_anything_is_written() {
 
     // owner_unconfirmed (exit 1): the Context's owner has no policy file.
     fx.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
-    fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+    fs::remove_file(fx.env.cpd_home().join("policy/acme/owner.toml")).unwrap();
     let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unconfirmed", 1, writes);
     assert_eq!(error["details"]["owner"], "acme");
-    fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
+    fs::write(fx.env.cpd_home().join("policy/acme/owner.toml"), "").unwrap();
 
     // With every refusal cleared (`remote remove` dropped the tracking ref), the same add succeeds.
     fx.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
@@ -713,7 +714,7 @@ fn legacy(status: &str) -> Legacy {
 #[test]
 fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     let Legacy { fx, origin, lead, sha } = legacy("merged");
-    let out = fx.add("fix", &fx.pay, &[]).ok();
+    let out = fx.add("fix", &fx.pay, &["--no-needs"]).ok();
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay-1/fix");
 
     assert_eq!(fx.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
@@ -726,7 +727,7 @@ fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch");
 
     // A second PR finds nothing to move.
-    fx.add("more", &fx.pay, &[]).ok();
+    fx.add("more", &fx.pay, &["--no-needs"]).ok();
 }
 
 #[test]
@@ -960,7 +961,7 @@ fn gh_args(fx: &Crud) -> Vec<Vec<String>> {
 #[test]
 fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
     let fx = crud("dispatch");
-    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("api", &fx.pay, &["--no-needs"]).ok();
     open_pr(&fx, Reply::ok("{}\n"));
 
     let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
@@ -979,7 +980,7 @@ fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
 #[test]
 fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
     let fx = crud("dispatch");
-    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("api", &fx.pay, &["--no-needs"]).ok();
     open_pr(&fx, Reply::exit(1, "", "HTTP 422: nope\n"));
     let writes = fx.writes();
 
@@ -1895,7 +1896,7 @@ fn after_a_pr_cancel_the_plan_can_be_archived() {
 #[test]
 fn owner_is_in_use_while_a_plan_has_a_pr_row() {
     let fx = crud("plan");
-    fs::write(fx.env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    fx.env.owner_policy("other", "");
     fx.add("api", &fx.pay, &[]).ok();
     let owner = |fx: &Crud| fx.cpd(&["context", "owner", "other", "--context", "ctx"]);
 

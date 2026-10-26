@@ -13,7 +13,7 @@ export type GuardCall = { toolName: string; input: unknown; parentToolCallId?: s
 
 const OPEN_ACTIONS = new Set(["annotate", "review", "last"]);
 const refuse = (reason: string) => ({ block: true, reason }) as const;
-const G2 = (cause: string) => refuse(`cpd: plannotator needs a link the User can reach; refused: ${cause}`);
+const G2 = (cause: string) => refuse(`φ: plannotator needs a link the User can reach; refused: ${cause}`);
 
 const loopback = (host: string): boolean => {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
@@ -27,7 +27,7 @@ export function pnVerdict(state: GuardState, call: GuardCall): { block: true; re
   if (!opens) return undefined;
   const { env } = state;
   if (env.CPD_SESSION === undefined || env.CPD_SESSION === "") return undefined; // not a pi cpd started
-  if (!state.live) return refuse("cpd: plannotator waits for the cpd adapter to start");
+  if (!state.live) return refuse("φ: plannotator waits for the cpd adapter to start");
   if (env.PLANNOTATOR_REMOTE !== "1") return G2("PLANNOTATOR_REMOTE is not 1");
   if (loopback(env.PLANNOTATOR_URL_HOST ?? "")) return G2("PLANNOTATOR_URL_HOST is empty or a loopback name or address");
   const port = env.PLANNOTATOR_PORT ?? "";

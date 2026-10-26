@@ -5,6 +5,7 @@ import { newReporter } from "./agent-state.ts";
 import { CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 import { PERMANENT_CODES } from "./follower.ts";
+import { boldPhi } from "./phi.ts";
 import { policySection } from "./policy.ts";
 import { holdTrip, trippedIn } from "./loop-guard.ts";
 import { followerHooks } from "./handle.ts";
@@ -99,7 +100,7 @@ function logTo(host: Host, id: string): (line: string) => void {
     } catch (e) {
       if (!failed) {
         failed = true;
-        host.ctx?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error");
+        host.ctx?.ui.notify(boldPhi(`φ: cannot write the reload log: ${toCpdError(e).message}`), "error");
       }
     }
   };
@@ -209,7 +210,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     validate: (dir) => validatePackage(dir, options.reload),
     refusal: () => (host.run === r && host.ctx !== undefined ? refusal(guardOf(r, host.ctx)) : "not active"),
     trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
-    onRefused: (reason) => host.ctx?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
+    onRefused: (reason) => host.ctx?.ui.notify(boldPhi(`φ: adapter update not loaded: ${reason}`), "error"),
     onError: (e) => host.deliver("reload after install", e),
     log: r.log,
     onLongRefusal: () => host.ctx?.ui.notify(LONG_REFUSAL_NOTICE),

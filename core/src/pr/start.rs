@@ -314,14 +314,18 @@ pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId
 /// PR's Lead Branch head (§7.2).
 fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &pr.key;
-    // The PR's policy is strict: a repo without its file is `repo_unconfigured`, and nothing was created.
-    let policy = store.read(|conn| super::policy_of_pr(conn, home, &config.host, plan, key)).map_err(Failed::Other)?;
+    let policy = store.read(|conn| super::policy_of_pr(conn, home, plan, key)).map_err(Failed::Other)?;
     let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
     let setup = Setup {
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
     };
-    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, stacked, &setup, &policy.hooks.pre_start) {
+    let cut = match (&pr.head_ref, stacked) {
+        (Some(head_ref), _) => git::Cut::Adopted(head_ref),
+        (None, true) => git::Cut::Stacked,
+        (None, false) => git::Cut::Base,
+    };
+    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, cut, &setup, &policy.hooks.pre_start) {
         Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());

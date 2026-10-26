@@ -9,7 +9,7 @@ export const WINDOW_MS = 600_000;
 /** The pi session entry that keeps a trip across a reload (L4 (c), L7). */
 export const ENTRY_TYPE = "cpd-loop-guard";
 export const KEY = "loop-guard";
-export const LABEL = "cpd: loop guard";
+export const LABEL = "φ: loop guard";
 
 const guarded = (r: Run) => r.info.role === "lead" || r.info.role === "manager";
 

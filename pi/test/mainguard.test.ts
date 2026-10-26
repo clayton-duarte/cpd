@@ -19,7 +19,7 @@ const ARGS: Record<string, string> = {
   pull: "pull",
   stash: "stash",
 };
-const PREFIX = "cpd: no agent moves HEAD or changes the files of a repo's primary checkout";
+const PREFIX = "φ: no agent moves HEAD or changes the files of a repo's primary checkout";
 const ALTERNATIVES = ["git show origin/main:<path>", "git log origin/main", "git diff origin/main", "git worktree add $(mktemp -d) origin/main"];
 
 const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))) as NodeJS.ProcessEnv;

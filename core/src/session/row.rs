@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use super::{Env, ListArgs, ShowArgs, session_not_found};
 use crate::args::SessionArg;
-use crate::config::{Config, Letter, Tier};
+use crate::config::{Letter, Tier};
+use crate::policy::model::Models;
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
@@ -258,12 +259,11 @@ pub(super) fn live(conn: &Connection) -> Result<Vec<Row>, CpdError> {
     query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())
 }
 
-/// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): `tiers.<letter>` of the config and
+/// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): the `<letter>` ref of the Session's `Models` (its Context's key) and
 /// the level of the Tier's digit. The one function `session show` and `session run` share, so a Session retiered and a
 /// Session started later are on the same model.
-pub(super) fn model_and_level(config: &Config, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
+pub(super) fn model_and_level(models: &Models, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
     let tier = Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
-    let models = &config.tiers;
     let model = match tier.letter() {
         Letter::O => &models.o,
         Letter::S => &models.s,
@@ -271,6 +271,12 @@ pub(super) fn model_and_level(config: &Config, id: &SessionId, tier: &str) -> Re
         Letter::G => &models.g,
     };
     Ok((model.clone(), tier.level()))
+}
+
+/// The models of the Session's Context (contract §8.3 "Models" (5)): its owner's key, or the machine layer.
+pub(super) fn models_of(env: &mut Env, row: &Row) -> Result<Models, CpdError> {
+    let home = env.home.clone();
+    env.store.read(|conn| crate::policy::model::models_of_context(conn, &home, row.context.as_str()))
 }
 
 /// The Session `id`, if it exists.
@@ -341,7 +347,8 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut session = row.list_json();
     session["created_at"] = json!(row.created_at);
     session["registered_event"] = json!(row.registered_event);
-    let (model, thinking) = model_and_level(&env.config, &row.id, &row.tier)?;
+    let models = models_of(&mut env, &row)?;
+    let (model, thinking) = model_and_level(&models, &row.id, &row.tier)?;
     session["model"] = json!(model);
     session["thinking"] = json!(thinking);
     session["loop_guard_turns"] = json!(env.config.loop_guard_turns);

@@ -24,7 +24,8 @@ use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::ports::Ports;
 use crate::session::run::{quiet_since_with, turn_finished};
-use crate::spec::{self, Answer, Cause, Input, JobKind, Previous};
+use crate::attempt::ledger::{Cause, Stored};
+use crate::spec::{self, Answer, Evidence, Input, JobKind, Previous};
 use crate::store::Store;
 
 /// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1).
@@ -83,28 +84,36 @@ fn previous(conn: &Connection, target: &Target) -> Result<Vec<Previous>, CpdErro
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, number, tier, cause)| {
-            let files = if cause == "merge_conflict" {
-                let data: Option<String> = conn
-                    .query_row(
-                        "SELECT data FROM events WHERE plan = ?1 AND attempt = ?2
-                            AND kind IN ('attempt-retry', 'job-failed') ORDER BY id DESC LIMIT 1",
-                        params![target.plan.as_str(), id],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                let data: Value = data.map_or(Value::Null, |d| serde_json::from_str(&d).unwrap_or(Value::Null));
-                let detail = data.get("feedback").or_else(|| data.get("detail")).and_then(Value::as_str).unwrap_or("");
-                conflict_files(detail)
-            } else {
-                Vec::new()
+            let cause = spec::parse_cause(&cause)?;
+            let evidence = match cause {
+                Stored::Failed(Cause::MergeConflict) => Evidence::Files(conflict_files(&end_detail(conn, target, &id)?)),
+                Stored::Failed(Cause::GateFailed | Cause::GateError) => {
+                    Evidence::Gate(crate::merge::parse_gate_detail(&end_detail(conn, target, &id)?))
+                }
+                _ => Evidence::None,
             };
             Ok(Previous {
                 number,
                 tier: Tier::parse(&tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {id}")))?,
-                cause: Cause::parse(&cause, files)?,
+                cause,
+                evidence,
             })
         })
         .collect()
+}
+
+/// The `detail` of the end Event of Attempt `id` (`attempt-retry`'s `feedback` or `job-failed`'s `detail`); empty when it has none.
+fn end_detail(conn: &Connection, target: &Target, id: &str) -> Result<String, CpdError> {
+    let data: Option<String> = conn
+        .query_row(
+            "SELECT data FROM events WHERE plan = ?1 AND attempt = ?2
+                AND kind IN ('attempt-retry', 'job-failed') ORDER BY id DESC LIMIT 1",
+            params![target.plan.as_str(), id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let data: Value = data.map_or(Value::Null, |d| serde_json::from_str(&d).unwrap_or(Value::Null));
+    Ok(data.get("feedback").or_else(|| data.get("detail")).and_then(Value::as_str).unwrap_or("").to_owned())
 }
 
 /// The `answered` Escalations of earlier Attempts of `target`'s Job, oldest first.
@@ -135,10 +144,10 @@ fn strings(value: &Value, what: &str) -> Result<Vec<String>, CpdError> {
 }
 
 /// A3: renders the Worker Spec to `run/<plan>/specs/<attempt>.md` and returns its path.
-pub fn render_spec(conn: &Connection, home: &CpdHome, host: &crate::ids::HostName, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
+pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job) -> Result<PathBuf, CpdError> {
     let previous = previous(conn, target)?;
     let answers = answers(conn, target)?;
-    let policy = crate::pr::policy_of_job(conn, home, host, &target.plan, &job.key)?;
+    let policy = crate::pr::policy_of_job(conn, home, &target.plan, &job.key)?;
     let quick_check = spec::quick_check(&policy.hooks.pre_commit);
     let protected = policy.protected.paths.clone();
     let job_spec = job.require_spec()?;

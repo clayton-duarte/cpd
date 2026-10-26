@@ -88,7 +88,7 @@ test("a targeted run, a build and other commands run", () => {
 
 test("the reason is one line naming the rule and what matched", () => {
   const r = reasonText(unfilteredTestRun("scripts/cargo.sh test --workspace")!);
-  assert.equal(r, "cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: cargo.sh test --workspace");
+  assert.equal(r, "φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: cargo.sh test --workspace");
   assert.equal(r.includes("\n"), false);
   assert.equal(unfilteredTestRun("timeout 60 cargo nextest run"), "cargo nextest run");
   assert.equal(unfilteredTestRun("npm test"), "npm test");
@@ -115,7 +115,7 @@ test("a Worker's full test runs get block and the rule's reason; the targeted on
   for (const c of ["scripts/cargo.sh test --workspace", "cargo nextest run", "npm test", "npm run verify"]) {
     const r = await call(f, c);
     assert.equal(r?.block, true, c);
-    assert.match(r?.reason ?? "", /^cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: /);
+    assert.match(r?.reason ?? "", /^φ: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: /);
   }
   for (const c of ["scripts/cargo.sh nextest run -p cpd --test plan_overlap", "cargo test -p cpd-core spec::", "node --test pi/test/x.test.ts", "npm test -- pi/test/x.test.ts", "npm run typecheck", "cargo build"])
     assert.equal(await call(f, c), undefined, c);
@@ -130,7 +130,8 @@ test("a Worker's other tools are never refused", async (t) => {
 test("a Lead's identical calls are not refused", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  for (const c of REFUSED) assert.equal(await call(f, c), undefined, c);
+  // the `timeout N` entries are left out: a Lead's wait over 30 s is refused by noblock (commands.md 15.11)
+  for (const c of REFUSED.filter((c) => !c.startsWith("timeout "))) assert.equal(await call(f, c), undefined, c);
 });
 
 test("a Manager is not refused for a test run (its own guard is the no-block one)", async (t) => {

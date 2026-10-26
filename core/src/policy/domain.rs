@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::exposure::ScopeKind;
+use super::model::{ModelSet, Models};
 use crate::config::RepoTests;
 use crate::git::hooks::Pipeline;
 use crate::session::Role;
@@ -533,6 +534,7 @@ domains! {
     tests, Tests, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     monitor, Monitor, [Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
     instructions, Instructions, [Manager, Lead, Worker], [Machine, Owner, Repo], Text, TextSet;
+    model, Model, [], [Machine, Owner, Repo], Models, ModelSet;
     hooks, Hooks, [], [Repo], Hooks, HooksSet;
     test_commands = "test-commands", TestCommands, [], [Repo], Option<RepoTests>, TestCommandsSet;
     protected, Protected, [], [Repo], Protected, ProtectedSet;

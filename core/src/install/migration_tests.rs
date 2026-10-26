@@ -23,7 +23,7 @@ use tempfile::TempDir;
 use super::{Install, run};
 use crate::fakes::git::{GitRoute, Repo, Universe};
 use crate::home::CpdHome;
-use crate::host::runner::{Call, Reply};
+use crate::host::runner::{Call, Handler, Reply};
 use crate::ports::Fakes;
 
 const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
@@ -34,6 +34,22 @@ const MIGRATIONS: &str = "core/src/store/migrations";
 struct Run {
     exit: i32,
     stderr: String,
+}
+
+/// The install harness's default answer of the built binary's `config --migrate`: nothing stale. A test's `on`
+/// rule wins over it, and every other call of the built binary that no rule matched is `NotFound` as before.
+struct BuiltConfigMigrate {
+    built: PathBuf,
+}
+
+impl Handler for BuiltConfigMigrate {
+    fn handle(&self, call: &Call) -> Reply {
+        if Path::new(&call.program) == self.built && call.args == ["config", "--migrate"] {
+            Reply::ok(r#"{"ok":true,"migrated":[]}"#)
+        } else {
+            Reply::io(std::io::ErrorKind::NotFound)
+        }
+    }
 }
 
 /// A checkout (a clone of an origin whose `main` is `origin/main`), a built binary, a `HOME` and a `CPD_HOME`.
@@ -85,7 +101,7 @@ impl Rig {
         }
         origin.commit("install files");
 
-        Rig::route(&fakes, &route, &installed, &tag);
+        Rig::route(&fakes, &route, &built, &installed, &tag);
         let rig = Rig {
             _tmp: tmp,
             fakes,
@@ -105,13 +121,15 @@ impl Rig {
         rig
     }
 
-    /// The runner's git route, and the installed `cpd` and the tagger answering exit 0 and nothing.
-    fn route(fakes: &Fakes, route: &Arc<GitRoute>, installed: &Path, tag: &Path) {
-        let (installed, tag) = (installed.to_path_buf(), tag.to_path_buf());
+    /// The runner's git route, the installed `cpd` and the tagger answering exit 0 and nothing, and the built
+    /// binary's `config --migrate` answering "nothing migrated" unless a test scripts it ([`Rig::built_config`]).
+    fn route(fakes: &Fakes, route: &Arc<GitRoute>, built: &Path, installed: &Path, tag: &Path) {
+        let (built, installed, tag) = (built.to_path_buf(), installed.to_path_buf(), tag.to_path_buf());
         (*fakes.runner)
             .clone()
             .on("cpd", move |c| Path::new(&c.program) == installed, Reply::ok(""))
             .on("tag-version.sh", move |c| Path::new(&c.program) == tag, Reply::ok(""))
+            .route("cpd", Arc::new(BuiltConfigMigrate { built }))
             .with_git(route);
     }
 
@@ -131,6 +149,14 @@ impl Rig {
     fn built_says(&self, version: &str) {
         let built = self.built();
         (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["--version"], Reply::ok(version));
+    }
+
+    /// What `<target>/release/cpd config --migrate` prints; a test's rule wins over the route's default
+    /// (["nothing migrated"]).
+    fn built_config(&self, reply: &str) {
+        let built = self.built();
+        let reply = reply.to_owned();
+        (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["config", "--migrate"], Reply::ok(&reply));
     }
 
     /// `git <args>` in `dir`, through the runner: (exit, stderr).
@@ -256,8 +282,12 @@ fn a_build_whose_migrations_are_all_on_origin_main_installs() {
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert!(rig.installed().exists());
-    // The script's assertion that cargo ran once: the build is the shell's now, the built binary's verdict is asked once.
-    assert_eq!(rig.built_calls().len(), 1);
+    // The script's assertion that cargo ran once: the build is the shell's now, and the built binary is asked once for
+    // the store verdict, then once for the config migration and validation (both before it replaces the binary).
+    let calls = rig.built_calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].args, ["--version"], "{calls:?}");
+    assert_eq!(calls[1].args, ["config", "--migrate"], "{calls:?}");
 }
 
 #[test]
@@ -384,4 +414,53 @@ fn a_refused_install_leaves_the_installed_binary_as_it_was() {
         assert_eq!(fs::read(rig.installed()).unwrap(), b"old cpd\n", "{refusal:?}");
         assert_eq!(rig.dest_entries(), ["cpd"], "{refusal:?}");
     }
+}
+
+// ---- The config migration and validation (contract §3.7, commands.md §14.4 step 4) ----
+
+/// The install runs the built binary's `config --migrate` with the caller's `CPD_HOME`.
+#[test]
+fn the_install_runs_the_built_binarys_config_migrate() {
+    let rig = Rig::new(&[]);
+    rig.built_says(&version("null"));
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    let call = rig.built_calls().into_iter().find(|c| c.args == ["config", "--migrate"]).expect("the built binary ran config --migrate");
+    let cpd_home = call.envs.iter().find(|(key, _)| key == "CPD_HOME").and_then(|(_, value)| value.clone());
+    assert_eq!(cpd_home.as_deref(), rig.cpd_home().to_str(), "CPD_HOME is the caller's");
+}
+
+/// A config the build cannot migrate is refused before the binary is replaced: the installed
+/// binary stays byte-identical.
+#[test]
+fn a_config_the_build_cannot_migrate_is_refused_before_replacing_the_binary() {
+    let rig = Rig::new(&[]);
+    fs::create_dir_all(rig.installed().parent().unwrap()).unwrap();
+    fs::write(rig.installed(), "old cpd\n").unwrap();
+    rig.built_says(&version("null"));
+    rig.built_config(
+        r#"{"ok":false,"error":{"code":"config_invalid","message":"must be GX","details":{"key":"context_distill_tier"}}}"#,
+    );
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install refused:"), "{}", run.stderr);
+    assert!(run.stderr.contains("cannot migrate"), "{}", run.stderr);
+    assert_eq!(fs::read(rig.installed()).unwrap(), b"old cpd\n", "the binary was replaced");
+}
+
+/// Each migration the build applied is reported on stderr.
+#[test]
+fn the_migrations_the_build_applied_are_reported_on_stderr() {
+    let rig = Rig::new(&[]);
+    rig.built_says(&version("null"));
+    rig.built_config(r#"{"ok":true,"path":"x","migrated":["distill-tier-gx"]}"#);
+
+    let run = rig.run();
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install: config.toml migrated: distill-tier-gx"), "{}", run.stderr);
 }

@@ -469,7 +469,8 @@ impl Run<'_> {
     /// stdout read by cpd: the run and its final assistant text (ending in a newline) are returned. A failure
     /// appends the `error` Event upstream; every run that started pi appends its line to `runs.jsonl`, a failed one here.
     fn run_pi(&mut self, tier: Tier, upto: u64, files: &[&str]) -> Result<Result<(Ran, String), Fault>, CpdError> {
-        let models = &self.config.tiers;
+        let (home, context) = (self.home, self.context);
+        let models = self.store.read(|conn| crate::policy::model::models_of_context(conn, home, context.as_str()))?;
         let model = match tier.letter() {
             Letter::O => &models.o,
             Letter::S => &models.s,
@@ -668,10 +669,10 @@ fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
 
 /// `records.md` (contract §4.6 step 3): one block per record, `[<id>] <kind> (<date>)`, `answers <question id>`
 /// for an answer, then the full text. A superseding decision's `supersedes` is not shown: what it names is not in force.
-fn records_md(in_force: &[&Indexed]) -> String {
+pub(super) fn records_md(in_force: &[&Indexed]) -> String {
     let mut out = String::new();
     for (_, record) in in_force {
-        let date = record.at.get(..10).unwrap_or(&record.at);
+        let date = format!("{} UTC", record.at.get(..10).unwrap_or(&record.at));
         out.push_str(&format!("[{}] {} ({date})\n", record.id, record.kind().as_str()));
         if let Some(question) = record.question() {
             out.push_str(&format!("answers {question}\n"));
@@ -951,9 +952,9 @@ mod tests {
         let d = record("hs-d2", "2026-10-03T10:00:00.000Z", "Use it.", Draft::Decision { supersedes: Some(RecordId::parse("hs-d1").unwrap()) });
         assert_eq!(
             records_md(&[&q, &a, &d]),
-            "[hs-q1] question (2026-10-01)\nWhich port?\n\n\
-             [hs-a1] answer (2026-10-02)\nanswers hs-q1\nPort 80.\nSecond line.\n\n\
-             [hs-d2] decision (2026-10-03)\nUse it.\n\n"
+            "[hs-q1] question (2026-10-01 UTC)\nWhich port?\n\n\
+             [hs-a1] answer (2026-10-02 UTC)\nanswers hs-q1\nPort 80.\nSecond line.\n\n\
+             [hs-d2] decision (2026-10-03 UTC)\nUse it.\n\n"
         );
     }
 

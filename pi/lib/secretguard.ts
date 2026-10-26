@@ -18,6 +18,6 @@ export function secretBypass(command: string): string | undefined {
 /** The rule's reason, one line. */
 export function reasonText(matched: string): string {
   return matched === "cpd secret approve"
-    ? `cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: ${matched}`
-    : `cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: ${matched}`;
+    ? `φ: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: ${matched}`
+    : `φ: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: ${matched}`;
 }

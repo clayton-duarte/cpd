@@ -79,6 +79,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
+| `cpd mcp` | MCP servers (commands.md §24) | | |
+| `cpd mcp attach` | Attach a server of this machine's policy to this Session only (§24.1) | Manager, Lead, Worker | |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
 | `cpd session list` | List Sessions (§10.1) | Lead, Manager | |
 | `cpd session show` | Show a Session (§10.2) | Lead, Manager | |
@@ -132,6 +134,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
+| `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
 | `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |
 | `cpd secret list` | List the items of a vault (§24.2) | Lead, Manager | |

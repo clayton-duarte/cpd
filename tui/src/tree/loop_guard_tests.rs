@@ -23,7 +23,7 @@ fn tripped(kind: Kind) -> Env {
                  NULL, cpd_txn(), '2026-01-02T00:00:01.000Z', NULL, NULL);
          INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
          VALUES ('l-sketch', 'lead', 'alpha', 'sketch', NULL, 'sketch', '/sessions/l-sketch.jsonl', '/repo', 'O3',
-                 NULL, 'blocked', 'cpd: loop guard', '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:01.000Z');",
+                 NULL, 'blocked', 'φ: loop guard', '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:01.000Z');",
     );
     let item = Condition {
         kind,

@@ -10,6 +10,7 @@ use std::sync::Mutex;
 
 use common::fx::Fx;
 use common::{TestEnv, sql};
+use cpd_core::attempt::ledger::{Cause, Stored};
 use cpd_core::config::Tier;
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
@@ -20,7 +21,7 @@ use cpd_core::session::State;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::read::{
-    self, AttemptStatus, Cause, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
+    self, AttemptStatus, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
     ReviewStatus, Target,
 };
 use rusqlite::Connection;
@@ -927,7 +928,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
     let c = by("c");
     let (first, second) = (&c.attempts[0], &c.attempts[1]);
     assert_eq!((first.id.clone(), first.number, first.tier, first.origin), (attempt("c-a1"), 1, tier("S2"), Origin::Ladder));
-    assert_eq!((first.status, first.outcome, first.cause), (AttemptStatus::Ended, Some(Outcome::Failed), Some(Cause::TimedOut)));
+    assert_eq!((first.status, first.outcome, first.cause), (AttemptStatus::Ended, Some(Outcome::Failed), Some(Stored::Failed(Cause::TimedOut))));
     assert!(first.ended_at.is_some() && first.worker.is_none());
     assert_eq!((second.number, second.tier, second.origin, second.status), (2, tier("S3"), Origin::Retry, AttemptStatus::Running));
     let worker = second.worker.as_ref().unwrap();
@@ -1307,7 +1308,7 @@ fn a_worker_is_its_attempt_session_and_escalations() {
     assert_eq!(by_job.attempt.as_ref().map(|a| a.id.clone()), Some(attempt("c-a2")), "a Job's latest Attempt");
     let ended = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("a-a1"))).unwrap();
     let done = ended.attempt.as_ref().unwrap();
-    assert_eq!((done.status, done.outcome, done.cause), (AttemptStatus::Ended, Some(Outcome::Merged), Some(Cause::Merged)));
+    assert_eq!((done.status, done.outcome, done.cause), (AttemptStatus::Ended, Some(Outcome::Merged), Some(Stored::Merged)));
     assert_eq!((done.merged_sha.as_deref(), ended.session.is_none()), (Some("abc123"), true));
     assert_eq!((ended.escalations[0].status, ended.escalations[0].answer.as_deref()), (EscalationStatus::Answered, Some("Use v2.")));
     let merging = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("b-a1"))).unwrap();

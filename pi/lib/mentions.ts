@@ -1,10 +1,11 @@
 import { isObject } from "./cpd.ts";
+import { italic } from "./italic.ts";
 
 /** commands.md §15.14: magenta mentions of Leads and Managers. */
 export type PaneRole = "lead" | "manager" | "worker";
 
 const WORD = /[A-Za-z0-9_-]+/g;
-const MAGENTA = (s: string) => `\x1b[35m${s}\x1b[39m`;
+const MAGENTA = (s: string) => italic(`\x1b[35m${s}\x1b[39m`);
 
 /** A mention is a whole token (word characters `[A-Za-z0-9_-]`) that is an id of the set. */
 export function isMention(token: string, ids: ReadonlySet<string>): boolean {

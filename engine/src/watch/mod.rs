@@ -40,6 +40,8 @@ mod titles;
 mod wake;
 mod workers;
 #[cfg(test)]
+mod local_time_tests;
+#[cfg(test)]
 mod incident_tests;
 #[cfg(test)]
 mod inbox_tests;

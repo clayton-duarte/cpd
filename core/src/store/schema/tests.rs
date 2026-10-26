@@ -947,8 +947,8 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let dir = tempfile::tempdir().unwrap();
     let (store, before) = migrated_5(&dir);
     drop(store);
-    // `prs_shape_fixed` is `job-kinds`': it is not one of migration 5's.
-    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_hist_del").collect();
+    // `prs_shape_fixed` is `job-kinds`' and `prs_head_ref_fixed` is `pr-adopt`'s: neither is one of migration 5's.
+    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_head_ref_fixed" && name != "prs_hist_del").collect();
     let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
@@ -1026,17 +1026,17 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
 }
 
 #[test]
-fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
+fn the_inbox_items_table_accepts_the_urgency_cyan_and_refuses_others() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut store = Store::open(&home, 5000).unwrap();
     let item = |urgency: &str| {
         format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');")
     };
-    for urgency in ["white", "blue", "magenta", "yellow", "red"] {
+    for urgency in ["white", "cyan", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
     }
-    assert!(write(&mut store, &item("cyan")).is_err());
+    assert!(write(&mut store, &item("blue")).is_err());
     assert!(write(&mut store, &item("")).is_err());
 }
 
@@ -2122,7 +2122,7 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
            VALUES ('mgr',    'manager', 'ctx', NULL, NULL,   'Manager', '/f/m', NULL,   '/', 'O3', '%1',  'idle',    NULL,      't1', 't', NULL),
                   ('lead',   'lead',    'ctx', 'pl', NULL,   'Lead',    '/f/l', NULL,   '/', 'O3', '%2',  'blocked', 'dialog',  't2', 't', NULL),
                   ('fork',   'lead',    'ctx', 'pl', NULL,   'Fork',    NULL,   'lead', '/', 'O3', NULL,  'working', NULL,      't3', 't', NULL),
-                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'cpd: question to the Lead', 't4', 't', NULL),
+                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'φ: question to the Lead', 't4', 't', NULL),
                   ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', NULL,   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
          COMMIT;",
     )
@@ -2156,8 +2156,8 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     drop(conn);
 
     // `waiting` is a state, and says why, as `blocked` does; no other state has a label.
-    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: Worker question' WHERE id = 'lead'").unwrap();
-    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'worker'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'lead'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'φ: question to the Lead' WHERE id = 'worker'").unwrap();
     for bad in [
         "UPDATE sessions SET state = 'waiting', state_label = NULL WHERE id = 'fork'",
         "UPDATE sessions SET state = 'blocked', state_label = NULL WHERE id = 'fork'",
@@ -2766,11 +2766,12 @@ fn stacked_prs_keeps_every_pr_and_need() {
         vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
-    // `job-kinds` added `prs.shape`, last, `free` in every row.
+    // `job-kinds` added `prs.shape`, `free` in every row, and `pr-adopt` `prs.head_ref` after it, null in every row.
     let without_shape: Vec<String> = after["prs"]
         .iter()
         .map(|row| {
             let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+            assert_eq!(cells.pop(), Some(serde_json::Value::Null));
             assert_eq!(cells.pop(), Some(serde_json::json!("free")));
             serde_json::Value::from(cells).to_string()
         })
@@ -2875,8 +2876,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` and the one of `incident-plans-event`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` the one of `incident-plans-event` and the one of `event-mcp-attached`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
@@ -2998,7 +2999,7 @@ fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store()
             .collect()
     };
     assert_eq!(strip(&after["jobs"], 4, "work"), before["jobs"]);
-    assert_eq!(strip(&after["prs"], 1, "free"), before["prs"]);
+    assert_eq!(strip(&after["prs"], 2, "free"), before["prs"]);
     assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
 
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
