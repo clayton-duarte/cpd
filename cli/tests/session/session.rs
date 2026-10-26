@@ -1261,6 +1261,12 @@ fn assert_restarted_parked(fx: &Fx, id: &str, old_pane: &str, window: &str) {
     assert_eq!(parked, &("parked".to_owned(), json!(pane.pane)));
 }
 
+/// The `error` Events about a Session or `session_restart_loop`: the fixture's own errors (an Attempt without a worktree, E5's
+/// spawn) are not what these tests are about.
+fn session_errors(fx: &Fx) -> Vec<Value> {
+    events(fx, "error").into_iter().filter(|e| !e["session"].is_null() || e["data"]["code"] == "session_restart_loop").collect()
+}
+
 /// `lead1` (idle) parked in `park-pay` and `lead2` (made `working`) parked in `park-other`, the chat slot the placeholder.
 fn two_parked_leads(fx: &Fx) -> (String, String) {
     dying_leads(fx);
@@ -1285,7 +1291,8 @@ fn e2_restarts_a_lead_whose_pane_died_while_it_was_working_in_a_parked_window() 
     assert_placeholders(&fx, 1);
     assert!(slot(&fx).session.is_empty(), "the chat slot never changes");
     // The other Lead's pane lives: nothing was done to it.
-    assert_eq!(moves_of(&fx, LEAD2).len(), 3);
+    let places: Vec<String> = moves_of(&fx, LEAD2).into_iter().map(|(place, _)| place).collect();
+    assert_eq!(places, ["chat", "parked"]);
 
     // Idempotent: the new pane lives, a tick writes nothing.
     let moved = events(&fx, "session-moved").len();
@@ -1382,7 +1389,7 @@ fn e2_leaves_a_lead_stopped_and_raises_session_restart_loop_once_when_its_restar
     fx.engine_tick();
     assert_restarted_parked(&fx, LEAD1, &old, "park-pay");
     let restarted = show(&fx, LEAD1)["tmux_pane"].as_str().unwrap().to_owned();
-    assert!(events(&fx, "error").is_empty());
+    assert!(session_errors(&fx).is_empty(), "{:?}", session_errors(&fx));
 
     // The restart died nine minutes later (the fake clock): the engine does not start it again.
     fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
@@ -1393,14 +1400,14 @@ fn e2_leaves_a_lead_stopped_and_raises_session_restart_loop_once_when_its_restar
     assert!(panes(&fx).iter().all(|p| p.session != LEAD1));
     let lead1 = show(&fx, LEAD1);
     assert_eq!((&lead1["state"], &lead1["tmux_pane"], &lead1["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
-    let errors = events(&fx, "error");
+    let errors = session_errors(&fx);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!((&errors[0]["data"]["code"], &errors[0]["session"]), (&json!("session_restart_loop"), &json!(LEAD1)));
 
     // Once: later ticks raise nothing more and start nothing.
     fx.engine_tick();
     fx.engine_tick();
-    assert_eq!(events(&fx, "error").len(), 1);
+    assert_eq!(session_errors(&fx).len(), 1);
     assert_eq!(window_names(&fx), ["main"]);
     assert_eq!(slot(&fx).session, LEAD2, "the chat slot is untouched");
 }
@@ -1421,7 +1428,7 @@ fn e2_restarts_a_lead_again_when_its_last_restart_is_ten_minutes_old() {
     fx.engine_tick();
     assert_restarted_parked(&fx, LEAD1, &restarted, "park-pay");
     assert_eq!(window_names(&fx), ["main", "park-pay"]);
-    assert!(events(&fx, "error").is_empty());
+    assert!(session_errors(&fx).is_empty(), "{:?}", session_errors(&fx));
     assert_eq!(slot(&fx).session, LEAD2, "the chat slot is untouched");
 }
 

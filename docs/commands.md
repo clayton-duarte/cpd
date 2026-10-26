@@ -170,7 +170,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
-| `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but the latest parked Event is less than 10 minutes old (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
+| `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
 

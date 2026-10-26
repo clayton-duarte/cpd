@@ -136,6 +136,7 @@ error_codes! {
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
     PlanInactive = "plan_inactive" => Refused,
+    SessionRestartLoop = "session_restart_loop" => Refused,
     Broadcast = "broadcast" => Refused,
     Duplicate = "duplicate" => Refused,
     NoManager = "no_manager" => Refused,
