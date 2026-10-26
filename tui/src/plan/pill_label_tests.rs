@@ -26,6 +26,7 @@ fn a_pill_from_the_second_attempt_has_the_attempt_before_the_tier() {
 #[test]
 fn the_attempt_before_the_tier_keeps_the_tiers_right_aligned() {
     let c = layout(&[job("a", 1), job("a-longer-key", 2), job("b", 1)], 0);
-    let want = "󰝦 a              │S1\n\n󰝦 a-longer-key│#2│S1\n\n󰝦 b              │S1";
+    let row = |body: &str| format!("{CAP_L}󰝦 {body}{CAP_R}");
+    let want = [row("a              │S1"), String::new(), row("a-longer-key│#2│S1"), String::new(), row("b              │S1")].join("\n");
     assert_eq!(rows(&c.buf).join("\n"), want);
 }
