@@ -18,6 +18,8 @@ use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incide
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
+use crate::install;
+
 /// The build's version string: `<Cargo.toml version>-<commit>`: the short hash the build was given in `CPD_COMMIT`, `dev` when it was given none.
 pub fn version() -> &'static str {
     env!("CPD_VERSION")
@@ -84,6 +86,8 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
+    /// Install the cpd built from a checkout (commands.md §14.4)
+    Install(install::Args),
     /// Secrets in 1Password through op (commands.md §24)
     #[command(subcommand)]
     Secret(secret::Command),
@@ -175,6 +179,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
+        Command::Install(a) => install::run(ports, a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
         Command::Gate(c) => gate_exit(gate::run(ports, c)),
