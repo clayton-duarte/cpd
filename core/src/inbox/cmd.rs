@@ -359,6 +359,10 @@ fn scoped(mut event: NewEvent, item: &Item) -> NewEvent {
 }
 
 #[cfg(test)]
+#[path = "snooze_time_tests.rs"]
+mod snooze_time_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::home::CpdHome;

@@ -190,6 +190,10 @@ fn date(record: &Record) -> &str {
 }
 
 #[cfg(test)]
+#[path = "render_time_tests.rs"]
+mod render_time_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::context::record::{By, Draft};

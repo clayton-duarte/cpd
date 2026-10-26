@@ -668,7 +668,7 @@ fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
 
 /// `records.md` (contract §4.6 step 3): one block per record, `[<id>] <kind> (<date>)`, `answers <question id>`
 /// for an answer, then the full text. A superseding decision's `supersedes` is not shown: what it names is not in force.
-fn records_md(in_force: &[&Indexed]) -> String {
+pub(super) fn records_md(in_force: &[&Indexed]) -> String {
     let mut out = String::new();
     for (_, record) in in_force {
         let date = record.at.get(..10).unwrap_or(&record.at);
