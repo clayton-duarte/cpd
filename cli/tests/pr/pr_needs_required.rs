@@ -1,0 +1,83 @@
+//! `pr add` in phase `dispatch` is refused `needs_required` unless it says `--needs` or `--no-needs`
+//! (commands.md §9.4, §1.3; contract). Reuses the `added` fixture of `pr.rs`.
+
+use crate::pr::{Added, added};
+use serde_json::{Value, json};
+
+fn error(run: &crate::common::Run) -> Value {
+    let v: Value = serde_json::from_str(run.stdout.trim()).unwrap_or_else(|e| panic!("not JSON ({e}): {} / {}", run.stdout, run.stderr));
+    v["error"].clone()
+}
+
+fn assert_refused(f: &Added, key: &str, shape: &str) {
+    let other = f.fx.keyed_repo(&format!("other-{shape}")).canonicalize().unwrap();
+    let run = f.fx.cpd(&["pr", "add", key, "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", shape, "--plan", "pay"]);
+    let e = error(&run);
+    assert_eq!(e["code"], "needs_required", "{shape}: {e}");
+    assert_eq!(run.exit, 3, "{shape}");
+    assert_eq!(e["details"], json!({"plan": "pay", "pr": key, "phase": "dispatch"}), "{shape}");
+    let msg = e["message"].as_str().unwrap();
+    assert!(msg.contains("--needs") && msg.contains("--no-needs"), "{msg}");
+    // Nothing written.
+    let prs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM prs WHERE plan = 'pay' AND key = '{key}'"));
+    let jobs: i64 = f.fx.env.query(&format!("SELECT count(*) FROM jobs WHERE plan = 'pay' AND pr = '{key}'"));
+    assert_eq!((prs, jobs), (0, 0), "{shape}");
+    assert!(f.pr_added().is_empty(), "{shape}");
+}
+
+#[test]
+fn pr_add_in_dispatch_without_needs_or_no_needs_is_refused_needs_required() {
+    let f = added("dispatch");
+    assert_refused(&f, "fix", "config");
+    let stub: i64 = f.fx.env.query("SELECT count(*) FROM jobs WHERE plan = 'pay' AND key = 'fix-docs'");
+    assert_eq!(stub, 0);
+}
+
+#[test]
+fn pr_add_in_dispatch_refusal_covers_every_shape() {
+    let f = added("dispatch");
+    assert_refused(&f, "fix", "docs");
+    assert_refused(&f, "fix", "config");
+}
+
+#[test]
+fn pr_add_in_dispatch_with_no_needs_adds_a_pr_without_needs() {
+    let f = added("dispatch");
+    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
+    let out = f.add("fix", &other, &["--no-needs"]).ok();
+    assert_eq!(out["pr"]["needs"], json!([]));
+    assert!(f.needs_of("fix").is_empty());
+}
+
+#[test]
+fn pr_add_in_dispatch_with_needs_links_the_pr() {
+    let f = added("dispatch");
+    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
+    let out = f.add("fix", &other, &["--needs", "repo"]).ok();
+    assert_eq!(out["pr"]["needs"], json!(["repo"]));
+    assert_eq!(f.needs_of("fix"), ["repo"]);
+}
+
+#[test]
+fn pr_add_in_plan_phase_needs_no_flag() {
+    let fx = crate::common::fx::Fx::with_ports();
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    fx.env.write_config("version = 1\nmachine = \"t\"\n");
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('pay', 'ctx', 'Pay the bills', 'plan', 'lead1', 't');",
+    );
+    let run = fx.cpd(&["pr", "add", "fix", "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]);
+    assert_eq!(run.json()["pr"]["needs"], json!([]));
+}
+
+#[test]
+fn pr_add_rerun_in_dispatch_without_a_flag_is_already() {
+    let f = added("dispatch");
+    let other = f.fx.keyed_repo("other").canonicalize().unwrap();
+    f.add("fix", &other, &["--no-needs"]).ok();
+    assert_eq!(f.add("fix", &other, &[]).ok()["already"], true);
+}
