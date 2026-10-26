@@ -785,6 +785,33 @@ fn a_test_job_must_change_a_path_its_test_files_name_or_is_refused_test_files_mi
     assert_eq!(fx.status(), "merging");
 }
 
+/// hs-d716: a linear Attempt (its branch is the Lead Branch, hs-d680) diffs its red tests against the Attempt's
+/// `base_sha` (`base...sha`), not the Lead Branch (`lead...sha` is empty when `lead == HEAD`).
+#[test]
+fn a_linear_test_job_checks_its_red_test_diff_against_the_attempt_base() {
+    let fx = git_fixture(&[]);
+    // A PR whose Lead Branch is `cpd/<plan>/<key>` (the non-migration-4 form a linear Attempt's branch takes).
+    let web = fx.add_pr("web");
+    fx.fx.env.repo_policy("acme", "web", TESTS);
+    fx.sh(test_commands);
+    fx.attempt_needing(&web, "ui", "running", "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)), None);
+    // Seed the linear Attempt: branch == the PR's Lead Branch, worktree == the Lead worktree, base_sha == its tip.
+    let base = fx.fx.git(&web.lead, &["rev-parse", "HEAD"]);
+    fx.fx.env.sql(&format!(
+        "UPDATE attempts SET branch = 'cpd/pay/web', worktree = '{}', base_sha = '{base}' WHERE id = 'ui-a1'",
+        web.lead.display()
+    ));
+    fx.commit_in(&web.lead, "tests/t.rs", "// red\n");
+    // The control: the commit changes exactly the file the Job's `test_files` names, and the Lead Branch diff is
+    // empty because the linear Attempt's HEAD is the Lead Branch tip.
+    assert_eq!(fx.fx.git(&web.lead, &["diff", "--name-only", &format!("{base}...HEAD")]), "tests/t.rs");
+    assert_eq!(fx.fx.git(&web.lead, &["diff", "--name-only", "cpd/pay/web...HEAD"]), "", "linear: HEAD is the Lead Branch");
+    // On `main` this is refused `test_files_missing`; the fix diffs `base...sha`.
+    let out = fx.fx.cpd_in(&web.lead, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
+    assert_eq!(out["submitted"], true, "{out}");
+    assert_eq!(fx.fx.env.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "merging");
+}
+
 #[test]
 fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigured() {
     {
