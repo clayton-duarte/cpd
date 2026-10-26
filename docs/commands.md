@@ -3092,7 +3092,7 @@ The Context block's rows (title, `├─` rows, closing row) end at column `W - 
 | Tier (colour) | Glyph: code point and escape | Meaning |
 |---|---|---|
 | white | U+F0366 (`\u{F0366}`) | an unread reply |
-| cyan | U+F06F1 (`\u{F06F1}`) (hs-d570, pro-d16) | a cpd notice: curation, a change in the models a provider offers; nothing blocks (hs-d570) |
+| cyan | U+F06F1 (`\u{F06F1}`) (hs-d570, pro-d16) | a cpd notice: curation, nothing blocks; also a change in the models a provider offers (hs-d570) |
 | blue | U+F0368 (`\u{F0368}`) (pro-d58) | external support: a review asked of you (review-requested Inbox kind) |
 | magenta | U+F173A (`\u{F173A}`) (hs-d570: back from U+F06F1) | a decision before the work runs (a Plan review, a question while the Plan is still planning) |
 | yellow | U+F069A (`\u{F069A}`) | pull-request work (your PR ready to merge, a team PR needing your review) |

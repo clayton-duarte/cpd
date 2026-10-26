@@ -142,7 +142,7 @@ fn the_legends_cyan_tier_line_names_a_change_in_the_models_a_provider_offers() {
     let lines = legend_rows();
     let notice = lines
         .iter()
-        .find(|r| r.contains(CYAN) && r.contains("a cpd notice: curation, a change in the models a provider offers; nothing blocks"))
+        .find(|r| r.contains(CYAN) && r.contains("a cpd notice: curation, nothing blocks; also a change in the models a provider offers"))
         .unwrap_or_else(|| panic!("the cyan tier's line:\n{}", lines.join("\n")));
     assert!(notice.contains("cyan"), "the line names the tier: {notice:?}");
 }
