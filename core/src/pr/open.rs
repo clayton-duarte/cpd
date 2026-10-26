@@ -169,9 +169,9 @@ fn find_or_create(lead: &Path, pr: &PrRow, existing: Option<PrRef>, title: &str,
     if let Some(found) = existing {
         return Ok(found);
     }
-    match gh::create_pr(lead, &pr.base, &pr.lead_branch, title, &summary(title, list)) {
+    match gh::create_pr(lead, &pr.base, pr.remote_branch(), title, &summary(title, list)) {
         Ok(created) => Ok(created),
-        Err(failed) => gh::head_pr(lead, &pr.lead_branch)
+        Err(failed) => gh::head_pr(lead, pr.remote_branch())
             .ok()
             .flatten()
             .filter(|h| h.state == HeadState::Open)
@@ -209,9 +209,9 @@ impl Pulled {
 /// `pr_closed`; an `OPEN` one is adopted, and with none one is created, never a draft (hs-d329), through the one seam from the stored
 /// title to GitHub's. `lead` is the PR's Lead worktree, so `gh` addresses its repo; `list` the PR's Jobs, for the body.
 pub fn pull_request(lead: &Path, pr: &PrRow, stored_title: &str, list: &[jobs::Job]) -> Result<Pulled, CpdError> {
-    match gh::head_pr(lead, &pr.lead_branch)? {
+    match gh::head_pr(lead, pr.remote_branch())? {
         Some(head) if head.state == HeadState::Merged => Ok(Pulled { row: merged_row(lead, &head)?, merged: true }),
-        Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, &pr.lead_branch, &head)),
+        Some(head) if head.state == HeadState::Closed => Err(closed(&pr.key, pr.remote_branch(), &head)),
         Some(head) => Ok(Pulled { row: opened_row(lead, pr, Some(PrRef { number: head.number, url: head.url }), stored_title, list)?, merged: false }),
         None => Ok(Pulled { row: opened_row(lead, pr, None, stored_title, list)?, merged: false }),
     }
@@ -401,9 +401,9 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
     let mut adopting = false;
     if job.kind == "open" {
         stored_title(env, plan, &key)?;
-        if let Some(head) = gh::head_pr(&lead, &pr.lead_branch)? {
+        if let Some(head) = gh::head_pr(&lead, pr.remote_branch())? {
             match head.state {
-                HeadState::Closed => return Err(closed(&key, &pr.lead_branch, &head).with("plan", plan.as_str())),
+                HeadState::Closed => return Err(closed(&key, pr.remote_branch(), &head).with("plan", plan.as_str())),
                 HeadState::Merged => adopting = true,
                 HeadState::Open => {}
             }
@@ -535,7 +535,7 @@ fn open_job_live(plan: &PlanId, key: &PrKey, job: &str) -> CpdError {
 /// Every Job of the PR `merged` or `cancelled`, and at least one `merged`; else `jobs_not_done`. The PR's `open` and `update` Jobs count
 /// for nothing (contract §7.6): an `open` Job that is `failed` is why the Lead is here, and one that is `merged` on a PR still
 /// `dispatch` is a merge that died before it opened the pull request.
-fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
+pub(super) fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<jobs::Job>, CpdError> {
     let all: Vec<jobs::Job> = env
         .store
         .read(|conn| jobs::load(conn, &plan.plan.id))?

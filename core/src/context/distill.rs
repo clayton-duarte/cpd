@@ -469,7 +469,8 @@ impl Run<'_> {
     /// stdout read by cpd: the run and its final assistant text (ending in a newline) are returned. A failure
     /// appends the `error` Event upstream; every run that started pi appends its line to `runs.jsonl`, a failed one here.
     fn run_pi(&mut self, tier: Tier, upto: u64, files: &[&str]) -> Result<Result<(Ran, String), Fault>, CpdError> {
-        let models = &self.config.tiers;
+        let (home, context) = (self.home, self.context);
+        let models = self.store.read(|conn| crate::policy::model::models_of_context(conn, home, context.as_str()))?;
         let model = match tier.letter() {
             Letter::O => &models.o,
             Letter::S => &models.s,

@@ -45,10 +45,10 @@ type Step = Box<dyn FnMut(usize) -> bool + Send>;
 /// The executable the fake engine "started from" (`Spawn::self_exe`): E5 runs it with `pr poll`.
 pub const ENGINE_EXE: &str = "/opt/cpd/bin/cpd";
 
-/// The text of the engine's `config.toml`: machine `m1`, `extra`, the Tiers, a tick a second, no PR poll, then `tail` (more tables).
+/// The text of the engine's `config.toml`: machine `m1`, `extra`, a tick a second, no PR poll, then `tail` (more tables).
 fn engine_config_text(extra: &str, tail: &str) -> String {
     format!(
-        "version = 1\nmachine = \"m1\"\n{extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+        "version = 1\nmachine = \"m1\"\n{extra}\n\
          [watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n{tail}"
     )
 }
@@ -92,12 +92,14 @@ impl Fx {
     /// `config.toml` of machine `m1` for the engine on virtual time: a tick a second, no PR poll in the way (3600 s).
     /// `extra` is more TOML before the tables (top-level keys, or tables), as `TestEnv::write_tmux_config`'s.
     pub fn engine_config(&self, extra: &str) {
+        self.env.write_models();
         self.env.write_config(&engine_config_text(extra, ""));
     }
 
     /// [`Fx::engine_config`] on the tmux server of [`Fx::tmux`] (the env's socket): the engine and the test's own tmux calls
     /// reach the same server of the tmux route.
     pub fn engine_config_on_tmux(&self, extra: &str) {
+        self.env.write_models();
         self.env.write_config(&engine_config_text(extra, &format!("[tmux]\nsocket = \"{}\"\n", self.env.tmux_socket())));
     }
 

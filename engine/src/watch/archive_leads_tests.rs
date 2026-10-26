@@ -81,6 +81,48 @@ fn a_lead_asleep_past_the_threshold_archives_its_done_plan() {
     assert!(session_asleep_at(&mut fx, "recent-lead").is_some(), "a Lead asleep inside the threshold stays");
 }
 
+/// E14 (contract §3.7, hs-d716): a Plan with `deleted_at` set (a tombstone, §2.2 "Deleted") is never an archive
+/// candidate. E14 leaves it alone, appends no `error`, and never retries it; its orphan Lead stays asleep.
+#[test]
+fn a_deleted_plan_is_not_archived_and_appends_no_error() {
+    let mut fx = fx(Some(1));
+    plan(&mut fx, "gone", 2 * 24 * 3600);
+    // Tombstone the Plan the way `plan delete` does: `deleted_at` is set, the row is never hard-deleted (§2.2 "Deleted").
+    fx.fixture("UPDATE plans SET deleted_at = 't' WHERE id = 'gone';");
+    // Match a real delete: the Plan's side forks are gone, its Lead is left behind as an orphan.
+    fx.fixture("DELETE FROM sessions WHERE plan = 'gone' AND id <> 'gone-lead';");
+
+    for _ in 0..4 {
+        tick(&mut fx);
+    }
+
+    let errors = fx
+        .engine
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT count(*) FROM events WHERE kind = 'error'", [], |r| r.get::<_, i64>(0))?))
+        .unwrap();
+    assert_eq!(errors, 0, "E14 must not error on a deleted Plan");
+    let not_found = fx
+        .engine
+        .store
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'plan_not_found'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(not_found, 0, "E14 must not append plan_not_found for a deleted Plan");
+
+    assert_eq!(plan_archived_at(&mut fx, "gone"), None, "a tombstoned Plan is never archived");
+    assert_eq!(session_archived_at(&mut fx, "gone-lead"), None);
+    assert!(
+        session_asleep_at(&mut fx, "gone-lead").is_some(),
+        "the orphan Lead stays asleep; E14 archives a live Plan, not the orphan"
+    );
+}
+
 #[test]
 fn the_configured_threshold_decides() {
     // `archive_sleep_seconds = 1`: a Lead asleep 2 s is past the threshold and its Plan is archived.

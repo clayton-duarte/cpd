@@ -41,10 +41,11 @@ fn turns(turns: usize) -> Vec<(&'static str, String)> {
 /// 5 turns.
 fn setup(fx: &Fx) -> Arc<FakePi> {
     let env = &fx.env;
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )

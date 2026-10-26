@@ -11,6 +11,7 @@ mod domain;
 mod exposure;
 mod known;
 mod load;
+pub mod model;
 mod origin;
 mod resolve;
 mod show;
@@ -37,6 +38,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
     }
 }
 
+pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use known::known_owners;
@@ -557,7 +559,9 @@ mod tests {
         let rows = contract_rows();
         let doc_domains: Vec<&str> = rows.iter().map(|r| r.domain.as_str()).collect();
         let code_domains: Vec<&str> = Domain::ALL.iter().map(|d| d.name()).collect();
-        assert_eq!(doc_domains, code_domains, "the table's domains are Domain::ALL");
+        // `model` is documented in §8.3 "Models", not in the table (its key rows are pinned by policy::model).
+        let table_domains: Vec<&str> = code_domains.iter().copied().filter(|d| *d != "model").collect();
+        assert_eq!(doc_domains, table_domains, "the table's domains are Domain::ALL but model");
 
         let policy_json = serde_json::to_value(default_policy()).unwrap();
         let mut policy_fields: Vec<&str> = policy_json.as_object().unwrap().keys().map(String::as_str).collect();

@@ -15,11 +15,13 @@ use cpd_core::plan::archive::{self, Objects};
 
 /// Every Plan with a Lead asleep past the threshold whose Plan is still finished (contract §3.7; hs-d630). `?1` is
 /// `now`, `?2` the cut-off `now - timeouts.archive_sleep_seconds`; E13's [`LEAD_FINISHED`] is shared so "finished"
-/// cannot drift. `DISTINCT`: a Plan's side forks are Leads too, and its Plan is archived once.
+/// cannot drift. A Plan with `deleted_at` set (a tombstone, §2.2 "Deleted") is never a candidate (hs-d716).
+/// `DISTINCT`: a Plan's side forks are Leads too, and its Plan is archived once.
 fn archivable() -> String {
     format!(
         "SELECT DISTINCT p.id FROM sessions s LEFT JOIN plans p ON p.id = s.plan
           WHERE s.role = 'lead' AND s.archived_at IS NULL AND s.asleep_at IS NOT NULL AND s.asleep_at <= ?2
+            AND p.deleted_at IS NULL
             AND {LEAD_FINISHED}
           ORDER BY p.id"
     )

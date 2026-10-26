@@ -144,10 +144,11 @@ fn fx_bare(config_extra: &str) -> Fx {
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup).unwrap().path;
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n{config_extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"m1\"\n{config_extra}\n\
              [watch]\ntick_seconds = {TICK_SECONDS}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
