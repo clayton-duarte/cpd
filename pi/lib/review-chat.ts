@@ -1,4 +1,5 @@
 import type { Host } from "./host.ts";
+import { boldPhi } from "./phi.ts";
 import { reviewNumber } from "./plan-review.ts";
 import type { Run } from "./run.ts";
 
@@ -10,7 +11,7 @@ export const OPEN_FULL_PLAN = "Open full plan";
 const OPTIONS = [APPROVE, CHANGE, OPEN_FULL_PLAN];
 
 export const stillWaiting = (review: string): string => `Plan review ${review} is still waiting: /plan-review reopens it`;
-export const NONE_WAITING = "cpd: no plan review is waiting in chat";
+export const NONE_WAITING = boldPhi("φ: no plan review is waiting in chat");
 
 /** The open dialogs of each run, by review: one at a time per review; its controller aborts the select. An editor has no signal, so Change's editor is open without being abortable. */
 const open = new WeakMap<Run, Map<string, AbortController>>();

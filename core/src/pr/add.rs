@@ -472,8 +472,8 @@ fn key_repo_policy(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<(RepoNam
     if repo_owner != owner {
         return Err(owner_mismatch(&owner, &repo_owner));
     }
-    let file = env.home.root().join("policy/repos").join(owner.as_str()).join(format!("{name}.toml"));
-    let policy = resolve(&env.home, &env.config.host, &PolicyKey::Repo(owner, name.clone()))?.policy;
+    let file = crate::policy::repo_path(&env.home, &owner, &name);
+    let policy = resolve(&env.home, &PolicyKey::Repo(owner, name.clone()))?.policy;
     Ok((name, file, policy))
 }
 

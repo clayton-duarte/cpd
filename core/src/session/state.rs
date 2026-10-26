@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn label_bounds() {
-        assert_eq!("cpd: Worker question".parse::<Label>().unwrap().as_str(), "cpd: Worker question");
+        assert_eq!("φ: Worker question".parse::<Label>().unwrap().as_str(), "φ: Worker question");
         for bad in [String::new(), "a".repeat(81), "a\nb".to_owned()] {
             assert_eq!(bad.parse::<Label>().unwrap_err().code(), ErrorCode::Usage, "{bad:?}");
         }

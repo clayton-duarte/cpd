@@ -13,7 +13,7 @@ import type { Run } from "./run.ts";
 
 // The Plan review in chat, and through plannotator when the User opens the full plan (§15.5).
 
-export const QUESTION_LABEL = "cpd: Worker question";
+export const QUESTION_LABEL = "φ: Worker question";
 
 const runDir = (host: Host, plan: string) => join(host.env.CPD_HOME || join(homedir(), ".cpd"), "run", plan);
 const planFile = (host: Host, plan: string, review: string) => join(runDir(host, plan), `plan-${review}.md`);

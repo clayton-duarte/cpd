@@ -7,8 +7,8 @@ use cpd_core::inbox::model::{Item, Kind, Urgency};
 use cpd_core::plan::Phase;
 use cpd_core::session::State;
 
-/// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Blue > White >
-/// Working > Waiting > Idle > Stopped` (§17, Precedence); `Magenta > Blue > White` since hs-d570.
+/// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > Cyan > White >
+/// Working > Waiting > Idle > Stopped` (§17, Precedence); `Magenta > Cyan > White` since hs-d570.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
     /// `palette::STOPPED`: pi stopped.
@@ -25,8 +25,8 @@ pub enum Dot {
     Fixing,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
     White,
-    /// `palette::NEEDS_YOU` blue: an Inbox item of urgency `blue` (hs-d570).
-    Blue,
+    /// `palette::NEEDS_YOU` cyan: an Inbox item of urgency `cyan` (hs-d570).
+    Cyan,
     /// `palette::NEEDS_YOU` magenta.
     Magenta,
     /// `palette::NEEDS_YOU` yellow.
@@ -41,7 +41,7 @@ impl Dot {
         self >= Dot::White
     }
 
-    /// The dot-urgency tier the tree orders by (hs-d686): red 0, yellow 1, magenta 2, blue 3, and 4 for every dot
+    /// The dot-urgency tier the tree orders by (hs-d686): red 0, yellow 1, magenta 2, cyan 3, and 4 for every dot
     /// that needs no attention (white, the red loader `Fixing`, and the state glyphs). The red loader is a row with
     /// no Inbox item (A1), so it sits below the four coloured dots.
     pub fn tier(self) -> u8 {
@@ -49,7 +49,7 @@ impl Dot {
             Dot::Red => 0,
             Dot::Yellow => 1,
             Dot::Magenta => 2,
-            Dot::Blue => 3,
+            Dot::Cyan => 3,
             Dot::White | Dot::Working(_) | Dot::Fixing | Dot::Waiting | Dot::Idle | Dot::Stopped => 4,
         }
     }
@@ -94,7 +94,7 @@ impl From<Urgency> for Dot {
             Urgency::Yellow => Dot::Yellow,
             Urgency::Magenta => Dot::Magenta,
             Urgency::White => Dot::White,
-            Urgency::Blue => Dot::Blue,
+            Urgency::Cyan => Dot::Cyan,
         }
     }
 }
@@ -163,12 +163,12 @@ mod tests {
 
     #[test]
     fn an_item_gives_its_urgency_colour_unless_the_session_is_working() {
-        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
+        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
             assert_eq!(Dot::of(State::Working, Some(urgency), false, None), Dot::Working(None), "own state first (hs-d183): {urgency:?}");
         }
         for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             for (urgency, dot) in
-                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Blue, Dot::Blue), (Urgency::White, Dot::White)]
+                [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::Cyan, Dot::Cyan), (Urgency::White, Dot::White)]
             {
                 assert_eq!(Dot::of(state, Some(urgency), false, None), dot, "{state:?} {urgency:?}");
                 assert!(dot.needs_you());
@@ -246,18 +246,18 @@ mod tests {
         assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None);
     }
 
-    /// hs-d570 BL5: a Session whose strongest open item is blue shows the blue dot, between magenta and white.
+    /// hs-d570 BL5: a Session whose strongest open item is cyan shows the cyan dot, between magenta and white.
     #[test]
-    fn a_blue_item_gives_its_session_a_blue_dot_between_magenta_and_white() {
-        assert_eq!(Dot::from(Urgency::Blue), Dot::Blue);
-        assert_eq!(Dot::of(State::Idle, Some(Urgency::Blue), false, None), Dot::Blue);
-        assert!(Dot::Blue.needs_you());
-        assert!(Dot::Magenta > Dot::Blue && Dot::Blue > Dot::White);
+    fn a_cyan_item_gives_its_session_a_cyan_dot_between_magenta_and_white() {
+        assert_eq!(Dot::from(Urgency::Cyan), Dot::Cyan);
+        assert_eq!(Dot::of(State::Idle, Some(Urgency::Cyan), false, None), Dot::Cyan);
+        assert!(Dot::Cyan.needs_you());
+        assert!(Dot::Magenta > Dot::Cyan && Dot::Cyan > Dot::White);
         let unread = item(Kind::Unread, Urgency::White, Some("s-lead"), None);
         let dialog = item(Kind::Dialog, Urgency::Magenta, Some("s-lead"), None);
-        let blue_dialog = item(Kind::Dialog, Urgency::Blue, Some("s-lead"), None);
-        assert_eq!(urgency(&[unread.clone(), blue_dialog.clone()], &id("s-lead"), None), Some(Urgency::Blue), "blue beats white");
-        assert_eq!(urgency(&[dialog, blue_dialog], &id("s-lead"), None), Some(Urgency::Magenta), "magenta beats blue");
+        let cyan_dialog = item(Kind::Dialog, Urgency::Cyan, Some("s-lead"), None);
+        assert_eq!(urgency(&[unread.clone(), cyan_dialog.clone()], &id("s-lead"), None), Some(Urgency::Cyan), "cyan beats white");
+        assert_eq!(urgency(&[dialog, cyan_dialog], &id("s-lead"), None), Some(Urgency::Magenta), "magenta beats cyan");
     }
 
     /// hs-d581: a working Lead of a Plan with a failed Job shows the red loader; its own red item keeps the red dot;
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_unless_its_item_is_red() {
         assert_eq!(Dot::of(State::Working, None, true, None), Dot::Fixing);
-        for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
+        for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
             assert_eq!(Dot::of(State::Working, Some(urgency), true, None), Dot::Fixing, "{urgency:?}");
         }
         assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, None), Dot::Red);
@@ -276,8 +276,8 @@ mod tests {
 
     #[test]
     fn the_order_is_the_precedence() {
-        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Fixing, Dot::Working(None), Dot::Waiting, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > blue > white > fixing > working > waiting > idle > stopped");
+        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White, Dot::Fixing, Dot::Working(None), Dot::Waiting, Dot::Idle, Dot::Stopped];
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > cyan > white > fixing > working > waiting > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert!(!Dot::Fixing.needs_you());
         assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 5, "the needs-you dots are the five colours");

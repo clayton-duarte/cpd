@@ -32,6 +32,8 @@ mod cursor;
 pub(crate) mod folds;
 mod inbox;
 #[cfg(test)]
+mod archived_folder_tests;
+#[cfg(test)]
 mod inbox_indent;
 mod kinds;
 #[cfg(test)]

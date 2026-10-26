@@ -47,8 +47,6 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[90m/g, "<c8>")
     .replace(/\x1b\[35m/g, "<c5>")
         .replace(/\x1b\[37m/g, "<t7>")
-    .replace(/\x1b\[3m/g, "<i>")
-    .replace(/\x1b\[23m/g, "</i>")
     .replace(/\x1b\[7m/g, "<inv>")
     .replace(/\x1b\[27m/g, "</inv>")
     .replace(/\x1b\[1m/g, "<b>")
@@ -65,14 +63,14 @@ const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), `cpd` and the first sentence; no dot.
+// hs-d534, hs-d537, hs-d708: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), the bold φ and the first sentence; no dot.
 const first = (summary: string): string => {
   const at = summary.search(/[.:]/);
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv><i>cpd</i></inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
-const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
+const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}φ${CAP_R} ${first(summary)}`;
 const TERM = `<c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => `<c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F0B26}";
@@ -84,6 +82,13 @@ const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev
 const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
+
+test("the cpd message pill reads a bold phi", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged." }), ID);
+  const row = draw(rendering().render(m, { expanded: false, outputPad: 1 }, theme))[0]!;
+  assert.ok(row.includes(`<c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</>`), `the pill holds the bold φ: ${JSON.stringify(row)}`);
+  assert.ok(!row.includes("cpd"), `the pill no longer reads cpd: ${JSON.stringify(row)}`);
+});
 
 test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰬦 expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
@@ -97,7 +102,7 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
 
 test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}cpd${CAP_R} `.length);
+  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}φ${CAP_R} `.length);
   assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
@@ -105,9 +110,9 @@ test("a long summary is cut to 60 characters and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
+  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}φ${CAP_R} alpha`), lines[0]);
   assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith("│ ")), "continuation rows are aligned like a tool row's");
-  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
+  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|φ/gu, "").includes("zeta"), "never cut");
   assert.equal(lines.at(-1), `╰${FOLDED} expand · ${TIME}`);
 });
 
@@ -138,7 +143,7 @@ test("a message from a Session: its name, or its id when it has none", () => {
 test("an adapter error: `adapter: <what>`", () => {
   const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
   assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("expand")]);
-  assert.deepEqual(show(message, true)[1], rail("cpd adapter: session show: bad_output: cpd session show: the session object lacks role"));
+  assert.deepEqual(show(message, true)[1], rail("<b>φ</b> adapter: session show: bad_output: cpd session show: the session object lacks role"));
 });
 
 test("an `error` Event (it has an id) is an Event: its text", () => {
@@ -278,7 +283,7 @@ test("Click to expand is gone; only the closing ╰ row names the toggle, muted"
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}φ${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {
@@ -377,18 +382,5 @@ test("the title row is ╭─, the title as a pill between U+E0B6 and U+E0B4, no
     assert.equal(lines[0], HEAD("Job api-1 merged."));
     assert.equal(plain(lines)[0], PLAIN_HEAD("Job api-1 merged."));
     assert.ok(!lines.join("\n").includes(DOT), "no dot glyph");
-  }
-});
-
-test("the cpd pill's text is italic and its caps are not, in every cpd message type", () => {
-  const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[3mcpd\x1b[23m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
-  const raw = (m: RenderedMessage): string => (rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component).render(WIDTH)[0]!;
-  const make = (customType: string): RenderedMessage =>
-    timed({ role: "custom", customType, content: "line one\nline two", display: true, details: { text: "Hello.", review: "r1", approved: true, summary: "Hello." } }) as unknown as RenderedMessage;
-  assert.deepEqual([...RENDERED_TYPES].sort(), ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
-  for (const type of RENDERED_TYPES) {
-    const row = raw(make(type));
-    assert.ok(row.includes(PILL), `${type}: ${JSON.stringify(row)}`);
-    assert.equal(row.split("\x1b[3m").length - 1, 1, `${type}: one italic span, only the text`);
   }
 });

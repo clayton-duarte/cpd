@@ -6,7 +6,7 @@ use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
-use super::resolve::{machine_file, owners_dir, repos_dir};
+use super::resolve::{machine_path, owner_path, repo_path};
 use super::domain::{BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
@@ -111,7 +111,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if args.repo.is_some() && args.owner.is_none() {
         return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
     }
-    let Env { home, mut store, config, .. } = Env::open()?;
+    let Env { home, mut store, .. } = Env::open()?;
     let (role, key) = if let Some(pr) = &args.pr {
         let plan = args.plan.as_ref().ok_or_else(|| {
             CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
@@ -130,12 +130,12 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         (Some(role), key)
     };
     check_file_names(&home)?;
-    let resolved = resolve(&home, &config.host, &key)?;
+    let resolved = resolve(&home, &key)?;
 
-    // The files read, machine first; the owner's exists (resolve refused otherwise).
-    let mut files = vec![machine_file(&home, &config.host), owners_dir(&home).join(format!("{}.toml", key.owner()))];
+    // The files read, machine first (`host.toml`); the owner's exists (resolve refused otherwise).
+    let mut files = vec![machine_path(&home), owner_path(&home, key.owner())];
     if let PolicyKey::Repo(owner, name) = &key {
-        files.push(repos_dir(&home).join(owner.as_str()).join(format!("{name}.toml")));
+        files.push(repo_path(&home, owner, name));
     }
     let files: Vec<PathBuf> = files.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect();
 

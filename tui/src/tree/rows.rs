@@ -66,6 +66,10 @@ const TOGGLE: &str = "╰─ ";
 /// What the identifier of the empty row after the Context whose own identifier is `id` starts with (hs-d476).
 const SPACER: &str = "  ";
 
+/// The synthetic path id of the tree root's archive row (hs-d698, hs-d707). Context ids are lowercase `^[a-z]`, so it
+/// can never collide with a Context.
+pub(super) const ARCHIVE: &str = "Archive";
+
 use crate::box_widget::spacing::RIGHT_PAD;
 
 /// The columns a Plan row keeps for itself before its counters may be drawn: the branch, the glyph, its space and one cell of the name.
@@ -100,6 +104,9 @@ pub enum Row<'a> {
     Toggle,
     /// The closing row `╰󰬪 new` of a live Context with no row at all (hs-d688): a left click opens its New Plan popup.
     NewPlan(&'a ContextNode),
+    /// The tree root's single archive row (hs-d698, hs-d707): `󰬦 archive` folded, `󰬬 archive` expanded; the whole
+    /// row toggles the archived Contexts. No Session, Plan or Context, never selectable, no menu.
+    Archive,
 }
 
 /// What a Context lists: the live rows, then the archived ones (the rows its toggle shows and hides).
@@ -140,6 +147,9 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
         // a live Context with no archived row closes with the clickable new row; every other closing row is a toggle
         return if !c.is_archived() && !kids(c).has_archived() { Some(Row::NewPlan(c)) } else { Some(Row::Toggle) };
     }
+    if path == [ARCHIVE] {
+        return Some(Row::Archive);
+    }
     let (context, path) = path.split_first()?;
     let context = tree.contexts.iter().find(|c| c.id.as_str() == context)?;
     let Some((next, path)) = path.split_first() else { return Some(Row::Context(context)) };
@@ -160,7 +170,7 @@ impl<'a> Row<'a> {
     /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::Toggle | Row::NewPlan(_) => None,
+            Row::Context(_) | Row::Toggle | Row::NewPlan(_) | Row::Archive => None,
             Row::Plan(_, p) => p.lead(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => Some(s),
         }
@@ -169,7 +179,7 @@ impl<'a> Row<'a> {
     /// The Plan of the row; none for a Context or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::Toggle | Row::NewPlan(_) | Row::Manager(..) => None,
+            Row::Context(_) | Row::Toggle | Row::NewPlan(_) | Row::Manager(..) | Row::Archive => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -182,7 +192,7 @@ impl<'a> Row<'a> {
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
             Row::Manager(c, s) => c.is_archived() || s.is_archived(),
-            Row::Toggle | Row::NewPlan(_) => false,
+            Row::Toggle | Row::NewPlan(_) | Row::Archive => false,
         }
     }
 
@@ -195,7 +205,7 @@ impl<'a> Row<'a> {
                 Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
                 Row::Fork(_, _, s) => s.is_asleep(),
                 Row::Manager(..) => true,
-                Row::Toggle | Row::NewPlan(_) => false,
+                Row::Toggle | Row::NewPlan(_) | Row::Archive => false,
             }
     }
 
@@ -207,7 +217,7 @@ impl<'a> Row<'a> {
         match *self {
             Row::Context(c) => c.is_archived() || (!c.plans.is_empty() && c.plans.iter().all(quiet)),
             Row::Plan(c, p) => c.is_archived() || quiet(p),
-            Row::Fork(..) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) => false,
+            Row::Fork(..) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) | Row::Archive => false,
         }
     }
 
@@ -220,7 +230,7 @@ impl<'a> Row<'a> {
         let (context, plan, session) = match *self {
             Row::Plan(c, p) => (c, p, p.lead()?),
             Row::Fork(c, p, s) => (c, p, s),
-            Row::Context(_) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) => return None,
+            Row::Context(_) | Row::Manager(..) | Row::Toggle | Row::NewPlan(_) | Row::Archive => return None,
         };
         let subject = if context.is_archived() {
             Subject::Context(context.id.clone())
@@ -247,7 +257,7 @@ impl<'a> Row<'a> {
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
             Row::Manager(_, s) => Some(s.id.as_str().chars().take(8).collect()),
-            Row::Toggle | Row::NewPlan(_) => None,
+            Row::Toggle | Row::NewPlan(_) | Row::Archive => None,
         }
     }
 
@@ -258,7 +268,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
             Row::Fork(_, _, s) | Row::Manager(_, s) => session_label(s),
-            Row::Toggle | Row::NewPlan(_) => String::new(),
+            Row::Toggle | Row::NewPlan(_) | Row::Archive => String::new(),
         }
     }
 }
@@ -448,25 +458,41 @@ fn spacer(c: &ContextNode) -> FlatRow {
     FlatRow { path: vec![format!("{SPACER}{}", c.id)], line: Line::default() }
 }
 
-/// The tree's visible rows for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree
-/// state's open set: a Context not in it shows its title only. `frame` is the animation frame of the working dots.
+/// The tree root's archive row: `󰬦 archive` folded, `󰬬 archive` expanded, colour 8 on every cell (hs-d698, hs-d707).
+fn archive_item(opened: &HashSet<Vec<Id>>) -> FlatRow {
+    let path = vec![ARCHIVE.to_owned()];
+    let glyph = if opened.contains(&path) { fold::UP } else { fold::DOWN };
+    FlatRow { path, line: Line::from(Span::styled(format!("{glyph} archive"), palette::muted_text())) }
+}
+
+/// The tree's visible rows for a column `width` wide: the live Contexts, then the archive row, then the archived
+/// Contexts when the archive path is open. `opened` is the tree state's open set: a Context not in it shows its title
+/// only. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<FlatRow> {
     let (archived, mut live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
     // The live Contexts by tier then last activity (hs-d686); the archived ones keep their read-model order after them.
     live.sort_by_key(|c| row_key(c.dot, c.last_activity));
-    let contexts: Vec<&ContextNode> = live.into_iter().chain(archived).collect();
-    let last = contexts.len().saturating_sub(1);
-    contexts
-        .into_iter()
-        .enumerate()
-        .flat_map(|(i, c)| {
-            let mut block = context_items(c, opened, width, frame);
-            if i != last {
-                block.push(spacer(c));
+    let mut rows: Vec<FlatRow> = Vec::new();
+    let last_live = live.len().saturating_sub(1);
+    for (i, c) in live.iter().enumerate() {
+        rows.extend(context_items(c, opened, width, frame));
+        if i != last_live || !archived.is_empty() {
+            rows.push(spacer(c));
+        }
+    }
+    if !archived.is_empty() {
+        rows.push(archive_item(opened));
+        if opened.contains(&vec![ARCHIVE.to_owned()]) {
+            let last = archived.len().saturating_sub(1);
+            for (i, c) in archived.iter().enumerate() {
+                rows.extend(context_items(c, opened, width, frame));
+                if i != last {
+                    rows.push(spacer(c));
+                }
             }
-            block
-        })
-        .collect()
+        }
+    }
+    rows
 }
 
 /// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
@@ -655,6 +681,13 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
 /// `╰󰬪` of a Context with no row (nothing to fold) and the live Context's `╰󰬪 new` row do not toggle, so a click falls
 /// through to the caller.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
+    if path == [ARCHIVE] {
+        if !tree.contexts.iter().any(ContextNode::is_archived) {
+            return false;
+        }
+        state.toggle(path.to_vec());
+        return true;
+    }
     let Some(Row::Context(c)) = toggle_owner(path).and_then(|owner| row(tree, &owner)) else { return false };
     if kids(c).has_archived() {
         state.toggle(path.to_vec());
@@ -738,6 +771,9 @@ mod tests {
     const TERMINATOR: &str = "╰󰬪";
     /// The closing row of a LIVE Context with nothing to fold (hs-d688).
     const NEW_PLAN: &str = "╰󰬪 new";
+    /// The tree root's archive row, folded and expanded (hs-d698, hs-d707).
+    const ARCHIVE_DOWN: &str = "\u{F0B26} archive";
+    const ARCHIVE_UP: &str = "\u{F0B2C} archive";
 
     /// A Plan with an idle Lead named `name` and no forks.
     fn lone(id: &str, name: &str, phase: Phase, counts: [usize; 6]) -> PlanNode {
@@ -747,7 +783,7 @@ mod tests {
     /// The README's "Context column" example (`main:tui/README.md`): a Context with three Lead Sessions; the
     /// one in the chat slot needs you.
     fn readme() -> Tree {
-        let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("cpd: Worker question"), Place::Chat);
+        let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("φ: Worker question"), Place::Chat);
         rust.dot = Dot::Red;
         tree(vec![managed(context(
             "cpd",
@@ -954,7 +990,7 @@ mod tests {
     #[test]
     fn every_dot_is_drawn_as_the_palette_draws_it_on_a_session_row_and_its_context_and_no_phase_colours_it() {
         for phase in [Phase::Grounding, Phase::Plan, Phase::Dispatch, Phase::Deploy, Phase::Done] {
-            for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White, Dot::Working(None), Dot::Idle, Dot::Stopped] {
+            for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White, Dot::Working(None), Dot::Idle, Dot::Stopped] {
                 let mut p = with_dot("pp", dot);
                 p.head.phase = phase;
                 let t = tree(vec![managed(context("cc", vec![p]), dot)]);
@@ -1001,13 +1037,14 @@ mod tests {
         gone.archived_at = Some(WHEN.into());
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Working(None)), gone]);
         let mut state = state_for(&t, &[], &[]);
+        state.open(vec![ARCHIVE.to_owned()]);
         unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
             let grey = (String::from("\u{E3D5}"), color(Meaning::Nothing));
             assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the hollow ring {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 1, 4), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 2, 5), grey, "frame {frame}: its Plan row");
+            assert_eq!(cell(&buf, 1, 5), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 2, 6), grey, "frame {frame}: its Plan row");
             assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
         }
     }
@@ -1363,7 +1400,9 @@ mod tests {
     #[test]
     fn archived_plans_and_forks_are_inside_the_expanded_block_after_the_live_rows_muted_with_no_group_row_and_one_toggle() {
         let t = archived();
-        let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 16, false);
+        let mut state = state_for(&t, &[], &[]);
+        state.open(vec![ARCHIVE.to_owned()]);
+        let buf = render(&t, &mut state, 44, 20, false);
         assert_eq!(
             lines(&buf)[..13],
             [
@@ -1445,14 +1484,26 @@ mod tests {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
         assert!(!state.opened().contains(&toggle_of(&["zeta"])), "an archived Context starts folded");
-        let buf = render(&t, &mut state, 44, 16, false);
-        let rows = lines(&buf);
-        assert_eq!(rows[11..], [format!("╭{STOPPED} gamma"), NEW_PLAN.to_owned(), String::new(), format!("╭{STOPPED} zeta"), EXPAND.to_owned()], "{rows:#?}");
-        unfold(&mut state, &t, "zeta");
-        let buf = render(&t, &mut state, 44, 18, false);
+        state.open(vec![ARCHIVE.to_owned()]);
+        let buf = render(&t, &mut state, 44, 22, false);
         let rows = lines(&buf);
         assert_eq!(
-            rows[14..],
+            rows[11..17],
+            [
+                format!("╭{STOPPED} gamma"),
+                NEW_PLAN.to_owned(),
+                String::new(),
+                ARCHIVE_UP.to_owned(),
+                format!("╭{STOPPED} zeta"),
+                EXPAND.to_owned()
+            ],
+            "{rows:#?}"
+        );
+        unfold(&mut state, &t, "zeta");
+        let buf = render(&t, &mut state, 44, 24, false);
+        let rows = lines(&buf);
+        assert_eq!(
+            rows[15..19],
             [
                 format!("╭{STOPPED} zeta"),
                 row_of(&format!("├─{STOPPED} zp"), "2", 44),
@@ -1461,7 +1512,7 @@ mod tests {
             ],
             "{rows:#?}"
         );
-        for y in 14..18 {
+        for y in 15..19 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     // the closing row's arrow and word are the fold toggle's colour 7; everything else is muted
@@ -1472,7 +1523,7 @@ mod tests {
             }
         }
         assert!(click_toggle(&mut state, &t, &toggle_of(&["zeta"])));
-        assert_eq!(lines(&render(&t, &mut state, 44, 18, false))[14..16], [format!("╭{STOPPED} zeta"), EXPAND.to_owned()]);
+        assert_eq!(lines(&render(&t, &mut state, 44, 24, false))[15..17], [format!("╭{STOPPED} zeta"), EXPAND.to_owned()]);
     }
 
     #[test]

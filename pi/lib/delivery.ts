@@ -32,7 +32,7 @@ export function eventMessage(event: CpdEvent, sessionId: string, content: string
 /** §15.1, "Errors": the adapter's own error, delivered like any message (no `id`, so the cursor never counts it). */
 export function errorMessage(what: string, code: string, message: string, extra: Record<string, unknown> = {}): { message: Message; options: SendOptions } {
   return {
-    message: { customType: "cpd", content: `cpd adapter: ${what}: ${code}: ${message}`, display: true, details: { kind: "error", code, ...extra } },
+    message: { customType: "cpd", content: `φ adapter: ${what}: ${code}: ${message}`, display: true, details: { kind: "error", code, ...extra } },
     options: FOLLOW_UP(false),
   };
 }

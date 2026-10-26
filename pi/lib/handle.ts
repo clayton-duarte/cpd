@@ -3,6 +3,7 @@ import { eventMessage, FOLLOW_UP, gated, leadRule, sessionMessage } from "./deli
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
+import { boldPhi } from "./phi.ts";
 import { clearTrip } from "./loop-guard.ts";
 import { checkProtocol } from "./protocol.ts";
 import { closeSuperseded, decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
@@ -106,7 +107,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     const name = ev.data.name;
     r.knownName = name;
     pi.setSessionName(name);
-    host.ctx?.ui.notify(`cpd: session renamed to "${name}"`);
+    host.ctx?.ui.notify(boldPhi(`φ: session renamed to "${name}"`));
     return;
   }
   if (!r.info.planLead) {

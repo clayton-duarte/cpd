@@ -31,13 +31,13 @@ fn fresh(env: &mut Env, plan: &PlanId, key: &str) -> Result<(Vec<Job>, Job), Cpd
 }
 
 /// The red-test guard (`tests_tampered`, §7.5, §7.7) for an `impl` Job: its diff `base...sha` changes no path a `test` Job it needs guards, unless the Lead approved it.
-pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, lead: &str, base: &str, sha: &str) -> Result<(), CpdError> {
+pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, compare: &str, base: &str, sha: &str) -> Result<(), CpdError> {
     if job.kind != "impl" {
         return Ok(());
     }
     let (all, job) = fresh(env, plan, &job.key)?;
     let guard = guard::of(&all, &job);
-    let paths = git::tamper::touched_guarded(root, lead, base, sha, &guard.files, &guard.approved)?;
+    let paths = git::tamper::touched_guarded(root, compare, base, sha, &guard.files, &guard.approved)?;
     if paths.is_empty() {
         return Ok(());
     }
@@ -57,7 +57,7 @@ pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, 
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
-        "The repo's policy file has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to $CPD_HOME/policy/repos/<owner>/<name>.toml; a PR with no behaviour is made with --shape docs or --shape config.",
+        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a PR with no behaviour is made with --shape docs or --shape config.",
     )
     .with("job", job)
 }
@@ -71,12 +71,12 @@ struct Ran {
 
 /// The checks of a `test` or `impl` Job, after the quick check (§6.1): `test_files_missing`, `tests_unconfigured`, then the
 /// `build`, the optional `list` and the `run` of the Job's named tests. HEAD is `sha`, the worktree clean.
-pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, policy: &Policy, root: &Path, lead: &str, sha: &str) -> Result<(), CpdError> {
+pub(super) fn check(env: &mut Env, plan: &PlanId, id: &AttemptId, job: &Job, policy: &Policy, root: &Path, lead: &str, diff_base: &str, sha: &str) -> Result<(), CpdError> {
     let (all, job) = fresh(env, plan, &job.key)?;
     let tests = if job.kind == "impl" { guard::of(&all, &job).tests } else { guard::own(&job).0 };
     if job.kind == "test" {
         let (_, files) = guard::own(&job);
-        let changed = git::tamper::changed_paths(root, lead, sha)?;
+        let changed = git::tamper::changed_paths(root, diff_base, sha)?;
         let missing: Vec<&String> = files.iter().filter(|f| !changed.iter().any(|c| git::tamper::path_matches(f, c))).collect();
         if !missing.is_empty() {
             return Err(CpdError::new(

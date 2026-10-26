@@ -42,7 +42,7 @@ test("a failed `cpd policy show` is an error message and no section", async (t) 
   assert.deepEqual(sections, { preamble: "x" });
   const errors = adapterErrors(f);
   assert.equal(errors.length, 1);
-  assert.equal(errors[0]!.message.content, "cpd adapter: policy show: owner_unset: the Context has no owner");
+  assert.equal(errors[0]!.message.content, "φ adapter: policy show: owner_unset: the Context has no owner");
 });
 
 test("the Worker's role: the adapter trusts policy show's role and keeps the domains whose audience holds it", async (t) => {
@@ -91,5 +91,5 @@ test("a pi without sections: the policy failure is reported once per run, no tur
   for (let i = 0; i < 2; i++) await f.pi.fire("before_agent_start", { messageType: "user", prompt: "hi", systemPromptOptions: {} });
   const errs = adapterErrors(f);
   assert.equal(errs.length, 1);
-  assert.match(errs[0]!.message.content, /^cpd adapter: policy section: sections_missing: /);
+  assert.match(errs[0]!.message.content, /^φ adapter: policy section: sections_missing: /);
 });

@@ -194,12 +194,12 @@ fn assert_options_on_fake(fx: &Fx) {
 }
 
 /// After `cpd tui`: `@cpd_machine` is the test config's machine and the title tmux expands from `set-titles-string` is
-/// `cpd · <machine>` (contract §6.1, hs-d300).
+/// `φ · <machine>` (contract §6.1, hs-d300).
 fn assert_window_title(fx: &Fx) {
     assert_eq!(shown(fx, &["show", "-gv", "set-titles"]), "on");
     assert_eq!(shown(fx, &["show", "-gv", "@cpd_machine"]), "m1");
     let format = shown(fx, &["show", "-gv", "set-titles-string"]);
-    assert_eq!(shown(fx, &["display", "-p", &format]), "cpd · m1");
+    assert_eq!(shown(fx, &["display", "-p", &format]), "φ · m1");
 }
 
 /// The left group of the status line (hs-d479): the leading `━`, then each button as a pill (its glyph between the two caps),

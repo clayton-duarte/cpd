@@ -16,7 +16,7 @@ use crate::store::WriteTxn;
 const COMMAND: &str = "ask";
 
 /// Why the Worker Session is `waiting` while it waits (commands.md §8.1): for its Lead, not for the User (hs-d303).
-const LABEL: &str = "cpd: question to the Lead";
+const LABEL: &str = "φ: question to the Lead";
 
 /// How often `ask` reads its row (§8.1).
 const POLL: Duration = Duration::from_millis(500);

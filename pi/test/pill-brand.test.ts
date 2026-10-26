@@ -7,7 +7,7 @@ import type { Theme } from "../lib/pi.ts";
 import { Rendering } from "../lib/render.ts";
 import { ev, ID } from "./fake.ts";
 
-/** contract §6.1.1 "The pi chat rows" (hs-d509, hs-d537): cpd's pill is magenta (bg 5, text 0, caps 5), holds `cpd ` and the first sentence of the summary; hs-d545: indexed colours 0-15 only. */
+/** contract §6.1.1 "The pi chat rows" (hs-d509, hs-d537, hs-d708): cpd's pill is magenta (bg 5, text 0, caps 5), holds `φ ` and the first sentence of the summary; hs-d545: indexed colours 0-15 only; the φ is bold. */
 
 // The theme paints a recognisable code, so that anything left to the theme shows.
 const theme: Theme = {
@@ -30,22 +30,22 @@ const render = (text: string, expanded = false): string[] => {
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   return (rendering.render(m, { expanded, outputPad: 1 }, theme) as Component).render(200);
 };
-const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[3mcpd\x1b[23m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
-// the pill holds only `cpd`; the first sentence follows it outside, text 7
+const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[1mφ\x1b[22m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
+// the pill holds only the bold φ; the first sentence follows it outside, text 7
 const pill = (sentence: string): string => `${PILL} \x1b[37m${sentence}\x1b[39m`;
 
-test("cpd pill is magenta, inverted, with magenta caps", () => {
+test("φ pill is magenta, inverted, with magenta caps", () => {
   const row = render("Job api-1 merged.")[0]!;
   assert.ok(row.includes(pill("Job api-1 merged.")), JSON.stringify(row));
 });
 
-test("cpd pill shows the first sentence of the summary", () => {
+test("φ pill shows the first sentence of the summary", () => {
   assert.ok(render("Job api-1 merged. The rest follows.")[0]!.includes(pill("Job api-1 merged")), "cut at the first `.`");
   assert.ok(render("Escalation from api-1: it needs a decision")[0]!.includes(pill("Escalation from api-1")), "cut at the first `:`");
   assert.ok(render("first line\nsecond line")[0]!.includes(pill("first line")), "cut at the line end");
 });
 
-test("cpd pill cuts a first sentence over 60 characters with an ellipsis", () => {
+test("φ pill cuts a first sentence over 60 characters with an ellipsis", () => {
   const long = `${"word ".repeat(20)}end`;
   const exact = "x".repeat(60);
   assert.ok(render(long)[0]!.includes(pill(`${long.slice(0, 59)}…`)) || render(long)[0]!.includes(pill(`${long.slice(0, 60)}…`)), "a long sentence ends with …");

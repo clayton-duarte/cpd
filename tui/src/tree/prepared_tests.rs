@@ -278,7 +278,7 @@ pub(super) fn populate(env: &mut Env) {
     s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:08.000Z");
-    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("cpd: Worker question"), "2026-01-02T00:00:09.000Z");
+    s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("φ: Worker question"), "2026-01-02T00:00:09.000Z");
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
     s += &session_row("l-old", "old lead", "beta", "old", "stopped", None, "2026-01-02T00:00:03.000Z");
@@ -617,7 +617,11 @@ fn an_empty_live_context_draws_the_clickable_new_row() {
     assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
     // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
     env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
-    let buf = draw(&mut env.view(), 46, 20);
+    let mut view = env.view();
+    let closed = draw(&mut view, 46, 30);
+    let archive = text_rows(&closed).iter().position(|r| r.contains("archive")).expect("the archive row") as u16;
+    click(&mut view, 3, archive);
+    let buf = draw(&mut view, 46, 30);
     let rows = text_rows(&buf);
     let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
     assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));

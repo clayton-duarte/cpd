@@ -1,6 +1,7 @@
 # cargo-nextest (https://nexte.st/docs/configuration/): the Gate (`npm run
 # verify`) and CI run `cargo nextest run --workspace`, which runs every test in
-# a process of its own, all at once (docs/implementing.md).
+# a process of its own, at most 4 at a time per run (`test-threads`, below;
+# docs/implementing.md).
 # Everything not set here is nextest's default.
 
 # No test group is needed: nothing in the tests shares process state. ETXTBSY
@@ -17,6 +18,16 @@
 # hs-d236: a red run lists every failing test, not only the first.
 [profile.default]
 fail-fast = false
+
+# test-threads = 4, PROVISIONAL until the research of Plan leak-flake ends
+# (docs/research/leak-flake-*.md has the evidence). 14 cores; Gates at 14 threads
+# gave LEAK-FAIL at 56-70 test processes (4-5 Gates) and none at 42 (3 Gates).
+# Sized for a Worker cap of 10: 10 Gates x 4 = 40, at or below 42; 4 Gates x 4
+# = 16, about the cores. A cap of 14 (56) would need 3 or less. A per-run limit
+# only (pro-d30: no slots, no run waits for another); leak-timeout is unchanged.
+# Price (inference): a Gate run alone takes up to ~3.5x longer if CPU-bound (180 s
+# at 14 threads, calm); gate_minutes is 30, so far under it.
+test-threads = 4
 
 # A test that leaves a process holding its stdout/stderr pipes is marked LEAK by
 # nextest and, by default, still passes. Fail it, so no leak comes back

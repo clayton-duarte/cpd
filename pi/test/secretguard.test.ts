@@ -49,11 +49,11 @@ test("secretBypass does not judge sh -c, xargs and scripts", () => {
 test("the reason names cpd secret and what was refused", () => {
   assert.equal(
     reasonText("op read"),
-    "cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: op read",
+    "φ: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: op read",
   );
   assert.equal(
     reasonText("cpd secret approve"),
-    "cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve",
+    "φ: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve",
   );
   assert.ok(!reasonText("op read").includes("\n"));
 });

@@ -25,7 +25,7 @@ use crate::store::Store;
 
 /// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
-const PLAN_REVIEW: &str = "cpd: plan review";
+const PLAN_REVIEW: &str = "φ: plan review";
 
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
@@ -254,7 +254,7 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(out)
 }
 
-/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one blue item per Context and kind while the Context has
+/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one cyan item per Context and kind while the Context has
 /// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
 fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
     let mut out = Vec::new();
@@ -278,7 +278,7 @@ fn curate(conn: &Connection, floor: u32) -> Result<Vec<Condition>, CpdError> {
             let context = id("context id", &raw, ContextId::parse)?;
             out.push(Condition {
                 kind,
-                urgency: Urgency::Blue,
+                urgency: Urgency::Cyan,
                 subject: format!("{name}:{context}"),
                 label: format!("{context}: {n} {noun}"),
                 url: None,
@@ -748,11 +748,11 @@ mod tests {
     #[test]
     fn a_lead_waiting_for_a_worker_and_a_plan_review_label_are_not_dialogs() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "waiting", Some("cpd: Worker question"));
-        f.state("mgr", "blocked", Some("cpd: plan review"));
+        f.state("l-pay", "waiting", Some("φ: Worker question"));
+        f.state("mgr", "blocked", Some("φ: plan review"));
         assert!(f.of(Kind::Dialog).is_empty());
         // `blocked` is the human's whatever its label: the Worker question is `waiting` now (hs-d303).
-        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        f.state("l-pay", "blocked", Some("φ: Worker question"));
         assert_eq!(f.of(Kind::Dialog).len(), 1);
     }
 
@@ -775,7 +775,7 @@ mod tests {
         assert!(f.of(Kind::Dialog).is_empty());
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
-        f.state("wk", "waiting", Some("cpd: question to the Lead"));
+        f.state("wk", "waiting", Some("φ: question to the Lead"));
         assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
@@ -863,7 +863,7 @@ mod tests {
         f.state("mgr", "working", None);
         f.state("mgr", "blocked", Some("Which?"));
         assert!(f.of(Kind::Unread).is_empty(), "blocked is a dialog, not unread");
-        f.state("mgr", "waiting", Some("cpd: Worker question"));
+        f.state("mgr", "waiting", Some("φ: Worker question"));
         assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
         f.state("mgr", "stopped", None);
         assert!(f.of(Kind::Unread).is_empty());
@@ -1300,9 +1300,9 @@ mod tests {
     #[test]
     fn checks_no_longer_matter_to_pr_ready_hs_d481() {
         let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
+        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
         for (n, checks) in [(1, "failed"), (2, "pending")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
@@ -1327,9 +1327,9 @@ mod tests {
     #[test]
     fn with_feedback_checks_none_a_mergeable_pr_is_ready_whatever_its_checks() {
         let mut f = fixture("dispatch");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
+        std::fs::write(owners.join("owner.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"none\"\n").unwrap();
         for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
@@ -1376,9 +1376,9 @@ mod tests {
     fn own(f: &mut Fixture, n: i64) {
         f.job("a", "queued");
         f.sql("UPDATE contexts SET owner = 'acme'");
-        let owners = f.home.root().join("policy/owners");
+        let owners = f.home.root().join("policy/acme");
         std::fs::create_dir_all(&owners).unwrap();
-        std::fs::write(owners.join("acme.toml"), "").unwrap();
+        std::fs::write(owners.join("owner.toml"), "").unwrap();
         f.sql(&format!(
             "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
                             pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"

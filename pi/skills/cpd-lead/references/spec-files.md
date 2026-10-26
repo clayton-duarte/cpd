@@ -87,7 +87,7 @@ A PR that changes behaviour has a test Job and an implementation Job after its d
   run   = "<run the named tests, {{ tests }}: exit non-zero when one fails>"
   ```
 
-  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is refused `repo_unconfigured` and one with no `[test-commands]` table is refused `tests_unconfigured`: a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
+  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is fine (it inherits the owner's policy); a `tdd` PR that needs `[test-commands]` is refused `tests_unconfigured`: a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
 
 ## Research Jobs
 

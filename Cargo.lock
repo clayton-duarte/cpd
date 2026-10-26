@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "cpd"
-version = "0.14.52"
+version = "0.14.53"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-core"
-version = "0.14.52"
+version = "0.14.53"
 dependencies = [
  "clap",
  "cpd-core",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-engine"
-version = "0.14.52"
+version = "0.14.53"
 dependencies = [
  "clap",
  "cpd-core",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "cpd-tui"
-version = "0.14.52"
+version = "0.14.53"
 dependencies = [
  "clap",
  "cpd-core",

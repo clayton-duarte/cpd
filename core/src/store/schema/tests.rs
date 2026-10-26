@@ -1026,17 +1026,17 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
 }
 
 #[test]
-fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
+fn the_inbox_items_table_accepts_the_urgency_cyan_and_refuses_others() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut store = Store::open(&home, 5000).unwrap();
     let item = |urgency: &str| {
         format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');")
     };
-    for urgency in ["white", "blue", "magenta", "yellow", "red"] {
+    for urgency in ["white", "cyan", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
     }
-    assert!(write(&mut store, &item("cyan")).is_err());
+    assert!(write(&mut store, &item("blue")).is_err());
     assert!(write(&mut store, &item("")).is_err());
 }
 
@@ -2122,7 +2122,7 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
            VALUES ('mgr',    'manager', 'ctx', NULL, NULL,   'Manager', '/f/m', NULL,   '/', 'O3', '%1',  'idle',    NULL,      't1', 't', NULL),
                   ('lead',   'lead',    'ctx', 'pl', NULL,   'Lead',    '/f/l', NULL,   '/', 'O3', '%2',  'blocked', 'dialog',  't2', 't', NULL),
                   ('fork',   'lead',    'ctx', 'pl', NULL,   'Fork',    NULL,   'lead', '/', 'O3', NULL,  'working', NULL,      't3', 't', NULL),
-                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'cpd: question to the Lead', 't4', 't', NULL),
+                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'φ: question to the Lead', 't4', 't', NULL),
                   ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', NULL,   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
          COMMIT;",
     )
@@ -2156,8 +2156,8 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     drop(conn);
 
     // `waiting` is a state, and says why, as `blocked` does; no other state has a label.
-    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: Worker question' WHERE id = 'lead'").unwrap();
-    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'worker'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'φ: Worker question' WHERE id = 'lead'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'φ: question to the Lead' WHERE id = 'worker'").unwrap();
     for bad in [
         "UPDATE sessions SET state = 'waiting', state_label = NULL WHERE id = 'fork'",
         "UPDATE sessions SET state = 'blocked', state_label = NULL WHERE id = 'fork'",
