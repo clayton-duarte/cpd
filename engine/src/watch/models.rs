@@ -28,23 +28,7 @@ pub(super) struct State {
     last_end: Option<Instant>,
 }
 
-/// `CPD_TEST_MODELS_DISCOVERY=off` (contract §1.2 test overrides): a debug build's E15 does nothing, so the tests of the
-/// other steps see no helper run. A release build ignores it.
-fn switched_off() -> bool {
-    if !cfg!(debug_assertions) {
-        return false;
-    }
-    match std::env::var("CPD_TEST_MODELS_DISCOVERY") {
-        Ok(text) if text == "off" => true,
-        Ok(text) => panic!("CPD_TEST_MODELS_DISCOVERY={text:?} is not \"off\""),
-        Err(_) => false,
-    }
-}
-
 pub(super) fn run(engine: &mut Engine) {
-    if switched_off() {
-        return;
-    }
     if let Some(running) = &engine.models.running {
         let answer = match running.try_recv() {
             Ok(answer) => answer,

@@ -357,13 +357,6 @@ impl Fx {
         unsafe { std::env::set_var(key, value) };
     }
 
-    /// Removes `key` from the process's environment until this `Fx` drops, which puts the environment back: a variable
-    /// the test env sets that the test is about (`CPD_TEST_MODELS_DISCOVERY=off`, which a test of E15 itself lifts).
-    pub fn unexport(&self, key: &str) {
-        // SAFETY: under this `Fx`'s lock, as `enter`.
-        unsafe { std::env::remove_var(key) };
-    }
-
     /// Scripts `reply` for every call of `program` (matched by file name) on the `FakeRunner`.
     pub fn fake(&self, program: &str, reply: Reply) {
         let _ = (*self.fakes.runner).clone().on(program, |_| true, reply);

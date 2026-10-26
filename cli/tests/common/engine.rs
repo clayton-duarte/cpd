@@ -93,6 +93,7 @@ impl Fx {
     /// `extra` is more TOML before the tables (top-level keys, or tables), as `TestEnv::write_tmux_config`'s.
     pub fn engine_config(&self, extra: &str) {
         self.env.write_models();
+        self.env.quiet_models(self.fakes.clock.utc());
         self.env.write_config(&engine_config_text(extra, ""));
     }
 
@@ -100,6 +101,7 @@ impl Fx {
     /// reach the same server of the tmux route.
     pub fn engine_config_on_tmux(&self, extra: &str) {
         self.env.write_models();
+        self.env.quiet_models(self.fakes.clock.utc());
         self.env.write_config(&engine_config_text(extra, &format!("[tmux]\nsocket = \"{}\"\n", self.env.tmux_socket())));
     }
 

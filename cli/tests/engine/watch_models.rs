@@ -112,15 +112,20 @@ impl Probe {
         fs::write(self.path(provider), file.to_string()).unwrap();
     }
 
-    /// The first column of `sql` over the rows of the engine's store, read on a connection of its own.
+    /// The engine's store, read on a connection of its own.
+    fn store(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open_with_flags(self.home.join("cpd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
+    }
+
+    /// The first column of `sql` (text) over its rows.
     fn column(&self, sql: &str) -> Vec<String> {
-        let conn = rusqlite::Connection::open_with_flags(self.home.join("cpd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let conn = self.store();
         let mut stmt = conn.prepare(sql).unwrap();
         stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap()
     }
 
     fn query(&self, sql: &str) -> i64 {
-        self.column(sql)[0].parse().unwrap()
+        self.store().query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
     /// The `error` Events of E14: their data.
@@ -149,7 +154,7 @@ struct Fx {
     adapter: PathBuf,
 }
 
-/// The engine on virtual time with E14 on (the test env switches it off), a pi install, the helper `node` answering
+/// The engine on virtual time (E14 is due: no file is cached yet), a pi install, the helper `node` answering
 /// `first` and the fake tmux. `watch` is more `[watch]` keys.
 fn fx(watch: &str, first: &Value) -> Fx {
     let ip = Ip::with_ports();
@@ -163,7 +168,6 @@ fn fx(watch: &str, first: &Value) -> Fx {
     ));
     ip.engine_routes();
     ip.install_pi();
-    ip.unexport("CPD_TEST_MODELS_DISCOVERY");
     ip.export("BIFROST_TEST_KEY", KEY);
     let node = Arc::new(Node { says: Mutex::new((0, first.to_string())), seen: Mutex::default() });
     let _ = (*ip.fakes.runner).clone().route("node", node.clone());
