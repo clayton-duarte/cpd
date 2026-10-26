@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -60,15 +60,15 @@ fn a_link_with_text_draws_the_underlined_text_a_gap_and_the_cue() {
 fn the_underline_is_added_to_every_span_and_each_span_keeps_its_colours() {
     let mut b = buf(6);
     let line = Line::from(vec![
-        Span::styled("a", Style::new().fg(Color::Red)),
-        Span::styled("b", Style::new().fg(Color::Green).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+        Span::styled("a", palette::muted_text()),
+        Span::styled("b", palette::pill_interactive().add_modifier(Modifier::BOLD)),
     ]);
     Link::new(URL).text(line).render(Rect::new(0, 0, 6, 1), &mut b);
     let (_, a, am) = cell(&b, 0);
-    assert_eq!(a.fg, Some(Color::Red));
+    assert_eq!(a.fg, palette::muted_text().fg);
     assert!(am.contains(Modifier::UNDERLINED));
     let (_, s, m) = cell(&b, 1);
-    assert_eq!((s.fg, s.bg), (Some(Color::Green), Some(Color::Blue)));
+    assert_eq!((s.fg, s.bg), (palette::pill_interactive().fg, palette::pill_interactive().bg));
     assert!(m.contains(Modifier::UNDERLINED | Modifier::BOLD));
 }
 
