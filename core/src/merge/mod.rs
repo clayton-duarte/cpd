@@ -286,7 +286,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         // update-ref; rule P's push and rule S still run, and step 10 records `submitted_sha` as `merged_sha` (hs-d680).
         if linear {
             let new = git::run::rev_parse(&target.worktree, "HEAD")?;
-            let push = push(lead, &target.lead_branch, &new);
+            let push = publish(target, &new);
             let stale = git::sync_lead(lead, &target.lead_branch).err();
             return finish_merge(store, target, submitted.to_owned(), cpd_kind, push, stale);
         }
@@ -466,7 +466,7 @@ fn open_pull_request(store: &mut Store, target: &Attempt) -> Result<crate::pr::P
     crate::pr::pull_request(&target.lead_worktree, &pr, &title, &jobs)
 }
 
-/// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR unless the Job is an `open` or
+/// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR that has not opened unless the Job is an `open` or
 /// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
 pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
     if target.adopted && !is_cpd_kind(target) {
