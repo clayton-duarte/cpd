@@ -301,6 +301,7 @@ fn pr_push_pushes_to_the_head_branch() {
 /// Plan `pay` with two `open` PRs, each with its pull request open: `web`, adopted (`acme/pay#7`), and `api`, cpd's own (`acme/api#11`).
 fn cancel_fx() -> TestEnv {
     let env = TestEnv::new();
+    env.fake_tmux();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), format!("version = 1\nmachine = \"t\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket())).unwrap();
     env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
