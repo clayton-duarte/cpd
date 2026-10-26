@@ -15,6 +15,9 @@ use crate::dialog::scroll::{self, Cue};
 use crate::link::{self, Link, Links};
 use crate::palette::{self, Meaning};
 use crate::box_widget::SectionTitle;
+use super::inbox::{self, Shape, inbox_share};
+use cpd_core::inbox::model::Item;
+use time::OffsetDateTime;
 use crate::read::{Dot, OpenPr, PrFacts, PrState, ReviewDecision, pr_look};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
@@ -271,20 +274,44 @@ pub struct Drawn {
     pub rows: Vec<PrRow>,
     /// Every link drawn (the PR rows' cues): a click on one opens its url.
     pub links: Links,
+    /// The Inbox section, pinned to the bottom (its first row is the empty one): the wheel there scrolls it, a click on its
+    /// toggle row folds or unfolds it.
+    pub inbox: Rect,
+    /// The Inbox section as drawn: capped by the column's split and scrolled ([`Shape::hit`], [`Shape::wheeled`]).
+    pub inbox_shape: Shape,
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
-/// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. It draws no note
+/// Draws the column in `area`: a blank row, the machine, the PRs under their header and the Inbox section pinned last
+/// (commands.md §13.2, pro-d55). The PRs and the Inbox share the rows below the machine as the tree and the Inbox did
+/// ([`inbox_share`], hs-d307), the PRs in the tree's place. The PRs section
+/// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. The Inbox draws `inbox`, folded or
+/// `expanded`, from the item `inbox_scroll`, its ages taken at `now`, the spinner in the glyph cell of a `pr-ready` item whose pull
+/// request is in `merging`. It draws no note
 /// (commands.md §17 "No notes"); the snapshot's error is [`draw_error`]'s. `frame` is the spinner's frame (`palette::frame`) for the rows whose
 /// Lead is working. Returns where a click reaches an owned PR or a merge icon.
-pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scroll: usize, frame: usize) -> Drawn {
-    let [_top, home, prs_header, prs] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(SectionTitle::ROWS),
-        Constraint::Min(1),
-    ])
-    .areas(area);
+#[allow(clippy::too_many_arguments)]
+pub fn draw(
+    f: &mut Frame,
+    area: Rect,
+    open: &[OpenPr],
+    machine: &Machine,
+    scroll: usize,
+    frame: usize,
+    inbox: &[Item],
+    (expanded, inbox_scroll): (bool, usize),
+    now: OffsetDateTime,
+    merging: &std::collections::BTreeSet<String>,
+) -> Drawn {
+    // the PRs and the Inbox share the rows under the blank row and the machine; the Inbox leaves the PRs one row
+    let column = area.height.saturating_sub(3);
+    let prs_rows = usize::from(SectionTitle::ROWS) + (2 * open.len()).max(1);
+    let shape = Shape::new(inbox.len(), expanded).capped(inbox_share(prs_rows, inbox.len(), expanded, column)).scrolled(inbox_scroll);
+    let inbox_height = shape.height().min(column.saturating_sub(1));
+    let [_top, home, prs_section, inbox_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Min(0), Constraint::Length(inbox_height)]).areas(area);
+    let [prs_header, prs] = Layout::vertical([Constraint::Length(SectionTitle::ROWS), Constraint::Min(1)]).areas(prs_section);
+    // the section's title carries the padding itself, so the section is drawn across the column
+    inbox::draw(f, inbox_area, inbox, shape, None, now, &|item| inbox::merges(merging, item).then_some(frame));
     f.render_widget(SectionTitle::new("PRs", Some(open.len())), prs_header);
     f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     let height = usize::from(prs.height);
@@ -341,7 +368,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
             }
         }
     }
-    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows, links }
+    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows, links, inbox: inbox_area, inbox_shape: shape }
 }
 
 
@@ -361,7 +388,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     use ratatui::buffer::Buffer;
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &[], &machine, 0, 0))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &[], &machine, 0, 0, &[], (false, 0), OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     let pane = Rect::new(0, 0, width, 3);
     let mut buf = Buffer::empty(pane);
     for (y, x) in (0..3).flat_map(|y| (0..width).map(move |x| (y, x))) {
@@ -400,10 +427,14 @@ mod tests {
 
     fn at_frame(width: u16, height: u16, open: &[OpenPr], scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+        // the Inbox section, with no item, is the pane's last rows: the pane is as tall as they and `height` rows are the PRs'
+        let height = height + Shape::new(0, false).height();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, scroll, frame))).unwrap();
-        (terminal.backend().buffer().clone(), out.unwrap())
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, scroll, frame, &[], (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
+        let (full, height) = (terminal.backend().buffer().clone(), height - Shape::new(0, false).height());
+        let top = Buffer { area: Rect::new(0, 0, width, height), content: full.content[..usize::from(width) * usize::from(height)].to_vec() };
+        (top, out.unwrap())
     }
 
     fn icons(width: u16, open: &[OpenPr]) -> Vec<MergeIcon> {
@@ -511,7 +542,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
         terminal
             .draw(|f| {
-                draw(f, f.area(), &[], &machine, 0, 0);
+                draw(f, f.area(), &[], &machine, 0, 0, &[], (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default());
                 draw_error(f, f.area(), "no_cockpit: nothing here");
             })
             .unwrap();

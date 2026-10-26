@@ -182,7 +182,7 @@ fn assert_no_escape(buf: &Buffer) {
 #[test]
 fn a_pr_row_ends_its_first_line_in_the_cue_and_no_cell_holds_an_escape() {
     let (_dir, home) = home_with(&[7, 8]);
-    let seen = run(&home, 14, exit0(), |p| owned(p, 0), no_change, vec![]);
+    let seen = run(&home, 30, exit0(), |p| owned(p, 0), no_change, vec![]);
     assert_eq!(row(&seen.buf, FIRST), line("acme/repo#7"), "an owned row");
     assert_eq!(row(&seen.buf, FIRST + 2), line("acme/repo#8"), "an unowned row");
     assert_no_escape(&seen.buf);
@@ -197,7 +197,7 @@ fn a_pr_row_ends_its_first_line_in_the_cue_and_no_cell_holds_an_escape() {
         let prepared = super::prepare(&ports, home.clone()).unwrap();
         let mut input = NoInput;
         let feed = Feed::scripted(ports.clock.clone(), vec![gone()]);
-        let mut ctx = Ctx::new(&ports, Terminal::new(TestBackend::new(9, 14)).unwrap(), &mut input);
+        let mut ctx = Ctx::new(&ports, Terminal::new(TestBackend::new(9, 30)).unwrap(), &mut input);
         let _ = show_with(&mut ctx, feed, prepared, no_command);
         ctx.terminal.backend().buffer().clone()
     };
@@ -209,7 +209,7 @@ fn a_pr_row_ends_its_first_line_in_the_cue_and_no_cell_holds_an_escape() {
 fn a_left_click_on_a_pr_rows_cue_opens_that_rows_url_and_nothing_else() {
     let (_dir, home) = home_with(&[7, 8]);
     let ctrl_shift = mouse(MouseEventKind::Down(MouseButton::Left), CUE_X, FIRST + 2, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
-    let seen = run(&home, 14, exit0(), |p| owned(p, 0), no_change, vec![click(CUE_X, FIRST), ctrl_shift]);
+    let seen = run(&home, 30, exit0(), |p| owned(p, 0), no_change, vec![click(CUE_X, FIRST), ctrl_shift]);
     assert_eq!(seen.opened, [vec![url(7)], vec![url(8)]], "one `open <url>` for each click, any modifiers");
     assert!(seen.others.iter().all(|c| c.program != "tmux"), "no Go to Lead, no popup: {:?}", seen.others);
     assert_eq!(seen.log, "", "no failure");
@@ -219,14 +219,14 @@ fn a_left_click_on_a_pr_rows_cue_opens_that_rows_url_and_nothing_else() {
 fn a_left_click_on_a_pr_rows_text_opens_no_page() {
     let (_dir, home) = home_with(&[7, 8]);
     let script = vec![click(3, FIRST), click(3, FIRST + 1), click(3, FIRST + 2), click(CUE_X - 1, FIRST + 2), click(CUE_X, FIRST + 3), click(CUE_X, FIRST + 2)];
-    let seen = run(&home, 14, exit0(), |p| owned(p, 0), no_change, script);
+    let seen = run(&home, 30, exit0(), |p| owned(p, 0), no_change, script);
     assert_eq!(seen.opened_urls(), [url(8)], "only the click on the cue opened a page");
 }
 
 #[test]
 fn the_cue_of_an_unowned_pr_opens_its_url_too() {
     let (_dir, home) = home_with(&[7]);
-    let seen = run(&home, 14, exit0(), no_tweak, no_change, vec![click(CUE_X, FIRST)]);
+    let seen = run(&home, 30, exit0(), no_tweak, no_change, vec![click(CUE_X, FIRST)]);
     assert_eq!(seen.opened_urls(), [url(7)]);
     assert!(seen.others.iter().all(|c| c.program != "tmux"), "{:?}", seen.others);
 }
@@ -236,7 +236,7 @@ fn after_the_rows_are_reordered_the_cue_opens_the_url_of_the_row_now_under_it() 
     let (_dir, home) = home_with(&[7, 8]);
     // PR 8 becomes the older one: the next read lists it first. A click anywhere asks for a read.
     let reorder = |store: &mut Store| exec(store, "UPDATE pull_requests SET created_at = '2025-12-01T00:00:00.000Z' WHERE number = 8;");
-    let seen = run(&home, 14, exit0(), no_tweak, reorder, vec![click(0, 0), Signal::Read, click(CUE_X, FIRST), click(CUE_X, FIRST + 2)]);
+    let seen = run(&home, 30, exit0(), no_tweak, reorder, vec![click(0, 0), Signal::Read, click(CUE_X, FIRST), click(CUE_X, FIRST + 2)]);
     assert_eq!(plain(&seen.buf, FIRST), line("acme/repo#8"), "the frame shows the new order");
     assert_eq!(seen.opened_urls(), [url(8), url(7)]);
 }
@@ -246,13 +246,13 @@ fn a_cue_whose_row_went_away_or_scrolled_off_opens_nothing() {
     // a row went away: its cue's cell is the blank under the last row
     let (_dir, home) = home_with(&[7, 8]);
     let close = |store: &mut Store| exec(store, "UPDATE pull_requests SET state = 'closed' WHERE number = 8;");
-    let seen = run(&home, 14, exit0(), no_tweak, close, vec![click(0, 0), Signal::Read, click(CUE_X, FIRST + 2), click(CUE_X, FIRST)]);
+    let seen = run(&home, 30, exit0(), no_tweak, close, vec![click(0, 0), Signal::Read, click(CUE_X, FIRST + 2), click(CUE_X, FIRST)]);
     assert_eq!(plain(&seen.buf, FIRST + 2), "", "the frame shows no second row");
     assert_eq!(seen.opened_urls(), [url(7)], "only the row still there opens its page");
     // a row scrolled off: the `▲` row now holds the cell where its cue was
     let (_dir, home) = home_with(&[7, 8, 9]);
     let wheel = mouse(MouseEventKind::ScrollDown, 3, FIRST + 1, KeyModifiers::NONE);
-    let seen = run(&home, 10, exit0(), no_tweak, no_change, vec![wheel, click(CUE_X, FIRST), click(CUE_X, FIRST + 1)]);
+    let seen = run(&home, 15, exit0(), no_tweak, no_change, vec![wheel, click(CUE_X, FIRST), click(CUE_X, FIRST + 1)]);
     assert!(plain(&seen.buf, FIRST).contains('▲'), "the first row scrolled off: {:?}", plain(&seen.buf, FIRST));
     assert_eq!(seen.opened_urls(), [url(8)], "the cell of the cue row is no link, the row now in view is");
 }
@@ -261,7 +261,7 @@ fn a_cue_whose_row_went_away_or_scrolled_off_opens_nothing() {
 fn a_refused_open_is_reported_as_a_failure_dialog_of_the_view() {
     let (_dir, home) = home_with(&[7]);
     let refused = Reply::exit(1, "", "The file does not exist.");
-    let seen = run(&home, 14, refused, no_tweak, no_change, vec![click(CUE_X, FIRST)]);
+    let seen = run(&home, 30, refused, no_tweak, no_change, vec![click(CUE_X, FIRST)]);
     assert_eq!(seen.opened_urls(), [url(7)], "`open` ran once");
     assert!(seen.log.contains("failed:"), "the view's log: {:?}", seen.log);
     assert!(seen.log.contains(&url(7)) && seen.log.contains("The file does not exist."), "the log names the url and what `open` said: {:?}", seen.log);

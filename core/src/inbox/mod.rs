@@ -7,4 +7,6 @@ pub mod rules;
 pub mod team;
 
 #[cfg(test)]
+mod blue_tests;
+#[cfg(test)]
 mod runner_tests;

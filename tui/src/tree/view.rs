@@ -5,12 +5,10 @@
 //!
 //! Keys (commands.md §13.2): ↑↓ and j/k move the cursor, Enter opens the cursor's Session, `n` starts a new Plan,
 //! `x` closes a Session's pane (both ask in a dialog popup, as the menu's `…`, Close and Archive do; the view has no
-//! inline prompt), `?` opens the legend. After the last Session the cursor goes on into the Inbox
-//! section's item rows (and back up); there Enter jumps to the item's cause, `s` opens the snooze choices and `d`
-//! dismisses. No other key does anything. A right click opens the menu
+//! inline prompt), `?` opens the legend. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -18,19 +16,15 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::widgets::{Paragraph, Wrap};
-use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
-use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject, Until};
+use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject};
 use super::cursor::{self, Input};
 use super::folds::{Folds, FoldsFile};
-use super::inbox::{self, Hit, Jump, Shape};
-use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
 use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
-use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
 use cpd_core::ports::Ports;
 use cpd_core::session::State;
@@ -45,7 +39,7 @@ const DOWN_FOR: Duration = Duration::from_secs(60);
 const DOWN_TOLD: &str = "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.";
 
 /// The longest name of a Session (commands.md §1.4).
-/// Rows a wheel notch scrolls the tree or the Inbox section by.
+/// Rows a wheel notch scrolls the tree by.
 const WHEEL_ROWS: usize = 3;
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
@@ -111,13 +105,6 @@ pub enum Effect {
     Ask(Question),
     /// Open the legend popup (`?`); a failure is logged.
     Legend,
-    /// Run these actions in order, then call [`View::finished`] with the result: a click on a `plan-review` item.
-    Steps(Vec<Action>),
-    /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is logged.
-    Merge(Pull),
-    /// The checklist dialog of a curate item of this Context, then the command its answer makes: a click on a
-    /// `curate-retire` or `curate-docs` item. A failure is a `text` dialog.
-    Curate(cpd_core::inbox::model::Kind, cpd_core::ids::ContextId),
     /// Open a `text` dialog popup ([`crate::dialog::show_error`]): a failure or refusal the User must see (commands.md
     /// §17 "No notes"). `title` says what failed, `text` why (`<code>: <message>`).
     Text { title: String, text: String },
@@ -144,26 +131,10 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (title, items, `╰󰬬 collapse`) are shown, not only the first three, in the rows the column's
-    /// split gives it ([`View::inbox_cap`]). View state only.
-    inbox_expanded: bool,
-    /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
-    /// View state only.
-    inbox_scroll: usize,
-    /// The most rows the expanded section may take, as the last frame had it: what the split of the column gives it
-    /// (commands.md §13.2, hs-d307).
-    inbox_cap: u16,
     /// The tree's scroll: the wheel and the cursor move it.
     tree_scroll: rows::Scroll,
     /// Where the last frame drew the tree and its cue rows (the gap below them is not it): the wheel there scrolls it.
     tree_area: Rect,
-    /// The cursor moved (or the list changed): the next frame scrolls the section to show the cursor's item.
-    follow_inbox_cursor: bool,
-    /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
-    inbox_area: Rect,
-    /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
-    /// the tree's cursor then rests on its last Session. Hidden like the tree's cursor ([`cursor::shown`]).
-    inbox_cursor: Option<usize>,
     /// The last failed snapshot's error (one row), until a snapshot succeeds: a lasting state of the view, drawn as its
     /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
@@ -172,37 +143,12 @@ pub struct View {
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
-    /// The pull requests (`<owner>/<repo>#<n>`) whose merge runs, as of the last snapshot of the merge markers
-    /// ([`View::set_merging`], hs-d495): view state only, no Event tells it.
-    merging: BTreeSet<String>,
 }
 
 /// One downtime of the engine (see [`View::down`]).
 struct Down {
     since: Instant,
     spoke: bool,
-}
-
-/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
-/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
-/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
-/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
-/// the rest to the other.
-fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
-    let column = usize::from(column);
-    let wants = Shape::new(count, expanded).height().into();
-    if tree + wants <= column {
-        return u16::try_from(wants).unwrap_or(u16::MAX);
-    }
-    let share = (column / 3).max(Shape::new(count, false).height().into());
-    let rows = if wants <= share {
-        wants
-    } else if tree + share <= column {
-        column - tree
-    } else {
-        share
-    };
-    u16::try_from(rows).unwrap_or(u16::MAX)
 }
 
 /// The refusal of New Context… when the instance has no owner policy.
@@ -219,72 +165,29 @@ impl View {
             last_input: Input::Click,
             menu: None,
             pane: Rect::default(),
-            inbox_expanded: false,
-            inbox_scroll: 0,
-            inbox_cap: u16::MAX,
             tree_scroll: rows::Scroll::default(),
             tree_area: Rect::default(),
-            follow_inbox_cursor: false,
-            inbox_area: Rect::default(),
-            inbox_cursor: None,
             error: None,
             policy_dir: CpdHome::from_env().ok().map(|h| cpd_core::policy::policy_dir(&h)),
             down: None,
-            merging: BTreeSet::new(),
         };
         view.refresh(tree);
         view
     }
 
-    /// The pull requests (`<owner>/<repo>#<n>`) whose merge is running, from the live merge markers
-    /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
-    /// cell and a click on them does nothing.
-    /// Whether the set changed (the pane is then redrawn).
-    pub fn merging(&self) -> &BTreeSet<String> {
-        &self.merging
-    }
-
-    pub fn set_merging(&mut self, pulls: BTreeSet<String>) -> bool {
-        std::mem::replace(&mut self.merging, pulls) != self.merging
-    }
-
-    /// An Inbox item's `pr-ready` pull request has a merge running.
-    fn merges(&self, item: &cpd_core::inbox::model::Item) -> bool {
-        item.kind == InboxKind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| self.merging.contains(&pull.to_string()))
-    }
-
-    /// A working dot or a merging item is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
+    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
     /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
+        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived())
     }
 
-    /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
-    /// it is gone).
+    /// A new snapshot: keep the cursor on its Session.
     pub fn refresh(&mut self, tree: Tree) {
         let before = rows::selected_index(&self.state, &self.tree);
-        let item = self.inbox_cursor.and_then(|i| self.tree.inbox.get(i)).map(|item| item.id);
         self.tree = tree;
         rows::open_new(&mut self.state, &mut self.known, &self.tree);
         rows::reselect(&mut self.state, &self.tree, before);
-        if let Some(i) = self.inbox_cursor {
-            let moved = item.and_then(|id| self.tree.inbox.iter().position(|it| it.id == id));
-            self.inbox_cursor = Some(moved.unwrap_or(i));
-            self.clamp_inbox_cursor();
-            self.follow_inbox_cursor = true;
-        }
-    }
-
-    /// The Inbox section as the last frame had it.
-    fn shape(&self) -> Shape {
-        Shape::new(self.tree.inbox.len(), self.inbox_expanded).capped(self.inbox_cap).scrolled(self.inbox_scroll)
-    }
-
-    /// The Inbox cursor stays on a shown item row; with none, it goes.
-    fn clamp_inbox_cursor(&mut self) {
-        let shown = self.shape().shown();
-        self.inbox_cursor = self.inbox_cursor.and_then(|i| shown.checked_sub(1).map(|last| i.min(last)));
     }
 
     /// Starts from the folds in `file` and keeps them there from now on (commands.md §13.2, hs-d260). A file that cannot
@@ -315,12 +218,7 @@ impl View {
     }
 
     fn cursor_shown(&self) -> bool {
-        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty() || self.inbox_cursor.is_some())
-    }
-
-    /// The Inbox item under the keyboard cursor, while it shows.
-    fn cursor_item(&self) -> Option<&cpd_core::inbox::model::Item> {
-        self.inbox_cursor.filter(|_| self.cursor_shown()).and_then(|i| self.tree.inbox.get(i))
+        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty())
     }
 
     pub fn focus(&mut self, gained: bool) {
@@ -378,7 +276,7 @@ impl View {
 
     /// The cursor's row, while the cursor shows: Enter, `n` and `x` act on it.
     fn cursor_row(&self) -> Option<Row<'_>> {
-        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && self.inbox_cursor.is_none() && !r.archived())
+        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && !r.archived())
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Effect {
@@ -407,30 +305,14 @@ impl View {
                 let asked = self.cursor_row().and_then(close_of);
                 return self.ask(asked);
             }
-            KeyCode::Char('s') => {
-                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
-                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
-                    self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    return Effect::Run(Action::Dismiss(item.id));
-                }
-            }
             KeyCode::Char('?') => return Effect::Legend,
             // the first arrow after a click only shows the cursor again where it was (the first Session when there is none)
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
                 self.arrow(delta);
-                self.follow_inbox_cursor = true;
                 self.last_input = Input::Arrow;
             }
             KeyCode::Enter => {
-                if let Some(i) = self.inbox_cursor.filter(|_| self.cursor_shown()) {
-                    return self.jump(i);
-                }
                 if let Some(session) = self.cursor_row().and_then(|r| r.session()) {
                     return Effect::Run(Action::Open(session.id.clone()));
                 }
@@ -440,47 +322,18 @@ impl View {
         Effect::None
     }
 
-    /// An arrow key (`delta` 1 down, -1 up) while the cursor shows: it moves through the Sessions, on from the last
-    /// into the Inbox's shown items and back up from the first to the last Session; when it does not show, the key
-    /// only shows it again where it was (on the first Session when it has none).
+    /// An arrow key (`delta` 1 down, -1 up) while the cursor shows: it moves through the Sessions; when it does not show, the
+    /// key only shows it again where it was (on the first Session when it has none).
     fn arrow(&mut self, delta: isize) {
-        let shown = self.shape().shown();
-        if let Some(i) = self.inbox_cursor {
-            if self.cursor_shown() {
-                self.inbox_cursor = match (delta, i) {
-                    (d, 0) if d < 0 => None,
-                    (d, i) if d < 0 => Some(i - 1),
-                    (_, i) => Some((i + 1).min(shown.saturating_sub(1))),
-                };
-            }
-        } else if self.cursor_shown() {
-            let before = rows::selected_index(&self.state, &self.tree);
+        if self.cursor_shown() {
             rows::move_cursor(&mut self.state, &self.tree, delta);
-            // it did not move: the last Session, so down goes into the Inbox
-            if delta > 0 && shown > 0 && rows::selected_index(&self.state, &self.tree) == before {
-                self.inbox_cursor = Some(0);
-            }
         } else if self.state.selected().is_empty() {
             rows::move_cursor(&mut self.state, &self.tree, 1);
-            // no Session at all: the Inbox is all there is to reach
-            if delta > 0 && shown > 0 && self.state.selected().is_empty() {
-                self.inbox_cursor = Some(0);
-            }
         }
     }
 
     pub fn mouse(&mut self, m: MouseEvent) -> Effect {
         let at = Position::new(m.column, m.row);
-        // a right click on the Inbox section: the menu of an item row; the header and the toggle row have none
-        if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
-            if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
-                let item = &self.tree.inbox[i];
-                if item.kind != InboxKind::EngineDown {
-                    self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
-                }
-            }
-            return Effect::None;
-        }
         if let Some(menu) = self.menu.as_mut() {
             // an open menu takes every click: a left click picks, any button outside closes
             return match menu.mouse(self.pane, m) {
@@ -493,16 +346,9 @@ impl View {
             };
         }
         match m.kind {
-            // the wheel over the tree scrolls its rows, over the Inbox section its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            // the wheel over the tree scrolls its rows, three rows a notch, as the Plan view; elsewhere it does nothing
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.tree_area.contains(at) => {
                 self.tree_scroll.wheel(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
-                Effect::None
-            }
-            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
-                let max = self.shape().max_scroll();
-                let scroll = self.inbox_scroll.min(max);
-                self.inbox_scroll =
-                    if m.kind == MouseEventKind::ScrollDown { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) };
                 Effect::None
             }
             MouseEventKind::Down(MouseButton::Left) => self.click(m),
@@ -525,15 +371,6 @@ impl View {
     /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the refusal.
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
-        if let Some(id) = menu.inbox {
-            return match item {
-                Item::Snooze15 => Effect::Run(Action::Snooze { item: id, until: Until::Minutes15 }),
-                Item::Snooze1h => Effect::Run(Action::Snooze { item: id, until: Until::Hour1 }),
-                Item::SnoozeTomorrow => Effect::Run(Action::Snooze { item: id, until: Until::Tomorrow }),
-                Item::Dismiss => Effect::Run(Action::Dismiss(id)),
-                _ => Effect::None,
-            };
-        }
         if item == Item::NewContext {
             let owners: Vec<String> =
                 self.policy_dir.as_deref().map(cpd_core::policy::known_owners).unwrap_or_default().iter().map(|o| o.as_str().to_owned()).collect();
@@ -573,8 +410,7 @@ impl View {
                 self.ask(asked)
             }
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
-            // an Inbox item's entries are the menu's `inbox` branch above
-            Item::NewContext | Item::Snooze15 | Item::Snooze1h | Item::SnoozeTomorrow | Item::Dismiss => Effect::None,
+            Item::NewContext => Effect::None,
         }
     }
 
@@ -627,9 +463,6 @@ impl View {
     fn click(&mut self, m: MouseEvent) -> Effect {
         self.last_input = Input::Click;
         let at = Position::new(m.column, m.row);
-        if self.inbox_area.contains(at) {
-            return self.click_inbox(at.y - self.inbox_area.y);
-        }
         let Some(path) = self.row_at(at) else { return Effect::None };
         // only a closing row (`╰󰬦 expand`, `╰󰬬 collapse`) shows or hides a Context's archived rows; the title row keeps its own action:
         // a live Context's row opens its Manager (B3-A6), a live Session row opens it and an archived one shows its
@@ -655,46 +488,6 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its first (the empty one): `╰󰬦 expand` and `╰󰬬 collapse` toggle the inline
-    /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
-    fn click_inbox(&mut self, row: u16) -> Effect {
-        match self.shape().hit(row) {
-            Some(Hit::Toggle) => {
-                self.inbox_expanded = !self.inbox_expanded;
-                self.inbox_scroll = 0;
-                self.clamp_inbox_cursor();
-                self.follow_inbox_cursor = true;
-                Effect::None
-            }
-            Some(Hit::Item(i)) => self.jump(i),
-            Some(Hit::Header) | None => Effect::None,
-        }
-    }
-
-    /// Whether `action` opens the Session that is already in the chat slot: it does nothing, and says nothing.
-    fn in_focus(&self, action: &Action) -> bool {
-        let Action::Open(id) = action else { return false };
-        self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
-    }
-
-    /// The jump of the Inbox item `i` ([`inbox::jump`]): a click on its row, or Enter on it. An item whose Session is
-    /// already in focus does nothing.
-    fn jump(&self, i: usize) -> Effect {
-        match inbox::jump(&self.tree, &self.tree.inbox[i]) {
-            Some(Jump::Run(action)) if self.in_focus(&action) => Effect::None,
-            Some(Jump::Run(action)) => Effect::Run(action),
-            Some(Jump::Steps(steps)) => {
-                let steps: Vec<Action> = steps.into_iter().filter(|a| !self.in_focus(a)).collect();
-                if steps.is_empty() { Effect::None } else { Effect::Steps(steps) }
-            }
-            // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
-            Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
-            Some(Jump::Merge(pull)) => Effect::Merge(pull),
-            Some(Jump::Curate(kind, context)) => Effect::Curate(kind, context),
-            None => Effect::None,
-        }
-    }
-
     /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
         let Hits { rows, paths } = self.tree_scroll.hits();
@@ -709,53 +502,22 @@ impl View {
         self.error.clone().unwrap_or_default()
     }
 
-    /// [`View::draw_at`] now.
-    #[cfg(test)]
+    /// Draw a blank row, the tree below it and (when the snapshot cannot be read) its error in the rows at the bottom: the
+    /// reference's layout. One blank column is left on each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`).
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
-        self.draw_at(f, frame, OffsetDateTime::now_utc());
-    }
-
-    /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when the snapshot cannot be
-    /// read) its error in the rows at the bottom: the reference's layout. One blank column is left on
-    /// each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`); the Inbox items'
-    /// ages are taken at `now`, from their `opened_at`, so they need no read.
-    pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
         let inner = f.area().inner(Margin::new(1, 0));
         let footer = self.footer();
         let width = inner.width.max(1) as usize;
         let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
-        // the tree and the section share the rows between the blank one and the footer (hs-d307)
-        let column = inner.height.saturating_sub(1 + footer_height);
-        // the section leaves the tree at least one row, when there is one to leave
-        let room = column.saturating_sub(1);
-        self.inbox_cap = inbox_share(rows::row_count(&self.state, &self.tree), self.tree.inbox.len(), self.inbox_expanded, column);
-        self.inbox_scroll = self.inbox_scroll.min(self.shape().max_scroll());
-        if std::mem::take(&mut self.follow_inbox_cursor) {
-            if let Some(i) = self.inbox_cursor {
-                self.inbox_scroll = self.shape().scroll_to(i);
-            }
-        }
-        let inbox_height = self.shape().height().min(room);
-        let [_, list, inbox_area, footer_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(inbox_height),
-            Constraint::Length(footer_height),
-        ])
-        .areas(inner);
-        self.inbox_area = inbox_area;
-        let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        // the section's title carries the padding itself, so the section is drawn across the panel (`inbox::draw`)
-        let across = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
-        inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now, &|item| self.merges(item).then_some(frame));
+        let [_, list, footer_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::error()).wrap(Wrap { trim: false }), footer_area);
         }
-        let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
-        // the tree has more or fewer rows when the section was expanded or folded or an item came or went: it scrolls to
-        // keep the cursor's Session in view
+        // the tree scrolls to keep the cursor's Session in view
+        let cursor = self.cursor_shown();
         rows::draw(f, list, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
         self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
@@ -777,8 +539,6 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
-    // a right click inside the Inbox opens only an item's menu: an empty Inbox has none, so click just above it
-    let row = if view.inbox_area.contains(Position::new(column, row)) { view.inbox_area.y.saturating_sub(1) } else { row };
     view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE });
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     let rect = view.menu.as_ref().expect("the right click opens a menu").rect(view.pane);
@@ -1022,11 +782,11 @@ mod tests {
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[13..15].iter().all(|r| r.is_empty()) && rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16] == format!(" ╰{} up to date, drink some water", crate::fold::TERMINATOR) && rows[17].is_empty(), "no row for a prompt: {rows:?}");
+        assert!(rows[13..].iter().all(|r| r.is_empty()), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
         view.error = Some("closed".into());
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[15] == format!(" ╰{} up to date, drink some water", crate::fold::TERMINATOR) && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
+        assert!(rows[13..17].iter().all(|r| r.is_empty()), "nothing above the error: {rows:?}");
         assert_eq!(rows[17], " closed", "an error is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1198,7 +958,7 @@ mod tests {
         }
         assert_eq!(click(&mut view, 1, 4), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())), "the title row keeps its action");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 1, 12), Effect::None, "a terminator closing row has nothing to fold");
+        assert_eq!(click(&mut view, 1, 13), Effect::None, "below the last row there is nothing to fold");
         assert_eq!(drawn(&mut view, 44, 16), rows, "and folds nothing");
     }
 
@@ -1467,7 +1227,7 @@ mod tests {
         assert!(rows[5].ends_with(&format!("shi╭─────────╮")), "{rows:?}");
         assert!(rows[6].contains(&format!("shi│ Open    │")), "{rows:?}");
         assert!(rows[7].contains("│ Rename… │"), "drawn over the tree: {rows:?}");
-        assert_eq!(rows[12], "        ╰─────────╯", "over the empty row below the tree");
+        assert_eq!(rows[12], " ╰\u{f0b2a} new ╰─────────╯", "over the tree's last row");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1481,9 +1241,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 16);
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
         assert_eq!((rows[13].ends_with(&box_row('╭', &"─".repeat(14), '╮')[27..]), rows[15].clone()), (true, box_row('╰', &"─".repeat(14), '╯')));
-        // the menu is drawn over the Inbox title and its closing row, which show to its left
-        assert!(rows[13].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "{rows:?}");
-        assert!(rows[14].starts_with(&format!(" ╰{} up to date", crate::fold::TERMINATOR)) && rows[14].ends_with("│ New Context… │"), "{rows:?}");
+        assert!(rows[14].ends_with("│ New Context… │"), "{rows:?}");
     }
 
     #[test]
@@ -1934,41 +1692,12 @@ mod tests {
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
         assert!(view.menu.is_none());
     }
-    // ---------- the Inbox section (commands.md §13.2) ----------
 
-    use super::super::inbox::item;
-    use cpd_core::inbox::model::{Item, Kind as InboxKind, Urgency};
-
-    /// 2026-01-03T00:00:00Z: the clock of the Inbox tests.
-    fn now() -> OffsetDateTime {
-        OffsetDateTime::parse("2026-01-03T00:00:00.000Z", &time::format_description::well_known::Rfc3339).unwrap()
-    }
-
-    /// Five open items, ages `42s`, `5m`, `3h`, `2d` and `10m` at [`now`], in the order of `cpd inbox list` as the
-    /// tests have it (the view draws them as it is given them).
-    fn five() -> Vec<Item> {
-        let mut dialog = item(1, InboxKind::Dialog, Urgency::Red, "f-blocked: Worker question", "2026-01-02T23:59:18.000Z");
-        dialog.session = Some(sid("f-blocked"));
-        let mut failing = item(2, InboxKind::PrFailing, Urgency::Red, "acme/api#12 checks failed", "2026-01-02T23:55:00.000Z");
-        failing.url = Some("https://github.com/acme/api/pull/12".into());
-        let mut stuck = item(3, InboxKind::JobStuck, Urgency::Yellow, "ship: Job c is stuck", "2026-01-02T21:00:00.000Z");
-        stuck.plan = Some(PlanId::parse("ship").unwrap());
-        let mut error = item(4, InboxKind::EngineError, Urgency::Magenta, "engine: store busy", "2026-01-01T00:00:00.000Z");
-        error.event = Some(9);
-        let mut unread = item(5, InboxKind::Unread, Urgency::White, "ship lead has a reply", "2026-01-02T23:50:00.000Z");
-        unread.session = Some(sid("l-ship"));
-        vec![dialog, failing, stuck, error, unread]
-    }
-
-    fn with_inbox(n: usize) -> View {
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = five().into_iter().take(n).collect();
-        view
-    }
+    // ---------- helpers of the drawn tree ----------
 
     fn draw_now(view: &mut View, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
+        terminal.draw(|f| view.draw(f, 0)).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -1989,680 +1718,16 @@ mod tests {
             .collect()
     }
 
-    /// The title of the section at 43 columns: a blank margin, then the pill, the line and the count of `n` items.
-    fn header(n: usize) -> String {
-        format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}{n}\u{E0B4}", "─".repeat(41 - 2 - 7 - (n.to_string().len() + 2)))
-    }
-
-    /// The row of the Inbox's title: it is the pill title with the count pill (hs-d480), asserted whole.
-    fn inbox_title_y(rows: &[String], n: usize) -> u16 {
-        let y = rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).expect("the Inbox title");
-        assert_eq!(rows[y], header(n));
-        y as u16
-    }
-
-    /// An item row at 43 columns: the margin, the fold's `│`, one space, the tier glyph, a space, the label, the age ending at the last column of the inner area.
-    fn item_row(glyph: &str, label: &str, age: &str) -> String {
-        format!(" │ {glyph} {label}{}{age}", " ".repeat(39 - 4 - label.chars().count() - age.chars().count()))
-    }
-
-    /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F0B2A, the words.
-    const EMPTY_CLOSE: &str = " ╰\u{F0B2A} up to date, drink some water";
-
-    /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
-    fn cue_row(arrow: char, n: usize) -> String {
-        format!(" │{:>38}", format!("{arrow} {n} more"))
-    }
-
     /// A scroll cue row of the tree at 43 columns: the margin, the cue right-aligned in the 41 columns of the inner area.
     fn cue_row_at(arrow: char, n: usize) -> String {
         format!(" {:>41}", format!("{arrow} {n} more"))
-    }
-
-    #[test]
-    fn with_no_item_the_section_is_its_header_pinned_to_the_bottom() {
-        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
-        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
-        assert_eq!(rows[title - 1], "", "the empty row above the title");
-        assert_eq!(rows[title + 2], "", "the empty row below the closing row");
-        assert_eq!(rows.len(), title + 3, "and it is the last: no row below it");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"), "the tree above is where it was");
-    }
-
-    #[test]
-    fn three_items_are_three_rows_with_the_age_at_the_right_edge_and_the_terminator_close() {
-        let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 16));
-        assert_eq!(rows[9], "", "the empty row above the title");
-        assert_eq!(rows[10], header(3));
-        assert_eq!(rows[11], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
-        assert_eq!(rows[12], item_row(palette::TIER_RED, "acme/api#12 checks failed", "5m"));
-        assert_eq!(rows[13], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[14], " ╰󰬪", "nothing to fold");
-        assert_eq!(rows[15], "", "the empty row below the section");
-        assert_eq!(rows[11].chars().count(), 40, "the age ends in column 39 (W-4)");
-    }
-
-    #[test]
-    fn five_items_show_three_and_the_arrow_and_a_click_expands_and_folds_inline() {
-        // 22 rows: the tree's 12 and the expanded section's 9 fit the column, so the section shows all five items
-        let mut view = with_inbox(5);
-        let rows = text_rows(&draw_now(&mut view, 43, 22));
-        assert_eq!(rows[15], "", "the empty row above the title");
-        assert_eq!(rows[16], header(5));
-        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[20], EXPAND);
-        assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
-        let rows = text_rows(&draw_now(&mut view, 43, 22));
-        assert_eq!(rows[13], "", "the empty row above the title");
-        assert_eq!(rows[14], header(5));
-        assert_eq!(rows[18], item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"));
-        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
-        assert_eq!(rows[20], COLLAPSE);
-        assert_eq!(click(&mut view, 3, 20), Effect::None);
-        let rows = text_rows(&draw_now(&mut view, 43, 22));
-        assert_eq!((rows[16].clone(), rows[20].clone()), (header(5), EXPAND.to_owned()), "folded again");
-    }
-
-    #[test]
-    fn the_inbox_toggle_is_the_fold_widgets_muted_line_and_only_it_toggles() {
-        let mut view = with_inbox(5);
-        let buf = draw_now(&mut view, 43, 16);
-        for x in 1..12 {
-            let cell = &buf[(x, 14)];
-            if cell.symbol() != " " {
-                let want = if cell.symbol() == "╰" { palette::muted_text() } else { palette::toggle_text() }.fg.unwrap();
-                assert_eq!(cell.fg, want, "`╰󰬦 expand`: a muted corner, then colour 7: column {x}");
-                assert!(!cell.modifier.contains(Modifier::BOLD));
-            }
-        }
-        // the title does nothing; a click on an item keeps its action
-        assert_eq!(click(&mut view, 20, 10), Effect::None);
-        assert!(!view.inbox_expanded, "the title does not toggle");
-        assert_eq!(click(&mut view, 20, 11), Effect::Run(Action::Open(sid("f-blocked"))), "an item jumps");
-        assert!(!view.inbox_expanded, "an item row does not toggle");
-        assert_eq!(click(&mut view, 20, 14), Effect::None);
-        assert!(view.inbox_expanded, "`╰󰬦 expand` does");
-        let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[14], COLLAPSE);
-        assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).unwrap() as u16), Effect::None);
-        assert!(view.inbox_expanded, "the title does not fold it");
-        click(&mut view, 20, 14);
-        assert!(!view.inbox_expanded, "`╰󰬬 collapse` does");
-    }
-
-    #[test]
-    fn a_tree_taller_than_its_rows_scrolls_to_keep_the_cursor_visible_between_cues() {
-        let mut view = with_inbox(5);
-        press(&mut view, KeyCode::Down);
-        view.state.select(vec!["alpha".into(), "f-idle".into()]);
-        let rows = text_rows(&draw_now(&mut view, 43, 14));
-        assert_eq!(rows[8], header(5), "{rows:?}");
-        assert_eq!(rows[7], "", "the empty row above it");
-        assert_eq!(rows[1], cue_row_at('▲', 5), "the tree's cue is right-aligned: {rows:?}");
-        assert_eq!(rows[6], cue_row_at('▼', 3), "{rows:?}");
-        assert!(rows[2..6].iter().any(|r| r.starts_with(&format!(" ╰─{IDLE} ship·f-id"))), "the cursor's Session is between the cues: {rows:?}");
-        assert!(!rows[1..7].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
-    }
-
-    #[test]
-    fn a_label_too_long_for_its_row_is_cut_with_an_ellipsis_before_the_age() {
-        let mut view = with_inbox(1);
-        view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
-        let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long questio…"; // 39 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 31 columns
-        assert_eq!(label.chars().count(), 31);
-        assert_eq!(rows[13], format!(" │ {} {label} 42s", palette::TIER_RED));
-        view.tree.inbox[0].label = "x".repeat(31);
-        let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(31)), "a label that fits is not cut");
-    }
-
-    #[test]
-    fn the_age_follows_the_clock_with_no_new_snapshot() {
-        let mut view = with_inbox(1);
-        let draw_at = |view: &mut View, text: &str| {
-            let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
-            let at = OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).unwrap();
-            terminal.draw(|f| view.draw_at(f, 0, at)).unwrap();
-            text_rows(terminal.backend().buffer())[13].clone()
-        };
-        let ends = |row: String| row.trim_end().rsplit(' ').next().unwrap().to_owned();
-        assert_eq!(ends(draw_at(&mut view, "2026-01-02T23:59:19.000Z")), "1s");
-        assert_eq!(ends(draw_at(&mut view, "2026-01-02T23:59:58.000Z")), "40s");
-        assert_eq!(ends(draw_at(&mut view, "2026-01-03T00:00:18.000Z")), "1m");
-        assert_eq!(ends(draw_at(&mut view, "2026-01-03T00:00:00.000Z")), "42s");
-    }
-
-    #[test]
-    fn the_item_rows_keep_their_tier_glyph_in_its_colour_a_muted_branch_and_a_grey_age() {
-        let buf = draw_now(&mut with_inbox(5), 43, 16);
-        let rows = text_rows(&buf);
-        let muted = palette::color(palette::Meaning::Nothing);
-        for (y, glyph, colour) in [(11, palette::TIER_RED, palette::Meaning::Failed), (12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color_clickable(m))) {
-            assert!(rows[y].starts_with(&format!(" │ {glyph} ")), "the glyph in row {y}: {rows:?}");
-            assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
-            assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
-            assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
-        }
-        assert_eq!(buf[(38, 11)].fg, muted, "the age");
-    }
-
-    #[test]
-    fn a_click_on_each_kind_runs_its_action() {
-        let mut view = with_inbox(5);
-        draw_now(&mut view, 43, 22);
-        click(&mut view, 20, 20); // expand
-        draw_now(&mut view, 43, 22);
-        // rows 15.. are (the sample tree has 12 rows: one `└ collapse` per Context) the five items: dialog, pr-failing, job-stuck, engine-error, unread
-        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
-        assert_eq!(click(&mut view, 10, 16), Effect::None, "pr-failing (an old row, hs-d470): no click");
-        assert_eq!(click(&mut view, 10, 17), Effect::None, "job-stuck (an old row, hs-d318): no click");
-        assert_eq!(click(&mut view, 10, 18), Effect::None, "engine-error (an old row, hs-d314): no click");
-        assert_eq!(click(&mut view, 41, 19), Effect::None, "unread, its Lead in the chat slot already: nothing, anywhere on the row, the age too");
-        assert_eq!(click(&mut view, 10, 14), Effect::None, "the header");
-        // the section's rows are not the tree's: the Session row above is its own
-        assert_eq!(click(&mut view, 8, 6), Effect::Run(Action::Open(sid("l-ship"))));
-    }
-
-    #[test]
-    fn a_click_on_pr_ready_opens_the_merge_popup_and_on_plan_review_runs_the_lead_then_the_copy() {
-        let mut view = View::new(sample(), true);
-        let mut ready = item(1, InboxKind::PrReady, Urgency::Yellow, "api#3 ready", "2026-01-02T23:00:00.000Z");
-        ready.subject = "pr:acme/api#3".into();
-        let mut review = item(2, InboxKind::PlanReview, Urgency::Magenta, "ship plan review", "2026-01-02T23:00:00.000Z");
-        review.plan = Some(PlanId::parse("ship").unwrap());
-        review.url = Some("http://10.0.0.5:20000/".into());
-        let mut odd = item(3, InboxKind::PrReady, Urgency::Yellow, "odd ready", "2026-01-02T23:00:00.000Z");
-        odd.url = Some("https://x.io/odd".into());
-        view.tree.inbox = vec![ready, review, odd];
-        draw_now(&mut view, 43, 16);
-        let first = inbox_row(&view, 0);
-        assert_eq!(click(&mut view, 10, first), Effect::Merge(Pull::from_subject("pr:acme/api#3").unwrap()));
-        assert_eq!(
-            click(&mut view, 10, first + 1),
-            Effect::Steps(vec![Action::CopyUrl("http://10.0.0.5:20000/".into())]),
-            "the Lead is in the chat slot already (`sample`): only the copy is left"
-        );
-        assert_eq!(click(&mut view, 10, first + 2), Effect::None, "a subject that is no pull request: no popup");
-    }
-
-    #[test]
-    fn a_click_on_a_link_kind_copies_its_url_the_header_changes_nothing_and_a_question_opens_the_manager() {
-        let mut view = with_inbox(2);
-        draw_now(&mut view, 43, 16);
-        let before = view.inbox_expanded;
-        assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 13), Effect::None, "a pr-failing (an old row, hs-d470): no click, no url copy");
-        assert_eq!(click(&mut view, 10, 11), Effect::None, "the header");
-        assert_eq!(view.inbox_expanded, before);
-        let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
-        question.context = Some(ContextId::parse("alpha").unwrap());
-        view.tree.inbox = vec![question];
-        draw_now(&mut view, 43, 16);
-        assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())));
-    }
-
-    #[test]
-    fn a_click_on_an_archived_sessions_item_shows_its_history_and_an_engine_down_starts_the_engine() {
-        let mut view = View::new(archived(), true);
-        let mut unread = item(7, InboxKind::Unread, Urgency::White, "ship review has a reply", "2026-01-02T23:00:00.000Z");
-        unread.session = Some(sid("f-blocked"));
-        let down = item(8, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
-        view.tree.inbox = vec![down, unread];
-        draw_now(&mut view, 43, 18);
-        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::EnsureWatch));
-        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::History(sid("f-blocked"))));
-    }
-
-    /// Two `pr-ready` items, `acme/api#3` and `acme/api#4`, and a `plan-review` between them, on the sample tree.
-    fn two_ready() -> View {
-        let ready = |id, number: i64| {
-            let mut ready = item(id, InboxKind::PrReady, Urgency::Yellow, &format!("api#{number} ready"), "2026-01-02T23:00:00.000Z");
-            ready.subject = format!("pr:acme/api#{number}");
-            ready
-        };
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = vec![ready(1, 3), ready(2, 4)];
-        view
-    }
-
-    fn merging(pulls: &[&str]) -> BTreeSet<String> {
-        pulls.iter().map(|p| (*p).to_owned()).collect()
-    }
-
-    /// The glyph cell of the Inbox row `row`, drawn at `frame`.
-    fn glyph(view: &mut View, row: u16, frame: usize) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
-        terminal.draw(|f| view.draw_at(f, frame, now())).unwrap();
-        terminal.backend().buffer()[(3, row)].symbol().to_owned()
-    }
-
-    #[test]
-    fn a_pr_ready_item_whose_merge_runs_shows_the_spinner_in_its_glyph_cell_and_the_others_keep_their_glyph() {
-        let mut view = two_ready();
-        draw_now(&mut view, 43, 16);
-        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
-        assert_eq!((glyph(&mut view, first, 0).as_str(), glyph(&mut view, second, 0).as_str()), (crate::palette::TIER_YELLOW, crate::palette::TIER_YELLOW));
-        view.set_merging(merging(&["acme/api#3"]));
-        for frame in 0..SPINNER.len() {
-            assert_eq!(glyph(&mut view, first, frame), SPINNER[frame], "the merging item, frame {frame}: the shared clock's spinner");
-            assert_eq!(glyph(&mut view, second, frame), crate::palette::TIER_YELLOW, "the other item, frame {frame}");
-        }
-        // the markers go with the merge: the next snapshot's set is empty and the glyph is back
-        view.set_merging(BTreeSet::new());
-        assert_eq!(glyph(&mut view, first, 5), crate::palette::TIER_YELLOW);
-    }
-
-    #[test]
-    fn a_click_on_a_pr_ready_item_whose_merge_runs_does_nothing_and_the_other_still_opens_its_popup() {
-        let mut view = two_ready();
-        view.set_merging(merging(&["acme/api#3"]));
-        draw_now(&mut view, 43, 16);
-        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
-        for column in [4, 10, 41] {
-            assert_eq!(click(&mut view, column, first), Effect::None, "the glyph cell, the label, the age: column {column}");
-        }
-        assert_eq!(click(&mut view, 10, second), Effect::Merge(Pull::from_subject("pr:acme/api#4").unwrap()), "another pull request");
-        // Enter on it, as a click
-        into_the_inbox(&mut view);
-        assert_eq!(view.inbox_cursor, Some(0));
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "Enter on the running item");
-        view.set_merging(BTreeSet::new());
-        assert_eq!(click(&mut view, 10, first), Effect::Merge(Pull::from_subject("pr:acme/api#3").unwrap()), "once the merge ends, the click merges again");
-    }
-
-    /// The row of the Inbox item `i`, as the last frame drew it: under the empty row and the title.
-    fn inbox_row(view: &View, i: u16) -> u16 {
-        view.inbox_area.y + 2 + i
-    }
-
-    /// The labels of the open menu, as `menu_items` reads them from the drawn box.
-    fn menu_labels(view: &mut View) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
-        terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
-        let buf = terminal.backend().buffer();
-        let rect = view.menu.as_ref().expect("a menu is open").rect(view.pane);
-        (rect.y + 1..rect.bottom() - 1)
-            .map(|y| (rect.x + 1..rect.right() - 1).map(|x| buf[(x, y)].symbol()).collect::<String>().trim().to_owned())
-            .collect()
-    }
-
-    /// Picks the entry `index` of the open menu with Enter.
-    fn pick_entry(view: &mut View, index: usize) -> Effect {
-        for _ in 0..index {
-            press(view, KeyCode::Down);
-        }
-        press(view, KeyCode::Enter)
-    }
-
-    #[test]
-    fn a_right_click_on_an_item_row_opens_its_four_entries_and_each_runs_its_command() {
-        let mut view = with_inbox(3);
-        draw_now(&mut view, 43, 16);
-        let row = inbox_row(&view, 1); // the pr-failing, item 2
-        assert_eq!(right_click(&mut view, 10, row), Effect::None);
-        assert_eq!(menu_labels(&mut view), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]);
-        let expected = [
-            Action::Snooze { item: 2, until: Until::Minutes15 },
-            Action::Snooze { item: 2, until: Until::Hour1 },
-            Action::Snooze { item: 2, until: Until::Tomorrow },
-            Action::Dismiss(2),
-        ];
-        for (i, action) in expected.into_iter().enumerate() {
-            right_click(&mut view, 10, row);
-            assert_eq!(pick_entry(&mut view, i), Effect::Run(action), "entry {i}");
-            assert!(view.menu.is_none());
-        }
-        // a click on an entry picks it too, and Esc closes the menu running nothing
-        right_click(&mut view, 10, row);
-        let rect = view.menu.as_ref().unwrap().rect(view.pane);
-        assert_eq!(click(&mut view, rect.x + 2, rect.y + 4), Effect::Run(Action::Dismiss(2)));
-        right_click(&mut view, 10, row);
-        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
-        assert!(view.menu.is_none());
-    }
-
-    #[test]
-    fn the_header_and_the_more_row_have_no_menu_and_engine_down_has_none() {
-        let mut view = with_inbox(5);
-        draw_now(&mut view, 43, 16);
-        let header = view.inbox_area.y + 1;
-        assert_eq!(right_click(&mut view, 10, header), Effect::None, "the header");
-        assert!(view.menu.is_none());
-        let more = inbox_row(&view, 3);
-        assert_eq!(right_click(&mut view, 10, more), Effect::None, "the toggle row");
-        assert!(view.menu.is_none());
-        let mut down = item(9, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
-        down.id = 9;
-        view.tree.inbox.insert(0, down);
-        draw_now(&mut view, 43, 16);
-        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
-        assert_eq!(right_click(&mut view, 10, first), Effect::None);
-        assert!(view.menu.is_none(), "engine-down offers no menu");
-        right_click(&mut view, 10, second);
-        assert!(view.menu.is_some(), "the next row does");
-    }
-
-    /// Down presses until the cursor is in the Inbox, from the first Session.
-    fn into_the_inbox(view: &mut View) {
-        draw_now(view, 43, 16);
-        for _ in 0..20 {
-            press(view, KeyCode::Down);
-            if view.inbox_cursor.is_some() {
-                return;
-            }
-        }
-        panic!("the cursor never reached the Inbox");
-    }
-
-    #[test]
-    fn the_cursor_goes_from_the_last_session_into_the_item_rows_and_back() {
-        let mut view = with_inbox(5);
-        draw_now(&mut view, 43, 19);
-        press(&mut view, KeyCode::Down); // shows the cursor
-        let mut last = None;
-        while view.inbox_cursor.is_none() {
-            last = view.state.selected().to_vec().into();
-            press(&mut view, KeyCode::Down);
-        }
-        assert_eq!(view.inbox_cursor, Some(0), "down from the last Session enters the first item");
-        assert_eq!(Some(view.state.selected().to_vec()), last, "the tree's cursor stays on its last Session");
-        press(&mut view, KeyCode::Down);
-        press(&mut view, KeyCode::Char('j'));
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.inbox_cursor, Some(2), "three items shown: it stops on the last of them");
-        press(&mut view, KeyCode::Up);
-        press(&mut view, KeyCode::Char('k'));
-        assert_eq!(view.inbox_cursor, Some(0));
-        press(&mut view, KeyCode::Up);
-        assert_eq!(view.inbox_cursor, None, "up from the first item is back on the last Session");
-        assert_eq!(Some(view.state.selected().to_vec()), last);
-        // the toggle row and the header are skipped; expanded, the cursor reaches every item
-        let toggle = inbox_row(&view, 3);
-        click(&mut view, 20, toggle);
-        draw_now(&mut view, 43, 22);
-        press(&mut view, KeyCode::Down);
-        for _ in 0..9 {
-            press(&mut view, KeyCode::Down);
-        }
-        assert_eq!(view.inbox_cursor, Some(4));
-        // folded again, it is on the last shown item
-        let toggle = inbox_row(&view, 5);
-        click(&mut view, 20, toggle);
-        assert_eq!(view.inbox_cursor, Some(2));
-    }
-
-    #[test]
-    fn the_item_cursor_is_drawn_inverted_across_its_row_only_while_it_shows() {
-        let mut view = with_inbox(3);
-        into_the_inbox(&mut view); // the dialog: its label is no link (a link's cells are written in pieces)
-        let buf = draw_now(&mut view, 43, 16);
-        let reversed = |y: u16| (1..42).all(|x| crate::palette::check::is_selected(&buf[(x, y)]));
-        assert!(reversed(inbox_row(&view, 0)));
-        assert!(!reversed(inbox_row(&view, 1)) && !reversed(inbox_row(&view, 2)));
-        let tree_row_reversed = (1..16).any(|y| y < view.inbox_area.y && crate::palette::check::is_selected(&buf[(5, y)]));
-        assert!(!tree_row_reversed, "no Session row is inverted while the cursor is in the Inbox");
-        // a click hides it; the first arrow shows it again where it was
-        let header = view.inbox_area.y + 1;
-        click(&mut view, 20, header);
-        let buf = draw_now(&mut view, 43, 16);
-        // (row 10 is the title, whose pill is inverted by design)
-        let lit: Vec<_> = (0..16).filter(|&y| y != 10).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| crate::palette::check::is_selected(&buf[(x, y)])).collect();
-        assert!(lit.is_empty(), "{lit:?}");
-        assert_eq!(view.inbox_cursor, Some(0));
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.inbox_cursor, Some(0), "it only shows again");
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.inbox_cursor, Some(1));
-        // focus lost hides it too
-        view.focus(false);
-        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::None);
-    }
-
-    #[test]
-    fn d_dismisses_the_item_under_the_cursor_at_once_and_s_opens_the_snooze_choices() {
-        let mut view = with_inbox(3);
-        into_the_inbox(&mut view);
-        press(&mut view, KeyCode::Down); // the second item: id 2
-        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::Run(Action::Dismiss(2)));
-        assert!(view.menu.is_none());
-        assert_eq!(press(&mut view, KeyCode::Char('s')), Effect::None);
-        draw_now(&mut view, 43, 16);
-        assert_eq!(menu_labels(&mut view), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00"]);
-        assert_eq!(pick_entry(&mut view, 1), Effect::Run(Action::Snooze { item: 2, until: Until::Hour1 }));
-        for (i, until) in [Until::Minutes15, Until::Hour1, Until::Tomorrow].into_iter().enumerate() {
-            press(&mut view, KeyCode::Char('s'));
-            assert_eq!(pick_entry(&mut view, i), Effect::Run(Action::Snooze { item: 2, until }));
-        }
-        press(&mut view, KeyCode::Char('s'));
-        assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
-        assert!(view.menu.is_none());
-        // the menu takes every key, so `d` in it dismisses nothing
-        press(&mut view, KeyCode::Char('s'));
-        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::None);
-        assert!(view.menu.is_some());
-    }
-
-    #[test]
-    fn s_and_d_do_nothing_on_a_session_row_and_n_and_x_do_nothing_on_an_item() {
-        let mut view = on(&["alpha", "ship"]);
-        draw_now(&mut view, 43, 16);
-        view.tree.inbox = five();
-        draw_now(&mut view, 43, 16);
-        for key in ['s', 'd'] {
-            assert_eq!(press(&mut view, KeyCode::Char(key)), Effect::None, "{key}");
-            assert!(view.menu.is_none());
-        }
-        // before any arrow key none shows, neither on an item
-        let mut view = with_inbox(3);
-        draw_now(&mut view, 43, 16);
-        view.inbox_cursor = Some(0);
-        for key in ['s', 'd'] {
-            assert_eq!(press(&mut view, KeyCode::Char(key)), Effect::None, "{key}: the cursor is hidden");
-        }
-        let mut view = with_inbox(3);
-        into_the_inbox(&mut view);
-        for key in ['n', 'x'] {
-            press(&mut view, KeyCode::Char(key));
-        }
-    }
-
-    #[test]
-    fn enter_on_an_item_jumps_as_a_click_does() {
-        let mut view = with_inbox(5);
-        view.inbox_expanded = true; // all five items, so that the cursor reaches the last
-        draw_now(&mut view, 43, 18);
-        press(&mut view, KeyCode::Down);
-        while view.inbox_cursor.is_none() {
-            press(&mut view, KeyCode::Down);
-        }
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
-        press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing (an old row, hs-d470): no jump, no url copy");
-        press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "job-stuck (an old row, hs-d318): no jump");
-        press(&mut view, KeyCode::Down);
-        press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "unread: its Lead is in the chat slot already");
-    }
-
-    #[test]
-    fn a_snapshot_keeps_the_cursor_on_its_item_or_the_one_at_its_place_and_none_leaves_the_tree() {
-        let mut view = with_inbox(5);
-        into_the_inbox(&mut view);
-        press(&mut view, KeyCode::Down);
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.inbox_cursor, Some(2));
-        let mut tree = sample();
-        tree.inbox = five().into_iter().skip(1).collect(); // item 1 left: item 3 is at 1 now
-        view.refresh(tree);
-        assert_eq!(view.inbox_cursor, Some(1));
-        let mut tree = sample();
-        tree.inbox = five().into_iter().skip(2).take(1).collect(); // only item 3 is left; it is at 0
-        view.refresh(tree);
-        assert_eq!(view.inbox_cursor, Some(0));
-        let mut tree = sample();
-        tree.inbox = Vec::new();
-        view.refresh(tree);
-        assert_eq!(view.inbox_cursor, None, "no item: the cursor is a Session's again");
-        press(&mut view, KeyCode::Up);
-        assert!(view.cursor_shown());
-    }
-
-    #[test]
-    fn with_no_session_the_arrow_reaches_the_items() {
-        let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: five(), engine_running: true }, true);
-        draw_now(&mut view, 43, 16);
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.inbox_cursor, Some(0));
-        assert_eq!(press(&mut view, KeyCode::Char('d')), Effect::Run(Action::Dismiss(1)));
-    }
-
-    #[test]
-    fn the_section_leaves_the_tree_a_row_in_a_short_pane_and_the_footer_stays_below_it() {
-        let mut view = with_inbox(5);
-        let rows = text_rows(&draw_now(&mut view, 43, 5));
-        assert_eq!(rows[0], "");
-        assert!(rows[1].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "one row for the tree, scrolled to the cursor: {rows:?}");
-        assert_eq!((rows[2].as_str(), rows[3].as_str()), ("", header(5).as_str()), "{rows:?}");
-        view.error = Some("closed".into());
-        let rows = text_rows(&draw_now(&mut view, 43, 8));
-        assert_eq!(rows[7], " closed");
-        assert_eq!(rows[3], header(5), "the section is above the error: {rows:?}");
-    }
-
-    // ---------- the expanded section scrolls in the rows it is given (hs-n265, hs-d307) ----------
-
-    /// `n` open items `item 00`, `item 01`, … (ages `1d`), a view of them on the sample tree (12 rows) expanded and drawn
-    /// at 43x40: the tree needs less than its two thirds, so the section has the other 27 rows, from row 13: the empty
-    /// row, the title, 23 rows of list (items between their cues), the closing row and the empty row.
-    fn fifty(n: usize) -> (View, Vec<String>) {
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = (0..n)
-            .map(|i| {
-                let mut it = item(i as i64 + 1, InboxKind::Unread, Urgency::White, &format!("item {i:02}"), "2026-01-02T00:00:00.000Z");
-                it.session = Some(sid("m-alpha"));
-                it
-            })
-            .collect();
-        draw_now(&mut view, 43, 40);
-        assert_eq!(click(&mut view, 20, 38), Effect::None, "`╰󰬦 expand` expands");
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        (view, rows)
     }
 
     fn wheel(view: &mut View, kind: MouseEventKind, column: u16, row: u16) {
         assert_eq!(view.mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }), Effect::None);
     }
 
-    fn label(row: &str) -> &str {
-        row.trim_start_matches(|c: char| c != 'i').split("  ").next().unwrap()
-    }
-
-    #[test]
-    fn expanded_with_fifty_items_in_forty_rows_the_section_has_what_the_short_tree_leaves() {
-        let (view, rows) = fifty(50);
-        assert_eq!(view.inbox_area, Rect::new(1, 13, 41, 27), "what the 12-row tree leaves of the column, pinned to the bottom");
-        assert_eq!(rows[13], "", "the empty row above the title");
-        assert_eq!(rows[14], header(50));
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"), "the tree is above it");
-        assert_eq!(rows[12], " ╰󰬪 new", "the tree's rows are its 12, then the section's empty row");
-        assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
-        assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
-        assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
-        assert_eq!(rows[39], "", "and the empty row below it");
-        assert!(!rows.iter().any(|r| r.contains("▲")), "nothing is hidden above: no cue");
-    }
-
-    #[test]
-    fn the_wheel_scrolls_the_section_three_rows_a_notch_and_clamps() {
-        let (mut view, _) = fifty(50);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!(rows[15], cue_row('▲', 3));
-        assert_eq!((label(&rows[16]), label(&rows[36])), ("item 03", "item 23"));
-        assert_eq!(rows[37], cue_row('▼', 26));
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
-        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[15], cue_row('▲', 6));
-        for _ in 0..30 {
-            wheel(&mut view, MouseEventKind::ScrollDown, 10, 39);
-        }
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!(rows[15], cue_row('▲', 28), "clamped: the last item reaches the bottom");
-        assert_eq!((label(&rows[16]), label(&rows[37])), ("item 28", "item 49"));
-        assert!(!rows.iter().any(|r| r.contains("▼")), "nothing is hidden below: no cue");
-        wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
-        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[15], cue_row('▲', 25));
-        for _ in 0..30 {
-            wheel(&mut view, MouseEventKind::ScrollUp, 10, 20);
-        }
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!((label(&rows[15]), rows[37].as_str()), ("item 00", cue_row('▼', 28).as_str()));
-    }
-
-    #[test]
-    fn the_wheel_elsewhere_does_nothing_and_a_cue_row_is_no_hit() {
-        let (mut view, _) = fifty(50);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 0);
-        assert_eq!(view.inbox_scroll, 0, "the wheel over the tree is the tree's");
-        assert_eq!(click(&mut view, 10, 37), Effect::None, "the ▼ cue");
-        assert_eq!(view.inbox_scroll, 0);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
-        draw_now(&mut view, 43, 40);
-        assert_eq!(click(&mut view, 10, 15), Effect::None, "the ▲ cue");
-        assert!(view.inbox_expanded);
-        assert_eq!(click(&mut view, 10, 16), Effect::Run(Action::Open(sid("m-alpha"))), "an item row jumps");
-    }
-
-    #[test]
-    fn a_refresh_keeps_the_scroll_and_folding_goes_back_to_the_top() {
-        let (mut view, _) = fifty(50);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
-        let mut tree = sample();
-        tree.inbox = view.tree.inbox[..49].to_vec();
-        view.refresh(tree);
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!((rows[15].clone(), label(&rows[16])), (cue_row('▲', 3), "item 03"));
-        click(&mut view, 3, 38);
-        let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!((rows[33].clone(), rows[34].clone(), rows[38].clone()), (String::new(), header(49), EXPAND.to_owned()));
-        assert_eq!(view.inbox_scroll, 0);
-    }
-
-    #[test]
-    fn the_keyboard_cursor_scrolls_the_section_to_stay_visible() {
-        let (mut view, _) = fifty(50);
-        // from the tree into the Inbox, then down 30 items
-        for _ in 0..40 {
-            press(&mut view, KeyCode::Down);
-        }
-        assert!(view.inbox_cursor.is_some());
-        let at = view.inbox_cursor.unwrap();
-        let buf = draw_now(&mut view, 43, 40);
-        let rows = text_rows(&buf);
-        let shown = rows.iter().position(|r| r.contains(&format!("item {at:02}"))).expect("the cursor's item is drawn");
-        assert!((16..37).contains(&shown), "between the cues: {rows:?}");
-        assert!(crate::palette::check::is_selected(&buf[(5, shown as u16)]));
-        // down to the last item, then back up to the first
-        for _ in 0..60 {
-            press(&mut view, KeyCode::Down);
-        }
-        let buf = draw_now(&mut view, 43, 40);
-        let rows = text_rows(&buf);
-        assert_eq!(label(&rows[37]), "item 49", "{rows:?}");
-        assert!(crate::palette::check::is_selected(&buf[(5, 37)]));
-        for _ in 0..49 {
-            press(&mut view, KeyCode::Up);
-        }
-        let buf = draw_now(&mut view, 43, 40);
-        let rows = text_rows(&buf);
-        assert_eq!((label(&rows[15]), rows[37].as_str()), ("item 00", cue_row('▼', 28).as_str()));
-        assert!(crate::palette::check::is_selected(&buf[(5, 15)]));
-    }
-
-    // ---------- the tree and the Inbox share the column (hs-d307) ----------
+    // ---------- the tree takes the whole column ----------
 
     /// A tree of one Context `alpha` with `n` Plans `p00`, `p01`, …: `n + 1` rows, a Session cursor on each Plan.
     fn long_tree(n: usize) -> Tree {
@@ -2678,122 +1743,42 @@ mod tests {
         tree(vec![context("alpha", plans)])
     }
 
-    /// `n` open items `item 00`, `item 01`, …
-    fn items(n: usize) -> Vec<Item> {
-        (0..n)
-            .map(|i| {
-                let mut it = item(i as i64 + 1, InboxKind::Unread, Urgency::White, &format!("item {i:02}"), "2026-01-02T00:00:00.000Z");
-                it.session = Some(sid("l-p00"));
-                it
-            })
-            .collect()
-    }
-
-    /// A view of `tree` and `n` items, expanded when `expanded`, drawn at 43x`height`.
-    fn shared(tree: Tree, n: usize, expanded: bool, height: u16) -> (View, Vec<String>) {
-        let mut view = View::new(tree, true);
-        view.tree.inbox = items(n);
-        view.inbox_expanded = expanded;
-        let rows = text_rows(&draw_now(&mut view, 43, height));
-        (view, rows)
-    }
-
-    #[test]
-    fn both_fit_each_takes_its_rows_and_the_leftover_is_empty_between_them() {
-        let (view, rows) = shared(sample(), 3, false, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
-        assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{rows:?}");
-        assert_eq!(rows[12], " ╰󰬪 new", "the tree's last row: {rows:?}");
-        assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
-        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰬪", ""), "{rows:?}");
-        assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
-    }
-
-    #[test]
-    fn a_long_tree_and_a_long_inbox_share_thirty_rows_twenty_and_ten() {
-        let (view, rows) = shared(long_tree(60), 50, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 21, 41, 10), "the Inbox has a third of the column's rows, its empty row among them");
-        assert_eq!(rows[21], "", "the empty row above the title");
-        assert_eq!(rows[22], header(50));
-        assert_eq!((label(&rows[23]), label(&rows[27])), ("item 00", "item 04"));
-        assert_eq!(rows[28], cue_row('▼', 45), "the Inbox's cue, right-aligned: {rows:?}");
-        assert_eq!((rows[29].as_str(), rows[30].as_str()), (COLLAPSE, ""));
-        assert!(rows[1].ends_with(" alpha"), "the tree starts at the top: {rows:?}");
-        assert!(rows[19].contains("p17"), "the tree's 19th row: {rows:?}");
-        assert_eq!(rows[20], cue_row_at('▼', 42), "the tree's cue is the last of its 20 rows, right-aligned: {rows:?}");
-    }
-
-    #[test]
-    fn a_long_tree_and_a_short_expanded_inbox_give_the_rest_to_the_tree() {
-        let (view, rows) = shared(long_tree(60), 4, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 23, 41, 8), "the empty row, the title, four items, `╰󰬬 collapse` and the empty row");
-        assert_eq!((rows[23].clone(), rows[24].clone(), label(&rows[28]).to_owned(), rows[29].clone()), (String::new(), header(4), "item 03".to_owned(), COLLAPSE.to_owned()));
-        assert_eq!(rows[22], cue_row_at('▼', 40), "the tree has 22 rows: {rows:?}");
-        assert!(!rows[1..22].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
-    }
-
-    #[test]
-    fn a_short_tree_and_a_long_inbox_give_the_rest_to_the_inbox() {
-        let (view, rows) = shared(long_tree(2), 50, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 4, 41, 27), "three tree rows (the last row's `╰─` ends it), the rest to the Inbox");
-        assert!(rows[1].ends_with(" alpha") && rows[3].contains("p01") && rows[3].starts_with(" ╰─"), "{rows:?}");
-        assert_eq!(rows[4], "", "the empty row above the title");
-        assert_eq!(rows[5], header(50));
-        assert_eq!((label(&rows[6]), label(&rows[27])), ("item 00", "item 21"));
-        assert_eq!((rows[28].as_str(), rows[29].as_str(), rows[30].as_str()), (cue_row('▼', 28).as_str(), COLLAPSE, ""));
-    }
-
     #[test]
     fn the_tree_scrolls_with_the_wheel_three_rows_a_notch_between_cues_and_clamps() {
-        let (mut view, _) = shared(long_tree(60), 50, true, 31);
+        let mut view = View::new(long_tree(60), true);
+        draw_now(&mut view, 43, 31);
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         let rows = text_rows(&draw_now(&mut view, 43, 31));
         assert_eq!(rows[1], cue_row_at('▲', 3), "right-aligned");
         assert!(rows[2].contains("p02"), "{rows:?}");
-        assert_eq!(rows[20], cue_row_at('▼', 40));
-        assert_eq!(view.inbox_scroll, 0, "the wheel over the tree leaves the Inbox alone");
+        assert_eq!(rows[30], cue_row_at('▼', 30));
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], cue_row_at('▲', 42), "clamped: the last row reaches the bottom of the tree's rows");
-        assert!(rows[20].contains("p59") && rows[20].starts_with(" ╰─"), "{rows:?}");
-        assert!(!rows[1..21].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
+        assert_eq!(rows[1], cue_row_at('▲', 32), "clamped: the last row reaches the bottom of the tree's rows");
+        assert!(rows[30].contains("p59") && rows[30].starts_with(" ╰─"), "{rows:?}");
+        assert!(!rows[1..31].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert!(rows[1].ends_with(" alpha") && rows[20] == cue_row_at('▼', 42), "{rows:?}");
-    }
-
-    #[test]
-    fn the_wheel_scrolls_the_section_under_the_pointer_and_a_cue_row_is_no_hit() {
-        let (mut view, _) = shared(long_tree(60), 50, true, 31);
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
-        let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[23], cue_row('▲', 3));
-        assert_eq!((label(&rows[24]), rows[28].as_str()), ("item 03", cue_row('▼', 43).as_str()));
-        assert!(rows[1].ends_with(" alpha"), "the tree did not move: {rows:?}");
-        assert_eq!(click(&mut view, 10, 1 + 20 - 1), Effect::None, "the tree's ▼ cue is no row");
-        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
-        draw_now(&mut view, 43, 31);
-        assert_eq!(click(&mut view, 10, 1), Effect::None, "the tree's ▲ cue is no row");
-        assert!(matches!(click(&mut view, 10, 2), Effect::Run(Action::Open(_))), "the row under the cue opens its Lead");
+        assert!(rows[1].ends_with(" alpha") && rows[30] == cue_row_at('▼', 32), "{rows:?}");
     }
 
     #[test]
     fn the_keyboard_cursor_scrolls_the_tree_to_stay_between_the_cues() {
-        let (mut view, _) = shared(long_tree(60), 3, false, 31);
+        let mut view = View::new(long_tree(60), true);
         for _ in 0..40 {
             press(&mut view, KeyCode::Down);
         }
         let buf = draw_now(&mut view, 43, 31);
         let rows = text_rows(&buf);
         let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
-        assert!((2..23).contains(&at), "between the cues: {rows:?}");
+        assert!((2..30).contains(&at), "between the cues: {rows:?}");
         assert!(crate::palette::check::is_selected(&buf[(5, at as u16)]));
-        assert!(rows[1].trim_start().starts_with('▲') && rows[23].trim_start().starts_with('▼'), "{rows:?}");
-        assert_eq!((rows[1].as_str(), rows[23].as_str()), (cue_row_at('▲', 20).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
+        assert!(rows[1].trim_start().starts_with('▲') && rows[30].trim_start().starts_with('▼'), "{rows:?}");
+        assert_eq!((rows[1].as_str(), rows[30].as_str()), (cue_row_at('▲', 13).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
         let before = rows.clone();
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
@@ -2907,25 +1892,6 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_engine_down_item_still_runs_watch_ensure_and_only_its_failure_is_said() {
-        let mut view = View::new(sample(), true);
-        view.tree.engine_running = false;
-        view.tree.inbox = vec![item(8, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z")];
-        draw_now(&mut view, 43, 18);
-        let row = inbox_row(&view, 0);
-        assert_eq!(click(&mut view, 10, row), Effect::Run(Action::EnsureWatch), "the User's own explicit action");
-        // the reply is the log's (the loop's `said`), whether it started the engine or found it running
-        for started in [true, false] {
-            let said = Action::EnsureWatch.done(&serde_json::json!({"ok": true, "started": started, "already": !started}));
-            assert_eq!(view.finished(&Action::EnsureWatch, Ok(said)), Effect::None);
-        }
-        assert_eq!(
-            view.finished(&Action::EnsureWatch, Err(Action::EnsureWatch.failed("watch_start_failed", "no tmux"))),
-            Effect::text("watch --ensure", "watch_start_failed: no tmux")
-        );
-    }
-
-    #[test]
     fn a_downtime_with_no_live_manager_says_nothing_and_a_failure_to_tell_or_list_is_the_log() {
         let t0 = Instant::now();
         let mut view = View::new(sample(), true);
@@ -3006,98 +1972,11 @@ mod tests {
         assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰󰬪 new".to_owned()]);
     }
 
-    #[test]
-    fn with_no_item_the_section_is_an_empty_row_the_title_and_an_empty_row_pinned_to_the_bottom() {
-        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
-        assert_eq!(rows[title - 1], "", "the empty row above the title");
-        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
-        assert_eq!(rows.get(title + 2).map(String::as_str), Some(""), "the empty row below it");
-        assert_eq!(rows.len(), title + 3, "pinned to the bottom");
-    }
-
-    #[test]
-    fn three_items_close_with_the_terminator_and_an_empty_row_below() {
-        let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
-        assert_eq!(rows[15], "", "the empty row above the title");
-        assert_eq!(rows[16], header(3));
-        assert_eq!(rows[17], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
-        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[20], " ╰󰬪", "nothing to fold");
-        assert_eq!(rows[21], "", "the empty row below the section");
-    }
-
-    #[test]
-    fn five_items_fold_between_an_empty_row_above_and_one_below_and_the_tree_above_shares_the_row() {
-        // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
-        let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
-        assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[12], " ╰󰬪 new");
-        assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
-        assert_eq!(rows[14], header(5));
-        assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
-        assert_eq!(rows[17], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[18], EXPAND);
-        assert_eq!(rows[19], "", "the empty row below the section");
-    }
-
-    #[test]
-    fn expanded_the_closing_row_is_followed_by_an_empty_row_and_it_toggles_where_it_is_drawn() {
-        let mut view = with_inbox(5);
-        let rows = text_rows(&draw_now(&mut view, 43, 22));
-        assert_eq!((rows[20].as_str(), rows[21].as_str()), (EXPAND, ""));
-        assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
-        let rows = text_rows(&draw_now(&mut view, 43, 22));
-        assert_eq!(rows[13], "");
-        assert_eq!(rows[14], header(5));
-        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
-        assert_eq!(rows[20], COLLAPSE);
-        assert_eq!(rows[21], "");
-    }
-
-    #[test]
-    fn the_inbox_pill_is_grey_the_block_muted_its_text_the_background_colour_and_its_caps_muted() {
-        let buf = draw_now(&mut with_inbox(5), 43, 20);
-        let y = inbox_title_y(&text_rows(&buf), 5);
-        assert_eq!(buf[(1, y)].symbol(), "╭");
-        crate::section::check::grey_pill(&buf, 3, y, "Inbox");
-        crate::section::check::grey_pill(&buf, 39, y, "5"); // the count is a grey pill too (hs-d480), ending at column 41
-    }
-
-    #[test]
-    fn the_inbox_title_sits_inside_the_panels_padding_one_column_each_side() {
-        let buf = draw_now(&mut with_inbox(5), 43, 20);
-        let y = inbox_title_y(&text_rows(&buf), 5);
-        assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "\u{E0B4}", " "));
-    }
-
-    #[test]
-    fn a_click_on_the_inbox_title_does_nothing_and_opens_no_menu() {
-        let mut view = with_inbox(5);
-        let rows = text_rows(&draw_now(&mut view, 43, 20));
-        let y = inbox_title_y(&rows, 5);
-        for column in [0, 1, 3, 6, 20, 41, 42] {
-            assert_eq!(click(&mut view, column, y), Effect::None, "column {column}");
-        }
-        for column in [1, 3, 6, 20, 41] {
-            assert_eq!(right_click(&mut view, column, y), Effect::None, "column {column}");
-            assert!(view.menu.is_none(), "no menu on a title: column {column}");
-        }
-        assert_eq!(text_rows(&draw_now(&mut view, 43, 20)), rows, "and nothing folds or moves");
-    }
-
     // ---------- no notes (commands.md §17 "No notes", hs-d469) ----------
     //
     // The view draws no transient note line: what the User must see is a `text` dialog (`Effect::Text`), the rest is
     // nothing on the screen and a line in `run/tui/tree.log`. Every test below compares frames, so none names how the
     // implementation keeps its state.
-
-    /// The Inbox's item `id` of `kind` for the Session `session`, at [`now`].
-    fn session_item(id: i64, kind: InboxKind, session: &str) -> Item {
-        let mut it = item(id, kind, Urgency::White, "ship lead has a reply", "2026-01-02T23:50:00.000Z");
-        it.session = Some(sid(session));
-        it
-    }
 
     /// The frame of `view` at 43 × 18, as text.
     fn frame(view: &mut View) -> Vec<String> {
@@ -3105,60 +1984,9 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_an_inbox_item_already_in_focus_does_nothing_and_says_nothing() {
-        // `l-ship` is in the chat slot (`Place::Chat` in the sample), so its item is already in focus
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
-        let before = frame(&mut view);
-        let row = inbox_row(&view, 0);
-        assert_eq!(click(&mut view, 10, row), Effect::None, "no `session open` for the Session that is in focus");
-        assert_eq!(frame(&mut view), before, "and nothing is drawn");
-    }
-
-    #[test]
-    fn enter_on_an_inbox_item_already_in_focus_does_nothing_too() {
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
-        into_the_inbox(&mut view);
-        let before = frame(&mut view);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
-        assert_eq!(frame(&mut view), before);
-    }
-
-    #[test]
-    fn a_click_on_an_inbox_item_that_is_not_in_focus_still_opens_its_session() {
-        // the other side of the rule above: `f-blocked` is parked
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = vec![session_item(1, InboxKind::Dialog, "f-blocked")];
-        draw_now(&mut view, 43, 18);
-        let row = inbox_row(&view, 0);
-        assert_eq!(click(&mut view, 10, row), Effect::Run(Action::Open(sid("f-blocked"))));
-    }
-
-    #[test]
-    fn a_copy_click_draws_no_note_when_the_copy_is_done() {
-        let url = "https://github.com/acme/api/pull/12";
-        let mut failing = item(2, InboxKind::ReviewRequested, Urgency::Yellow, "review acme/api#12", "2026-01-02T23:55:00.000Z");
-        failing.url = Some(url.into());
-        let mut view = View::new(sample(), true);
-        view.tree.inbox = vec![failing];
-        let before = frame(&mut view);
-        let row = inbox_row(&view, 0);
-        let action = Action::CopyUrl(url.into());
-        assert_eq!(click(&mut view, 10, row), Effect::Run(action.clone()), "the click still copies");
-        // what the command's success used to say
-        let done = view.finished(&action, Ok(format!("copied {url}: Cmd-click the row to open it")));
-        assert_eq!(done, Effect::None, "a success opens nothing");
-        let after = frame(&mut view);
-        assert!(after.iter().all(|r| !r.contains("copied")), "no `copied <url>: …` line: {after:?}");
-        assert_eq!(after, before, "the frame is the one before the click");
-    }
-
-    #[test]
     fn a_success_of_any_action_draws_nothing_and_opens_nothing() {
         for (action, said) in [
             (Action::Open(sid("l-sketch")), ""),
-            (Action::Dismiss(2), "dismissed"),
             (Action::EnsureWatch, "already running"),
             (Action::CopyId("l-sketch".into()), "copied l-sketch"),
         ] {
@@ -3170,27 +1998,10 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_plan_review_item_with_no_review_page_yet_opens_the_lead_and_says_nothing_else() {
-        // a step with no command was the note `no review page yet`
-        let mut review = item(6, InboxKind::PlanReview, Urgency::Yellow, "ship: Plan review r1", "2026-01-02T23:50:00.000Z");
-        review.plan = Some(PlanId::parse("ship").unwrap());
-        review.url = None;
-        let tree = sample();
-        let steps = match super::super::inbox::jump(&tree, &review) {
-            Some(super::super::inbox::Jump::Run(action)) => vec![action],
-            Some(super::super::inbox::Jump::Steps(steps)) => steps,
-            other => panic!("the Lead opens: {other:?}"),
-        };
-        assert_eq!(steps.first(), Some(&Action::Open(sid("l-ship"))));
-        assert!(steps.iter().all(|a| !a.argv().is_empty()), "every step is a command, none is only a line to say: {steps:?}");
-    }
-
-    #[test]
     fn a_failed_action_is_a_text_dialog_with_what_failed_its_code_and_its_message_and_draws_no_note() {
         for (action, why) in [
             (Action::Open(sid("l-sketch")), "no_cockpit: No cockpit."),
             (Action::EnsureWatch, "watch_start_failed: no tmux"),
-            (Action::Dismiss(2), "item_closed: Item 2 is closed."),
         ] {
             let mut view = on(&["alpha", "sketch"]);
             let before = frame(&mut view);

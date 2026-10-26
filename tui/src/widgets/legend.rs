@@ -217,6 +217,7 @@ pub(crate) fn sections() -> Vec<Section> {
             tier(Urgency::Red, "a blocker only you can clear"),
             tier(Urgency::Yellow, "pull-request work"),
             tier(Urgency::Magenta, "a decision before the work runs"),
+            tier(Urgency::Blue, "blue, external support: a review asked of you"),
             tier(Urgency::Cyan, "cyan, a cpd notice: curation, nothing blocks"),
             vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Notice))), plain("a documentation candidate")],
             vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Notice))), plain("a record to retire")],
@@ -636,10 +637,10 @@ mod tests {
         section::check::grey_pill(&buf, 3, 1, &text);
     }
 
-    // ---- the Inbox section (hs-d483, hs-d570): the five tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
+    // ---- the Inbox section (hs-d483, hs-d570): the six tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
 
     #[test]
-    fn the_legends_inbox_section_lists_five_tiers_and_the_two_curate_glyphs() {
+    fn the_legends_inbox_section_lists_six_tiers_and_the_two_curate_glyphs() {
         let all = sections();
         let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
         let inbox = &all[at];
@@ -650,6 +651,7 @@ mod tests {
                 "\u{F0362}", "a blocker only you can clear",
                 "\u{F069A}", "pull-request work",
                 "\u{F173A}", "a decision before the work runs",
+                "\u{F0368}", "blue, external support: a review asked of you",
                 "\u{F06F1}", "cyan, a cpd notice: curation, nothing blocks",
                 "\u{F0653}", "a documentation candidate",
                 "\u{F116E}", "a record to retire",
@@ -660,8 +662,8 @@ mod tests {
         let c = |m| Some(palette::color_clickable(m));
         assert_eq!(
             colours,
-            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted)],
-            "red, yellow, magenta, cyan (three lines: the tier and the two curate kinds), white"
+            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::External), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted)],
+            "red, yellow, magenta, blue, cyan (three lines: the tier and the two curate kinds), white"
         );
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();

@@ -47,7 +47,7 @@ fn a_pr_title_in_wide_characters_stays_in_its_row_and_the_merge_icon_in_its_colu
     // The production draw path: the wide title does not push the merge icon out of the second line's last column.
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
     let mut terminal = Terminal::new(TestBackend::new(WIDTH, 20)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &[pr], &machine, 0, 0))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &[pr], &machine, 0, 0, &[], (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     let buf = terminal.backend().buffer();
     assert_eq!(buf[(WIDTH - 1, 7)].symbol(), MERGE, "the merge icon sits in the last column of the second line, not pushed out");
 }

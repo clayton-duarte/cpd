@@ -47,6 +47,8 @@ pub enum Meaning {
     Waiting,
     /// A cpd notice that blocks nothing: the cyan Inbox tier and its Session dot (hs-d570, pro-d16). Not in [`Meaning::ALL`].
     Notice,
+    /// External support: the blue Inbox tier, a review asked of you (B1). Not in [`Meaning::ALL`].
+    External,
 }
 
 impl Meaning {
@@ -74,6 +76,7 @@ impl Meaning {
             Meaning::Nothing => "nothing / n/a / zero",
             Meaning::Waiting => "waiting on an agent",
             Meaning::Notice => "a cpd notice",
+            Meaning::External => "external support",
         }
     }
 }
@@ -119,6 +122,8 @@ fn meaning_index(m: Meaning) -> u8 {
         // The notice tier shares cyan with `Waiting`: two meanings, one colour, because the Inbox tier is read from its glyph and
         // position and the Inbox draws no waiting state (pro-d16).
         Meaning::Notice => s.in_progress,
+        // Blue amends "blue is focus and selection only" for this one Inbox tier (B1).
+        Meaning::External => s.focus,
     }
 }
 
@@ -424,6 +429,8 @@ pub const TIER_MAGENTA: &str = "\u{F173A}";
 pub const ITEM_DOCS: &str = "\u{F0653}";
 /// A record to retire (an Inbox item of kind `curate-retire`), cyan.
 pub const ITEM_RETIRE: &str = "\u{F116E}";
+/// Blue: external support, a review asked of you, U+F0368 (md-message_reply_text).
+pub const TIER_BLUE: &str = "\u{F0368}";
 /// Cyan: a cpd notice that blocks nothing (the generic system item), U+F06F1 (hs-d570).
 pub const TIER_CYAN: &str = "\u{F06F1}";
 /// Yellow: pull-request work.
@@ -439,6 +446,7 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
         Urgency::Cyan => (TIER_CYAN, Meaning::Notice),
+        Urgency::Blue => (TIER_BLUE, Meaning::External),
     };
     Span::styled(glyph, fg_clickable(meaning))
 }
@@ -596,6 +604,9 @@ mod tests {
         assert_eq!(selected().fg, Some(numbered::C4), "the focus block is still 4");
         assert_eq!(selected().bg, Some(Color::Reset), "a block is reversed over the terminal's background");
         assert_eq!(tier_span(Urgency::Cyan), Span::styled(TIER_CYAN, fg_clickable(Meaning::Notice)));
+        assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::External)));
+        assert_eq!(color(Meaning::External), Color::Blue);
+        assert_eq!(color_clickable(Meaning::External), Color::LightBlue, "12");
         assert_eq!(dot_span(Dot::Cyan, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
         assert_eq!(dot_span(Dot::Cyan, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
     }
