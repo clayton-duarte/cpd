@@ -50,8 +50,9 @@ const NOISE_EVERY: Duration = Duration::from_millis(300);
 /// name and load are read with (`hostname`, and macOS's `ioreg`, `sysctl`, `ps` and `vm_stat`) answer nothing.
 fn env() -> Fx {
     let fx = Fx::with_ports();
+    fx.env.write_models();
     fx.env.write_config(
-        "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+        "version = 1\nmachine = \"m1\"\nconcurrency = 4\n\
          [events]\npoll_ms = 200\n",
     );
     for program in ["hostname", "ioreg", "sysctl", "ps", "vm_stat"] {

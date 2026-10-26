@@ -49,9 +49,10 @@ const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S"
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.
 fn setup(env: &TestEnv) {
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+        "version = 1\nmachine = \"m1\"\n",
     )
     .unwrap();
     env.fake_pi("exit 0");

@@ -60,12 +60,19 @@ fn write_config(fx: &Fx, extra: &str) {
     // Every config keeps the healthy fake engine, so a test that changes another key still passes `holographic`.
     let bridge = FakeBridge::new(&fx.env);
     let text = format!(
-        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n{}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
+        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n{}\n",
         adapter.display(),
         bridge.config()
     );
-    // `extra` holds top-level keys, so it must come before the `[tiers]` table.
     fx.env.write_config(&text);
+    machine_models(fx, ["p/m-opus", "p/m-sonnet", "p/m-low", "p/m-aux"]);
+}
+
+/// The machine policy's `[model]`: the refs of `O`, `S`, `H` and `G`.
+fn machine_models(fx: &Fx, [o, s, h, g]: [&str; 4]) {
+    let path = fx.env.cpd_home().join("policy/host.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, format!("[model]\nO = \"{o}\"\nS = \"{s}\"\nH = \"{h}\"\nG = \"{g}\"\n")).unwrap();
 }
 
 /// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
@@ -327,9 +334,10 @@ fn tiers_fail_for_a_model_pi_does_not_have() {
     let fx = healthy();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
-        format!("version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/nope\"\n", fx.env.root().join("adapter").display()),
+        format!("version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n", fx.env.root().join("adapter").display()),
     )
     .unwrap();
+    machine_models(&fx, ["p/m-opus", "p/nope", "p/m-low", "p/m-aux"]);
     let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "tiers", "error", "tier_model_unknown");
@@ -360,7 +368,7 @@ fn the_adapter_directory_needs_a_package_json() {
     {
         // The default, beside the binary, does not exist in a build tree.
         let fx = healthy();
-        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n").unwrap();
+        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n").unwrap();
         let run = doctor(&fx);
         assert_doctor_failed(&run);
         let c = assert_fails(&run, "pi_adapter", "error", "package.json");

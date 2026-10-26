@@ -172,7 +172,7 @@ fn config_shows_a_custom_plannotator_range() {
 #[test]
 fn config_has_one_source_per_leaf_key() {
     let fx = Fx::new();
-    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[tiers]\nO = \"p/opus\"\n[timeouts]\nask_minutes = 10\n").ok();
+    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[timeouts]\nask_minutes = 10\n").ok();
 
     // The leaves of `config`, as dotted paths.
     fn leaves(prefix: &str, value: &Value, into: &mut Vec<String>) {
@@ -192,14 +192,13 @@ fn config_has_one_source_per_leaf_key() {
     assert_eq!(actual, expected);
 
     let sources = &out["sources"];
-    for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
+    for key in ["version", "machine", "concurrency", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
-    assert_eq!(out["config"]["tiers"]["O"], "p/opus");
     assert_eq!(out["config"]["timeouts"]["ask_minutes"], 10);
 }
 
@@ -230,11 +229,6 @@ context_engine_dir = "/b/engine"
 context_engine_timeout_ms = 4294967295
 context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
-[tiers]
-O = "a/b/c"
-S = "provider/model:1"
-H = "x/y"
-G = "g/z"
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1
@@ -285,7 +279,6 @@ work_session = "w"
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
-    assert_eq!(out["config"]["tiers"]["O"], "a/b/c");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
@@ -300,7 +293,6 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         // unknown keys, at the top and in every table
         ("version = 1\nmachine = \"hs\"\nsurprise = 1\n", "surprise"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nsurprise = 1\n", "timeouts.surprise"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nX = \"a/b\"\n", "tiers.X"),
         ("version = 1\nmachine = \"hs\"\n[watch]\nsurprise = 1\n", "watch.surprise"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nsurprise = 1\n", "inbox.surprise"),
         ("version = 1\nmachine = \"hs\"\n[events]\nsurprise = 1\n", "events.surprise"),
@@ -400,11 +392,6 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         // removed by hs-d340 (contract §8.2): E4 opens the PR through its open Job and no longer escalates, so a config still setting it is unknown
         ("version = 1\nmachine = \"hs\"\npr_open_escalate_minutes = 10\n", "pr_open_escalate_minutes"),
         ("version = 1\nmachine = \"hs\"\npr_open_escalate_minutes = 0\n", "pr_open_escalate_minutes"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"no-slash\"\n", "tiers.O"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nS = \"/model\"\n", "tiers.S"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nH = \"provider/\"\n", "tiers.H"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"pro vider/model\"\n", "tiers.O"),
-        ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"provider/mo del\"\n", "tiers.O"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"\"\n", "tmux.socket"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\nsocket = \"a b\"\n", "tmux.socket"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\ncockpit_session = \"a.b\"\n", "tmux.cockpit_session"),
@@ -473,20 +460,6 @@ fn config_refuses_g_for_lead_manager_and_open_tier() {
             assert!(message.contains('G') && message.contains("hs-d562"), "{key}: {message}");
         }
     }
-}
-
-/// hs-d562: `tiers.G` has the shape of `tiers.O/S/H`.
-#[test]
-fn config_reads_a_tiers_g_model() {
-    let fx = Fx::new();
-    let out = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
-    assert_eq!(out["config"]["tiers"]["G"], "p/gemini");
-    assert_eq!(out["sources"]["tiers.G"], "file");
-    let run = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid");
-    assert_eq!(err["details"]["key"], "tiers.G");
 }
 
 #[test]
@@ -619,7 +592,8 @@ export function getSupportedThinkingLevels(model) {
 }
 "#;
 
-const TIERS_CONFIG: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\n";
+/// The machine policy's `[model]` keys of the tests of `cpd tiers`.
+const TIERS_MODELS: &str = "O = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\n";
 
 /// [`cpd_isolated`] in this process: `PATH` is the env's `bin/` alone for the one call.
 fn fx_isolated(fx: &Fx, args: &[&str]) -> Run {
@@ -638,7 +612,7 @@ fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
 
 const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","minimal","low"],"H":["off","low","medium","high"],"G":["off","minimal","low","medium","high"]}"#;
 
-/// The levels pi's fake modules ([`FAKE_PI_AI`]) report for the models of [`TIERS_CONFIG`]: `p/m-low` has off, minimal,
+/// The levels pi's fake modules ([`FAKE_PI_AI`]) report for the models of [`TIERS_MODELS`]: `p/m-low` has off, minimal,
 /// low and medium, the others every level.
 const FAKE_MODULES_LEVELS_JSON: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium"],"G":["off","minimal","low","medium","high","xhigh","max"]}"#;
 
@@ -647,19 +621,18 @@ fn levels(json: &str) -> Reply {
     Reply::ok(&format!("{json}\n"))
 }
 
-/// `config` written, and its `[tiers]` as the machine policy's `[model]` table: `cpd tiers` reads the policy.
-fn write_tiers_config(env: &TestEnv, config: &str) {
-    env.write_config(config);
-    let tiers = config.split_once("[tiers]\n").map_or("", |(_, rest)| rest.split("\n[").next().unwrap());
+/// The minimal `config.toml`, and `models` (the keys of `[model]`) as the machine policy's `[model]` table: `cpd tiers` reads the policy.
+fn write_tiers_config(env: &TestEnv, models: &str) {
+    env.write_config(MINIMAL);
     let path = env.cpd_home().join("policy/host.toml");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, format!("[model]\n{tiers}")).unwrap();
+    fs::write(path, format!("[model]\n{models}")).unwrap();
 }
 
 /// An `Fx` on the fake ports with `config` written and pi installed (version `1.2.0`, no module sources: `node` is scripted).
-fn tiers_fx(config: &str) -> Fx {
+fn tiers_fx(models: &str) -> Fx {
     let fx = Fx::with_ports();
-    write_tiers_config(&fx.env, config);
+    write_tiers_config(&fx.env, models);
     install_pi(&fx.env, "1.2.0", "", "");
     fx
 }
@@ -667,7 +640,7 @@ fn tiers_fx(config: &str) -> Fx {
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
     let fx = Fx::with_ports();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     install_pi(&fx.env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
     // What pi's modules report (`FAKE_PI_AI`), as the scripted `node` prints it; the real `node` is the smoke below.
     fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
@@ -690,7 +663,7 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
     let fx = Fx::with_ports();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     let (coding_agent, pi_ai) = install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
@@ -722,12 +695,12 @@ fn tiers_runs_the_catalog_module_from_argv() {
     );
 }
 
-/// The config of the tests that print G's default model: no `tiers.G`.
-const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"github-copilot/m-opus\"\nS = \"github-copilot/m-sonnet\"\nH = \"github-copilot/m-low\"\n";
+/// The config of the tests that print G's default model: no `G`.
+const TIERS_MODELS_DEFAULT_G: &str = "O = \"github-copilot/m-opus\"\nS = \"github-copilot/m-sonnet\"\nH = \"github-copilot/m-low\"\n";
 
 #[test]
 fn tiers_prints_g_without_an_effort() {
-    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
@@ -735,14 +708,14 @@ fn tiers_prints_g_without_an_effort() {
     // An `Fx` holds the process-wide lock: the first goes before the second.
     drop(fx);
 
-    let fx = tiers_fx(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"github-copilot/gemini\"\n"));
+    let fx = tiers_fx(&format!("{TIERS_MODELS_DEFAULT_G}G = \"github-copilot/gemini\"\n"));
     fx.fake_node(levels(ALL_LEVELS_JSON));
     assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"], json!({"model": "github-copilot/gemini", "efforts": []}));
 }
 
 #[test]
 fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_node(levels(r#"{"O":["off"],"S":["off"],"H":["off"],"G":null}"#));
     let run = fx.cpd(&["tiers"]);
     let err = run.error();
@@ -753,7 +726,7 @@ fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
 
 #[test]
 fn a_cache_written_before_g_still_serves_the_catalog() {
-    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    let fx = tiers_fx(TIERS_MODELS_DEFAULT_G);
     // Only the cold call has a reply: a second call of node would be unscripted and fail the test.
     fx.fake_once("node", levels(ALL_LEVELS_JSON));
     fx.cpd(&["tiers"]).ok();
@@ -778,7 +751,8 @@ fn a_cache_written_before_g_still_serves_the_catalog() {
 #[test]
 fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
     let mut fx = Fx::with_ports();
-    write_tiers_config(&fx.env, &format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    write_tiers_config(&fx.env, TIERS_MODELS);
+    fx.env.write_config(&format!("{MINIMAL}[timeouts]\nstore_busy_ms = 300\n"));
     install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     fx.hold_store_migration(Duration::from_millis(1500));
@@ -806,7 +780,7 @@ fn config_does_not_wait_for_a_migration() {
 
 #[test]
 fn tiers_prefers_pis_own_node_over_node_on_path() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_once("node", levels(ALL_LEVELS_JSON));
 
     // ~/.local/share/pi-node/current/bin/node, as pi's launcher looks for it (the runner is scripted: the file is
@@ -839,7 +813,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
     let fx = Fx::new();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     fx.env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -851,7 +825,7 @@ fn tiers_without_pi_on_path_is_pi_not_found() {
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
     let fx = Fx::new();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     fx.env.fake_pi("exit 0");
     let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -877,7 +851,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
     let fx = Fx::with_ports();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     let env = &fx.env;
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
@@ -908,7 +882,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
         ("levels that are not text", levels(r#"{"O":[1],"S":["off"],"H":["off"],"G":["off"]}"#)),
     ];
     // One env: a failure caches nothing, so each case runs node again.
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     for (n, (name, reply)) in cases.into_iter().enumerate() {
         fx.fake_once("node", reply);
         let run = fx.cpd(&["tiers"]);
@@ -926,7 +900,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
 
 #[test]
 fn tiers_without_any_node_is_catalog_failed() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_node(Reply::io(ErrorKind::NotFound));
     let run = fx.cpd(&["tiers"]);
     assert_eq!(run.error()["code"], "catalog_failed");
@@ -935,7 +909,7 @@ fn tiers_without_any_node_is_catalog_failed() {
 
 #[test]
 fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":null,"G":["off"]}"#));
     let run = fx.cpd(&["tiers"]);
     let err = run.error();
@@ -947,7 +921,7 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
 #[test]
 fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
     let env = TestEnv::new();
-    write_tiers_config(&env, "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"p/none\"\nG = \"p/m-g\"\n");
+    write_tiers_config(&env, "O = \"p/m-opus\"\nS = \"p/other\"\nH = \"p/none\"\nG = \"p/m-g\"\n");
     install_pi(&env, "1.2.0", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -987,7 +961,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     let fx = Fx::with_ports_empty();
-    write_tiers_config(&fx.env, TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_MODELS);
     install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     assert!(!fx.env.cpd_home().join("cpd.db").exists());
@@ -1007,7 +981,7 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
 
 #[test]
 fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_once("node", levels(ALL_LEVELS_JSON));
     let cold = fx.cpd(&["tiers"]);
     cold.ok();
@@ -1020,7 +994,7 @@ fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
 
 #[test]
 fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_once("node", levels(ALL_LEVELS_JSON));
     fx.cpd(&["tiers"]).ok();
 
@@ -1050,11 +1024,11 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
 
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_node(levels(ALL_LEVELS_JSON));
     fx.cpd(&["tiers"]).ok();
 
-    write_tiers_config(&fx.env, &TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    write_tiers_config(&fx.env, &TIERS_MODELS.replace("p/m-sonnet", "p/m-other"));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
     assert_eq!(fx.calls("node").len(), 2);
@@ -1065,7 +1039,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
 
 #[test]
 fn tiers_does_not_cache_a_failed_catalog() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":["off"],"G":["off"]}"#));
     assert_eq!(fx.cpd(&["tiers"]).error()["code"], "tier_model_unknown");
     assert_eq!(cached_rows(&fx.env), []);
@@ -1074,7 +1048,7 @@ fn tiers_does_not_cache_a_failed_catalog() {
 
 #[test]
 fn tiers_is_idempotent() {
-    let fx = tiers_fx(TIERS_CONFIG);
+    let fx = tiers_fx(TIERS_MODELS);
     fx.fake_once("node", levels(ALL_LEVELS_JSON));
     let first = fx.cpd(&["tiers"]);
     let second = fx.cpd(&["tiers"]);
