@@ -222,7 +222,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     const tracker = createTracker({
       session: id,
       store: globalThis as Record<string, unknown>,
-      φ: async (argv) => (await host.exec("cpd", argv, { timeout: host.timing.callTimeoutMs, signal: host.abort.signal })).stdout,
+      cpd: async (argv) => (await host.exec("cpd", argv, { timeout: host.timing.callTimeoutMs, signal: host.abort.signal })).stdout,
       report: (m) => host.deliver("plannotator tracker", new CpdError("registry_changed", m)),
     });
     trackers.set(r, tracker);

@@ -1,7 +1,7 @@
 //! E8, the Inbox (contract §2.2 "Inbox item", §3.7), one `inbox::run` per tick on a prepared store: items open and close
 //! within a tick with their Events; a failed Job is stuck only after `inbox.stuck_job_minutes` and then goes to the Context's
 //! Manager as one message, not as an item (hs-d318); a tick with no change writes nothing; and the `loop-guard` item
-//! (hs-d552, hs-d571): a Lead, fork or Manager Session `blocked` with the label `cpd: loop guard` is one red item, whatever its
+//! (hs-d552, hs-d571): a Lead, fork or Manager Session `blocked` with the label `φ: loop guard` is one red item, whatever its
 //! Plan's phase and never also a `dialog`, closed when the Session leaves that state.
 
 use serde_json::{Value, json};
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::inbox;
 use super::testkit::{Fx, ago};
 
-const GUARD: &str = "cpd: loop guard";
+const GUARD: &str = "φ: loop guard";
 
 /// Plan `pay` in `dispatch`, its Lead `lead1` `working`, a tick of E8 and `stuck_job_minutes = 1`.
 fn fx() -> Fx {
@@ -111,7 +111,7 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
 }
 
 /// hs-d694: the plan review's visible label is `φ: plan review`, so a Lead `blocked` with exactly that label
-/// opens no `dialog` (the matcher must recognise the φ label, not only `cpd: plan review`).
+/// opens no `dialog` (the matcher must recognise the φ label).
 #[test]
 fn a_phi_plan_review_blocked_session_is_not_a_dialog() {
     let mut fx = fx();
