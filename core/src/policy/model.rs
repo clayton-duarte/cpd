@@ -41,7 +41,13 @@ pub fn models_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId,
     Ok(Models::of(&crate::pr::policy_of_job(conn, home, plan, job)?))
 }
 
-/// The models of the PR `key` of `plan`: [`models_of_job`] for a PR.
+/// The models of Attempt `id` of `plan`: those of its Job.
+pub fn models_of_attempt(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, id: &str) -> Result<Models, CpdError> {
+    let job: String = conn.query_row("SELECT job FROM attempts WHERE plan = ?1 AND id = ?2", [plan.as_str(), id], |r| r.get(0))?;
+    models_of_job(conn, home, plan, &job)
+}
+
+/// The models of the PR `key' of `plan`: [`models_of_job`] for a PR.
 pub fn models_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Models, CpdError> {
     Ok(Models::of(&crate::pr::policy_of_pr(conn, home, plan, key)?))
 }

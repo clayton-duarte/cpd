@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::catalog::{PiInstall, config_models, node, read_with};
-use super::file::Config;
+use super::catalog::{PiInstall, node, read_with};
 use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::runner::{FakeRunner, Reply};
