@@ -25,7 +25,7 @@ use cpd_core::plan::Phase;
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::buffer::copy_cells;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
-use crate::link::{CUE, link};
+use crate::link::{CUE, Link, Links};
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobNode, JobStatus, NeedsUser, PrFacts, PrNode, PrStatus, Pull, pr_look};
 
@@ -60,6 +60,10 @@ pub struct Boxes {
     pub chart: Chart,
     /// Indexed by the chart's columns.
     pub row_of: Vec<usize>,
+    /// The links drawn in the box titles (pro-d60), on the canvas as [`layout`] drew it: `links_origin` is where that
+    /// canvas's corner now is (the margin [`Boxes::with_margin`] added), so a cell of the chart is looked up less it.
+    pub links: Links,
+    pub links_origin: (u16, u16),
 }
 
 /// The level of each PR (indices into `prs`). A merged PR's is 0 with no needs, else one more than the highest level
@@ -275,15 +279,17 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
 
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
     let lines = palette::muted_text();
+    let mut links = Links::default();
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         BoxWidget::new(Walls::Full, lines, ChartBody { chart }).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
-            // the title starts after the corner and the dash and ends with one space; the `󱆭` is the cell before it, and
-            // the link runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󱆭`
-            let dot = if pull.lead_working { 2 } else { 0 };
-            let len = format!("#{} {} {CUE}", pull.number, word(pull, false).0).chars().count() as u16 + dot;
-            link(&mut buf, Rect::new(rect.x + 1 + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
+            // the title starts after the corner and the dash and ends with one space; the link is the title's tail before its last space:
+            // `#<number> <state>`, the Lead's dot when it works (the title's spans after the repo), then the cue
+            let spans = &titles[i].spans;
+            let link = Link::new(&pull.url).text(Line::from(spans[3..spans.len() - 2].to_vec()));
+            let area = Rect::new(rect.x + 1 + titles[i].width() as u16 - link.width(), rect.y, link.width(), 1);
+            links.draw(link, area, &mut buf);
         }
     }
     // the lines lie between the boxes, never on them (a line's end on a border is replaced by the exit below)
@@ -333,13 +339,14 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
             }
         }
     }
-    Boxes { chart: Chart { buf, pills, columns }, row_of }
+    Boxes { chart: Chart { buf, pills, columns }, row_of, links, links_origin: (0, 0) }
 }
 
 impl Boxes {
     /// The same canvas with `margin` around it ([`Chart::with_margin`]).
     pub fn with_margin(self, margin: Margin) -> Boxes {
-        Boxes { chart: self.chart.with_margin(margin), ..self }
+        let links_origin = (self.links_origin.0 + margin.horizontal, self.links_origin.1 + margin.vertical);
+        Boxes { chart: self.chart.with_margin(margin), links_origin, ..self }
     }
 
     /// The neighbour of pill `from`: as [`Chart::step`] within a row of boxes (←→ cross into the neighbouring box), and
@@ -680,7 +687,7 @@ mod tests {
         p.pull = Some(pull(12, PrState::Closed));
         let cell = |needs: &NeedsUser| {
             let c = layout(&[p.clone()], &[], needs, 0).chart;
-            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol().contains("\x07cl")).unwrap();
+            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol() == "c" && c.buf[(x + 1, 0)].symbol() == "l").unwrap();
             c.buf[(x, 0)].fg
         };
         assert_eq!(cell(&NeedsUser::default()), palette::color_clickable(Meaning::Waiting));
@@ -708,37 +715,13 @@ mod tests {
         assert_eq!(t.spans[3].style, palette::muted_text(), "the status before a pull request exists is muted");
     }
 
-    /// The chart with its OSC 8 link sequences stripped, so it reads as plain text.
-    fn without_links(c: &Chart) -> Chart {
-        let mut plain = Chart { buf: c.buf.clone(), pills: Vec::new(), columns: Vec::new() };
-        let mut covered = 0;
-        for cell in &mut plain.buf.content {
-            if covered > 0 {
-                // the second cell of a link piece is drawn by the piece
-                cell.set_symbol("");
-                covered -= 1;
-                continue;
-            }
-            covered = cell.cell_width().saturating_sub(1);
-            let symbol = cell.symbol().replace("\x1b]8;;https://github.com/acme/repo/pull/12\x07", "").replace("\x1b]8;;\x07", "");
-            cell.set_symbol(&symbol);
-        }
-        plain
-    }
-
-    /// The cells of the title row under the link to the pull request, and the cells of `#` and `󱆭` in the plain chart.
-    /// A piece's second cell keeps its symbol but is covered by the piece.
-    fn link_cells(c: &Chart, plain: &Chart) -> (Vec<u16>, u16, u16) {
-        let top: Vec<char> = text(plain).lines().next().unwrap().chars().collect();
+    /// The cells of the title row (y 0) that are the link to the pull request, and the cells of `#` and `󱆭` in the chart.
+    fn link_cells(b: &Boxes) -> (Vec<u16>, u16, u16) {
+        let c = &b.chart;
+        let top: Vec<char> = text(c).lines().next().unwrap().chars().collect();
         let first = top.iter().position(|&ch| ch == '#').unwrap() as u16;
         let arrow = top.iter().position(|&ch| ch.to_string() == CUE).unwrap() as u16;
-        let mut covered = Vec::new();
-        for x in 0..c.buf.area.width {
-            let symbol = c.buf[(x, 0)].symbol();
-            if symbol.contains("]8;;https://github.com/acme/repo/pull/12\x07") {
-                covered.extend(x..x + c.buf[(x, 0)].cell_width().max(1));
-            }
-        }
+        let covered = (0..c.buf.area.width).filter(|&x| b.links.at(Position::new(x, 0)).is_some()).collect();
         (covered, first, arrow)
     }
 
@@ -746,13 +729,12 @@ mod tests {
     fn a_conflicting_pull_request_links_exactly_its_number_conflict_and_arrow() {
         let mut api = pr("api", &[]);
         api.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
-        let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
-        let plain = without_links(&c);
-        snap(&plain, "
+        let b = layout(&[api], &[], &NeedsUser::default(), 0);
+        snap(&b.chart, "
 ╭─ api · api-repo 󱦰 main · #12 conflict 󱆭 ─╮
 │ no Jobs                                  │
 ╰──────────────────────────────────────────╯");
-        let (covered, first, arrow) = link_cells(&c, &plain);
+        let (covered, first, arrow) = link_cells(&b);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󱆭` whole, not the key nor the separators");
     }
 
@@ -760,18 +742,18 @@ mod tests {
     fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
         let _guard = LayoutGuard;
         let mut api = pr("api", &[]);
-        let before = layout(&[api.clone()], &[], &NeedsUser::default(), 0).chart;
+        let before = layout(&[api.clone()], &[], &NeedsUser::default(), 0);
         api.pull = Some(pull(12, PrState::Open));
-        let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
-        let plain = without_links(&c);
-        snap(&plain, "
+        let b = layout(&[api], &[], &NeedsUser::default(), 0);
+        let c = &b.chart;
+        snap(c, "
 ╭─ api · api-repo 󱦰 main · #12 open 󱆭 ─╮
 │ no Jobs                              │
 ╰──────────────────────────────────────╯");
-        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󱆭` is two cells longer than `dispatch`");
-        let (covered, first, arrow) = link_cells(&c, &plain);
+        assert_eq!(c.buf.area.width, before.chart.buf.area.width + 2, "`#12 open 󱆭` is two cells longer than `dispatch`");
+        let (covered, first, arrow) = link_cells(&b);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󱆭`, not the key nor the separators");
-        assert!(before.buf.content.iter().all(|cell| !cell.symbol().contains("]8;;")), "no pull request, no link");
+        assert_eq!(before.links, Links::default(), "no pull request, no link");
     }
 
     #[test]

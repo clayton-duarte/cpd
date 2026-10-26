@@ -1,10 +1,10 @@
-//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
+//! The Inbox section at the bottom of the Deploy column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
 //! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
 //! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰬦 expand` that expands the list inline and becomes `╰󰬬 collapse`, with 3 or fewer the terminator `╰󰬪` (U+F0B2A; hs-d574), with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
-//! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
+//! column's split gives it (the PRs have two thirds, hs-d307; [`super::draw`]) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
 //! (`dialog::scroll::cue`, [`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
@@ -19,7 +19,7 @@ use ratatui::widgets::Widget;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::actions::Action;
+use crate::tree::actions::Action;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::cells::{self, truncate};
 use crate::fold;
@@ -30,7 +30,8 @@ use crate::phi;
 use crate::read::{Tree, age_text};
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
-use crate::widgets::{Window, max_scroll, window};
+use crate::dialog::scroll::WHEEL_ROWS;
+use super::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
@@ -45,6 +46,34 @@ const TOP: usize = 2;
 
 /// The rows below the closing row: the empty row (hs-d476).
 const BOTTOM: usize = 1;
+
+/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
+/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
+/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
+/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
+/// the rest to the other.
+pub(crate) fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
+    let column = usize::from(column);
+    let wants = Shape::new(count, expanded).height().into();
+    if tree + wants <= column {
+        return u16::try_from(wants).unwrap_or(u16::MAX);
+    }
+    let share = (column / 3).max(Shape::new(count, false).height().into());
+    let rows = if wants <= share {
+        wants
+    } else if tree + share <= column {
+        column - tree
+    } else {
+        share
+    };
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+/// Whether the merge of the `pr-ready` `item`'s pull request runs: `merging` is the pull requests (`<owner>/<repo>#<n>`) with a live
+/// merge marker (hs-d495).
+pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) -> bool {
+    item.kind == Kind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
+}
 
 /// What a row of the section is, by its offset from the section's first row (the empty one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +149,13 @@ impl Shape {
     /// The largest scroll offset: the last item reaches the bottom of the list. 0 when collapsed or when all fit.
     pub fn max_scroll(self) -> usize {
         if self.expanded { max_scroll(self.count, self.list_rows(), 1) } else { 0 }
+    }
+
+    /// The scroll offset after a wheel notch down or up over the section: [`WHEEL_ROWS`] items a notch, clamped.
+    pub fn wheeled(self, down: bool) -> usize {
+        let max = self.max_scroll();
+        let scroll = self.scroll.min(max);
+        if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
     }
 
     /// The row, below the section's first, of the item `i`, when it is drawn.
@@ -287,6 +323,62 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     }
 }
 
+/// What a left click on `item` runs, as [`jump`] says but for what is already so: an action whose Session already is in the
+/// chat slot is dropped, and so is the merge popup of a pull request whose merge runs (`merging`, hs-d495): the click, like
+/// the glyph's spinner, is its marker's.
+pub fn click(tree: &Tree, item: &Item, merging: &std::collections::BTreeSet<String>) -> Option<Jump> {
+    let in_focus = |action: &Action| {
+        let Action::Open(id) = action else { return false };
+        tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
+    };
+    match jump(tree, item)? {
+        Jump::Run(action) if in_focus(&action) => None,
+        Jump::Steps(steps) => {
+            let steps: Vec<Action> = steps.into_iter().filter(|a| !in_focus(a)).collect();
+            (!steps.is_empty()).then_some(Jump::Steps(steps))
+        }
+        Jump::Merge(pull) if merging.contains(&pull.to_string()) => None,
+        jump => Some(jump),
+    }
+}
+
+/// An entry of an item's right-click menu (commands.md §13.2): the labels are the contract's, exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Snooze15,
+    Snooze1h,
+    SnoozeTomorrow,
+    Dismiss,
+}
+
+impl Choice {
+    /// The entries, in order.
+    pub const ALL: [Choice; 4] = [Choice::Snooze15, Choice::Snooze1h, Choice::SnoozeTomorrow, Choice::Dismiss];
+
+    /// The words of the command of the item `id`: `inbox snooze <id> <15m|1h|tomorrow>` (§21.3) or `inbox dismiss <id>` (§21.4).
+    pub fn argv(self, id: i64) -> Vec<String> {
+        let id = id.to_string();
+        let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        match self {
+            Choice::Snooze15 => words(&["inbox", "snooze", &id, "15m"]),
+            Choice::Snooze1h => words(&["inbox", "snooze", &id, "1h"]),
+            Choice::SnoozeTomorrow => words(&["inbox", "snooze", &id, "tomorrow"]),
+            Choice::Dismiss => words(&["inbox", "dismiss", &id]),
+        }
+    }
+}
+
+impl crate::menu::Entry for Choice {
+    fn label(self) -> &'static str {
+        match self {
+            Choice::Snooze15 => "Snooze 15 min",
+            Choice::Snooze1h => "Snooze 1 h",
+            Choice::SnoozeTomorrow => "Snooze until tomorrow 09:00",
+            Choice::Dismiss => "Dismiss",
+        }
+    }
+}
+
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
 fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
     let plan = tree.contexts.iter().flat_map(|c| &c.plans).find(|p| &p.head.id == plan)?;
@@ -438,7 +530,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 
 /// An open item for the tests: `kind` and `urgency`, its `label`, opened at `opened_at`; the rest is none.
 #[cfg(test)]
-pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
+pub(crate) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
     Item {
         id,
         kind,
@@ -470,7 +562,7 @@ mod tests {
     use ratatui::backend::CrosstermBackend;
     use ratatui::{Terminal, TerminalOptions, Viewport};
 
-    use super::super::fixture::{archived, sample};
+    use crate::tree::fixture::{archived, sample};
     use super::*;
     use cpd_core::ids::{ContextId, JobKey, PlanId};
     use cpd_core::inbox::model::Urgency;

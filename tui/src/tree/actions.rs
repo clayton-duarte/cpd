@@ -10,12 +10,9 @@
 //! ([`Free`], F3), and a click on an archived row unarchives its outermost archived object and opens its Session ([`Action::Resume`]).
 //! `session history` is no click any more (hs-d515); it stays a command.
 //!
-//! The Inbox's menu and keys (`s`, `d`) run `inbox snooze <id> <15m|1h|tomorrow>` and `inbox dismiss <id>`.
-//!
 //! Text the User typed is passed as `--flag=value`, or after `--` when it is a positional, so a value that starts
 //! with `-` is still a value.
 
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -30,7 +27,6 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
-use crate::merge::Pull;
 use super::ask::{Dialogs, Question};
 use crate::dialog::{self, validate::Validator};
 use crate::widgets::open_legend;
@@ -75,27 +71,6 @@ impl Deletable {
             argv.push("--yes".to_owned());
         }
         argv
-    }
-}
-
-/// How long an Inbox item is snoozed: the words of `inbox snooze` (§21.3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Until {
-    /// `15m`.
-    Minutes15,
-    /// `1h`.
-    Hour1,
-    /// `tomorrow`: the next 09:00.
-    Tomorrow,
-}
-
-impl Until {
-    fn arg(self) -> &'static str {
-        match self {
-            Until::Minutes15 => "15m",
-            Until::Hour1 => "1h",
-            Until::Tomorrow => "tomorrow",
-        }
     }
 }
 
@@ -146,7 +121,7 @@ pub enum Action {
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
-    /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open); the
+    /// `tmux set-buffer -w -- <url>`: a click on an item that only has a link (no Plan to open); the
     /// click says nothing (the label is an OSC 8 link the terminal's modifier-click opens).
     CopyUrl(String),
     /// `session resume <id>` (§10.17): a click on a `loop-guard` item, in the background with no dialog.
@@ -157,12 +132,6 @@ pub enum Action {
     /// `session send <manager> --unblocks <why> -- <text>` (§10.13): the engine's failure to start, to the most recently active live
     /// Manager. No sender, so `from` is the User's side; send always wakes. Only a step of the tree's own restart of the engine.
     Tell { manager: SessionId, text: String },
-    /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
-    Snooze { item: i64, until: Until },
-    /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
-    Dismiss(i64),
-    /// Stub: `inbox claim <id>`.
-    Claim(i64),
     /// `plan delete <id>` or `context delete <id>` (§4.14, §3.14): the menu's Delete. Without `yes` the command deletes
     /// nothing and lists what would go, for the popup ([`super::ask::Question::Delete`]); with it, it deletes.
     Delete { what: Deletable, yes: bool },
@@ -214,9 +183,6 @@ impl Action {
                 "--".into(),
                 text.clone(),
             ],
-            Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
-            Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
-            Action::Claim(item) => words(&["inbox", "claim", &item.to_string()]),
             Action::Delete { what, yes } => what.command(*yes),
         }
     }
@@ -279,9 +245,6 @@ impl Action {
             Action::EnsureWatch => "engine started".into(),
             Action::SessionResume(id) => format!("resumed {id}"),
             Action::Tell { manager, .. } => format!("told {manager}"),
-            Action::Snooze { .. } => "snoozed".into(),
-            Action::Dismiss(_) => "dismissed".into(),
-            Action::Claim(_) => "claimed".into(),
             Action::Delete { .. } if reply["already"] == true => "already deleted".into(),
             Action::Delete { .. } => "deleted".into(),
         }
@@ -337,6 +300,12 @@ impl Runner {
             .map_err(|e| e.message().to_owned())
     }
 
+    /// The tree as of `now` (contract §1.3 text): what [`crate::widgets::inbox::click`] reads the Sessions from.
+    pub fn tree(&self, now: &str) -> Result<crate::read::Tree, String> {
+        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        crate::read::tree_at(&mut store, Some(now)).map_err(|e| e.message().to_owned())
+    }
+
     /// Runs the action's steps: what the log says of the last, or the step that failed and why (the flow stops there).
     pub fn run(&self, action: &Action) -> Result<String, Failed> {
         self.run_all(&action.steps())
@@ -377,11 +346,6 @@ impl Runner {
         Ok(())
     }
 
-    /// A click on a `pr-ready` item: the merge popup of `pull`; returns when it closes.
-    pub fn merge(&self, pull: &Pull) -> Result<(), String> {
-        crate::merge::open(&self.tmux, &pull.to_string()).map_err(|e| e.message().to_owned())
-    }
-
     /// Opens the dialog popup of `question` and returns when it closes: the command its answer makes, none when the
     /// User cancelled.
     pub fn ask(&self, question: Question) -> Result<Option<Action>, String> {
@@ -400,20 +364,14 @@ impl Runner {
     }
 
     fn curate_flow(&self, kind: cpd_core::inbox::model::Kind, context: &ContextId) -> Result<(), String> {
-        use super::inbox::{approved, checklist};
+        use crate::widgets::inbox::{approved, checklist};
         let call_cpd = |argv: Vec<String>| {
-            let words = argv.join(" ");
-            let output = Command::new(PROGRAM).args(&argv).stdin(Stdio::null()).output().map_err(|e| format!("cannot run {PROGRAM}: {e}"))?;
-            let reply: Value = serde_json::from_slice(&output.stdout)
-                .map_err(|_| format!("{PROGRAM} {words} printed no JSON (exit {}): {}", output.status, String::from_utf8_lossy(&output.stderr).trim()))?;
-            if reply["ok"] == true {
-                Ok(reply)
-            } else {
-                let error = &reply["error"];
-                Err(format!("{}: {}", error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
-            }
+            call_argv(&*self.processes, argv).map_err(|failure| match failure {
+                Failure::Refused { code, message } => format!("{code}: {message}"),
+                Failure::Broken(why) => why,
+            })
         };
-        let reply = call_cpd(super::inbox::curation_argv(context))?;
+        let reply = call_cpd(crate::widgets::inbox::curation_argv(context))?;
         let Some(list) = checklist(kind, context, &reply) else { return Ok(()) };
         let rows: Vec<_> = list.rows.into_iter().map(|r| (r.id, r.text, r.detail)).collect();
         let checked = dialog::checklist(&self.tmux, &list.title, &rows).map_err(|e| e.message().to_owned())?;
@@ -483,15 +441,13 @@ impl Failure {
     }
 }
 
-/// Runs the command of `action`: its reply, or why it failed.
-#[cfg(test)]
-pub fn call(action: &Action) -> Result<Value, Failure> {
-    call_with(&*Ports::current().runner, action)
+/// Runs the command of `action` on `runner`: its reply, or why it failed.
+pub fn call_with(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, Failure> {
+    call_argv(runner, action.argv())
 }
 
-/// [`call`] on `runner`.
-pub fn call_with(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, Failure> {
-    let argv = action.argv();
+/// [`call_with`] of the `cpd` arguments `argv`.
+fn call_argv(runner: &dyn ProcessRunner, argv: Vec<String>) -> Result<Value, Failure> {
     let call = Call {
         tool: PROGRAM.to_owned(),
         program: PROGRAM.to_owned(),
@@ -608,11 +564,6 @@ mod tests {
                 vec!["session", "rename", "--session=f-idle", "--", "-x y"],
             ),
             (Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() }, vec!["session", "fork", "l-ship", "--name=ship (fork)"]),
-            (Action::Snooze { item: 12, until: Until::Minutes15 }, vec!["inbox", "snooze", "12", "15m"]),
-            (Action::Snooze { item: 12, until: Until::Hour1 }, vec!["inbox", "snooze", "12", "1h"]),
-            (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
-            (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
-            (Action::Claim(12), vec!["inbox", "claim", "12"]),
             (Action::EnsureWatch, vec!["watch", "--ensure"]),
             (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "--unblocks", "the engine has been down 60 s", "--", "The engine is down."]),
         ];
@@ -702,9 +653,6 @@ mod tests {
         let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
         assert_eq!(unarchive.done(&json!({"ok": true, "archived": [], "closed": []})), "unarchived");
         assert_eq!(unarchive.done(&json!({"ok": true, "already": true})), "already unarchived");
-        assert_eq!(Action::Snooze { item: 1, until: Until::Hour1 }.done(&json!({"ok": true})), "snoozed");
-        assert_eq!(Action::Dismiss(1).done(&json!({"ok": true})), "dismissed");
-        assert_eq!(Action::Dismiss(1).failed("item_closed", "Item 1 is closed."), "item_closed: Item 1 is closed.");
     }
 
     #[test]

@@ -11,12 +11,14 @@ use serde_json::Value;
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
 use cpd_core::host::spawn::Pid;
+use cpd_core::inbox::model::{self, Item};
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
+use super::tree::{db_now, inbox_in, store_home};
 use super::shared::{AttemptStatus, SHOWN_STATUS, Checks, Place, PlanHead, PrState, bad_row, id, plan_heads, tier};
 
 /// What the Dispatch column shows.
@@ -34,6 +36,11 @@ pub struct Widgets {
     pub events: Vec<Event>,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+    /// The Inbox's open, visible items in the order of `cpd inbox list`, `engine-down` first when no engine runs and no live
+    /// Manager exists: what the Inbox section draws, read as the tree's ([`super::tree::Tree::inbox`]).
+    pub inbox: Vec<Item>,
+    /// Whether an engine holds `locks/watch.lock` (§1.4).
+    pub engine_running: bool,
 }
 
 /// The machine-wide concurrency slots (§3.4): an Attempt holds one from `starting` until `ended`.
@@ -158,6 +165,7 @@ pub struct MachineEscalation {
 /// The Dispatch column's snapshot. `concurrency` is the config's limit; `recent`
 /// is how many Events to return (the latest ones).
 pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widgets, CpdError> {
+    let engine_running = model::engine_running(&store_home(store)?)?;
     store.read(|conn| {
         Ok(Widgets {
             slots: held_slots(conn, concurrency)?,
@@ -167,6 +175,8 @@ pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widge
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
+            inbox: inbox_in(conn, &db_now(conn, None)?, engine_running)?,
+            engine_running,
         })
     })
 }

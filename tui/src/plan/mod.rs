@@ -104,13 +104,12 @@ impl Centre {
 
     /// [`Centre::turn`]; it lays nothing out, so the trace's `layout_us` stays 0. Only the glyph cells change: every frame is one cell wide
     /// and the plan view draws a `palette::SPINNER` glyph nowhere but at a spinner, so the cells holding the drawn
-    /// frame's glyph (alone, or inside the link's escapes) get the new one's.
+    /// frame's glyph get the new one's.
     fn turn_traced(&mut self, frame: usize, _trace: &mut Trace) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
             let (from, to) = (palette::SPINNER[self.frame % palette::SPINNER.len()], palette::SPINNER[frame % palette::SPINNER.len()]);
             for cell in &mut self.boxes.chart.buf.content {
-                // a cell under the pull request's link holds the glyph inside its hyperlink escapes
                 if cell.symbol().contains(from) {
                     let turned = cell.symbol().replace(from, to);
                     cell.set_symbol(&turned);
@@ -252,9 +251,34 @@ struct Ui {
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
+    /// The links of the last drawn frame (pro-d60): what a click on a PR box title reads.
+    links: crate::link::Links,
+    /// Where the canvas the `links` were drawn on has its corner in the chart (`Boxes::links_origin`).
+    links_origin: (u16, u16),
 }
 
 impl Ui {
+    /// A mouse event on the frame last drawn: a left press (any modifiers) on a drawn link opens its url through
+    /// `ports.runner` and answers `Ok(true)`, changing nothing else; any other event answers `Ok(false)` and changes
+    /// nothing. A failed `open` is the `Err`.
+    fn click(&mut self, ports: &Ports, m: ratatui::crossterm::event::MouseEvent) -> Result<bool, CpdError> {
+        let cell = Position::new(m.column, m.row);
+        if m.kind != MouseEventKind::Down(MouseButton::Left) || !self.body.contains(cell) {
+            return Ok(false);
+        }
+        let at = |screen: u16, body: u16, scroll: u16, origin: u16| (screen - body + scroll).checked_sub(origin);
+        let (Some(x), Some(y)) = (
+            at(m.column, self.body.x, self.scroll.0, self.links_origin.0),
+            at(m.row, self.body.y, self.scroll.1, self.links_origin.1),
+        ) else {
+            return Ok(false);
+        };
+        match self.links.at(Position::new(x, y)) {
+            Some(url) => crate::link::open_url(&*ports.runner, url).map(|()| true),
+            None => Ok(false),
+        }
+    }
+
     /// A different Lead is in the slot, `from` its Plan before and `to` its Plan now: nothing is selected, the chart
     /// is at the offset `to` was left at, or at its corner. Leads of one Plan share the Plan's offset.
     fn switch(&mut self, from: Option<&PlanId>, to: Option<&PlanId>) {
@@ -311,6 +335,7 @@ impl Ui {
             window = chart_area;
         }
         self.body = window;
+        self.links = crate::link::Links::default();
         let Some(c) = centre else { return };
         let sel = self.selected.resolve(&c.boxes.chart); // keeps the User's selection, never creates one
         if let (true, Some(i)) = (self.selected.follow, sel) {
@@ -318,6 +343,7 @@ impl Ui {
             self.selected.follow = false;
         }
         self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+        (self.links, self.links_origin) = (c.boxes.links.clone(), c.boxes.links_origin);
     }
 }
 
@@ -682,29 +708,37 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                     _ => {}
                 }
             }
-            Input::Mouse(m) => match m.kind {
-                MouseEventKind::Down(MouseButton::Left) if ui.body.contains(Position::new(m.column, m.row)) => {
-                    let hit = snap.centre.as_ref().and_then(|c| {
-                        let (x, y) = (m.column - ui.body.x + ui.scroll.0, m.row - ui.body.y + ui.scroll.1);
-                        c.boxes.chart.pill_at(x, y).map(|i| c.boxes.chart.pills[i].key.clone())
-                    });
-                    match hit {
-                        Some(key) if ui.selected.key.as_ref() == Some(&key) => {
-                            ui.selected.click(key.clone());
-                            unselect = Some(key);
-                        }
-                        Some(key) => {
-                            ui.selected.click(key.clone());
-                            open = Some(key);
-                        }
-                        None => unselect = ui.selected.clear(),
-                    }
+            Input::Mouse(m) => match ui.click(ports, m) {
+                // a PR box title's link: the pull request is opened and nothing else changes
+                Ok(true) => {}
+                Err(e) => {
+                    let actions = Arc::clone(actions);
+                    worker.submit(move || actions.report("Open Pull Request", &e));
                 }
-                MouseEventKind::ScrollUp => ui.scroll.1 = ui.scroll.1.saturating_sub(3),
-                MouseEventKind::ScrollDown => ui.scroll.1 = ui.scroll.1.saturating_add(3), // clamped when drawn
-                MouseEventKind::ScrollLeft => ui.scroll.0 = ui.scroll.0.saturating_sub(4),
-                MouseEventKind::ScrollRight => ui.scroll.0 = ui.scroll.0.saturating_add(4),
-                _ => {}
+                Ok(false) => match m.kind {
+                    MouseEventKind::Down(MouseButton::Left) if ui.body.contains(Position::new(m.column, m.row)) => {
+                        let hit = snap.centre.as_ref().and_then(|c| {
+                            let (x, y) = (m.column - ui.body.x + ui.scroll.0, m.row - ui.body.y + ui.scroll.1);
+                            c.boxes.chart.pill_at(x, y).map(|i| c.boxes.chart.pills[i].key.clone())
+                        });
+                        match hit {
+                            Some(key) if ui.selected.key.as_ref() == Some(&key) => {
+                                ui.selected.click(key.clone());
+                                unselect = Some(key);
+                            }
+                            Some(key) => {
+                                ui.selected.click(key.clone());
+                                open = Some(key);
+                            }
+                            None => unselect = ui.selected.clear(),
+                        }
+                    }
+                    MouseEventKind::ScrollUp => ui.scroll.1 = ui.scroll.1.saturating_sub(3),
+                    MouseEventKind::ScrollDown => ui.scroll.1 = ui.scroll.1.saturating_add(3), // clamped when drawn
+                    MouseEventKind::ScrollLeft => ui.scroll.0 = ui.scroll.0.saturating_sub(4),
+                    MouseEventKind::ScrollRight => ui.scroll.0 = ui.scroll.0.saturating_add(4),
+                    _ => {}
+                },
             },
             _ => {}
         }
@@ -846,6 +880,8 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
 }
 
+#[cfg(test)]
+mod box_link_tests;
 #[cfg(test)]
 mod box_tests;
 

@@ -95,7 +95,6 @@ mod tests {
             Kind::InboxSnoozed,
             Kind::InboxDismissed,
             Kind::InboxClaimed,
-    Kind::InboxClaimed,
         ] {
             assert!(KINDS.contains(&kind), "{kind}");
         }

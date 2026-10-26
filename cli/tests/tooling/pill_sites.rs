@@ -94,7 +94,7 @@ fn no_pill_cap_glyph_in_non_test_source_outside_the_spec_and_the_adapters() {
     // `core/src/host/tmux/pill.rs`, `pi/lib/pill.ts`) read the caps from it and spell none. No other exception.
     let allowed = [
         // Test-only modules (declared under `#[cfg(test)]`) whose names do not say so: they spell the caps to assert them.
-        "tui/src/tree/inbox_indent.rs",
+        "tui/src/widgets/inbox_indent.rs",
         "tui/src/tree/look.rs",
         "core/src/host/tmux/no_inbox.rs",
         "core/src/host/tmux/palette.rs",

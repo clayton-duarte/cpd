@@ -485,13 +485,6 @@ fn files_in(dir: &Path) -> Vec<String> {
     names
 }
 
-/// A pid that is not alive: a child that has ended and been waited for.
-pub(crate) fn dead_pid() -> u32 {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
 
 /// Writes the marker `file` (`<owner>__<repo>__<n>.json`) as the action does: `{"pid", "at"}`, by rename.
 pub(crate) fn put_marker(env: &TestEnv, file: &str, pid: u32) {

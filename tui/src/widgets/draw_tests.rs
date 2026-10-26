@@ -163,7 +163,7 @@ fn machine() -> Machine {
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &w.prs, &machine(), 0, 0))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -237,8 +237,11 @@ fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
         eleven.as_str(),
         none_open.as_str(),
     ];
-    expected.resize(25, "");
-    assert_eq!(got, expected, "\n{}", got.join("\n"));
+    // the Inbox section is the column's last five rows (no engine holds the lock here: `engine-down` is its one item)
+    expected.resize(20, "");
+    assert_eq!(got[..20], expected, "\n{}", got.join("\n"));
+    assert!(got[21].contains("Inbox") && got[22].contains("engine is down"), "\n{}", got.join("\n"));
+    assert_eq!((got[20].as_str(), got[24].as_str()), ("", ""), "the section's empty rows:\n{}", got.join("\n"));
 }
 
 #[test]

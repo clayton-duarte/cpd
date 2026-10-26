@@ -160,7 +160,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -264,16 +264,20 @@ fn prs_store(env: &TestEnv) -> Store {
 #[test]
 fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let fx = Fx::new();
+    let _engine = common::tree::engine(&fx);
     let w = read::widgets(&mut open(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, 0, 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let prs_head = pill(30, "PRs", Some(0));
     assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
     assert_eq!(lines[3..6], ["", prs_head.as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
-    assert_eq!(lines[7..], [""; 13], "the PRs take the rest of the column: no git, no Jira");
+    // the Inbox section, with no item, is the last four rows (an empty one, its title, the up-to-date row, an empty one)
+    assert_eq!(lines[7..16], [""; 9], "the PRs take the rest of the column: no git, no Jira");
+    assert!(lines[17].contains("Inbox") && lines[18].contains("up to date"), "{lines:?}");
+    assert_eq!((lines[16].as_str(), lines[19].as_str()), ("", ""));
 }
 
 #[test]
@@ -440,11 +444,12 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 #[test]
 fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
     let fx = Fx::new();
+    let _engine = common::tree::engine(&fx);
     let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
-    // Beside the 6 rows of the blank row, the machine, the header and its blank rows, each pull request takes 2, and
-    // when some are hidden the `▼` row takes one more.
+    // Beside the 6 rows of the blank row, the machine, the header and its blank rows, and the 4 of the Inbox section (the
+    // up-to-date row: no item, the engine's lock is held), each pull request takes 2, and when some are hidden the `▼` row takes one more.
     for (height, listed) in [(6 + 6, 3), (6 + 5, 2), (6 + 4, 1), (6 + 3, 1), (6 + 2, 0), (6 + 1, 0)] {
-        let got = rows(&render(46, height, &w)).join("\n");
+        let got = rows(&render(46, height + 4, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
         assert!(listed == 0 || got.contains("acme/web#4"), "the oldest stay:\n{got}");
@@ -454,19 +459,14 @@ fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
 
 // ---------- the 󱆭 links and the owned rows ----------
 
-/// The cell of a linked `󱆭`: its symbol is wrapped in the OSC 8 escapes of its link.
-fn linked_arrow(url: &str) -> String {
-    format!("\x1b]8;;{url}\x07{CUE}\x1b]8;;\x07")
-}
-
 #[test]
 fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
     let fx = Fx::new();
     let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
-        assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
-        assert_eq!(plain(buf[(45, y)].symbol()), CUE, "row {y}");
+        let _ = (number, repo);
+        assert_eq!(buf[(45, y)].symbol(), CUE, "row {y}");
         assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
         assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
     }
@@ -501,7 +501,7 @@ fn an_unowned_pr_is_read_only_text_on_both_lines_with_its_arrow_clickable_and_an
 /// The column drawn at spinner frame `frame`.
 fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, frame))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, frame, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -541,18 +541,21 @@ fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
 #[test]
 fn a_snapshot_error_is_the_last_row_in_red() {
     let fx = Fx::new();
+    let _engine = common::tree::engine(&fx);
     let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     terminal
         .draw(|f| {
-            drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0));
+            drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()));
             widgets::draw_error(f, f.area(), "no cockpit");
         })
         .unwrap();
     let buf = terminal.backend().buffer().clone();
     assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
     assert_eq!(buf[(0, 24)].fg, palette::color(Meaning::Failed), "red, colour 1");
-    assert_eq!(row(&buf, 23).trim_end(), "", "the rest is as without it");
+    // the Inbox section's last rows: the up-to-date row, as without the error
+    assert_eq!(row(&buf, 23), row(&render(46, 25, &w), 23), "the rest is as without it");
+    assert!(row(&buf, 23).contains("up to date"), "{}", row(&buf, 23));
 }
 
 // ---------- the view's loop, in this process ----------
@@ -742,8 +745,10 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
         let line = row(&buf, y);
         assert_eq!(line.chars().count(), usize::from(width), "the arrow ends {name}'s line at the right edge: {line:?}");
         assert!(line.ends_with(CUE), "{line:?}");
-        // the cell at the right edge is the link to the pull request, in the OSC 8 escapes the terminal gets
-        assert_eq!(buf[(width - 1, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "{name}");
+        // the cell at the right edge is the plain cue: no escape in any cell of the row
+        let _ = (number, repo);
+        assert_eq!(buf[(width - 1, y)].symbol(), CUE, "{name}");
+        assert!((0..width).all(|x| !buf[(x, y)].symbol().contains('\x1b')), "{name}");
     }
 }
 
@@ -812,6 +817,7 @@ fn a_follow_that_fails_is_shown_and_the_column_stays() {
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
     let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
     let mut store = prs_store(&fx.env);
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
     drop(store);
@@ -825,7 +831,7 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     };
     let steps = Steps::new()
         .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
-        // The unowned rows, and the owned row's arrow (the terminal's): nothing runs.
+        // The unowned rows, and the owned row's cue (it opens the page, never the Lead): no `session open` runs.
         .next("the click on an unowned row", quiet("an unowned row"))
         .next("the click on another unowned row", quiet("another unowned row"))
         .next("the click on the arrow", quiet("the arrow"));
@@ -834,6 +840,8 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     let mut expected = before;
     expected.push(("l-mine".to_owned(), "chat".to_owned()));
     assert_eq!(seen.moved_events(), expected, "one `session open`, for the owned PR's Lead");
+    let opened: Vec<_> = fx.calls("open").into_iter().map(|c| c.args).collect();
+    assert_eq!(opened, [["https://github.com/acme/repo/pull/20"]], "the cue click ran `open` once, with its row's url");
     assert!(seen.focused_session().contains("|l-mine|"), "{}", seen.focused_session());
     let chat = seen.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}|#{pane_id}"]);
     assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
@@ -842,6 +850,7 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
 #[test]
 fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_muted_cue_rows() {
     let fx = view_fx();
+    let _engine = common::tree::engine(&fx);
     let mut s = String::new();
     for n in 1..=21 {
         s += &pull_request("acme/repo", n, "A title", false, "open", "none", "passed", &format!("2026-01-03T00:{n:02}:00.000Z"));
@@ -852,25 +861,25 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_muted_cue_rows() {
     let down = || input(wheel(MouseEventKind::ScrollDown, 3, 10));
     let up = || input(wheel(MouseEventKind::ScrollUp, 3, 10));
     let steps = Steps::new()
-        // 40 rows less the 6 of the rest of the column leave 34 for the PRs: 16 whole ones beside the `▼` row.
+        // 40 rows less the 6 of the rest of the column and the 4 of the Inbox section leave 30 for the PRs: 14 whole ones beside the `▼` row.
         .at(
             "the first PRs and the cue below",
             move |s| {
-                rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && has(s, "acme/repo#16") && !has(s, "acme/repo#17") && !s.contains("▲")
+                rows(s, cue_row('▼', 7)) && has(s, "acme/repo#1") && has(s, "acme/repo#14") && !has(s, "acme/repo#15") && !s.contains("▲")
             },
-            |screen| assert_eq!(screen.cell_of("▼ 5 more").fg, palette::muted_text().fg.unwrap(), "the cue is muted, colour 8"),
+            |screen| assert_eq!(screen.cell_of("▼ 7 more").fg, palette::muted_text().fg.unwrap(), "the cue is muted, colour 8"),
         )
         // A notch outside the section does nothing: its frame is the first one
         .next("a notch outside the section", move |screen| {
-            assert!(rows(screen, cue_row('▼', 5)) && has(screen, "acme/repo#1") && !screen.contains("▲"), "{}", screen.text());
+            assert!(rows(screen, cue_row('▼', 7)) && has(screen, "acme/repo#1") && !screen.contains("▲"), "{}", screen.text());
         })
         // one inside moves by one pull request
-        .at("one pull request down", move |s| rows(s, cue_row('▲', 1)) && rows(s, cue_row('▼', 4)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1"), |_| {})
+        .at("one pull request down", move |s| rows(s, cue_row('▲', 1)) && rows(s, cue_row('▼', 6)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1"), |_| {})
         // Past the end it stops, with the last pull request at the bottom and no cue below.
-        .at("the end", move |s| rows(s, cue_row('▲', 5)) && has(s, "acme/repo#21") && has(s, "acme/repo#6") && !has(s, "acme/repo#5") && !s.contains("▼"), |_| {})
+        .at("the end", move |s| rows(s, cue_row('▲', 7)) && has(s, "acme/repo#21") && has(s, "acme/repo#8") && !has(s, "acme/repo#7") && !s.contains("▼"), |_| {})
         // And back up, one at a time.
-        .at("one back up", move |s| rows(s, cue_row('▲', 4)) && rows(s, cue_row('▼', 1)) && has(s, "acme/repo#5") && !has(s, "acme/repo#21"), |_| {})
-        .at("the top", move |s| rows(s, cue_row('▼', 5)) && has(s, "acme/repo#1") && !s.contains("▲"), |_| {});
+        .at("one back up", move |s| rows(s, cue_row('▲', 6)) && rows(s, cue_row('▼', 1)) && has(s, "acme/repo#7") && !has(s, "acme/repo#21"), |_| {})
+        .at("the top", move |s| rows(s, cue_row('▼', 7)) && has(s, "acme/repo#1") && !s.contains("▲"), |_| {});
     let mut signals = vec![input(wheel(MouseEventKind::ScrollDown, 3, 1)), down()];
     signals.extend((0..20).map(|_| down()));
     signals.push(up());
@@ -887,6 +896,7 @@ fn widgets_log(home: &Path) -> String {
 #[test]
 fn a_refused_session_open_is_logged_and_draws_no_note() {
     let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
     prs_store(&fx.env);
     let home = fx.env.cpd_home();
     let log = move || widgets_log(&home);
@@ -894,9 +904,9 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
     let (nothing, then, refused) = (log.clone(), log.clone(), log.clone());
     let steps = Steps::new()
         .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
-        // The unowned rows and the arrow run nothing, so nothing is logged: not after the first click, not after the second.
+        // The unowned rows run nothing and the cue opens the page without a failure, so nothing is logged: not after the first click, not after the second.
         .next("the click on an unowned row", move |_| assert_eq!(nothing(), "", "nothing was refused"))
-        .next("the click on the arrow", move |_| assert_eq!(then(), "", "nothing was refused"))
+        .next("the click on the cue", move |_| assert_eq!(then(), "", "nothing was refused"))
         // the owned row: refused, logged, and the view has drawn again since; no tmux client is attached, so no dialog opened either
         .next("the click on the owned row", move |screen| {
             assert!(refused().contains("failed: Go to Lead: no_cockpit: "), "{}", refused());
@@ -918,7 +928,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {
@@ -1270,4 +1280,21 @@ fn the_deploy_columns_menu_keeps_one_blank_column_on_each_side_of_the_pane() {
         });
     let signals = vec![input(common::screen::right_click(width - 1, blocked)), input(common::screen::key(KeyCode::Esc)), input(common::screen::right_click(0, blocked)), gone()];
     show(&fx, signals, &steps);
+}
+
+#[test]
+fn a_click_on_a_pr_rows_cue_runs_open_with_that_rows_url_and_nothing_else() {
+    let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
+    prs_store(&fx.env);
+    let home = fx.env.cpd_home();
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        .next("the click on the cue", move |s| {
+            assert_eq!(widgets_log(&home), "", "no failure logged");
+            assert!(s.shown_rows().iter().any(|r| r.contains("acme/repo#20")), "the column is as before");
+        });
+    show(&fx, vec![input(left_click(119, 6)), gone()], &steps);
+    let opened: Vec<_> = fx.calls("open").into_iter().map(|c| c.args).collect();
+    assert_eq!(opened, [["https://github.com/acme/web/pull/4"]]);
 }

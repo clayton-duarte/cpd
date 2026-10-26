@@ -88,7 +88,7 @@ impl ContextNode {
 }
 
 /// The home the store lives in: the store file is `<home>/cpd.db`.
-fn store_home(store: &Store) -> Result<CpdHome, CpdError> {
+pub(super) fn store_home(store: &Store) -> Result<CpdHome, CpdError> {
     let root = store.path().parent().map(|p| p.as_os_str().to_owned());
     CpdHome::resolve(root, None)
 }
@@ -120,6 +120,31 @@ fn engine_down(now: String) -> Item {
 /// The Inbox's open, visible items (not snoozed, not dismissed) at `now`, in the order of `cpd inbox list` (§17).
 pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Vec<Item>, CpdError> {
     model::list(conn, &Filter { context: None, state: State::Visible { now: now.to_owned() } })
+}
+
+/// `engine-down` first in `inbox` when no engine holds the lock and no live Manager exists (§2.2): with a live Manager the
+/// engine is restarted and a failure goes to the Manager (hs-d318), so it is no item. The tree's rule and the `widgets` view's.
+fn engine_down_first(inbox: &mut Vec<Item>, engine_running: bool, live_manager: bool, now: String) {
+    if !engine_running && !live_manager {
+        inbox.insert(0, engine_down(now));
+    }
+}
+
+/// The Inbox's visible items at `now` as `cpd inbox list` has them, `engine-down` first by [`engine_down_first`]: what the
+/// `widgets` view draws (the tree reads the same in its own transaction).
+pub(super) fn inbox_in(conn: &rusqlite::Connection, now: &str, engine_running: bool) -> Result<Vec<Item>, CpdError> {
+    let mut inbox = visible_items(conn, now)?;
+    let live_manager: bool =
+        conn.query_row("SELECT EXISTS (SELECT 1 FROM sessions WHERE role = 'manager' AND archived_at IS NULL)", [], |r| r.get(0))?;
+    engine_down_first(&mut inbox, engine_running, live_manager, now.to_owned());
+    Ok(inbox)
+}
+
+/// The Inbox's visible items at `now` (contract §1.3 text, the database's clock when `None`) and whether an engine holds the lock:
+/// the `widgets` view's read of its Inbox section.
+pub fn inbox_at(store: &mut Store, now: Option<&str>) -> Result<(Vec<Item>, bool), CpdError> {
+    let engine_running = model::engine_running(&store_home(store)?)?;
+    store.read(|conn| Ok((inbox_in(conn, &db_now(conn, now)?, engine_running)?, engine_running)))
 }
 
 /// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
@@ -159,7 +184,7 @@ pub fn snooze_end_at(store: &mut Store, now: Option<&str>) -> Result<Option<Offs
 }
 
 /// `now` as given (contract §1.3 text), or the database's own clock.
-fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<String, CpdError> {
+pub(super) fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<String, CpdError> {
     match now {
         Some(now) => Ok(now.to_owned()),
         None => Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?),
@@ -252,10 +277,7 @@ pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
                 id: context,
             });
         }
-        // With a live Manager the tree restarts the engine and a failure goes to the Manager (hs-d318): no item.
-        if !engine_running && managers.is_empty() {
-            inbox.insert(0, engine_down(now));
-        }
+        engine_down_first(&mut inbox, engine_running, !managers.is_empty(), now);
         Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })
     })
 }

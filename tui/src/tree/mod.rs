@@ -10,8 +10,6 @@
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
 //! - [`folds`]: the folds (collapsed Contexts, expanded `…` rows) kept in `run/tui/tree-folds.json` across restarts;
-//! - [`inbox`]: the Inbox section at the column's bottom (an empty row, the pill title, up to 3 items, the fold widget's `╰󰬦 expand` / `╰󰬬 collapse` row) and what a click on an item does:
-//!   `session open`, or nothing (the label is an OSC 8 link);
 //! - [`super::background`]: a command or the legend popup runs on a thread, one command at a time; the footer says
 //!   `running: <command>` meanwhile and then its result, and the loop keeps drawing and reading keys (tui-W7);
 //! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
@@ -24,28 +22,21 @@
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
-//! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A Context is a fold ([`crate::fold`]): only a click on its `╰󰬦 expand` / `╰󰬬 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with `╰─`, with no row at all it ends with the terminator `╰󰬪`; hs-d574); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
+//! Session's pane; `?` opens the legend. A Context is a fold ([`crate::fold`]): only a click on its `╰󰬦 expand` / `╰󰬬 collapse` row shows or hides its archived rows (its live rows always show; with none archived it closes with `╰─`, with no row at all it ends with the terminator `╰󰬪`; hs-d574); a click on the title row of a live Context opens its Manager (`context manager`, then `session open`), on a live Session opens it, on an archived Session shows its history; a right click opens the menu.
 
 pub(crate) mod actions;
 mod ask;
 mod cursor;
 pub(crate) mod folds;
-mod inbox;
 #[cfg(test)]
 mod archived_folder_tests;
-#[cfg(test)]
-mod inbox_indent;
 mod kinds;
 #[cfg(test)]
 mod look;
 #[cfg(test)]
 mod manager_tests;
 #[cfg(test)]
-mod margin_tests;
-#[cfg(test)]
 mod scroll_tests;
-#[cfg(test)]
-mod width_tests;
 #[cfg(test)]
 mod fixing_tests;
 #[cfg(test)]
@@ -66,24 +57,23 @@ mod rows;
 mod slug;
 mod view;
 #[cfg(test)]
-pub(crate) use inbox::layout_sample as layout_inbox_sample;
-#[cfg(test)]
 pub(crate) use view::layout_fold_sample;
 #[cfg(test)]
 pub(crate) use view::layout_sample;
 
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
+#[cfg(test)]
+mod margin_tests;
 #[cfg(test)]
 mod needs_tests;
 
-/// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is `!view.tree.inbox.is_empty()` (an
-/// age text is on screen), `at` is `None` (the safety read covers the engine's lock, a snooze's end and the merge marker).
+/// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is false (no row shows a time), `at` is `None`
+/// (the safety read covers the engine's lock, which the dots read through the Inbox, and a snooze's end).
 fn needs(view: &View) -> crate::pump::Needs {
-    crate::pump::Needs { frame: view.animated(), second: !view.tree.inbox.is_empty(), at: None }
+    crate::pump::Needs { frame: view.animated(), second: false, at: None }
 }
 
-use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -121,7 +111,6 @@ use crate::trace::Trace;
 struct Polled {
     changes: Result<read::Changes, CpdError>,
     engine: Result<bool, CpdError>,
-    merging: Result<BTreeSet<String>, CpdError>,
 }
 
 /// What the reader thread brings back: the poll, and the snapshot when the poll (or a force) called for one.
@@ -141,9 +130,7 @@ fn open(ports: &Ports) -> Result<Opened, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let now = clock::timestamp(ports.clock.utc());
     let snooze_end = read::snooze_end_at(&mut store, Some(&now))?;
-    let mut view = View::new(read::tree_at(&mut store, Some(&now))?, false);
-    // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
-    view.set_merging(crate::merge::marker::live(&home, &read::open_pulls(&mut store).unwrap_or_default()));
+    let view = View::new(read::tree_at(&mut store, Some(&now))?, false);
     let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
     let runner = Arc::new(Runner::new(home.clone(), &config, ports));
@@ -204,10 +191,10 @@ fn event_loop<B: Backend>(
     // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll (of the Events or of the
     // engine's lock) at the next poll. All are shown (runner::kept): the footer says the snapshot's error, else the
     // follow's, else the lock's.
-    let (mut snapshot_error, mut follow_error, mut engine_error, mut open_error) = (None, None, None, None);
-    // what the last draw showed of the clock (the spinner's frame, the second the Inbox items' ages were taken at), and
-    // whether anything changed since: the pane is written to only then
-    let (mut redraw, mut drawn_frame, mut drawn_second) = (true, frame_now(ports), unix_second(ports));
+    let (mut snapshot_error, mut follow_error, mut engine_error) = (None, None, None);
+    // what the last draw showed of the clock (the spinner's frame), and whether anything changed since: the pane is written
+    // to only then
+    let (mut redraw, mut drawn_frame) = (true, frame_now(ports));
     // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
     let mut actions = Background::<Result<String, Failed>>::with_waker(pump.waker());
@@ -236,9 +223,6 @@ fn event_loop<B: Backend>(
             let poll = done.poll;
             kept(poll.changes, &mut follow_error);
             kept(poll.engine, &mut engine_error);
-            if let Some(merging) = kept(poll.merging, &mut open_error) {
-                redraw |= view.set_merging(merging);
-            }
             if let Some(next) = done.snapshot {
                 ctx.snapshot_read();
                 if let Some((end, tree)) = kept(next, &mut snapshot_error) {
@@ -254,34 +238,28 @@ fn event_loop<B: Backend>(
                 .clone()
                 .or_else(|| follow_error.clone())
                 .or_else(|| engine_error.clone())
-                .or_else(|| open_error.clone())
                 .or_else(|| watch_error.clone());
         }
         if let Some(kind) = schedule.take(ports.clock.now()) {
             // one job does the poll, then the snapshot when something changed (a pull request's checks change with no
-            // Event, §17; the Inbox changes with no Event when a snooze ends or the engine stops or starts, `engine-down`;
-            // a merge starts and ends with no Event: its marker, hs-d495, is read on each poll), or on `force`, or after a
-            // failed snapshot
+            // Event, §17; the Inbox changes with no Event when a snooze ends or the engine stops or starts, `engine-down`),
+            // or on `force`, or after a failed snapshot
             let (shared, home) = (Arc::clone(&reader), home.clone());
             let now_text = clock::timestamp(ports.clock.utc());
-            let (engine_shown, merging_shown) = (view.tree.engine_running, view.merging().clone());
+            let engine_shown = view.tree.engine_running;
             let retry = snapshot_error.is_some() || kind.force || snooze_over(ports, snooze_end);
             reads.request(move || {
-                let (changes, merging) = (
-                    pace::Owned::read(&shared, |store, follow| follow.poll_changes(store)),
-                    pace::Owned::read(&shared, |store, _| read::open_pulls(store)).map(|open| crate::merge::marker::live(&home, &open)),
-                );
+                let changes = pace::Owned::read(&shared, |store, follow| follow.poll_changes(store));
                 let engine = model::engine_running(&home);
                 let due = retry
                     || changes.as_ref().is_ok_and(|c| c.any())
-                    || engine.as_ref().is_ok_and(|on| *on != engine_shown)
-                    || merging.as_ref().is_ok_and(|m| *m != merging_shown);
+                    || engine.as_ref().is_ok_and(|on| *on != engine_shown);
                 let snapshot = due.then(|| {
                     pace::Owned::read(&shared, |store, _| {
                         read::snooze_end_at(store, Some(&now_text)).and_then(|end| Ok((end, read::tree_at(store, Some(&now_text))?)))
                     })
                 });
-                Read { poll: Polled { changes, engine, merging }, snapshot }
+                Read { poll: Polled { changes, engine }, snapshot }
             });
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
@@ -294,18 +272,16 @@ fn event_loop<B: Backend>(
         if let Some(line) = view.save_folds_with(ports) {
             show(log.line(&line), &mut popups, runner);
         }
-        let (frame, second) = (frame_now(ports), unix_second(ports));
+        let frame = frame_now(ports);
         let wants = needs(&view);
         redraw |= view.error != error || (wants.frame && frame != drawn_frame);
-        // the Inbox items' ages are redrawn every second, from `opened_at`
-        redraw |= wants.second && second != drawn_second;
         if redraw {
-            let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw_at(f, frame, ports.clock.utc())));
+            let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw(f, frame)));
             drawn?;
             if let Err(why) = written {
                 show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
             }
-            (redraw, drawn_frame, drawn_second) = (false, frame, second);
+            (redraw, drawn_frame) = (false, frame);
         }
         let wall_ms = wall_ms(ports);
         let now = ports.clock.now();
@@ -349,7 +325,7 @@ fn event_loop<B: Backend>(
             Effect::Ask(question) => {
                 // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
                 // shows the item picked, not the menu, behind the popup.
-                let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw_at(f, frame, ports.clock.utc())));
+                let (drawn, written) = trace.draw(epoch, &log.file, frame, || ctx.draw(|f| view.draw(f, frame)));
                 drawn?;
                 if let Err(why) = written {
                     show(log.line(&format!("failed: trace: {why}")), &mut popups, runner);
@@ -373,27 +349,11 @@ fn event_loop<B: Backend>(
                 let runner = Arc::clone(runner);
                 popups.submit(move || runner.legend());
             }
-            Effect::Merge(pull) => {
-                // the merge popup returns when it closes; only a failure is said, and a merge shows on the next snapshot
-                let runner = Arc::clone(runner);
-                popups.submit(move || runner.merge(&pull));
-                schedule.force();
-            }
-            Effect::Curate(kind, context) => {
-                // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
-                let runner = Arc::clone(runner);
-                popups.submit(move || runner.curate(kind, &context));
-                schedule.force();
-            }
             Effect::Run(action) => {
                 let runner = Arc::clone(runner);
                 actions.submit(move || runner.run(&action));
             }
             text @ Effect::Text { .. } => show(text, &mut popups, runner),
-            Effect::Steps(steps) => {
-                show(said(&mut view, &mut log, runner.run_all(&steps)), &mut popups, runner);
-                schedule.force();
-            }
         }
     }
 }
@@ -434,9 +394,4 @@ fn show(effect: Effect, popups: &mut Background<Result<(), String>>, runner: &Ar
         let runner = Arc::clone(runner);
         popups.submit(move || runner.error(&title, &text));
     }
-}
-
-/// The Unix second now, on the clock of `ports`: the Inbox items' ages change with it.
-fn unix_second(ports: &Ports) -> u64 {
-    wall_ms(ports) / 1000
 }

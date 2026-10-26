@@ -52,6 +52,7 @@ pub mod cockpit;
 pub mod engine;
 pub mod fx;
 pub mod healthy;
+pub mod inbox;
 pub mod pi;
 pub mod screen;
 pub mod session;

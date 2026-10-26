@@ -4,7 +4,6 @@
 //! colours and keys is unit-tested in `tui/src/tree/`.
 
 use crate::common;
-use crate::tui_titles;
 
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ use cpd_core::host::runner::Reply;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
-use cpd_tui::palette::{self, IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
+use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
 use ratatui::crossterm::Command;
 use ratatui::crossterm::event::EnableMouseCapture;
 
@@ -35,17 +34,6 @@ fn expand() -> String {
 /// The same, expanded.
 fn collapse() -> String {
     format!(" ╰{UP} collapse")
-}
-
-/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin: the collapsible form
-/// (hs-d478), the count a pill too (hs-d480).
-fn pill(inner: usize, count: usize) -> String {
-    tui_titles::collapsible_title(inner + 2, "Inbox", Some(count))
-}
-
-/// An Inbox item row in `inner` columns: the muted `│`, one space, the tier `glyph`, the label and the age (`5m`) at the last column.
-fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
-    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 2 - 4 - label.len() - 2))
 }
 
 // ---------- the prepared store ----------
@@ -213,20 +201,6 @@ fn populate_at(env: &TestEnv, opened: &str) {
     reconcile(&mut store, &items(), opened).unwrap();
 }
 
-/// The Inbox section of `populate`'s four items in a pane `width` wide: the empty row, the pill title, three rows and the
-/// fold widget's `╰󰬦 expand`.
-fn inbox_section(width: usize) -> Vec<String> {
-    let inner = width - 2;
-    vec![
-        String::new(),
-        pill(inner, 4),
-        item_row_of(inner, palette::TIER_RED, "f-blocked label"),
-        item_row_of(inner, palette::TIER_RED, "l-rel label"),
-        item_row_of(inner, palette::TIER_MAGENTA, "m-beta label"),
-        expand(),
-    ]
-}
-
 // ---------- the screen ----------
 
 /// What the legend (`?`) logs where no tmux client is attached (a view draws no note, commands.md §17 "No notes").
@@ -253,35 +227,11 @@ fn ready(tree: &Tree) -> Vec<String> {
     screen
 }
 
-/// Naps `tree` until the screen's rows `first..first + expected.len()` are `expected` and returns the screen.
-fn rows_are(tree: &mut Tree, first: usize, expected: &[String]) -> Vec<String> {
-    let what = format!("rows {first}.. to be\n{}", expected.join("\n"));
-    tree.until(&what, |screen| screen.get(first..first + expected.len()) == Some(expected))
-}
-
 /// The style of every cell of the row that shows `text`, when one does.
 fn styled_row(tree: &Tree, text: &str) -> Option<Vec<common::screen::Cell>> {
     let screen = tree.styled();
     let (_, y) = screen.find(text)?;
     Some((0..screen.width()).map(|x| screen.cell(x, y).clone()).collect())
-}
-
-/// The row of the Inbox item labelled `label` on `screen`.
-fn item_row_in(screen: &[String], label: &str) -> u16 {
-    screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
-}
-
-/// The cursor on the Inbox's first item: down through the Sessions and into the section, then back up to the first.
-fn cursor_on_first_item(tree: &mut Tree) {
-    tree.down(15); // more than there are Sessions and shown items: it stops on the last shown item
-    tree.keys(&["k", "k"]);
-}
-
-/// Expands the Inbox section of a tall tree: its `╰󰬦 expand` row is the last.
-fn expand_the_inbox(tree: &mut Tree) {
-    let last = tree.until("the more row", |s| s.last().is_some_and(|r| *r == expand()));
-    tree.click(10, last.len() as u16 - 1);
-    tree.until("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
 }
 
 #[test]
@@ -483,23 +433,6 @@ fn the_tree_follows_the_archive_events() {
 }
 
 #[test]
-fn the_inbox_follows_an_engine_that_starts_and_a_snooze_that_ends_with_no_event() {
-    // Two changes of the Inbox have no Event (§17): an engine that starts takes `engine-down` away, and a snooze that ends
-    // brings its item back. The tree reads them then, with no timer of its own.
-    let fx = fx();
-    populate_in(&fx);
-    sql(&mut open(&fx.env), &format!("UPDATE inbox_items SET snoozed_until = '{}' WHERE subject = 'session:m-beta';", stamp(&fx, 8)));
-    // The engine is down, but the Context has live Managers: `engine-down` is no item (hs-d318, the tree restarts the
-    // engine itself; `engine_down_*` tests cover the item with no Manager). The snooze ends by the clock, with no Event.
-    let _engine = engine(&fx);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    tree.until("three stored items, one snoozed", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}3\u{E0B4}")));
-    tree.advance(Duration::from_secs(9));
-    tree.until("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}4\u{E0B4}")));
-}
-
-#[test]
 fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     let fx = fx();
     let _engine = engine(&fx);
@@ -573,7 +506,8 @@ fn no_key_but_the_references_does_anything() {
     drive::fake_cpd(&fx, r#"{"ok":true}"#);
     let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
-    let before = tree.until("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| *r == expand()));
+    tree.idle();
+    let before = tree.screen();
     tree.down(2); // on sketch
     tree.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]); // a `q` that ended the view would end the test here
     tree.idle();
@@ -699,7 +633,7 @@ fn the_tree_orders_by_dot_tier_then_newest_first() {
              UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'sketch';
              UPDATE sessions SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'f-idle';",
         );
-        let mut tree = Tree::start(&fx, 46, 30);
+        let tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
         let (beta, alpha, gamma) = (row(&screen, " beta"), row(&screen, " alpha"), row(&screen, " gamma"));
         assert!(beta < gamma && gamma < alpha, "Contexts by tier then creation, newest first: {screen:#?}");
@@ -713,7 +647,7 @@ fn the_tree_orders_by_dot_tier_then_newest_first() {
         let _engine = engine(&fx);
         populate_in(&fx);
         sql(&mut open(&fx.env), "UPDATE contexts SET created_at = '2026-01-06T00:00:00.000Z' WHERE id = 'alpha';");
-        let mut tree = Tree::start(&fx, 46, 30);
+        let tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
         assert!(row(&screen, " beta") < row(&screen, " alpha") && row(&screen, " alpha") < row(&screen, " gamma"), "{screen:#?}");
     }
@@ -730,7 +664,7 @@ fn the_tree_orders_by_dot_tier_then_newest_first() {
              UPDATE plans SET created_at = '2026-01-03T00:00:00.000Z' WHERE id = 'sketch';
              UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'ship';",
         );
-        let mut tree = Tree::start(&fx, 46, 30);
+        let tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
         let (fbl, ship, sketch, fid) = (row(&screen, "ship·f-bl"), row(&screen, " ship "), row(&screen, " sketch"), row(&screen, "ship·f-id"));
         assert!(fbl < ship && ship < sketch && sketch < fid, "a newer Event never moves a row: {screen:#?}");
@@ -747,7 +681,7 @@ fn the_tree_orders_by_dot_tier_then_newest_first() {
             "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'old';
              UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z', created_at = '2026-01-20T00:00:00.000Z' WHERE id = 'f-blocked';",
         );
-        let mut tree = Tree::start(&fx, 46, 30);
+        let tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
         let blade = row(&screen, "ship·f-bl");
         assert!(
@@ -835,53 +769,6 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
 }
 
 #[test]
-fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_title_does_not() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 46, 21);
-    ready(&tree);
-    // the section is pinned to the bottom, the Session rows above it
-    assert_eq!(rows_are(&mut tree, 14, &inbox_section(46))[14..], inbox_section(46));
-    tree.click(10, 19); // `╰󰬦 expand`
-    let expanded = [inbox_section(46)[..5].to_vec(), vec![item_row_of(44, palette::TIER_WHITE, "m-alpha label"), collapse()]].concat();
-    assert_eq!(rows_are(&mut tree, 13, &expanded)[13..], expanded);
-    tree.click(3, 19); // `╰󰬬 collapse`
-    assert_eq!(rows_are(&mut tree, 14, &inbox_section(46))[14..], inbox_section(46));
-    assert!(drive::calls(&fx).is_empty(), "expanding and folding are no commands");
-    tree.click(10, 15); // the title: the pill toggles nothing
-    tree.idle();
-    let rows = tree.screen(); // the section's empty row below is not a row of the screen
-    assert_eq!(rows[rows.len() - 6..], inbox_section(46), "still folded");
-}
-
-#[test]
-fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_click_on_it_runs_watch_ensure() {
-    let fx = fx();
-    populate_in(&fx);
-    archive_managers(&fx.env);
-    drive::fake_cpd(&fx, r#"{"ok":true,"started":true,"pane":"%3"}"#);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    // counted in the header, first of the rows
-    let screen = tree.until("the item", |s| s.iter().any(|r| r.contains("engine is down")));
-    let first = screen.iter().position(|r| r.contains("engine is down")).unwrap();
-    assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with("\u{E0B6}5\u{E0B4}"), "{:?}", screen[first - 1]);
-    // hs-d363: the tree never restarts the engine by itself (the supervisor does), and says nothing of it
-    tree.advance(Duration::from_secs(3));
-    assert_eq!(drive::calls(&fx), Vec::<Vec<String>>::new(), "no automatic `watch --ensure`");
-    assert!(!tree.shows("engine was down"), "{:?}", tree.screen());
-    // the User's own click does
-    tree.click(10, u16::try_from(first).unwrap());
-    assert_eq!(drive::calls(&fx), [words(&["watch", "--ensure"])]);
-    tree.until_logged("ok: engine started");
-    tree.idle();
-    assert!(drive::tmux_verbs(&fx).iter().all(|v| v == "list-clients"), "no popup: {:?}", drive::tmux_verbs(&fx));
-    assert_eq!(drive::calls(&fx).len(), 1, "the click ran `watch --ensure`, once: {:?}", drive::calls(&fx));
-}
-
-#[test]
 fn a_stopped_engine_is_not_restarted_by_the_tree_and_no_note_says_so_and_no_engine_down_shows_with_a_manager() {
     let fx = fx();
     populate_in(&fx); // its Contexts have Managers: the engine's absence is no Inbox item
@@ -919,67 +806,6 @@ fn engine_down_wakes_only_the_most_recently_active_manager() {
     assert!(!sent[0].iter().any(|a| a == "--wake"), "send always wakes, with no flag: {sent:?}");
 }
 
-/// hs-d318: a stuck Job is a message to the Manager, not an Inbox item, so a row an older engine opened for one has no click:
-/// no command runs, no Lead opens and no Worker pane starts beside the chat.
-#[test]
-fn a_click_on_a_stuck_job_item_an_older_engine_opened_does_nothing() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    let mut store = open(&fx.env);
-    // job `e` of `ship` failed twice: the click used to open the Worker of its latest Attempt, the second
-    sql(&mut store, &(attempt_row("e", 1, Some("timed_out")) + &attempt_row("e", 2, Some("crashed"))));
-    let stuck = |job: &str, label: &str| Condition {
-        subject: format!("job:ship/{job}"),
-        label: label.to_owned(),
-        session: None,
-        job: Some(cpd_core::ids::JobKey::parse(job).unwrap()),
-        ..condition(Kind::JobStuck, Urgency::Red, "none", Some("ship"), "alpha")
-    };
-    let mut conditions = items();
-    conditions.extend([stuck("e", "ship: e is stuck"), stuck("d", "ship: d is stuck")]);
-    reconcile(&mut store, &conditions, &stamp(&fx, -330)).unwrap();
-    drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 60, 40);
-    ready(&tree);
-    expand_the_inbox(&mut tree);
-    // a Job with Attempts and a Job with none: neither click does anything
-    let screen = tree.screen();
-    tree.click(10, item_row_in(&screen, "ship: e is stuck"));
-    tree.click(10, item_row_in(&tree.screen(), "ship: d is stuck"));
-    tree.idle();
-    assert_eq!(drive::calls(&fx), Vec::<Vec<String>>::new());
-    assert!(drive::tmux_verbs(&fx).is_empty(), "no Worker pane, no tmux call: {:?}", drive::tmux_verbs(&fx));
-}
-
-#[test]
-fn the_cursor_reaches_the_items_and_d_dismisses_and_s_snoozes_the_one_it_is_on() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    cursor_on_first_item(&mut tree);
-    tree.keys(&["d"]);
-    tree.until_logged("ok: dismissed");
-    assert_eq!(drive::calls(&fx), [words(&["inbox", "dismiss", "1"])]);
-    tree.keys(&["j", "s"]);
-    let screen = tree.until("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
-    assert!(!screen.iter().any(|r| r.contains("Dismiss")), "the choices are the three snoozes:\n{}", screen.join("\n"));
-    tree.keys(&["Down", "Enter"]);
-    tree.until_logged("ok: snoozed");
-    assert_eq!(drive::calls(&fx)[1], words(&["inbox", "snooze", "2", "1h"]));
-    tree.keys(&["j", "s", "Down", "Down", "Enter"]);
-    assert_eq!(drive::calls(&fx)[2], words(&["inbox", "snooze", "4", "tomorrow"]));
-    tree.keys(&["s"]);
-    tree.until("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
-    tree.keys(&["Escape"]);
-    tree.until("the menu closed", the_menu_is_closed);
-    tree.idle();
-    assert_eq!(drive::calls(&fx).len(), 3, "Esc ran nothing: {:?}", drive::calls(&fx));
-}
-
 #[test]
 fn s_and_d_do_nothing_on_a_session_row_or_before_an_arrow_key() {
     let fx = fx();
@@ -994,69 +820,6 @@ fn s_and_d_do_nothing_on_a_session_row_or_before_an_arrow_key() {
     tree.idle();
     assert!(the_menu_is_closed(&tree.screen()));
     assert!(drive::calls(&fx).is_empty(), "{:?}", drive::calls(&fx));
-}
-
-#[test]
-fn enter_on_an_item_jumps_as_a_click_does() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    cursor_on_first_item(&mut tree);
-    tree.keys(&["Enter"]);
-    assert_eq!(drive::calls(&fx), [words(&["session", "open", "f-blocked"])]);
-}
-
-#[test]
-fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    tree.right_click(10, item_row_in(&tree.screen(), "l-rel label")); // `l-rel label`, item 2
-    let screen = tree.until("the item's menu", |s| menu_open(s, "Snooze 15 min"));
-    for entry in ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"] {
-        assert!(screen.iter().any(|r| r.contains(&format!("│ {entry}"))), "{entry} in\n{}", screen.join("\n"));
-    }
-    tree.keys(&["Enter"]);
-    assert_eq!(drive::calls(&fx), [words(&["inbox", "snooze", "2", "15m"])]);
-    for (i, expected) in [["inbox", "snooze", "2", "1h"], ["inbox", "snooze", "2", "tomorrow"]].into_iter().enumerate() {
-        tree.until("the menu closed", the_menu_is_closed);
-        tree.right_click(10, item_row_in(&tree.screen(), "l-rel label"));
-        tree.until("the item's menu", |s| menu_open(s, "Snooze 15 min"));
-        tree.keys(&vec!["Down"; i + 1]);
-        tree.keys(&["Enter"]);
-        assert_eq!(drive::calls(&fx)[1 + i], words(&expected));
-    }
-    tree.until("the menu closed", the_menu_is_closed);
-    tree.right_click(10, item_row_in(&tree.screen(), "m-beta label")); // item 4
-    tree.until("the item's menu", |s| menu_open(s, "Snooze 15 min"));
-    tree.keys(&["Down", "Down", "Down", "Enter"]);
-    assert_eq!(drive::calls(&fx)[3], words(&["inbox", "dismiss", "4"]));
-    // the title has no menu
-    tree.until("the menu closed", the_menu_is_closed);
-    tree.right_click(10, item_row_in(&tree.screen(), "Inbox"));
-    tree.idle();
-    assert!(the_menu_is_closed(&tree.screen()));
-    assert_eq!(drive::calls(&fx).len(), 4);
-}
-
-#[test]
-fn a_refusal_of_an_item_command_is_logged() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    drive::fake_cpd_fails(&fx, r#"{"ok":false,"error":{"code":"item_closed","message":"Item 1 is closed.","details":{}}}"#);
-    let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    cursor_on_first_item(&mut tree);
-    tree.keys(&["d"]);
-    tree.until_logged("failed: inbox dismiss 1: item_closed: Item 1 is closed.");
-    assert_eq!(drive::calls(&fx), [words(&["inbox", "dismiss", "1"])]);
 }
 
 // ---------- tests ----------
@@ -1695,157 +1458,5 @@ fn wait_for_folds(tree: &mut Tree, env: &TestEnv, want: &str) {
 }
 
 // ---------- the Inbox section (commands.md §13.2) ----------
-
-/// `populate`'s items and one of each kind that jumps or links; the old engine-error row is caused by Event `event`.
-fn jumping_items(event: i64) -> Vec<Condition> {
-    let other = |kind, urgency, subject: &str, label: &str| Condition {
-        subject: subject.to_owned(),
-        label: label.to_owned(),
-        session: None,
-        ..condition(kind, urgency, "none", Some("ship"), "alpha")
-    };
-    let mut items = items();
-    items.extend([
-        Condition { event: Some(event), plan: None, context: None, ..other(Kind::EngineError, Urgency::Red, "engine:store", "engine: store busy") },
-        Condition {
-            url: Some("https://github.com/acme/api/pull/12".into()),
-            ..other(Kind::PrFailing, Urgency::Yellow, "pr:acme/api#12", "acme/api#12 failing")
-        },
-        other(Kind::JobStuck, Urgency::Yellow, "job:ship/c", "ship: c is stuck"),
-        Condition { url: Some("http://10.0.0.5:20000/".into()), ..other(Kind::PlanReview, Urgency::Magenta, "review:ship/r1", "ship plan review") },
-        Condition { url: Some("https://x.io/ready".into()), ..other(Kind::PrReady, Urgency::White, "pr:acme/api#3", "acme/api#3 ready") },
-        Condition {
-            url: Some("https://x.io/changes".into()),
-            plan: None,
-            ..other(Kind::PrChanges, Urgency::Yellow, "pr:acme/web#4", "acme/web#4 changes requested")
-        },
-        Condition {
-            url: Some("https://x.io/review".into()),
-            plan: None,
-            context: None,
-            ..other(Kind::ReviewRequested, Urgency::Yellow, "pr:acme/web#5", "acme/web#5 review requested")
-        },
-        Condition { plan: None, ..other(Kind::Question, Urgency::Magenta, "question:q1", "alpha: a question") },
-    ]);
-    items
-}
-
-#[test]
-fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    let mut store = open(&fx.env);
-    let event = store.read(cpd_core::events::highest_id).unwrap();
-    reconcile(&mut store, &jumping_items(event), &stamp(&fx, -330)).unwrap();
-    drive::cpd_says(&fx, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
-    // a fake tmux: one client (`/dev/pts/9`), the popups recorded and not run
-    let dialogs = drive::dialogs(&fx);
-    let mut tree = Tree::start(&fx, 60, 40);
-    ready(&tree);
-    expand_the_inbox(&mut tree);
-    let row_of = |tree: &Tree, label: &str| item_row_in(&tree.screen(), label);
-    let copies = || -> Vec<Vec<String>> { fx.calls("tmux").into_iter().map(|c| c.args).filter(|c| c.iter().any(|a| a == "set-buffer")).collect() };
-    let copied = |n: usize, url: &str| {
-        let all = copies();
-        assert!(all.len() >= n, "copy {n} of {url}: got {all:?}");
-        let copy = &all[n - 1];
-        assert_eq!(copy[copy.len() - 3..], words(&["-w", "--", url]));
-    };
-    // dialog: `session open <its Session>`
-    tree.click(10, row_of(&tree, "f-blocked label"));
-    assert_eq!(drive::calls(&fx), [words(&["session", "open", "f-blocked"])]);
-    // question: the Context's Manager
-    tree.click(10, row_of(&tree, "alpha: a question"));
-    assert_eq!(drive::calls(&fx)[1..], [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]);
-    // plan-review: its page's url is copied, and the log says how to open it; the Lead of its Plan is in the chat slot
-    // already (`populate`), so no `session open` runs, as for any item whose Session is in focus
-    tree.click(10, row_of(&tree, "ship plan review"));
-    copied(1, "http://10.0.0.5:20000/");
-    tree.until_logged("ok: copied http://10.0.0.5:20000/: Cmd-click the row to open it");
-    assert!(!tree.shows("copied"), "no note: {:?}", tree.screen());
-    // pr-ready: the merge popup of its pull request, whether a Plan owns it or not, and no command
-    tree.click(10, row_of(&tree, "acme/api#3 ready"));
-    assert_eq!(dialogs.raw().len(), 1, "{:?}", dialogs.raw());
-    assert_eq!(dialogs.raw()[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
-    assert!(dialogs.raw()[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", dialogs.raw()[0]);
-    assert!(dialogs.raw()[0].contains(&"-B".to_owned()), "{:?}", dialogs.raw()[0]);
-    // a review request: the url is copied, and the log says how to open it
-    tree.click(10, row_of(&tree, "acme/web#5 review requested"));
-    copied(2, "https://x.io/review");
-    tree.until_logged("ok: copied https://x.io/review: Cmd-click the row to open it");
-    // pr-changes and pr-failing, rows an older engine opened (hs-d470): no click, no url copy
-    tree.click(10, row_of(&tree, "acme/web#4 changes requested"));
-    tree.click(10, row_of(&tree, "acme/api#12 failing"));
-    // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click either; `settled` fails on any popup but the legend's
-    tree.click(10, row_of(&tree, "engine: store busy"));
-    tree.click(10, row_of(&tree, "ship: c is stuck"));
-    dialogs.settled(&mut tree);
-    assert_eq!(drive::calls(&fx).len(), 3, "the copies and the popups ran no cpd command: {:?}", drive::calls(&fx));
-    assert_eq!(copies().len(), 2, "only the review page and the review request were copied: {:?}", copies());
-}
-
-/// The glyph cell of the Inbox row that shows `label`, on `screen`: the fourth cell of ` │ <glyph> <label>`.
-fn glyph_of(screen: &[String], label: &str) -> String {
-    let row = screen.iter().find(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n")));
-    row.chars().nth(3).map(String::from).unwrap_or_default()
-}
-
-#[test]
-fn a_pr_ready_item_whose_merge_runs_shows_the_spinner_and_a_click_on_it_does_nothing_until_the_marker_is_gone_or_stale() {
-    // commands.md §13.2 "A merge in progress" (hs-d495): the merge marker of `acme/api#3` makes its `pr-ready` item's glyph the
-    // spinner and its click nothing; a stale marker (a dead pid) is ignored, as no marker is.
-    let fx = fx();
-    let _engine = engine(&fx);
-    populate_in(&fx);
-    let mut store = open(&fx.env);
-    let event = store.read(cpd_core::events::highest_id).unwrap();
-    reconcile(&mut store, &jumping_items(event), &stamp(&fx, -330)).unwrap();
-    drive::cpd_says(&fx, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
-    let dialogs = drive::dialogs(&fx);
-    // the marker is there before the view starts: a restarted view reads the same file
-    crate::tui_merge::put_marker(&fx.env, "acme__api__3.json", fx.live_pid());
-    let mut tree = Tree::start(&fx, 60, 40);
-    ready(&tree);
-    expand_the_inbox(&mut tree);
-    let ready = "acme/api#3 ready";
-    let screen = tree.until("the spinner in the glyph cell", |s| s.iter().any(|r| r.contains(ready)) && SPINNER.contains(&glyph_of(s, ready).as_str()));
-    // the other items keep their tier glyph
-    assert_eq!(glyph_of(&screen, "acme/web#5 review requested"), palette::TIER_YELLOW, "{screen:?}");
-    assert_eq!(glyph_of(&screen, "acme/api#12 failing"), palette::TIER_YELLOW);
-
-    // a click on it does nothing: the popups are the legend's alone, which `settled` asks for last
-    let row = item_row_in(&tree.screen(), ready);
-    tree.click(10, row);
-    tree.click(4, row);
-    dialogs.settled(&mut tree);
-    assert_eq!(dialogs.raw().len(), 1, "no merge popup: {:?}", dialogs.raw());
-
-    // the same marker, stale: ignored as no marker is, and the click merges again
-    crate::tui_merge::put_marker(&fx.env, "acme__api__3.json", fx.ended_pid());
-    let screen = tree.until("the tier glyph back", |s| s.iter().any(|r| r.contains(ready)) && glyph_of(s, ready) == palette::TIER_WHITE);
-    assert_eq!(glyph_of(&screen, ready), palette::TIER_WHITE);
-    tree.click(10, item_row_in(&tree.screen(), ready));
-    assert_eq!(dialogs.raw().len(), 2, "the merge popup: {:?}", dialogs.raw());
-    assert_eq!(dialogs.raw()[1].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'", "{:?}", dialogs.raw()[1]);
-}
-
-/// Every Manager archived: none is live (`populate` makes one per Context).
-fn archive_managers(env: &TestEnv) {
-    sql(&mut open(env), "UPDATE sessions SET archived_at = '2026-01-04T00:00:00.000Z' WHERE role = 'manager'");
-}
-
-/// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
-fn attempt_row(job: &str, number: u32, ended: Option<&str>) -> String {
-    let (status, outcome, ended_at) = match ended {
-        Some(cause) => ("ended", format!("'failed', '{cause}'"), "'2026-01-03T00:05:00.000Z'"),
-        None => ("running", "NULL, NULL".to_owned(), "NULL"),
-    };
-    format!(
-        "INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, started_at, ended_at)
-         VALUES ('ship', '{job}-a{number}', '{job}', {number}, 'S3', 'ladder', '{status}', {outcome}, 'cpd/ship--{job}-a{number}',
-                 '/w/{job}-a{number}', '2026-01-03T00:01:00.000Z', {ended_at});"
-    )
-}
 
 // ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
