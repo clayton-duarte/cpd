@@ -375,7 +375,6 @@ test("a session-message names the zone after the time", async (t) => {
   f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "the manager" } });
   const at = "2026-10-25T22:29:00.000Z";
   f.emit(message(101, null, { at }), message(102, OTHER, { at }));
-  await waitFor("two messages", () => f.pi.delivered().length === 2);
   await f.drain();
   assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:59 +05:30): ship it");
   assert.equal(f.pi.delivered()[1]!.message.content, `Message from the manager (${OTHER}) (03:59 +05:30): ship it`);
