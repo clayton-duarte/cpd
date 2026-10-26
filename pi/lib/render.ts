@@ -64,7 +64,7 @@ function senderOf(from: string | null, content: string): string {
   return named > 0 ? rest.slice(0, named) : from;
 }
 
-const ADAPTER_PREFIX = "cpd adapter: ";
+const ADAPTER_PREFIX = "φ adapter: ";
 
 /** commands.md §15.9 "The summary per kind". `undefined`: nothing short to say (a `cpd-context` without counts). */
 function summaryOf(message: RenderedMessage, content: string): string | undefined {

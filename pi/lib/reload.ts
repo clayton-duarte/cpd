@@ -13,7 +13,7 @@ export const RELOAD_TRIGGER = `/${RELOAD_COMMAND}`;
 export const DEFAULT_POLL_MS = 5000;
 /** commands.md §15.6 "Log": a reload refused for longer than this (after the new package validated) is told to the User once. */
 export const LONG_REFUSAL_MS = 10 * 60_000;
-export const LONG_REFUSAL_NOTICE = "cpd: a new adapter is installed; reload when free (/reload)";
+export const LONG_REFUSAL_NOTICE = "φ: a new adapter is installed; reload when free (/reload)";
 
 /** commands.md §15.6 "Log": where this Session's reload decisions are written. */
 export const reloadLogPath = (cpdHome: string, session: string): string => join(cpdHome, "run", "adapter", `${session}.log`);

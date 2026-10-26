@@ -8,7 +8,7 @@ import { Fixture, shown, waitFor } from "./fake.ts";
 
 // commands.md §15.16, the `edit` and `write` half: no agent changes the files of a repo's primary checkout.
 
-const PREFIX = "cpd: no agent moves HEAD or changes the files of a repo's primary checkout";
+const PREFIX = "φ: no agent moves HEAD or changes the files of a repo's primary checkout";
 const ALTERNATIVES = ["git show origin/main:<path>", "git log origin/main", "git diff origin/main", "git worktree add $(mktemp -d) origin/main"];
 const WORKTREE_WAY = "git worktree add -b <branch> <dir> origin/main";
 

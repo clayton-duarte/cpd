@@ -8,7 +8,7 @@ export const BOUND_SECONDS = 30;
 /** The rule's reason, one line naming it (§15.11): the role names who never blocks and where the wait goes instead. */
 export const reasonText = (matched: string, role: "manager" | "lead"): string => {
   const tail = role === "manager" ? "is the owning Lead's or Worker's job" : "is left to the engine's Events";
-  return `cpd: a ${role === "manager" ? "Manager" : "Lead"} never blocks: a wait over ${BOUND_SECONDS} s runs in the background or ${tail}; refused: ${matched}`;
+  return `φ: a ${role === "manager" ? "Manager" : "Lead"} never blocks: a wait over ${BOUND_SECONDS} s runs in the background or ${tail}; refused: ${matched}`;
 };
 
 const LOOPS = new Set(["while", "until"]);

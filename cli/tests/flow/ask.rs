@@ -99,7 +99,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
             .read(|c| Ok(c.query_row("SELECT status, asker_pid, question FROM escalations WHERE id = 'a-a1-q1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
             .unwrap();
         assert_eq!((status.as_str(), asker_pid, question.as_str()), ("open", std::process::id(), "Which field names?"));
-        assert_eq!(session_state_at(&home), ("waiting".to_owned(), Some("cpd: question to the Lead".to_owned())));
+        assert_eq!(session_state_at(&home), ("waiting".to_owned(), Some("φ: question to the Lead".to_owned())));
         let asked = events_by(|args| nap.cpd(args), "escalation");
         assert_eq!(asked.len(), 1);
         assert_eq!(asked[0]["plan"], "pl");
@@ -108,7 +108,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
         assert_eq!(asked[0]["data"], json!({"escalation": "a-a1-q1", "question": "Which field names?"}));
         assert!(asked[0]["text"].as_str().unwrap().contains("cpd answer a-a1-q1"));
         let states = events_by(|args| nap.cpd(args), "session-state");
-        assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "waiting", "label": "cpd: question to the Lead"}));
+        assert_eq!(states.last().unwrap()["data"], json!({"from": "working", "to": "waiting", "label": "φ: question to the Lead"}));
         assert_eq!(states.last().unwrap()["session"], "w1");
 
         nap.cpd(&["answer", "a-a1-q1", "Use the v2 field names.", "--plan", "pl"]).ok();

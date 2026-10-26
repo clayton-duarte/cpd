@@ -135,7 +135,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
-| `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `cpd: loop guard`; `details` `{state, label}` |
+| `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `φ: loop guard`; `details` `{state, label}` |
 | `slack_auth` | 3 | the team review helper found no usable Slack sign-in in pi's MCP credentials (§21.6); the message says to run `pi mcp login slack` |
 | `slack_not_configured` | 3 | there is no `slack` server in `~/.pi/agent/mcp.json` (§21.6); the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
 | `slack_failed`, `slack_unparseable`, `slack_helper_failed` | 1 | the helper could not read the channel, read a payload with no messages in it, or could not load pi's MCP modules (§21.6). Also the code of the engine's E11 `error` Event (contract §3.7) |
@@ -1640,7 +1640,7 @@ Run by the Worker; it blocks until the answer. `--timeout-minutes` defaults to `
 | answered before the timeout | `ask_timeout` | 5 |
 
 Effects:
-1. **Rows**, one transaction: `escalations` (`<attempt>-q<k>`, `open`, `asker_pid` = its own pid); the Worker Session `waiting` with label `cpd: question to the Lead` (it waits for its Lead, not for the User: hs-d303; contract §3.6). **Events** `escalation` `{escalation, question}` (the Lead's adapter delivers it with a turn) and `session-state`.
+1. **Rows**, one transaction: `escalations` (`<attempt>-q<k>`, `open`, `asker_pid` = its own pid); the Worker Session `waiting` with label `φ: question to the Lead` (it waits for its Lead, not for the User: hs-d303; contract §3.6). **Events** `escalation` `{escalation, question}` (the Lead's adapter delivers it with a turn) and `session-state`.
 2. It polls its row every 500 ms (a read; cpd 1 §11, kept).
 3. Answered: one transaction setting the Worker Session `working` (`session-state`); prints the answer. Timeout: one transaction, `status = expired`, `expired_at`, **Event** `escalation-expired` `{escalation, reason: "timeout"}`, Session `working`; prints `ask_timeout`. If the process dies, E1 expires it (`reason: "asker_dead"`).
 
@@ -2176,7 +2176,7 @@ Effects: none; one read transaction.
 
 ```json
 {"ok": true, "sessions": [
-  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null, "asleep_at": null,
+  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "φ: Worker question", "state_at": "…", "archived_at": null, "asleep_at": null,
    "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": "Dynamic session titles contract", "titled_at": "…"}],
  "events_cursor": 48213}
 ```
@@ -2298,7 +2298,7 @@ How the pi adapter reports its agent state (§3.6, D4). `waiting` (an agent wait
 Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. No tmux.
 
 ```json
-{"ok": true, "session": "596d007f-…", "state": "waiting", "label": "cpd: Worker question", "from": "working"}
+{"ok": true, "session": "596d007f-…", "state": "waiting", "label": "φ: Worker question", "from": "working"}
 ```
 
 Idempotent: yes.
@@ -2646,7 +2646,7 @@ Resumes a Lead or a Manager Session that is blocked by the loop guard, appending
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager` | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
-| it is `blocked` with the label `cpd: loop guard`; `details` `{state, label}` | `not_loop_guarded` | 3 |
+| it is `blocked` with the label `φ: loop guard`; `details` `{state, label}` | `not_loop_guarded` | 3 |
 
 Effects:
 - **Rows**, one transaction: nothing is written to the Session.
@@ -3412,7 +3412,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `attempt-retry`, `job-cancelled` | message, no turn, `followUp` | |
 | `pr-started`, `pr-merged` | message, no turn, `followUp` (R34: a started PR's Jobs are now scheduled; a merged PR may start the PRs that need it, §5.3) | |
 | `pr-base-changed` | message, no turn, `followUp` (informational, hs-d325: the PR's `base` followed GitHub, as after its base PR merged; no Gate is needed and the PR stays ready, hs-d326). `data` is in contract §5.2. Raises `protocol` to 5 | |
-| `escalation` | message, **turn**, **`steer`**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
+| `escalation` | message, **turn**, **`steer`**; opens the blocking reason `escalation:<id>` labelled `φ: Worker question` | |
 | `escalation-answered`, `escalation-expired` | closes `escalation:<id>`; no message | |
 | `plan-review` with `status: pending` | opens it in the Lead's chat (§15.5): the summary as a `cpd-plan-summary` message (no turn) and the dialog; no `cpd` message for the Event itself. A review with a higher id than another pending review of this session **closes** that one's `plan-review:<review>` reason: only the latest review of a Plan blocks the Lead (§15.5 "Latest only") | |
 | `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside this adapter (§15.5 "Deciding elsewhere"): closes `plan-review:<review>` and an open dialog of it; message `cpd-plan-decision`, **turn**, `followUp` (own custom type, not `cpd`). For any other review: ignored | |
@@ -3444,7 +3444,7 @@ The adapter keeps three facts and reports the state they give (the model of `tmu
 | its own reasons | §15.3 (`escalation:<id>`, kind **agent**), §15.5 (`plan-review:<review>`, the Plan's latest review only, kind **human**), and L4 of hs-d552, hs-d571 (`loop-guard`, kind **human**, when the loop guard trips), each with a label |
 | blocking dialogs | pi's `ui_prompt_start` and `ui_prompt_end` (pi 1.2.0 `ExtensionAPI`, emitted around every blocking extension UI prompt: `select`, `confirm`, `input`, `editor`, `custom`; depth-counted, so nested prompts give one pair) open and close **one** reason of kind **human** labelled `dialog`. **Exceptions:** the review chat's own `select` and `editor` calls (from `pi/lib/review-chat.ts` `runDialog`) open no `dialog` reason; they are represented by `plan-review:<review>` (the Plan's latest review, kind **human**) instead. This is implemented through a counter of the adapter's own prompts: each `runDialog` call increments the counter before opening the dialog and decrements it in a finally block; a `ui_prompt_start` or `ui_prompt_end` that arrives while the counter is above 0 opens no reason. Every other prompt (ask_user_question, any other extension's dialog) still opens `dialog` as today. A **Worker's** dialogs are not reported (hs-d303, audit Q6): a Worker never talks to the User, it asks its Lead with `cpd ask` |
 
-Every reason has a **kind** (hs-d303, audit J2): **human** (the User has to act: `dialog`, `cpd: plan review`, `cpd: loop guard`) or **agent** (another agent handles it: `cpd: Worker question`). Reported state: `blocked` with the label of the most recently opened **human** reason while any is open; else `waiting` with the label of the most recently opened **agent** reason while any is open; else `working` while `active`; else `idle`. So a Worker question opened during a dialog does not replace the dialog's label, and closing the dialog with the question still open reports `waiting`. On every change it runs `cpd session state <state> [--label <label>] --session <id>`. Calls are serialised: at most one in flight, and only the latest wanted state is sent next, so states never arrive out of order. A refused call (`illegal_transition`, for example after the engine marked the Session `stopped`) is reported as an error once and the next change is tried normally. At `session_shutdown`: `session state stopped`, waited for at most 2 s; `session run` reports it as well if pi exits without it (§10.8).
+Every reason has a **kind** (hs-d303, audit J2): **human** (the User has to act: `dialog`, `φ: plan review`, `φ: loop guard`) or **agent** (another agent handles it: `φ: Worker question`). Reported state: `blocked` with the label of the most recently opened **human** reason while any is open; else `waiting` with the label of the most recently opened **agent** reason while any is open; else `working` while `active`; else `idle`. So a Worker question opened during a dialog does not replace the dialog's label, and closing the dialog with the question still open reports `waiting`. On every change it runs `cpd session state <state> [--label <label>] --session <id>`. Calls are serialised: at most one in flight, and only the latest wanted state is sent next, so states never arrive out of order. A refused call (`illegal_transition`, for example after the engine marked the Session `stopped`) is reported as an error once and the next change is tried normally. At `session_shutdown`: `session state stopped`, waited for at most 2 s; `session run` reports it as well if pi exits without it (§10.8).
 
 **Reply runs** (hs-d278; contract §2.2 `unread`, §3.6). The adapter also records whether the current run is a **reply run**, and reports it when the run's end moves the Session to `idle`: `cpd session state idle --reply --session <id>`; any other call omits `--reply`. A run is a reply run when it started at pi's `before_agent_start` with `event.messageType` `"user"` (a prompt the User submitted, or `pi.sendUserMessage()`), or with `"custom"` and the adapter's own message for a `session-message` Event whose `data.from` is null (`cpd session send` with no sender: "Message from the User"), or when pi's `input` event with `source: "interactive"` arrived during it (the User typed, also as a steer or follow-up). A run started by an engine Event, or by another Session's message, is not a reply run unless the User also typed during it. The flag is cleared when the run starts and read at the `idle` report; an older adapter sends no `--reply`, so its Sessions are never unread until it reloads (protocol 4, §1.2). by `ask` itself and back to `working` when it returns (§8.1); its adapter is mid-turn meanwhile and reports nothing.
 
@@ -3468,7 +3468,7 @@ Decision hs-d502 (User, 2026-10-20; supersedes hs-d468). Replaces cpd 1 §15's `
 2. **Without `host.ctx`** (no UI), or when `run/<plan>/summary-<review>.md` does not exist (a review made before cpd wrote it), the adapter opens the review in plannotator as before: "Open full plan" below, with no dialog. Otherwise:
 3. Read `run/<plan>/summary-<review>.md` (§4.6). A failed read is an error message with the cause (turn); nothing is written and the review stays `pending`.
 4. Show it: `pi.sendMessage({customType: "cpd-plan-summary", content: <the file's text>, display: true, details: {plan, review}}, {triggerTurn: false})`. The message is drawn **expanded**, always open (§15.9), and stays in the session, so `/reload` and a resume show it again.
-5. `pi.appendEntry("cpd-plan-review", {plan, review, surface: "chat", status: "pending"})`; open the blocking reason `plan-review:<review>` labelled `cpd: plan review`; close the reasons of this session's older reviews ("Latest only"). An entry **without `surface`** is a plannotator one, so a session recorded before this change keeps working; `plannotator_id` is required only on an entry with `surface: "plannotator"`.
+5. `pi.appendEntry("cpd-plan-review", {plan, review, surface: "chat", status: "pending"})`; open the blocking reason `plan-review:<review>` labelled `φ: plan review`; close the reasons of this session's older reviews ("Latest only"). An entry **without `surface`** is a plannotator one, so a session recorded before this change keeps working; `plannotator_id` is required only on an entry with `surface: "plannotator"`.
 6. Open the **dialog**, below. It runs **detached**: the handler that opens it (the follower's, the tool's or the command's) does not wait for it, so Events keep being read and handled, the cursor keeps moving, and the tool returns at once.
 
 **The dialog**, with `host.ctx.ui` (one at a time per session; opening a newer review aborts the older review's dialog, below, whose entry stays pending as every superseded entry does):
@@ -3816,7 +3816,7 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 **L3 Counting** (the pi adapter; for a Lead and a Manager only). A *turn* is a pi agent run. It is **the User's** only when pi's `before_agent_start` event has `messageType: "user"` (a prompt the User typed). Every run a cpd message starts (`messageType: "custom"`: Events, a `session-message` with `from` null, `attempt-nudge`, a Plan review decision) is a **self-started turn**. The adapter keeps the start times of the self-started turns of the last 600 000 ms (a sliding window) from one clock, `options.now` (default `Date.now`).
 
-**L4 Trip** (the adapter; trigger on the pi adapter, L4 of hs-d552). When a self-started turn starts and the window then holds MORE than `loop_guard_turns` turns (with the default 20: the 20th does not trip, the 21st does), the breaker trips. That 21st turn runs, pi has started it; from then on: (a) every message the adapter delivers with `triggerTurn: true` is sent with `{triggerTurn: false, deliverAs: "nextTurn"}` instead, through the one gate `gated` of `pi/lib/delivery.ts` that §15.7a's first-message hold already uses, so deliveries keep queueing, keep their order and keep moving the cursor but start nothing; (b) the adapter opens the blocking reason `loop-guard`, kind **human**, label `cpd: loop guard` (§15.4); (c) it appends the pi session entry `cpd-loop-guard` `{tripped: true, at, turns}`.
+**L4 Trip** (the adapter; trigger on the pi adapter, L4 of hs-d552). When a self-started turn starts and the window then holds MORE than `loop_guard_turns` turns (with the default 20: the 20th does not trip, the 21st does), the breaker trips. That 21st turn runs, pi has started it; from then on: (a) every message the adapter delivers with `triggerTurn: true` is sent with `{triggerTurn: false, deliverAs: "nextTurn"}` instead, through the one gate `gated` of `pi/lib/delivery.ts` that §15.7a's first-message hold already uses, so deliveries keep queueing, keep their order and keep moving the cursor but start nothing; (b) the adapter opens the blocking reason `loop-guard`, kind **human**, label `φ: loop guard` (§15.4); (c) it appends the pi session entry `cpd-loop-guard` `{tripped: true, at, turns}`.
 
 **L5 The User's prompt** (`before_agent_start` with `messageType: "user"`) always runs. It empties the window; and when the breaker is tripped it also clears the trip: the reason closes, the entry `{tripped: false}` is appended, and deliveries trigger turns again. Nothing else resumes it: no timeout.
 

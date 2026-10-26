@@ -99,7 +99,7 @@ function logTo(host: Host, id: string): (line: string) => void {
     } catch (e) {
       if (!failed) {
         failed = true;
-        host.ctx?.ui.notify(`cpd: cannot write the reload log: ${toCpdError(e).message}`, "error");
+        host.ctx?.ui.notify(`φ: cannot write the reload log: ${toCpdError(e).message}`, "error");
       }
     }
   };
@@ -209,7 +209,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     validate: (dir) => validatePackage(dir, options.reload),
     refusal: () => (host.run === r && host.ctx !== undefined ? refusal(guardOf(r, host.ctx)) : "not active"),
     trigger: () => pi.sendUserMessage(RELOAD_TRIGGER, { expandPromptTemplates: true }),
-    onRefused: (reason) => host.ctx?.ui.notify(`cpd: adapter update not loaded: ${reason}`, "error"),
+    onRefused: (reason) => host.ctx?.ui.notify(`φ: adapter update not loaded: ${reason}`, "error"),
     onError: (e) => host.deliver("reload after install", e),
     log: r.log,
     onLongRefusal: () => host.ctx?.ui.notify(LONG_REFUSAL_NOTICE),

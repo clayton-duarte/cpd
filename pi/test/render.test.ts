@@ -136,7 +136,7 @@ test("a message from a Session: its name, or its id when it has none", () => {
 test("an adapter error: `adapter: <what>`", () => {
   const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
   assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("expand")]);
-  assert.deepEqual(show(message, true)[1], rail("cpd adapter: session show: bad_output: cpd session show: the session object lacks role"));
+  assert.deepEqual(show(message, true)[1], rail("φ adapter: session show: bad_output: cpd session show: the session object lacks role"));
 });
 
 test("an `error` Event (it has an id) is an Event: its text", () => {

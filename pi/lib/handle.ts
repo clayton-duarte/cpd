@@ -106,7 +106,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     const name = ev.data.name;
     r.knownName = name;
     pi.setSessionName(name);
-    host.ctx?.ui.notify(`cpd: session renamed to "${name}"`);
+    host.ctx?.ui.notify(`φ: session renamed to "${name}"`);
     return;
   }
   if (!r.info.planLead) {

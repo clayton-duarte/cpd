@@ -132,7 +132,7 @@ pub fn sample() -> Tree {
                     session("l-ship", "ship lead", Working, None, Place::Chat),
                     vec![
                         session("f-idle", "ship fork", Idle, None, Place::Parked),
-                        shown(session("f-blocked", "ship review", Blocked, Some("cpd: Worker question"), Place::Parked), Dot::Red),
+                        shown(session("f-blocked", "ship review", Blocked, Some("φ: Worker question"), Place::Parked), Dot::Red),
                     ],
                 ),
                 plan("sketch", "alpha", Phase::Plan, [4, 0, 0, 0, 0, 0], session("l-sketch", "sketch", Idle, None, Place::Parked), vec![]),

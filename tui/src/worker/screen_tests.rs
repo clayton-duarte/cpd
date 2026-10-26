@@ -181,9 +181,9 @@ fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
     let mut env = env();
     let file = session_file(&env);
     populate(&mut env, Some(&file));
-    env.sql("UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'w1';");
+    env.sql("UPDATE sessions SET state = 'waiting', state_label = 'φ: question to the Lead' WHERE id = 'w1';");
     let screen = screen(&mut env.attempt(), 60, 12);
-    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
+    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting φ: question to the Lead"), "{screen:?}");
 }
 
 /// The Job form's rows and helpers (commands.md §13.2, Job `planview-docs`): the reason header (P4, P5, P6).

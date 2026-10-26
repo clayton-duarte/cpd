@@ -747,7 +747,7 @@ mod tests {
     /// The README's "Context column" example (`main:tui/README.md`): a Context with three Lead Sessions; the
     /// one in the chat slot needs you.
     fn readme() -> Tree {
-        let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("cpd: Worker question"), Place::Chat);
+        let mut rust = session("s-rust", "cpd rust lead", State::Blocked, Some("φ: Worker question"), Place::Chat);
         rust.dot = Dot::Red;
         tree(vec![managed(context(
             "cpd",

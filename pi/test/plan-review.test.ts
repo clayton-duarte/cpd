@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { Fixture, ID, planShow, stateCalls, ev, waitFor } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
-const REVIEW_LABEL = "blocked:cpd: plan review";
+const REVIEW_LABEL = "blocked:φ: plan review";
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, ...over } });
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status } });
 const entries = (f: Fixture) => f.pi.entries.filter((e: any) => e.type === "custom" && e.customType === "cpd-plan-review").map((e: any) => e.data);
@@ -104,7 +104,7 @@ for (const [name, answer, code, text] of [
     f.emit(reviewEvent(101));
     await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
     const e = adapterErrors(f)[0]!;
-    assert.match(e.message.content, new RegExp(`^cpd adapter: plan review r1: ${code}: `));
+    assert.match(e.message.content, new RegExp(`^φ adapter: plan review r1: ${code}: `));
     assert.match(e.message.content, text);
     assert.deepEqual(entries(f), []);
     assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
@@ -121,7 +121,7 @@ test("an unreadable plan file is an error", async (t) => {
   await f.pi.fire("session_start");
   f.emit(reviewEvent(101));
   await waitFor("the error", () => adapterErrors(f).length === 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r1: file_unreadable: /);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: file_unreadable: /);
   assert.equal(requests(f).length, 0);
 });
 
@@ -203,7 +203,7 @@ test("any other failure of plan decide is an error and leaves the review pending
   f.respond("plan-decide", { ok: false, error: { code: "store_failed", message: "Disk full.", details: {} } }, { exit: 1 });
   result(f, { reviewId: "pn-1", approved: true });
   await waitFor("the error", () => adapterErrors(f).length === 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan decide r1: store_failed: Disk full\.$/);
   assert.equal(entries(f).at(-1).status, "pending");
   assert.equal(decisions(f).length, 0);
   assert.equal(stateCalls(f).at(-1), REVIEW_LABEL, "still blocked");
