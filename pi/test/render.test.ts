@@ -63,14 +63,14 @@ const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), `cpd` and the first sentence; no dot.
+// hs-d534, hs-d537, hs-d708: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), the bold φ and the first sentence; no dot.
 const first = (summary: string): string => {
   const at = summary.search(/[.:]/);
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
-const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
+const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}φ${CAP_R} ${first(summary)}`;
 const TERM = `<c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => `<c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F0B26}";
@@ -82,6 +82,13 @@ const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev
 const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
+
+test("the cpd message pill reads a bold phi", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged." }), ID);
+  const row = draw(rendering().render(m, { expanded: false, outputPad: 1 }, theme))[0]!;
+  assert.ok(row.includes(`<c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</>`), `the pill holds the bold φ: ${JSON.stringify(row)}`);
+  assert.ok(!row.includes("cpd"), `the pill no longer reads cpd: ${JSON.stringify(row)}`);
+});
 
 test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰬦 expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
@@ -95,7 +102,7 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
 
 test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}cpd${CAP_R} `.length);
+  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}φ${CAP_R} `.length);
   assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
@@ -103,9 +110,9 @@ test("a long summary is cut to 60 characters and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
+  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}φ${CAP_R} alpha`), lines[0]);
   assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith("│ ")), "continuation rows are aligned like a tool row's");
-  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
+  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|φ/gu, "").includes("zeta"), "never cut");
   assert.equal(lines.at(-1), `╰${FOLDED} expand · ${TIME}`);
 });
 
@@ -136,7 +143,7 @@ test("a message from a Session: its name, or its id when it has none", () => {
 test("an adapter error: `adapter: <what>`", () => {
   const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
   assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("expand")]);
-  assert.deepEqual(show(message, true)[1], rail("φ adapter: session show: bad_output: cpd session show: the session object lacks role"));
+  assert.deepEqual(show(message, true)[1], rail("<b>φ</b> adapter: session show: bad_output: cpd session show: the session object lacks role"));
 });
 
 test("an `error` Event (it has an id) is an Event: its text", () => {
@@ -276,7 +283,7 @@ test("Click to expand is gone; only the closing ╰ row names the toggle, muted"
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}φ${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {

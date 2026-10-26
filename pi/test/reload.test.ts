@@ -26,7 +26,7 @@ const install = (f: Fixture, files: Record<string, string> = { "extension.ts": G
   touch(f.adapterDir);
 };
 
-const noticeFor = (reason: string) => `φ: adapter update not loaded: ${reason}`;
+const noticeFor = (reason: string) => `\x1b[1mφ\x1b[22m: adapter update not loaded: ${reason}`;
 
 /** An extension the fake pi never finishes loading (a top-level await that never settles). */
 const HANGS = "await new Promise(() => {});\nexport default function () {}\n";
@@ -614,7 +614,7 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
-  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("φ: cannot write the reload log"));
+  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("\x1b[1mφ\x1b[22m: cannot write the reload log"));
   let beforeReload = -1;
   f.pi.onReload = async () => {
     beforeReload = failures().length; // every line of the first run (watching, changed, stable, validated, trigger, reloading) is written by now

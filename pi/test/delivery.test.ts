@@ -165,7 +165,7 @@ test("session-renamed for itself: setSessionName and a notice, no message, no tu
   await waitFor("the name", () => f.pi.sessionName === "new name");
   await f.pi.fire("session_info_changed", { name: "new name" });
   await f.drain();
-  assert.deepEqual(f.pi.notices, ['φ: session renamed to "new name"']);
+  assert.deepEqual(f.pi.notices, ['\x1b[1mφ\x1b[22m: session renamed to "new name"']);
   assert.deepEqual(f.pi.sent, []);
   assert.equal(f.argvs().some((a) => a[1] === "rename"), false, "the session-renamed it causes comes back and changes nothing");
 });
@@ -191,7 +191,7 @@ test("Worker: attempt-nudge for itself is a message with data.prompt and a turn;
   assert.equal((s.message.details as any).kind, "attempt-nudge");
   assert.equal((s.message.details as any).delivered_to, ID);
   assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
-  assert.deepEqual(f.pi.notices, ['φ: session renamed to "new name"']);
+  assert.deepEqual(f.pi.notices, ['\x1b[1mφ\x1b[22m: session renamed to "new name"']);
 });
 
 test("a message delivered to this Session is what a restart's cursor reads back", async (t) => {

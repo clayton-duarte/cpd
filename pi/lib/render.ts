@@ -2,6 +2,7 @@ import { type Component, MouseRegion, sliceByColumn, stripTerminalSequences, tru
 import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts";
 import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { meaning, pill as drawPill } from "./pill.ts";
+import { boldPhi } from "./phi.ts";
 import { isObject } from "./cpd.ts";
 import { localTime } from "./time.ts";
 import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
@@ -162,10 +163,10 @@ function rowsOf(summary: string, content: string, theme: Theme, time?: string): 
   const text = normalizeLineEndings(content).trimEnd();
   const lead = GREY8(TOP);
   // contract §6.1.1: the pill is magenta 5 inverted, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
-  const pill = drawPill(meaning("planning"), "cpd");
+  const pill = drawPill(meaning("planning"), boldPhi("φ"));
   const sentence = firstSentence(summary);
   const rail = GREY8(RAIL);
-  const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
+  const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${boldPhi(l)}\x1b[39m`)).join("\n");
   return {
     head: (width) => {
       const room = Math.max(1, width - visibleWidth(lead) - visibleWidth(pill) - 1);

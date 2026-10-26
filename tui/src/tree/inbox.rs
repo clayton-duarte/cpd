@@ -26,6 +26,7 @@ use crate::fold;
 use crate::link::link;
 use crate::merge::Pull;
 use crate::palette;
+use crate::phi;
 use crate::read::{Tree, age_text};
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
@@ -310,13 +311,11 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
     }
-    let line = Line::from(vec![
-        glyph,
-        " ".into(),
-        Span::styled(label, palette::clickable_text()),
-        " ".repeat(gap).into(),
-        Span::styled(age.to_owned(), palette::muted_text()),
-    ]);
+    let mut spans = vec![glyph, " ".into()];
+    spans.extend(phi::spans(&label, palette::clickable_text()));
+    spans.push(" ".repeat(gap).into());
+    spans.push(Span::styled(age.to_owned(), palette::muted_text()));
+    let line = Line::from(spans);
     (line, label_width)
 }
 
