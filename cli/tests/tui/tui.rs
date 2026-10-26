@@ -444,6 +444,47 @@ fn tui_removes_an_old_statusbar_pane_then_resets_the_layout() {
     assert_eq!(steps(&fx, again), Vec::<String>::new());
 }
 
+#[test]
+fn tui_removes_an_old_worker_pane_then_resets_the_layout() {
+    let fx = fx();
+    tui(&fx, &[]);
+    let full = main_panes(&fx);
+    // A main built by an older cpd: a Worker pane, and the sizes changed by the User.
+    let bar = shown(&fx, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &full[0].id, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    out(&fx, &["set", "-p", "-t", &bar, "@cpd_view", "worker"]);
+    out(&fx, &["resize-pane", "-t", &view(&full, "tree").id, "-x", "80"]);
+    let before = main_panes(&fx);
+    assert_eq!(before.len(), 5, "{before:?}");
+
+    let from = mark(&fx);
+    let (result, stderr) = fx.with_stderr(|| tui(&fx, &[]));
+    assert_eq!(result["built"], false, "{result}");
+    assert!(!stderr.contains("worker"), "no warning about the old pane: {stderr}");
+    // The bar is killed, the others get their sizes back (the reset steps), and the status line is on.
+    assert_eq!(
+        steps(&fx, from),
+        [
+            format!("kill-pane -t {bar}"),
+            "resize-pane -t %0 -x 20%".to_owned(),
+            "resize-pane -t %2 -x 30%".to_owned(),
+            "resize-pane -t %1 -y 30%".to_owned(),
+        ]
+    );
+    let after = main_panes(&fx);
+    assert_eq!(after.len(), 4, "{after:?}");
+    // They are the same panes, still alive.
+    for old in before.iter().filter(|p| p.id != bar) {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
+    }
+
+    // Rerunning removes nothing more.
+    let again = mark(&fx);
+    tui(&fx, &[]);
+    assert_eq!(main_panes(&fx), after);
+    assert_eq!(steps(&fx, again), Vec::<String>::new());
+}
+
 /// Kills `gone` (views of `main`) after a build, runs `cpd tui`, and asserts it added them back where they go and sized the
 /// layout again with `want` (the commands, in order, of that one run), the panes that were not killed unchanged, and that
 /// rerunning adds nothing.
