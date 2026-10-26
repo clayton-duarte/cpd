@@ -2178,6 +2178,8 @@ Turn-start Context updates stay raw records (hs-d147, `commands.md` §15.7). `co
 
 - **`<YYYYMMDDTHHMM>-cyan-tier`** (pro-d16, which refines hs-d570; made with `scripts/new-migration.sh cyan-tier breaking`), declared `breaking after <n>`, `<n>` counted as for `review-waiting`. It renames the stored Inbox tier `blue` to `cyan` by rebuilding `inbox_items` (SQLite cannot alter a CHECK constraint, so the rebuild is breaking, K4), as `blue-tier` and `review-waiting` rebuilt it: `inbox_items_new` with the §4.4 definition whose `urgency` check is `IN ('red', 'yellow', 'magenta', 'blue', 'cyan', 'white')`, every row copied with all columns and the primary key kept, `urgency` `blue` copied as `cyan` (open and closed rows alike), the old table dropped, the new one renamed, and `inbox_items_open` (the open-item unique index), `inbox_items_closed` and the trigger `inbox_items_no_delete` recreated. Nothing else changes: no kind, glyph or position in the order. The copy writes no `history` row. The pinned `SCHEMA_HASH` changes as for any migration (`scripts/repin.sh`, §4.3). Tests: a store before it with open and closed `blue` items keeps every row and id, each now `cyan`; after it accepts a `cyan` item and refuses a `blue` one; the schema hash matches that of a fresh store; a binary without it refuses the store (`store_too_new`).
 
+- **`20261030T1000-inbox-claim`** (lasting dismissal and claim, Plan review-intake, PR `claim`), additive or breaking as C2 says. The claim: adds `inbox_items.claimed_at` (TEXT, null, a time; `CHECK (claimed_at IS NULL OR kind = 'review-requested')`) and the Event kind `inbox-claimed` (`INSERT INTO event_kinds (name) VALUES ('inbox-claimed');`, one statement, as `event-session-retiered`). Additive when SQLite accepts the ADD COLUMN with its CHECK; otherwise breaks `inbox_items` by rebuild like `blue-tier`, starting from the newest shape on origin/main (`git grep -l "CREATE TABLE inbox_items_new" origin/main -- core/src/store/migrations`, the one that sorts last).
+
 ## 5. Events
 
 ### 5.1 Rules
@@ -2247,6 +2249,7 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `inbox-closed` | E8 closes an Inbox item | context?, plan?, job?, session? | `{item, kind}` |
 | `inbox-snoozed` | `inbox snooze` | context?, plan?, job?, session? | `{item, until}` |
 | `inbox-dismissed` | `inbox dismiss` | context?, plan?, job?, session? | `{item}` |
+| `inbox-claimed` | `inbox claim` | context?, plan?, job?, session? | `{item}` |
 | `incident-started` | `cpd incident start --plan <id>... --reason <text> [--until-pr <plan>/<key>]` (hs-d643, user decision hs-d643; supersedes hs-d634) | (none) | `{by, reason, started_at, plans, until_pr?}`; `plans` is the array of Plan ids in the incident; `until_pr` the PR key or null (addition the adapter ignores, so PROTOCOL stays 14) |
 | `incident-plans` | `cpd incident start --plan <id>... [--until-pr <plan>/<key>]` on a live incident, when the set or `until_pr` changed (hs-d643, this Job) | (none) | `{by, plans, until_pr?}`; `plans` is the array of Plan ids in the incident after the update; `until_pr` the PR key or null (addition the adapter ignores, so PROTOCOL stays 14) |
 | `incident-ended` | `cpd incident end` or auto-end when `until-pr` merges | (none) | `{by, ended_at, cause}`; `cause` is `"manual"` (Manager-only end command) or `"until-pr"` (auto-end on merge); `by` is the Manager Session id for manual, `"engine"` for until-pr. Addition the adapter ignores (PROTOCOL stays 14) |
@@ -3683,6 +3686,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `inbox.stuck_job_minutes` | int | `10` | ≥ 1 |
 | `inbox.team_channel` | text | `""` | `""` or `^C[A-Z0-9]+$`. `""` switches E11 and the Inbox kind `review-requested` off (hs: the Context decision 'Team review Inbox', 2026-10-19, names `C02JU6C2Z1D`) |
 | `inbox.slack_user_id` | text | `""` | `""` or `^U[A-Z0-9]+$`; **both** `inbox.team_channel` and `inbox.slack_user_id` set or both empty, else `config_invalid` (the claim and mention rules cannot run without the User's id) |
+| `inbox.review_context` | text | `""` | `""` or a Context id (`ContextId::parse`, §2.1): the Context whose Manager receives the claim message (C5). Empty means claim is refused (commands.md §21.7, C4) |
 | `inbox.bot_reviewers` | [text] | the three above | non-empty strings; GitHub logins (hermes `classify.BOT_REVIEWERS`, `classify.py:58-62`) |
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
