@@ -13,6 +13,7 @@ mod recover;
 #[cfg(test)]
 mod linear_tests;
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -353,6 +354,52 @@ fn finish_merge(
     Ok(Stepped { end: End::Merged { sha }, stale, push: None, pulled: None })
 }
 
+/// The three shapes of the `detail` an Attempt ends with after the Gate (§7.4 step 6): [`gate_detail`] writes them,
+/// [`parse_gate_detail`] reads them back, so the writer and the reader are one module.
+#[derive(Clone, Copy)]
+enum GateEnd<'a> {
+    /// The Gate exited non-zero (`gate_failed`).
+    Failed { exit: i32, tail: &'a str },
+    /// The Gate was killed or timed out (`gate_error`).
+    Unjudged { why: &'a str, tail: &'a str },
+    /// The Gate could not start (`gate_error`).
+    CouldNotRun { message: &'a str },
+}
+
+const FAILED: &str = " failed (exit ";
+const UNJUDGED: &str = " could not be judged (";
+const COULD_NOT_RUN: &str = " could not run: ";
+const LOG: &str = ". log: ";
+const TAIL: &str = "\ntail:\n";
+
+fn gate_detail(hook: Hook, log: &Path, end: GateEnd<'_>) -> String {
+    let (hook, log) = (hook.as_str(), log.display());
+    match end {
+        GateEnd::Failed { exit, tail } => format!("{hook}{FAILED}{exit}){LOG}{log}{TAIL}{tail}"),
+        GateEnd::Unjudged { why, tail } => format!("{hook}{UNJUDGED}{why}){LOG}{log}{TAIL}{tail}"),
+        GateEnd::CouldNotRun { message } => format!("{hook}{COULD_NOT_RUN}{message}{LOG}{log}"),
+    }
+}
+
+/// The hook and the log of the Gate a `detail` written by [`gate_detail`] names; `None` for a detail of another shape.
+pub fn parse_gate_detail(detail: &str) -> Option<(Hook, PathBuf)> {
+    let (hook, rest) = [Hook::PreCommit, Hook::PreMerge].into_iter().find_map(|h| Some((h, detail.strip_prefix(h.as_str())?)))?;
+    let log = if let Some(rest) = rest.strip_prefix(FAILED) {
+        let (exit, after) = rest.split_once(')')?;
+        exit.parse::<i32>().ok()?;
+        let (after, _) = after.split_once(TAIL)?;
+        after.strip_prefix(LOG)?
+    } else if let Some(rest) = rest.strip_prefix(UNJUDGED) {
+        let (head, _) = rest.split_once(TAIL)?;
+        &head[head.rfind(&format!("){LOG}"))? + 1 + LOG.len()..]
+    } else if let Some(rest) = rest.strip_prefix(COULD_NOT_RUN) {
+        &rest[rest.rfind(LOG)? + LOG.len()..]
+    } else {
+        return None;
+    };
+    (!log.is_empty() && !log.contains('\n')).then(|| (hook, PathBuf::from(log)))
+}
+
 /// Runs the Gate `hook` for `target` in its Attempt worktree at HEAD (§7.4 step 6, hs-d679). `None` when it passed or has no
 /// commands; `Some(end)` when it failed (`gate_failed`) or could not be judged (`gate_error`), carrying the hook tail and log.
 fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipeline: &Pipeline) -> Result<Option<End>, CpdError> {
@@ -365,22 +412,21 @@ fn run_gate(home: &CpdHome, config: &Config, target: &Attempt, hook: Hook, pipel
     match git::run_hook(hook, pipeline, &target.worktree, Some(&operation), timeout, &log) {
         Ok(result) => {
             let tail = result.tail.unwrap_or_default();
-            let log = log.display();
             match result.outcome {
                 HookOutcome::Passed => Ok(None),
                 HookOutcome::Failed { exit } => Ok(Some(End::Failed {
                     cause: Failure::GateFailed,
-                    detail: format!("{} failed (exit {exit}). log: {log}\ntail:\n{tail}", hook.as_str()),
+                    detail: gate_detail(hook, &log, GateEnd::Failed { exit, tail: &tail }),
                 })),
                 HookOutcome::Error(why) => Ok(Some(End::Failed {
                     cause: Failure::GateError,
-                    detail: format!("{} could not be judged ({why}). log: {log}\ntail:\n{tail}", hook.as_str()),
+                    detail: gate_detail(hook, &log, GateEnd::Unjudged { why: &why.to_string(), tail: &tail }),
                 })),
             }
         }
         Err(e) => Ok(Some(End::Failed {
             cause: Failure::GateError,
-            detail: format!("{} could not run: {}. log: {}", hook.as_str(), e.message(), log.display()),
+            detail: gate_detail(hook, &log, GateEnd::CouldNotRun { message: e.message() }),
         })),
     }
 }
@@ -496,4 +542,40 @@ pub(crate) fn rebase_with(runner: &dyn crate::host::runner::Runner, worktree: &s
             .with("stderr", git::tail(&abort.stderr, git::TAIL_LINES)));
     }
     Ok(Some(files))
+}
+
+#[cfg(test)]
+mod gate_detail_tests {
+    use super::*;
+
+    #[test]
+    fn the_three_forms_round_trip() {
+        let log = Path::new("/h/run/pay/logs/api-a1.pre-commit.log");
+        let forms = [
+            GateEnd::Failed { exit: 3, tail: "red\nmore" },
+            GateEnd::Unjudged { why: "killed. log: x (really)", tail: "t" },
+            GateEnd::CouldNotRun { message: "no such file. log: y" },
+        ];
+        for end in forms {
+            for hook in [Hook::PreCommit, Hook::PreMerge] {
+                let detail = gate_detail(hook, log, end);
+                assert_eq!(parse_gate_detail(&detail), Some((hook, log.to_path_buf())), "{detail}");
+            }
+        }
+    }
+
+    #[test]
+    fn another_shape_is_not_a_gate_detail() {
+        for detail in [
+            "",
+            "The rebase onto the Lead Branch conflicted in: a.txt.",
+            "pre-start failed (exit 1). log: /l\ntail:\nx",
+            "pre-commit failed (exit x). log: /l\ntail:\nx",
+            "pre-commit failed (exit 1). log: \ntail:\nx",
+            "pre-commit failed (exit 1). log: /l",
+            "pre-commit exploded. log: /l",
+        ] {
+            assert_eq!(parse_gate_detail(detail), None, "{detail:?}");
+        }
+    }
 }

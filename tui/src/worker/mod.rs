@@ -281,7 +281,8 @@ mod phi_bold_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::{AttemptDetail, AttemptStatus, Cause, Origin, Outcome, WorkerJob};
+    use cpd_core::attempt::ledger::{Cause, Stored};
+    use crate::read::{AttemptDetail, AttemptStatus, Origin, Outcome, WorkerJob};
     use cpd_core::config::Tier;
 
     fn job(status: JobStatus) -> WorkerJob {
@@ -305,7 +306,7 @@ mod tests {
                 origin: Origin::Ladder,
                 status,
                 outcome: Some(Outcome::Failed),
-                cause: Some(Cause::Crashed),
+                cause: Some(Stored::Failed(Cause::Crashed)),
                 branch: "cpd/ship--api-a1".into(),
                 worktree: "/w".into(),
                 worker_session: None,

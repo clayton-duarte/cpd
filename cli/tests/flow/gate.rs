@@ -325,3 +325,132 @@ fn the_pr_gate_failure_fails_the_open_job_with_gate_failed() {
     assert_eq!(fx.ended(), "failed|gate_failed", "the PR gate failure is the open Job's cause");
     assert_eq!(fx.job(), "failed|gate_failed");
 }
+
+// ---------- the next Spec after a Gate cause (contract §3.4, §4.4, §7.4 step 6; commands.md §16.1) ----------
+
+use cpd_core::attempt::ledger;
+use cpd_core::driver::worker::render_spec;
+use cpd_core::home::Hook;
+
+/// The gate_failed sentence of commands.md §16.1 'Gate causes in Previous Attempts', hook and log known.
+fn gate_failed_sentence(hook: &str) -> String {
+    format!("The Gate (`{hook}`) failed at its merge. Its whole output is in this log; read it and fix what it reports:")
+}
+
+/// The gate_error sentence of the same section, hook and log known.
+fn gate_error_sentence(hook: &str) -> String {
+    format!(
+        "The Gate (`{hook}`) could not be judged at its merge: it was killed, timed out or could not run, which is a problem of the Gate, not a failing check of your work. Its output so far is in this log, if the hook started:"
+    )
+}
+
+impl Fx {
+    /// Attempt 2 of Job `api` (`running`), as a retry of the Attempt that ended.
+    fn second_attempt(&self) {
+        self.env.sql(&format!(
+            "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+               VALUES ('pay', 'api-a2', 'api', 2, 'S2', 'retry', 'running', 'cpd/pay--api-a2', '{}/api-a2', '{}', 't');",
+            self.env.root().display(),
+            "0".repeat(40)
+        ));
+    }
+
+    /// The text of the Spec `render_spec` writes for Attempt `id` of Job `job`.
+    fn spec_text(&self, id: &str, job: &str) -> String {
+        let mut store = self.store();
+        let path = store
+            .read(|conn| {
+                let target = ledger::load(conn, &plan(), &AttemptId::parse(id).unwrap())?;
+                let jobs = cpd_core::plan::jobs::load(conn, &plan())?;
+                let job = jobs.iter().find(|j| j.key == job).expect("the Job");
+                render_spec(conn, &self.home, &target, job)
+            })
+            .unwrap_or_else(|e| panic!("the Spec of {id} is not rendered: {} ({:?})", e.message(), e.code()));
+        fs::read_to_string(path).unwrap()
+    }
+}
+
+#[test]
+fn every_cause_the_attempts_table_admits_is_rendered_into_the_next_spec() {
+    let fx = fx();
+    let causes = common::causes::attempt_causes(&fx.env);
+    assert!(causes.iter().any(|c| c == "merged") && causes.iter().any(|c| c == "gate_failed"), "the cause list read is {causes:?}");
+    // Job `api` has Attempt 1 `running`; each cause gets a Job of its own with an ended Attempt 1 and a running Attempt 2.
+    for (i, cause) in causes.iter().enumerate() {
+        let job = format!("c{i}");
+        let outcome = common::causes::outcome_of(cause);
+        let merged = if outcome == "merged" { "'abc123'" } else { "NULL" };
+        let worktree = fx.env.root().join(&job);
+        fx.env.sql(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+               VALUES ('pay', 'repo', '{job}', 'Title of {job}', 'S2', 'Do it.', 'Because.', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, 'work', '{fp}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, outcome, cause, branch, worktree, base_sha, merged_sha, started_at, ended_at)
+               VALUES ('pay', '{job}-a1', '{job}', 1, 'S2', 'ladder', 'ended', '{outcome}', '{cause}', 'cpd/pay--{job}-a1', '{wt}-a1', '{zero}', {merged}, 't', 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+               VALUES ('pay', '{job}-a2', '{job}', 2, 'S2', 'retry', 'running', 'cpd/pay--{job}-a2', '{wt}-a2', '{zero}', 't');",
+            fp = "f".repeat(64),
+            zero = "0".repeat(40),
+            wt = worktree.display()
+        ));
+
+        let spec = fx.spec_text(&format!("{job}-a2"), &job);
+
+        assert!(spec.contains(&format!("- Cause: {cause}\n")), "the Spec after cause {cause:?} has no Cause line:\n{spec}");
+        assert!(spec.contains(&format!("- Outcome: {outcome}\n")), "the Spec after cause {cause:?} has no Outcome line:\n{spec}");
+    }
+}
+
+#[test]
+fn the_next_spec_after_a_merge_gate_failure_names_the_pre_commit_log() {
+    let fx = fx();
+    fx.policy(&work_gate("echo the merge gate is red; exit 3"));
+    fx.commit("a.txt", "a\n");
+    fx.submit().ok();
+    fx.merge().unwrap();
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    fx.second_attempt();
+
+    let spec = fx.spec_text("api-a2", "api");
+
+    let log = fx.home.hook_log(&plan(), &attempt(), Hook::PreCommit);
+    assert!(spec.contains("- Cause: gate_failed\n"), "{spec}");
+    assert!(spec.contains(&format!("- {}\n", gate_failed_sentence("pre-commit"))), "{spec}");
+    assert!(spec.contains(&format!("\n  - `{}`\n", log.display())), "the Spec does not list the log {} as an item:\n{spec}", log.display());
+}
+
+#[test]
+fn the_next_spec_after_a_pr_gate_failure_names_the_pre_merge_log() {
+    let fx = fixture("open", "");
+    gh_no_pr(&fx.env);
+    fx.policy(&pr_gate("echo the PR gate is red; exit 3"));
+    fx.commit("a.txt", "a\n");
+    fx.submit().ok();
+    fx.merge().unwrap();
+    assert_eq!(fx.ended(), "failed|gate_failed");
+    fx.second_attempt();
+
+    let spec = fx.spec_text("api-a2", "api");
+
+    let log = fx.home.hook_log(&plan(), &attempt(), Hook::PreMerge);
+    assert!(spec.contains("- Cause: gate_failed\n"), "{spec}");
+    assert!(spec.contains(&format!("- {}\n", gate_failed_sentence("pre-merge"))), "{spec}");
+    assert!(spec.contains(&format!("\n  - `{}`\n", log.display())), "the Spec does not list the log {} as an item:\n{spec}", log.display());
+}
+
+#[test]
+fn the_next_spec_after_a_gate_error_says_the_gate_could_not_be_judged_and_names_its_log() {
+    let fx = fx();
+    fx.policy(&work_gate("{{ no_such_gate_variable }}"));
+    fx.commit("a.txt", "a\n");
+    fx.submit().ok();
+    fx.merge().unwrap();
+    assert_eq!(fx.ended(), "failed|gate_error");
+    fx.second_attempt();
+
+    let spec = fx.spec_text("api-a2", "api");
+
+    let log = fx.home.hook_log(&plan(), &attempt(), Hook::PreCommit);
+    assert!(spec.contains("- Cause: gate_error\n"), "{spec}");
+    assert!(spec.contains(&format!("- {}\n", gate_error_sentence("pre-commit"))), "{spec}");
+    assert!(spec.contains(&format!("\n  - `{}`\n", log.display())), "the Spec does not list the log {} as an item:\n{spec}", log.display());
+}

@@ -124,46 +124,95 @@ pub fn cancel_request(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<
         .optional()?)
 }
 
-/// The causes an Attempt ends `failed` with (§3.4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cause {
+/// The causes an Attempt ends `failed` with (§3.4), declared once: a variant cannot exist without being listed in
+/// [`Cause::ALL`], spelled by [`Cause::as_str`] and read by [`Cause::parse`].
+macro_rules! causes {
+    ($($(#[$meta:meta])* $variant:ident = $text:literal),+ $(,)?) => {
+        /// The causes an Attempt ends `failed` with (§3.4).
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Cause {
+            $($(#[$meta])* $variant),+
+        }
+
+        impl Cause {
+            /// Every cause, in declaration order.
+            pub const ALL: &'static [Cause] = &[$(Cause::$variant),+];
+
+            /// As the `attempts` table spells it.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Cause::$variant => $text),+
+                }
+            }
+        }
+    };
+}
+
+causes! {
     /// A1–A2: the worktree or `pre-start` failed.
-    SetupFailed,
+    SetupFailed = "setup_failed",
     /// A5 after E2 set `stop_request = timed_out`.
-    TimedOut,
+    TimedOut = "timed_out",
     /// The Worker pane is dead, pi stopped badly, the driver failed, or (R3)
     /// the driver died before the merge's compare-and-swap.
-    Crashed,
+    Crashed = "crashed",
     /// A5: idle twice without a submit, nudged in between.
-    NoSubmit,
+    NoSubmit = "no_submit",
     /// Merge step 5: the rebase conflicted.
-    MergeConflict,
+    MergeConflict = "merge_conflict",
     /// Merge step 8: the Lead Branch kept moving.
-    CasLost,
+    CasLost = "cas_lost",
     /// Merge step 3: the Lead worktree is not clean.
-    DirtyTarget,
+    DirtyTarget = "dirty_target",
     /// Merge step 4: the diff touches protected paths (§7.5).
-    Tampered,
+    Tampered = "tampered",
     /// The merge Gate (`gate.merge` or `gate.pr`) exited non-zero (§7.4 step 6).
-    GateFailed,
+    GateFailed = "gate_failed",
     /// The merge Gate could not be judged: killed, at the timeout, or hook_invalid (§7.4 step 6).
-    GateError,
+    GateError = "gate_error",
+}
+
+/// What `attempts.cause` stores (§3.4): `merged`, `cancel_requested` or the [`Cause`] of a failed Attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stored {
+    Merged,
+    CancelRequested,
+    Failed(Cause),
+}
+
+impl Stored {
+    /// As the `attempts` table spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stored::Merged => "merged",
+            Stored::CancelRequested => "cancel_requested",
+            Stored::Failed(cause) => cause.as_str(),
+        }
+    }
+
+    /// The stored text, or `None` for a value outside the table's CHECK. Never panics.
+    pub fn parse(value: &str) -> Option<Stored> {
+        match value {
+            "merged" => Some(Stored::Merged),
+            "cancel_requested" => Some(Stored::CancelRequested),
+            other => Cause::parse(other).map(Stored::Failed),
+        }
+    }
+
+    /// `merged`, `cancelled` or `failed` (the `attempts` table's CHECKs).
+    pub fn outcome(self) -> &'static str {
+        match self {
+            Stored::Merged => "merged",
+            Stored::CancelRequested => "cancelled",
+            Stored::Failed(_) => "failed",
+        }
+    }
 }
 
 impl Cause {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Cause::SetupFailed => "setup_failed",
-            Cause::TimedOut => "timed_out",
-            Cause::Crashed => "crashed",
-            Cause::NoSubmit => "no_submit",
-            Cause::MergeConflict => "merge_conflict",
-            Cause::CasLost => "cas_lost",
-            Cause::DirtyTarget => "dirty_target",
-            Cause::Tampered => "tampered",
-            Cause::GateFailed => "gate_failed",
-            Cause::GateError => "gate_error",
-        }
+    /// The cause spelled `value`, or `None`.
+    pub fn parse(value: &str) -> Option<Cause> {
+        Cause::ALL.iter().copied().find(|c| c.as_str() == value)
     }
 
     /// A ladder cause sends the Job back to `queued` while the ladder allows (§3.4, §9).
@@ -454,6 +503,21 @@ mod tests {
                 out.push(path);
             }
         }
+    }
+
+    #[test]
+    fn every_cause_is_listed_and_reads_back() {
+        use super::{Cause, Stored};
+        assert_eq!(Cause::ALL.len(), 10);
+        for cause in Cause::ALL {
+            assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
+            assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));
+            assert_eq!(Stored::Failed(*cause).outcome(), "failed");
+        }
+        assert_eq!(Stored::parse("merged"), Some(Stored::Merged));
+        assert_eq!(Stored::parse("cancel_requested").map(Stored::outcome), Some("cancelled"));
+        assert_eq!(Stored::parse("review_rejected"), None);
+        assert_eq!(Cause::parse("merged"), None);
     }
 
     /// engine-G1: the ladder, the end transaction, the cancel read, the load of an Attempt and the
