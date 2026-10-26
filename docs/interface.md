@@ -118,7 +118,6 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view tree` | The session tree (left) | internal | |
 | `cpd tui view plan` | The Plan of the Lead in the chat slot (centre top) | internal | |
 | `cpd tui view widgets` | The Dispatch column (right) | internal | |
-| `cpd tui view worker` | An Attempt's Worker, read-only (beside the chat) | internal | |
 | `cpd tui view history` | An archived Session's history, read-only (the chat slot) | internal | |
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |

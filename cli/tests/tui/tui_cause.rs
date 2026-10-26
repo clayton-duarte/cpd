@@ -8,7 +8,7 @@ use common::sql;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::store::Store;
-use cpd_tui::read::{self, Target};
+use cpd_tui::read;
 
 #[test]
 fn the_cockpit_reads_every_cause_the_attempts_table_admits() {
@@ -46,8 +46,5 @@ fn the_cockpit_reads_every_cause_the_attempts_table_admits() {
         let flow = read::flow(&mut store, &plan).unwrap_or_else(|e| panic!("the flow read fails for cause {cause:?}: {e:?}"));
         let node = flow.jobs.iter().flat_map(|j| &j.attempts).find(|a| a.id == id).expect("the Attempt is in the flow");
         assert_eq!(node.cause.map(|c| c.as_str()), Some(cause.as_str()));
-        let worker = read::worker(&mut store, &plan, &Target::Attempt(id.clone()))
-            .unwrap_or_else(|e| panic!("the worker read fails for cause {cause:?}: {e:?}"));
-        assert_eq!(worker.attempt.expect("the Attempt").cause.map(|c| c.as_str()), Some(cause.as_str()));
     }
 }

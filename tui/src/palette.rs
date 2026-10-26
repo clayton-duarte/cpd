@@ -153,16 +153,16 @@ pub fn pulse_kind(kind: Kind) -> Color {
     }
 }
 
-/// Colours that are not a status: notes and prompts, the Worker view's roles.
+/// Colours that are not a status: notes and prompts, the session renderer's roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
     /// A dialog's input refusal.
     Note,
-    /// The User's lines in the Worker view.
+    /// The User's lines in the session renderer.
     You,
-    /// The agent's lines in the Worker view.
+    /// The agent's lines in the session renderer.
     Agent,
-    /// Tool calls in the Worker view.
+    /// Tool calls in the session renderer.
     Tool,
 }
 

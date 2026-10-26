@@ -10,8 +10,6 @@
 //! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
 //!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
-//! - [`worker()`]: the worker view, an Attempt or a Job, and its Worker Session (`attempt show`); [`latest_attempt()`]: the Attempt
-//!   a Job's Worker pane opens (the tree's `job-stuck` click).
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
@@ -45,7 +43,6 @@ mod widgets;
 pub mod watch;
 #[cfg(test)]
 mod watch_tests;
-mod worker;
 
 pub use age::age_text;
 pub use flow::{
@@ -53,7 +50,7 @@ pub use flow::{
     plan_boxes,
 };
 pub use shared::{
-    AttemptStatus, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
+    AttemptStatus, Checks, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::{Dot, OrderKey};
@@ -65,4 +62,3 @@ pub use tree::{ContextNode, PlanNode, Tree, inbox_at, snooze_end, snooze_end_at,
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, open_pulls, slots, widgets,
 };
-pub use worker::{AttemptDetail, AttemptEscalation, Target, Worker, WorkerJob, latest_attempt, worker};

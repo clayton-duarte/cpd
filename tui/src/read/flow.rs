@@ -367,14 +367,6 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
     Ok(out)
 }
 
-/// What Job `job` of `plan` waits for (the rule of [`Display::job_blockers`], as the plan view's `waiting_on`): empty for a Job that
-/// is not `queued`, is Ready or is unknown.
-pub(crate) fn waiting_on(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<Vec<String>, CpdError> {
-    let rows = jobs::load(conn, plan)?;
-    let display = Display::load(conn, plan)?;
-    Ok(rows.iter().find(|j| j.key == job.as_str()).map(|j| display.job_blockers(&rows, j)).unwrap_or_default())
-}
-
 /// Every Job of `plan` in creation order, with its Attempts.
 fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError> {
     let rows = jobs::load(conn, plan)?;

@@ -36,4 +36,3 @@ mod tui_widgets;
 mod tui_widgets_inbox;
 mod tui_widgets_inbox_actions;
 mod tui_titles;
-mod tui_worker;

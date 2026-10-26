@@ -1,11 +1,11 @@
-//! The Worker view rows show the local time of day, bare (PLAN local-time, pro-d49). The zone is `ManualClock`'s.
+//! The History view rows show the local time of day, bare (PLAN local-time, pro-d49). The zone is `ManualClock`'s.
 
 use cpd_core::clock::{Clock, ManualClock};
 
 use super::render::render;
 
 #[test]
-fn worker_rows_show_the_local_time_of_day() {
+fn history_rows_show_the_local_time_of_day() {
     let file = serde_json::json!({
         "type": "message",
         "timestamp": "2026-10-26T02:54:10.000Z",

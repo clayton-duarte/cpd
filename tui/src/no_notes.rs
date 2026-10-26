@@ -13,8 +13,7 @@ mod tests {
     use std::path::Path;
 
     /// A file or a directory (relative to `tui/src/`) that may keep a `note`, with why. A new one needs a reviewer to add it.
-    const EXEMPT: [(&str, &str); 3] = [
-        ("worker/", "its foot shows a failure to read the Attempt or its Session file: the view cannot read what it draws, a lasting state (rule (b))"),
+    const EXEMPT: [(&str, &str); 2] = [
         ("palette.rs", "defines `note()` and `Ui::Note`, which rule (c) keeps while something else uses them"),
         ("no_notes.rs", "this guard names the word it looks for"),
     ];
