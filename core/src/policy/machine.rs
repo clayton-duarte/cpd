@@ -60,6 +60,8 @@ pub struct McpServer {
     pub tool_exposure: Option<BTreeMap<String, Exposure>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOauth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<BTreeMap<String, String>>,
 }
 
 /// An entry as read: `url` is checked present afterwards, so that [`bad_key`] can read one key at a time.
@@ -212,6 +214,7 @@ pub fn parse_machine(file: &Path, text: &str) -> Result<BTreeMap<String, McpServ
                 exposure: parsed.exposure,
                 tool_exposure: parsed.tool_exposure,
                 oauth: parsed.oauth,
+                headers: None,
             },
         );
     }
