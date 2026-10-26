@@ -296,7 +296,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
             // Push (R35) by rule P: the merge stands whatever happens here.
-            let push = push(lead, &target.lead_branch, &new);
+            let push = publish(target, &new);
             // 9. Rule S on the Lead worktree; the merge stands whatever happens here.
             let stale = git::sync_lead(lead, &target.lead_branch).err();
             return finish_merge(store, target, new, cpd_kind, push, stale);
@@ -412,13 +412,22 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let (pr, _, _) = pr_of_job(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, &pr.lead_branch)
+    crate::pr::is_merged_on_github(&target.lead_worktree, pr.remote_branch())
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
 fn open_pull_request(store: &mut Store, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
     let (pr, title, jobs) = pr_of_job(store, target)?;
     crate::pr::pull_request(&target.lead_worktree, &pr, &title, &jobs)
+}
+
+/// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR unless the Job is an `open` or
+/// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
+pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
+    if target.adopted && !is_cpd_kind(target) {
+        return None;
+    }
+    push(&target.lead_worktree, &target.remote_branch, sha)
 }
 
 /// Rule P (§7.4) for `sha` on the Lead Branch `branch`, from the Lead worktree
