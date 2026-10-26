@@ -5,7 +5,6 @@ import {
 	CODEX_BULLET,
 	CODEX_COMMAND_INDENT,
 	CODEX_INDENT,
-	CODEX_MARGIN,
 	CODEX_PREVIEW_ROWS,
 	CODEX_RESULT_PREFIX,
 	CODEX_TAB,
@@ -197,7 +196,7 @@ function invocation(name: string, args: ToolArgs): Segment[] {
 
 /** Where a custom tool's opened header starts its invocation: beside the verb when it fits, else beneath it. */
 function invocationInline(verb: string, call: readonly Segment[], width: number): boolean {
-	return visibleWidth(call.map((segment) => segment.text).join("")) <= width - visibleWidth(`${CODEX_MARGIN}${CODEX_BULLET} ${verb} `);
+	return visibleWidth(call.map((segment) => segment.text).join("")) <= width - visibleWidth(`${CODEX_BULLET} ${verb} `);
 }
 
 /**
@@ -232,14 +231,14 @@ export function renderCodexCall(
 		const phase = settled(current);
 		const bullet = phase === "success" ? theme.bold(ink("success", CODEX_BULLET))
 			: phase === "error" ? theme.bold(ink("error", CODEX_BULLET)) : dot;
-		const head = (verb: string, rest: string) => `${CODEX_MARGIN}${bullet} ${theme.bold(verb)}${rest ? ` ${rest}` : ""}`;
+		const head = (verb: string, rest: string) => `${bullet} ${theme.bold(verb)}${rest ? ` ${rest}` : ""}`;
 		if (kind === "shell") {
 			if (opened(width)) {
 				const prompt = ink("bashMode", "$ ");
-				const first = width - visibleWidth(CODEX_MARGIN + "$ ");
+				const first = width - visibleWidth("$ ");
 				const rest = Math.max(1, width - visibleWidth(CODEX_COMMAND_INDENT));
 				return segments.flatMap((line, index) => wrapSegments(line, index === 0 ? first : rest, rest)
-					.map((row, position) => index === 0 && position === 0 ? `${CODEX_MARGIN}${prompt}${paintSegments(row, theme)}` : `${CODEX_COMMAND_INDENT}${paintSegments(row, theme)}`));
+					.map((row, position) => index === 0 && position === 0 ? `${prompt}${paintSegments(row, theme)}` : `${CODEX_COMMAND_INDENT}${paintSegments(row, theme)}`));
 			}
 			const exitCode = state.codex?.exitCode;
 			const verb = phase === "error" && exitCode !== undefined ? `Failed (exit ${exitCode})` : VERBS.shell[phase];
@@ -256,10 +255,10 @@ export function renderCodexCall(
 		const path = codexPath(args);
 		if (name === "edit" || name === "write") {
 			const verbs = VERBS[name];
-			if (phase === "error") return [clip(`${CODEX_MARGIN}${ink("error", theme.bold(`✘ ${verbs.error}${path ? ` ${path}` : ""}`))}`, width)];
+			if (phase === "error") return [clip(`${ink("error", theme.bold(`✘ ${verbs.error}${path ? ` ${path}` : ""}`))}`, width)];
 			if (phase === "running") return [clip(head(verbs.running, path), width)];
 			const changes = name === "write" ? { added: writeLineCount(args), removed: 0 } : state.codex?.changes ?? { added: 0, removed: 0 };
-			return [clip(`${CODEX_MARGIN}${ink("dim", CODEX_BULLET)} ${theme.bold(verbs.success)} ${path} ${changeCount(theme, changes.added, changes.removed)}`, width)];
+			return [clip(`${ink("dim", CODEX_BULLET)} ${theme.bold(verbs.success)} ${path} ${changeCount(theme, changes.added, changes.removed)}`, width)];
 		}
 		const { verb, target } = lookTitle(name, args, theme);
 		return [clip(head(verb, target), width)];
@@ -291,7 +290,7 @@ function outcomeLine(theme: Theme, isError: boolean, exitCode: number | undefine
 	const mark = isError
 		? theme.bold(ink("error", "✗")) + (exitCode !== undefined ? ` (${exitCode})` : "")
 		: theme.bold(ink("success", "✓"));
-	return `${CODEX_MARGIN}${mark}${duration ? ink("dim", ` • ${duration}`) : ""}`;
+	return `${mark}${duration ? ink("dim", ` • ${duration}`) : ""}`;
 }
 
 /** The last rows of output under `└`, each cut to the row, dim as Codex previews them. */
@@ -316,7 +315,7 @@ function outputLines(text: string): string[] {
 /** An opened call's output: whole, undimmed, wrapped from the margin. */
 function fullOutput(text: string, theme: Theme, width: number): string[] {
 	if (isEmptyOutput(text)) return [];
-	return prefixedRows(outputLines(text).map((line) => line ? [{ text: line, color: "toolOutput" as const }] : []), CODEX_MARGIN, CODEX_MARGIN, width, theme);
+	return prefixedRows(outputLines(text).map((line) => line ? [{ text: line, color: "toolOutput" as const }] : []), "", "", width, theme);
 }
 
 function dimDisclosure(theme: Theme, width: number, expanded: boolean, hidden?: number): string {
@@ -334,7 +333,7 @@ function shellVerb(isPartial: boolean, isError: boolean, exitCode: number | unde
 /** Whether a command's collapsed head hides part of it: a second line, or a first line too wide for the row. */
 function headerCut(command: string, verb: string, width: number): boolean {
 	const lines = command.split("\n");
-	return lines.length > 1 || visibleWidth(`${CODEX_MARGIN}${CODEX_BULLET} ${verb} ${lines[0] ?? ""}`) > width;
+	return lines.length > 1 || visibleWidth(`${CODEX_BULLET} ${verb} ${lines[0] ?? ""}`) > width;
 }
 
 /** What a call's output and the text it shows come to: a command's exit code apart, a read's notice apart. */

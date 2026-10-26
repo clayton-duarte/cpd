@@ -39,7 +39,7 @@ fn targets_of(conn: &rusqlite::Connection, home: &crate::home::CpdHome, context:
 /// `context delete` (§3.14).
 pub(super) fn delete(args: DeleteArgs) -> Result<Output, CpdError> {
     let id = args.id;
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let deleted: Option<Option<String>> =
         store.read(|conn| Ok(conn.query_row("SELECT deleted_at FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?))?;
     match deleted {

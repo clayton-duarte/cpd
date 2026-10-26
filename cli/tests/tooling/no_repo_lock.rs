@@ -1,110 +1,150 @@
-//! No per-repo lock (hs-d243, design `docs/research/no-repo-lock.md` §4): the built
-//! driver (`cpd attempt run`, A8) and `pr rebase` against one temporary repo with a
-//! bare `origin`, with Plans written straight into the database.
+//! No per-repo lock (hs-d243, design `docs/research/no-repo-lock.md` §4): the merge (`cpd_core::merge::merge`, which the
+//! driver calls at A8) and `pr rebase` against one repo with a bare `origin`, with Plans written straight into the
+//! database. In process, on `Fx::with_ports`: the git route, a `Runner` that holds one call, no process and no sleep.
 //!
-//! - Two Plans' Attempts merge into their two PRs of the one repo at once: a slow
-//!   `git` first on `PATH` holds each merge's compare-and-swap until both have
-//!   reached it, and records when each ran. With a lock between them the second
-//!   never reaches it while the first waits, and the windows do not overlap.
-//! - A Job merges into a PR while `pr rebase`'s Gate runs (risk 3): the merge's own
-//!   push is rejected, an accepted `push_failed`, and the rebase's push brings the
-//!   merge to `origin` by rule P.
+//! - Two Plans' Attempts merge into their two PRs of the one repo at once: the first merge's compare-and-swap is held,
+//!   and the other merge runs whole inside that hold. With a lock between them the second merge could not run while the
+//!   first holds its compare-and-swap.
+//! - A Job merges into a PR while `pr rebase`'s Gate runs (risk 3): the merge's own push is rejected, an accepted
+//!   `push_failed`, and the rebase's push brings the merge to `origin` by rule P.
 
 use crate::common;
 
-use std::collections::BTreeMap;
-use std::fs::{self, File};
-use std::os::unix::fs::PermissionsExt;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::Output as Finished;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::{CPD, TestEnv, write_executable};
+use common::fx::{Fx, exit_code};
+use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::{Call, Reply, Runner};
 use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::merge::{self, Ctx, Merge};
 use cpd_core::plan::{jobs, locked_fingerprint};
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use rusqlite::params;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+/// A `Runner` over `inner` that, at the first call `at` picks, first runs `during` (once) and then lets the call go on:
+/// the call is held while `during` runs, on the same thread, so the order is the test's and nothing waits on time.
+struct Hold {
+    inner: Arc<dyn Runner>,
+    at: Box<dyn Fn(&str, &[String]) -> bool + Send + Sync>,
+    during: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
+
+impl Hold {
+    fn before(&self, program: &str, args: &[String]) {
+        if !(self.at)(program, args) {
+            return;
+        }
+        let during = self.during.lock().unwrap().take();
+        if let Some(during) = during {
+            during();
+        }
+    }
+}
+
+impl Runner for Hold {
+    fn output(&self, cmd: &mut std::process::Command, tool: &str, deadline: Duration) -> Result<Finished, Failed> {
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        self.before(&cmd.get_program().to_string_lossy(), &args);
+        self.inner.output(cmd, tool, deadline)
+    }
+    fn output_unbounded(&self, cmd: &mut std::process::Command, tool: &str) -> std::io::Result<Finished> {
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        self.before(&cmd.get_program().to_string_lossy(), &args);
+        self.inner.output_unbounded(cmd, tool)
+    }
+    fn run(&self, call: &Call) -> Result<Finished, Failed> {
+        self.before(&call.program, &call.args);
+        self.inner.run(call)
+    }
+}
+
+/// `git update-ref` of a merge's compare-and-swap (`-m "cpd: merge <plan>/<attempt>"`).
+fn is_merge_cas(program: &str, args: &[String]) -> bool {
+    program.ends_with("git") && args.iter().any(|a| a == "update-ref") && args.iter().any(|a| a.starts_with("cpd: merge "))
+}
+
+/// pi's catalog, for the ladder's next Tier.
+fn catalog() -> Catalog {
+    let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
+    Catalog { pi_version: "1.0.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } }
+}
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] =
     [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
 
-/// How long the slow `git` holds a merge's compare-and-swap for the other merge to arrive.
-const BARRIER_SECONDS: u32 = 10;
-
-/// The repo `pay` with a bare `origin` holding `main`, a config, a fake pi install
-/// whose Tier catalog is in the cache, and Context `ctx`. No Plan yet.
-struct Fx {
-    env: TestEnv,
+/// The repo `pay` with a bare `origin` holding `main`, a config, the Tier catalog and Context `ctx`. No Plan yet.
+struct Pay {
+    fx: Fx,
     home: CpdHome,
     repo: PathBuf,
     origin: PathBuf,
 }
 
-/// A Plan's one PR `repo` in [`Fx::repo`]: its Lead Branch `cpd/<plan>` and Lead worktree.
+/// Attempt `attempt` of `plan`, `merging`, merged as the driver's A8 does, on the ports in scope.
+fn merged(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Merge {
+    let config = Config::load(home).unwrap();
+    let catalog = catalog();
+    let ctx = Ctx { home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
+    merge::merge(&mut Store::open(home, 5000).unwrap(), &ctx, plan, attempt).unwrap()
+}
+
+
+/// An Attempt in `merging`, as `attempt submit` leaves it.
+struct Submitted {
+    plan: PlanId,
+    attempt: AttemptId,
+}
+
+/// A Plan's one PR `repo` in [`Pay::repo`]: its Lead Branch `cpd/<plan>` and Lead worktree.
 struct Lead {
     plan: PlanId,
     branch: String,
     path: PathBuf,
 }
 
-/// An Attempt in `merging`, as `attempt submit` leaves it, and its driver lock file.
-struct Submitted {
-    plan: PlanId,
-    attempt: AttemptId,
-    lock: PathBuf,
-}
-
-fn fx() -> Fx {
-    let env = TestEnv::new();
+fn pay() -> Pay {
+    let fx = Fx::with_ports();
     // Every test here is about the Gate, which runs only under `pr.gate = "local"` (contract §8.3).
-    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
-    let repo = env.git_repo("pay").canonicalize().unwrap();
-    // The PRs below are of the repo `acme/pay` (their `name`): its policy file is required, empty unless a test sets hooks.
-    env.repo_policy("acme", "pay", "");
-    // git runs in this process too (the worktrees), whose environment is not the TestEnv's.
-    for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
-    }
-    let origin = env.root().join("origins/pay.git");
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    // The PRs below are of the repo `acme/pay` (their `name`): `keyed_repo` writes its empty policy file.
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    let origin = fx.env.root().join("origins/pay.git");
     fs::create_dir_all(&origin).unwrap();
-    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
-    env.git(&repo, &["push", "-q", "origin", "main"]);
+    fx.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    fx.local_origin(&repo, &origin);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
 
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(
         home.config(),
         format!(
             "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
-            env.tmux_socket()
+            fx.env.tmux_socket()
         ),
     )
     .unwrap();
-    // The pi install the driver locates at A1 for its catalog, which is read from the cache.
-    env.fake_pi("echo 'no Worker in these tests' >&2; exit 97");
-    fs::create_dir_all(env.root().join("install")).unwrap();
-    fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
-    for package in ["pi-coding-agent", "pi-ai"] {
-        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
-        fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
-    }
-    let fx = Fx { env, home, repo, origin };
-    let catalog: String = EFFORTS
+    let pay = Pay { fx, home, repo, origin };
+    let rows: String = EFFORTS
         .iter()
         .map(|(letter, model, efforts)| {
             format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
         })
         .collect();
-    fx.fixture(&format!("{catalog} INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"));
-    fx
+    pay.fixture(&format!("{rows} INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"));
+    pay
 }
 
-impl Fx {
+impl Pay {
     fn store(&self) -> Store {
         Store::open(&self.home, 5000).unwrap()
     }
@@ -114,16 +154,17 @@ impl Fx {
     }
 
     fn git(&self, dir: &Path, args: &[&str]) -> String {
-        self.env.git(dir, args)
+        self.fx.git(dir, args)
     }
 
-    /// Plan `id` (locked) with its PR `repo` in [`Fx::repo`], started: Lead Branch
+
+    /// Plan `id` (locked) with its PR `repo` in [`Pay::repo`], started: Lead Branch
     /// `cpd/<id>` cut from `main` and pushed. `open` makes the PR `open` with a pull
     /// request (Plan phase `deploy`); otherwise it is in `dispatch`.
     fn plan(&self, id: &str, open: bool) -> Lead {
         let plan = PlanId::parse(id).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
-        let created = create_lead_worktree(&self.repo, &plan, "main", &setup).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.fx.env.root().join("lead.log") };
+        let created = Ports::scope(&self.fx.fakes.ports, || create_lead_worktree(&self.repo, &plan, "main", &setup)).unwrap();
         assert!(created.push_failed.is_none(), "{:?}", created.push_failed);
         let (phase, status, columns, values, pull_request) = if open {
             (
@@ -156,7 +197,7 @@ impl Fx {
 
     /// Job `key` of `lead`'s PR (`running`, Tier S2, with its Locked-Job fingerprint) and its
     /// Attempt `<key>-a1` in `merging`: its worktree cut from the Lead Branch with one commit
-    /// writing `<key>.txt`, and its driver lock file.
+    /// writing `<key>.txt`.
     fn submitted(&self, lead: &Lead, key: &str) -> Submitted {
         let plan = lead.plan.as_str();
         self.fixture(&format!(
@@ -172,8 +213,9 @@ impl Fx {
         ));
 
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
-        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
-        let made = create_attempt_worktree(&self.repo, &lead.path, &lead.plan, &attempt, &setup).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.fx.env.root().join("attempt.log") };
+        let made =
+            Ports::scope(&self.fx.fakes.ports, || create_attempt_worktree(&self.repo, &lead.path, &lead.plan, &attempt, &setup)).unwrap();
         fs::write(made.path.join(format!("{key}.txt")), format!("{key}\n")).unwrap();
         self.git(&made.path, &["add", "-A"]);
         self.git(&made.path, &["commit", "-q", "-m", key]);
@@ -189,30 +231,24 @@ impl Fx {
                 Ok(())
             })
             .unwrap();
-        let lock = self.home.attempt_lock(&lead.plan, &attempt);
-        fs::create_dir_all(lock.parent().unwrap()).unwrap();
-        File::create(&lock).unwrap();
-        Submitted { plan: lead.plan.clone(), attempt, lock }
+        Submitted { plan: lead.plan.clone(), attempt }
     }
 
-    /// The driver of `submitted`, as `job dispatch` starts it: `cpd attempt run` with its
-    /// lock as fd 3, in this env (its `PATH` first). It takes the `merging` Attempt up at A8.
-    fn drive(&self, submitted: &Submitted) -> Child {
-        let mut command = self.env.command("sh");
-        command
-            .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
-            .arg(&submitted.lock)
-            .args([CPD, "attempt", "run", &submitted.attempt.to_string(), "--plan", submitted.plan.as_str()])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        Child(Some(common::spawn(&mut command).unwrap()))
+    /// `cpd pr rebase --plan <plan>` on `ports`: its exit status and its one JSON line.
+    fn rebase(&self, ports: &Ports, lead: &Lead) -> Value {
+        let argv = ["cpd", "pr", "rebase", "--plan", lead.plan.as_str()].map(std::ffi::OsString::from);
+        let mut stdout = Vec::new();
+        let code = exit_code(cpd::run_with(ports, argv, &mut stdout));
+        let text = String::from_utf8(stdout).unwrap();
+        assert_eq!(code, 0, "{text}");
+        serde_json::from_str(text.lines().last().expect("an output line")).unwrap_or_else(|e| panic!("{e}: {text}"))
     }
 
-    /// `cpd pr rebase --plan <plan>`, started in the background.
-    fn spawn_rebase(&self, lead: &Lead) -> Child {
-        let mut command = self.env.command(CPD);
-        command.args(["pr", "rebase", "--plan", lead.plan.as_str()]).stdout(Stdio::piped()).stderr(Stdio::piped());
-        Child(Some(common::spawn(&mut command).unwrap()))
+    /// `ports` with `inner`'s clock and spawn and a [`Hold`] over its runner.
+    fn held(&self, at: impl Fn(&str, &[String]) -> bool + Send + Sync + 'static, during: impl FnOnce() + Send + 'static) -> Ports {
+        let ports = &self.fx.fakes.ports;
+        let hold = Hold { inner: ports.runner.clone(), at: Box::new(at), during: Mutex::new(Some(Box::new(during))) };
+        Ports { runner: Arc::new(hold), ..ports.clone() }
     }
 
     fn tip(&self, lead: &Lead) -> String {
@@ -250,195 +286,112 @@ impl Fx {
             .unwrap()
     }
 
-    /// Installs the slow `git` first on the env's `PATH`. It runs the real git, except for a
-    /// merge's compare-and-swap (`update-ref -m "cpd: merge <plan>/<attempt>"`): that one
-    /// logs `start <plan>/<attempt> <ns>` to `merges.log`, waits until two merges have
-    /// arrived there (at most [`BARRIER_SECONDS`]), runs, then logs `end … <ns>`.
-    fn slow_git(&self) {
-        let real = std::env::split_paths(common::inherited_path())
-            .filter(|dir| *dir != self.env.bin())
-            .map(|dir| dir.join("git"))
-            .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
-            .expect("git on PATH");
-        let root = self.env.root();
-        write_executable(
-            &self.env.bin().join("git"),
-            &format!(
-                r#"#!/bin/sh
-real='{real}'
-dir='{arrived}'
-log='{log}'
-cas= merge=
-for a in "$@"; do
-  case "$a" in
-    update-ref) cas=1 ;;
-    "cpd: merge "*) merge=${{a#cpd: merge }} ;;
-  esac
-done
-if [ -z "$cas" ] || [ -z "$merge" ]; then exec "$real" "$@"; fi
-mkdir -p "$dir"
-: > "$dir/$(printf '%s' "$merge" | tr / _)"
-echo "start $merge $(date +%s%N)" >> "$log"
-i=0
-while [ "$i" -lt {ticks} ]; do
-  n=0
-  for f in "$dir"/*; do [ -e "$f" ] && n=$((n+1)); done
-  [ "$n" -ge 2 ] && break
-  sleep 0.1
-  i=$((i+1))
-done
-"$real" "$@"
-rc=$?
-echo "end $merge $(date +%s%N)" >> "$log"
-exit $rc
-"#,
-                real = real.display(),
-                arrived = root.join("arrived").display(),
-                log = root.join("merges.log").display(),
-                ticks = BARRIER_SECONDS * 10,
-            ),
-        );
-    }
-
-    /// The window `(start, end)` in ns of each merge's compare-and-swap, from the slow `git`'s log.
-    fn windows(&self) -> BTreeMap<String, (u128, u128)> {
-        let log = fs::read_to_string(self.env.root().join("merges.log")).unwrap_or_default();
-        let mut windows: BTreeMap<String, (Option<u128>, Option<u128>)> = BTreeMap::new();
-        for line in log.lines() {
-            let [what, merge, ns] = line.split(' ').collect::<Vec<_>>()[..] else { panic!("bad log line {line:?}: {log}") };
-            let ns: u128 = ns.parse().unwrap_or_else(|e| panic!("{e}: {log}"));
-            let window = windows.entry(merge.to_owned()).or_default();
-            match what {
-                "start" => assert!(window.0.replace(ns).is_none(), "two starts of {merge}: {log}"),
-                "end" => assert!(window.1.replace(ns).is_none(), "two ends of {merge}: {log}"),
-                _ => panic!("bad log line {line:?}: {log}"),
-            }
-        }
-        windows
-            .into_iter()
-            .map(|(merge, w)| match w {
-                (Some(start), Some(end)) => (merge, (start, end)),
-                _ => panic!("{merge} has no whole window: {log}"),
-            })
-            .collect()
-    }
 }
 
-/// A child process, killed when dropped: a test that panics leaves none behind.
-struct Child(Option<std::process::Child>);
-
-impl Child {
-    /// Its stdout as JSON, once it has exited (at most 120 s).
-    fn finish(mut self) -> Value {
-        let child = self.0.as_mut().unwrap();
-        common::wait_until_for("the child to exit", Duration::from_secs(120), || child.try_wait().unwrap().is_some());
-        let out = self.0.take().unwrap().wait_with_output().unwrap();
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let last = stdout.lines().last().unwrap_or_else(|| panic!("no output; stderr: {stderr}"));
-        serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {stdout}\nstderr: {stderr}"))
-    }
-}
-
-impl Drop for Child {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
+/// The status of an Attempt, read on its own connection.
+fn status_of(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> String {
+    Store::open(home, 5000)
+        .unwrap()
+        .read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE plan = ?1 AND id = ?2", params![plan.as_str(), attempt.to_string()], |r| r.get(0))?))
+        .unwrap()
 }
 
 // ------------------------------------------------------- two Plans, one repo
 
 #[test]
 fn two_plans_merge_into_their_prs_of_one_repo_at_once_with_overlapping_windows_and_no_error() {
-    let fx = fx();
-    let (pay, web) = (fx.plan("pay", false), fx.plan("web", false));
-    let (pay_old, web_old) = (fx.tip(&pay), fx.tip(&web));
-    let api = fx.submitted(&pay, "api");
-    let ui = fx.submitted(&web, "ui");
-    fx.slow_git();
+    let pay = pay();
+    let (pay_lead, web_lead) = (pay.plan("pay", false), pay.plan("web", false));
+    let (pay_old, web_old) = (pay.tip(&pay_lead), pay.tip(&web_lead));
+    let api = pay.submitted(&pay_lead, "api");
+    let ui = pay.submitted(&web_lead, "ui");
+    // The first merge's compare-and-swap is held; `ui`'s merge runs whole inside the hold and leaves what it saw.
+    let inside: Arc<Mutex<Option<(Merge, String)>>> = Arc::default();
+    let ports = {
+        let (home, ui, api, inside) = (pay.home.clone(), (ui.plan.clone(), ui.attempt.clone()), (api.plan.clone(), api.attempt.clone()), inside.clone());
+        pay.held(is_merge_cas, move || {
+            let second = merged(&home, &ui.0, &ui.1);
+            *inside.lock().unwrap() = Some((second, status_of(&home, &api.0, &api.1)));
+        })
+    };
 
-    let (first, second) = (fx.drive(&api), fx.drive(&ui));
-    let outs = [first.finish(), second.finish()];
+    let first = Ports::scope(&ports, || merged(&pay.home, &api.plan, &api.attempt));
 
-    for (out, id) in outs.iter().zip(["api-a1", "ui-a1"]) {
-        assert_eq!(out, &json!({"ok": true, "attempt": id, "outcome": "merged", "cause": "merged"}));
-    }
-    // Both compare-and-swaps were under way at once: neither merge waited for the other.
-    let windows = fx.windows();
-    assert_eq!(windows.keys().collect::<Vec<_>>(), ["pay/api-a1", "web/ui-a1"], "{windows:?}");
-    let ((api_start, api_end), (ui_start, ui_end)) = (windows["pay/api-a1"], windows["web/ui-a1"]);
-    assert!(api_start < ui_end && ui_start < api_end, "the merge windows do not overlap: {windows:?}");
+    // `ui` merged while `api` was held at its compare-and-swap: neither merge waited for the other.
+    let (second, api_during) = inside.lock().unwrap().take().expect("the other merge ran inside the hold");
+    assert_eq!(api_during, "merging", "api was held");
+    let (api_tip, ui_tip) = (pay.tip(&pay_lead), pay.tip(&web_lead));
+    assert_eq!((first.end, second.end), (merge::End::Merged { sha: api_tip.clone() }, merge::End::Merged { sha: ui_tip.clone() }));
     // Each landed on its own Plan's Lead Branch, was pushed, and its Lead worktree followed it.
-    for (lead, submitted, old, mine, theirs) in [(&pay, &api, &pay_old, "api.txt", "ui.txt"), (&web, &ui, &web_old, "ui.txt", "api.txt")] {
-        let tip = fx.tip(lead);
-        assert_eq!(fx.ended(submitted), ("ended".into(), Some("merged".into()), Some(tip.clone()), "merged".into()));
-        assert_eq!(&fx.git(&fx.repo, &["rev-parse", &format!("{tip}~1")]), old, "one commit on {}", lead.branch);
-        assert_eq!(fx.remote_tip(lead), tip);
-        assert_eq!(fx.git(&lead.path, &["rev-parse", "HEAD"]), tip);
-        assert_eq!(fx.git(&lead.path, &["status", "--porcelain"]), "");
+    for (lead, submitted, old, mine, theirs) in [(&pay_lead, &api, &pay_old, "api.txt", "ui.txt"), (&web_lead, &ui, &web_old, "ui.txt", "api.txt")] {
+        let tip = pay.tip(lead);
+        assert_eq!(pay.ended(submitted), ("ended".into(), Some("merged".into()), Some(tip.clone()), "merged".into()));
+        assert_eq!(&pay.git(&pay.repo, &["rev-parse", &format!("{tip}~1")]), old, "one commit on {}", lead.branch);
+        assert_eq!(pay.remote_tip(lead), tip);
+        assert_eq!(pay.git(&lead.path, &["rev-parse", "HEAD"]), tip);
+        assert_eq!(pay.git(&lead.path, &["status", "--porcelain"]), "");
         assert!(lead.path.join(mine).exists() && !lead.path.join(theirs).exists(), "{}", lead.branch);
     }
-    assert_eq!(fx.errors(), Vec::<(Option<String>, Option<String>, Value)>::new());
+    assert_eq!(pay.errors(), Vec::<(Option<String>, Option<String>, Value)>::new());
 }
 
 // ------------------------------------------------- a merge during pr rebase's Gate
 
-/// A `pre-merge` paused mid-run: it creates `<root>/gate-started`, then waits for
-/// `<root>/gate-go` (at most 60 s).
-fn paused_gate(root: &Path) -> String {
-    let (started, go) = (root.join("gate-started"), root.join("gate-go"));
-    format!(
-        "pre-merge = \"touch {}; i=0; while [ ! -e {} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\"\n",
-        started.display(),
-        go.display()
-    )
-}
-
 #[test]
 fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_push() {
-    let fx = fx();
-    let pay = fx.plan("pay", true);
-    // The Gate's hooks are the repo file's. The Lead Branch has a commit of its own, pushed: the PR's head and the
-    // lease, which the rebase rewrites.
-    fx.env.repo_policy("acme", "pay", &format!("[hooks]\n{}", paused_gate(fx.env.root())));
-    fs::write(pay.path.join("lead.txt"), "lead\n").unwrap();
-    fx.git(&pay.path, &["add", "-A"]);
-    fx.git(&pay.path, &["commit", "-q", "-m", "lead"]);
-    fx.git(&pay.path, &["push", "-q", "origin", &pay.branch]);
-    let api = fx.submitted(&pay, "api");
+    let pay = pay();
+    let lead = pay.plan("pay", true);
+    // The Gate's one hook is the repo file's; the fake `sh` runs it, and the merge runs inside that call.
+    pay.fx.env.repo_policy("acme", "pay", "[hooks]\npre-merge = \"the-gate\"\n");
+    pay.fx.fake("sh", Reply::ok(""));
+    // The Lead Branch has a commit of its own, pushed: the PR's head and the lease, which the rebase rewrites.
+    fs::write(lead.path.join("lead.txt"), "lead\n").unwrap();
+    pay.git(&lead.path, &["add", "-A"]);
+    pay.git(&lead.path, &["commit", "-q", "-m", "lead"]);
+    pay.git(&lead.path, &["push", "-q", "origin", &lead.branch]);
+    let api = pay.submitted(&lead, "api");
     // The base moved: the rebase rewrites the Lead Branch.
-    fs::write(fx.repo.join("base.txt"), "base\n").unwrap();
-    fx.git(&fx.repo, &["add", "-A"]);
-    fx.git(&fx.repo, &["commit", "-q", "-m", "base"]);
-    fx.git(&fx.repo, &["push", "-q", "origin", "main"]);
+    fs::write(pay.repo.join("base.txt"), "base\n").unwrap();
+    pay.git(&pay.repo, &["add", "-A"]);
+    pay.git(&pay.repo, &["commit", "-q", "-m", "base"]);
+    pay.git(&pay.repo, &["push", "-q", "origin", "main"]);
+    // The rebase's compare-and-swap is done (R'); its push waits for the Gate, which is held. The merge runs to its
+    // end meanwhile: it lands on R', and its own push, against the remote's pre-rebase head, is rejected.
+    let inside: Arc<Mutex<Option<(Merge, String)>>> = Arc::default();
+    let ports = {
+        let (home, api, plan, repo, inside) = (pay.home.clone(), api.attempt.clone(), lead.plan.clone(), pay.repo.clone(), inside.clone());
+        let (branch, fakes) = (lead.branch.clone(), pay.fx.fakes.ports.clone());
+        pay.held(
+            |program, args| program == "sh" && args.first().map(String::as_str) == Some("-c"),
+            // A Gate hook runs on a thread of its own, which has no ambient ports: the merge runs on the fakes'.
+            move || {
+                Ports::scope(&fakes, || {
+                    let rebased = cpd_core::git::run::rev_parse(&repo, &format!("refs/heads/{branch}")).unwrap();
+                    *inside.lock().unwrap() = Some((merged(&home, &plan, &api), rebased));
+                })
+            },
+        )
+    };
 
-    let rebase = fx.spawn_rebase(&pay);
-    common::wait_until_for("the Gate to start", Duration::from_secs(120), || fx.env.root().join("gate-started").exists());
-    // The rebase's compare-and-swap is done (R'); its push waits for the Gate. The merge
-    // runs to its end meanwhile: it lands on R', and its own push, against the remote's
-    // pre-rebase head, is rejected.
-    let rebased = fx.tip(&pay);
-    let driven = fx.drive(&api).finish();
-    assert_eq!(driven, json!({"ok": true, "attempt": "api-a1", "outcome": "merged", "cause": "merged"}));
-    let merged = fx.tip(&pay);
-    fs::write(fx.env.root().join("gate-go"), "").unwrap();
-    let out = rebase.finish();
+    let out = pay.rebase(&ports, &lead);
 
+    let (merge, rebased) = inside.lock().unwrap().take().expect("the merge ran inside the Gate");
+    let merged_tip = pay.tip(&lead);
+    assert_eq!(merge.end, merge::End::Merged { sha: merged_tip.clone() });
     assert_eq!(out["ok"], true, "{out}");
     assert_eq!((out["rebased"].as_bool(), out["new"].as_str()), (Some(true), Some(rebased.as_str())), "{out}");
-    assert_eq!(fx.ended(&api), ("ended".into(), Some("merged".into()), Some(merged.clone()), "merged".into()));
-    assert_eq!(fx.git(&fx.repo, &["rev-parse", &format!("{merged}~1")]), rebased);
-    // The merge's rejected push is the one Event, as accepted; the rebase pushed R' and then
-    // the merge after it, by rule P.
-    let errors = fx.errors();
+    assert_eq!(pay.ended(&api), ("ended".into(), Some("merged".into()), Some(merged_tip.clone()), "merged".into()));
+    // The merge landed on R'. It is an ancestor, not the parent: the fake's rebase keeps the Lead commit the merge replays
+    // although R' holds it (patch-id dedup is not modelled, docs/implementing.md "The git route"), where git drops it.
+    let landed_on_rebased = pay.fx.git_output(&pay.repo, &["merge-base", "--is-ancestor", &rebased, &merged_tip]);
+    assert_eq!(landed_on_rebased.status.code(), Some(0), "{rebased} is not under {merged_tip}");
+    // The merge's rejected push is the one Event, as accepted; the rebase pushed R' and then the merge after it, by rule P.
+    let errors = pay.errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!((errors[0].1.as_deref(), errors[0].2["code"].as_str()), (Some("api-a1"), Some("push_failed")), "{errors:?}");
-    assert_eq!(fx.remote_tip(&pay), merged);
+    assert_eq!(pay.remote_tip(&lead), merged_tip);
     // The Lead worktree followed the Lead Branch (rule S).
-    assert_eq!(fx.git(&pay.path, &["rev-parse", "HEAD"]), merged);
-    assert_eq!(fx.git(&pay.path, &["status", "--porcelain"]), "");
-    assert!(pay.path.join("api.txt").exists() && pay.path.join("base.txt").exists());
+    assert_eq!(pay.git(&lead.path, &["rev-parse", "HEAD"]), merged_tip);
+    assert_eq!(pay.git(&lead.path, &["status", "--porcelain"]), "");
+    assert!(lead.path.join("api.txt").exists() && lead.path.join("base.txt").exists());
 }

@@ -3,6 +3,7 @@
 //! every draft Job with its Locked-Job fingerprint, and starts the engine with
 //! `cpd watch --ensure`.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
@@ -16,8 +17,11 @@ use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{TAIL_LINES, tail};
+use crate::host::deadline::Failed;
+use crate::host::runner::{NO_DEADLINE, Runner};
 use crate::ids::PlanId;
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::pr::start::{self, By, Pushed};
 use crate::session::PROGRAM;
 
@@ -171,6 +175,11 @@ fn cas_lost(id: &PlanId) -> CpdError {
 /// If it fails, the Plan stays locked and the result is `watch_start_failed`
 /// with the ensure's error in `details.error` (commands.md §4.8).
 fn ensure_watch(env: &Env, plan: &PlanId) -> Result<Value, CpdError> {
+    ensure_watch_with(&*Ports::current().runner, env.home.root(), plan)
+}
+
+/// [`ensure_watch`] on `runner`: one call of `cpd watch --ensure` with `CPD_HOME=<root>` and `root` as its cwd.
+pub(crate) fn ensure_watch_with(runner: &dyn Runner, root: &Path, plan: &PlanId) -> Result<Value, CpdError> {
     let argv = [PROGRAM, "watch", "--ensure"];
     let failed = |why: String, error: Value| {
         CpdError::new(
@@ -182,13 +191,12 @@ fn ensure_watch(env: &Env, plan: &PlanId) -> Result<Value, CpdError> {
         .with("error", error)
         .with("next", "cpd watch --ensure")
     };
-    let out = Command::new(argv[0])
-        .args(&argv[1..])
-        .env("CPD_HOME", env.home.root())
-        .current_dir(env.home.root())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| failed(format!("cannot run {}: {e}.", argv[0]), json!({"message": e.to_string()})))?;
+    let mut command = Command::new(argv[0]);
+    command.args(&argv[1..]).env("CPD_HOME", root).current_dir(root).stdin(Stdio::null());
+    let out = runner.output(&mut command, "cpd", NO_DEADLINE).map_err(|e| match e {
+        Failed::Io(e) => failed(format!("cannot run {}: {e}.", argv[0]), json!({"message": e.to_string()})),
+        Failed::Timeout(e) => failed(e.message().to_owned(), json!({"message": e.message()})),
+    })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let parsed: Option<Map<String, Value>> = serde_json::from_str::<Value>(stdout.trim()).ok().and_then(|v| match v {
         Value::Object(map) => Some(map),

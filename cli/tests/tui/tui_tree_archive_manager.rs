@@ -1,31 +1,17 @@
 //! Archive on a Context row whose Manager holds the chat slot (commands.md §13.2 "Archive of the chat slot's Lead", hs-d90):
-//! the tree frees the slot (opens the next live Session, else `session park`), then runs `context archive`. End to end, as
-//! `tui_tree.rs` does (its helpers are private, so the few needed are repeated here): a pane of a private tmux server over a
-//! prepared store, a fake tmux whose popup confirms, and a fake `cpd` that records its calls and keeps the CLI's refusal:
-//! `context archive` fails with `in_chat_slot` until a `session open` or `session park` ran before it.
+//! the tree frees the slot (opens the next live Session, else `session park`), then runs `context archive`. In the test
+//! process on a `Tree` (`common/tree.rs`) over a prepared store, with a fake tmux whose popup confirms, and a fake `cpd` that
+//! records its calls and keeps the CLI's refusal: `context archive` fails with `in_chat_slot` until a `session open` or
+//! `session park` ran before it.
 
-use crate::common;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use common::{CPD, TestEnv, sql};
+use crate::common::tree::{self as drive, Tree, engine, fx};
+use crate::common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::store::Store;
-use nix::fcntl::{Flock, FlockArg};
-
-const SESSION: &str = "tree";
-
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    let path = env.cpd_home().join("locks/watch.lock");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let lock = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    std::mem::forget(lock);
-    env
-}
 
 fn session(id: &str, role: &str, context: &str, plan: Option<&str>, created: &str) -> String {
     let plan = plan.map_or("NULL".to_owned(), |p| format!("'{p}'"));
@@ -61,108 +47,77 @@ fn populate(env: &TestEnv, with_beta: bool) {
 }
 
 /// The fake `cpd`: `context archive` is refused with `in_chat_slot` unless `session open` or `session park` ran first; its
-/// success leaves `archived` in the env's root.
-fn fake_cpd(env: &TestEnv) {
-    let root = env.root().display().to_string();
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in\n\
-             \"session open\"|\"session park\") touch '{root}/freed'; echo '{{\"ok\":true}}';;\n\
-             \"context archive\")\n\
-               if [ -e '{root}/freed' ]; then touch '{root}/archived'; echo '{{\"ok\":true}}';\n\
-               else echo '{{\"ok\":false,\"error\":{{\"code\":\"in_chat_slot\",\"message\":\"Lead {manager} is in the chat slot\",\"details\":{{}}}}}}'; exit 3; fi;;\n\
-             *) echo '{{\"ok\":true}}';;\n\
-             esac",
-            manager = "m-alpha"
-        ),
-    );
+/// success sets `archived`.
+#[derive(Default)]
+struct Slot {
+    freed: AtomicBool,
+    archived: AtomicBool,
 }
 
-/// A fake tmux with a client attached whose `display-popup` confirms (writes the answer to the popup's `--out` file).
-fn fake_confirming_dialogs(env: &TestEnv) {
-    std::fs::write(env.root().join("dialog-answer.json"), r#"{"confirmed":true}"#).unwrap();
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    env.fake(
-        "tmux",
-        &format!(
-            "case \"$*\" in\n *display-popup*) for _c; do :; done\n out=$(printf '%s' \"$_c\" | sed -n \"s/.*--out='\\([^']*\\)'.*/\\1/p\")\n cat '{answer}' > \"$out\";;\n *list-clients*) echo '100 200 60';;\n *) exec {real} \"$@\";;\nesac",
-            answer = env.root().join("dialog-answer.json").display(),
-            real = real.trim()
-        ),
-    );
-}
-
-fn screen(env: &TestEnv) -> Vec<String> {
-    let out = env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-    String::from_utf8(out.stdout).unwrap().lines().map(|l| l.trim_end().to_owned()).collect()
-}
-
-fn type_text(env: &TestEnv, text: &str) {
-    assert!(env.tmux(&["send-keys", "-t", SESSION, "-l", text]).status.success());
-}
-
-fn mouse(env: &TestEnv, button: u8, column: u16, row: u16) {
-    for end in ['M', 'm'] {
-        type_text(env, &format!("\x1b[<{button};{};{}{end}", column + 1, row + 1));
+impl Handler for Slot {
+    fn handle(&self, call: &Call) -> Reply {
+        match call.args.iter().take(2).map(String::as_str).collect::<Vec<_>>()[..] {
+            ["session", "open" | "park"] => {
+                self.freed.store(true, Ordering::SeqCst);
+                Reply::ok(r#"{"ok":true}"#)
+            }
+            ["context", "archive"] if self.freed.load(Ordering::SeqCst) => {
+                self.archived.store(true, Ordering::SeqCst);
+                Reply::ok(r#"{"ok":true}"#)
+            }
+            ["context", "archive"] => Reply::exit(
+                3,
+                r#"{"ok":false,"error":{"code":"in_chat_slot","message":"Lead m-alpha is in the chat slot","details":{}}}"#,
+                "",
+            ),
+            _ => Reply::ok(r#"{"ok":true}"#),
+        }
     }
 }
 
-fn log(env: &TestEnv) -> String {
-    std::fs::read_to_string(env.cpd_home().join("run/tui/tree.log")).unwrap_or_default()
-}
-
-fn words(w: &[&str]) -> Vec<String> {
-    w.iter().map(|s| (*s).to_owned()).collect()
-}
-
 /// Archive on the Context `alpha`'s row, confirmed; returns once its `context archive` call has been made.
-fn archive_alpha(env: &TestEnv) {
-    let out = env.tmux(&[
-        "-u", "set-option", "-g", "remain-on-exit", "on", ";", "new-session", "-d", "-s", SESSION, "-x", "60", "-y", "14",
-        &format!("{CPD} tui view tree"),
-    ]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    common::wait_screen("the tree", || screen(env), |s| s.iter().any(|r| r.contains("alpha")));
-    mouse(env, 2, 5, 1); // right click on the Context `alpha`: Archive is the fourth item of its menu
-    common::wait_screen("the menu", || screen(env), |s| s.iter().any(|r| r.contains("New Plan…")));
-    mouse(env, 0, 7, 5);
-    common::wait_some("the archive call", common::WAIT, || {
-        let calls = env.calls("cpd");
-        if calls.iter().any(|c| c[..2] == words(&["context", "archive"])[..]) { Ok(()) } else { Err(format!("got {calls:?}, log: {}", log(env))) }
-    });
+fn archive_alpha(fx: &crate::common::fx::Fx, tree: &mut Tree) {
+    tree.until("the tree", |s| s.iter().any(|r| r.contains("alpha")));
+    tree.right_click(5, 1); // the Context `alpha`: Archive is the fourth item of its menu
+    tree.until("the menu", |s| s.iter().any(|r| r.contains("New Plan…")));
+    tree.click(7, 5);
+    tree.until_that("the archive call", |_| drive::calls(fx).iter().any(|c| c[..2] == drive::words(&["context", "archive"])[..]));
+}
+
+/// Archives `alpha` (with a Context `beta` after it when `with_beta`) in a tree with the [`Slot`] for `cpd` and a confirming
+/// popup; the `cpd` calls, whether the Context ended archived, and the tree's log.
+fn archived_alpha(with_beta: bool) -> (Vec<Vec<String>>, bool, String) {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate(&fx.env, with_beta);
+    let slot = Arc::new(Slot::default());
+    let _ = (*fx.fakes.runner).clone().route("cpd", slot.clone());
+    let dialogs = drive::dialogs(&fx);
+    dialogs.confirm();
+    let mut tree = Tree::start(&fx, 60, 14);
+    archive_alpha(&fx, &mut tree);
+    tree.until_that("the Context to be archived", |_| slot.archived.load(Ordering::SeqCst));
+    (drive::calls(&fx), slot.archived.load(Ordering::SeqCst), tree.log())
 }
 
 #[test]
 fn context_archive_frees_the_slot_held_by_its_manager() {
-    let env = env();
-    populate(&env, true);
-    fake_cpd(&env);
-    fake_confirming_dialogs(&env);
-    archive_alpha(&env);
+    let (calls, archived, log) = archived_alpha(true);
     assert_eq!(
-        env.calls("cpd"),
-        [words(&["session", "open", "l-rel"]), words(&["context", "archive", "alpha"])],
-        "the next live Session after the Context, then the archive; log: {}",
-        log(&env)
+        calls,
+        [drive::words(&["session", "open", "l-rel"]), drive::words(&["context", "archive", "alpha"])],
+        "the next live Session after the Context, then the archive; log: {log}"
     );
-    common::wait_until("the Context to be archived", || env.root().join("archived").exists());
-    assert!(env.root().join("archived").exists(), "the Context ends archived (not refused in_chat_slot); log: {}", log(&env));
+    assert!(archived, "the Context ends archived (not refused in_chat_slot); log: {log}");
 }
 
 #[test]
 fn context_archive_parks_when_no_other_session_is_live() {
-    let env = env();
-    populate(&env, false);
-    fake_cpd(&env);
-    fake_confirming_dialogs(&env);
-    archive_alpha(&env);
+    let (calls, archived, log) = archived_alpha(false);
     assert_eq!(
-        env.calls("cpd"),
-        [words(&["session", "park"]), words(&["context", "archive", "alpha"])],
-        "no other live Session: the slot is parked, then the archive; log: {}",
-        log(&env)
+        calls,
+        [drive::words(&["session", "park"]), drive::words(&["context", "archive", "alpha"])],
+        "no other live Session: the slot is parked, then the archive; log: {log}"
     );
-    common::wait_until("the Context to be archived", || env.root().join("archived").exists());
-    assert!(env.root().join("archived").exists(), "the Context ends archived (not refused in_chat_slot); log: {}", log(&env));
+    assert!(archived, "the Context ends archived (not refused in_chat_slot); log: {log}");
 }

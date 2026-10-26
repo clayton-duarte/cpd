@@ -9,10 +9,16 @@ publish.workspace = true
 name = "cpd_core"
 path = "src/lib.rs"
 
+[features]
+# The in-process fakes of tmux and git (`core/src/fakes`), for the tests of the crates above core.
+fakes = ["dep:parking_lot"]
+
 [dependencies]
 clap.workspace = true
 minijinja.workspace = true
 nix.workspace = true
+# Only the fakes (feature `fakes`): a lock the same thread takes again, for a `run-shell` child that calls the fake tmux.
+parking_lot = { workspace = true, optional = true }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +31,8 @@ uuid.workspace = true
 libproc.workspace = true
 
 [dev-dependencies]
+# The tests of core's own fakes (`core/src/fakes`) need the feature `fakes` under `-p cpd-core` too.
+cpd-core = { path = ".", features = ["fakes"] }
 # Not used by core. It makes `-p cpd-core` resolve dependency features as
 # `--workspace` does: ratatui is what enables rustix `termios`/`stdio`,
 # hashbrown 0.16's features, syn `extra-traits` and time `local-offset`. Without

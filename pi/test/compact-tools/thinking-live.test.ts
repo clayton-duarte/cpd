@@ -11,6 +11,8 @@ import { ThinkingCycleController } from "../../compact-tools/extensions/compact-
 import chalk from "chalk";
 chalk.level = 3; // pi draws italic with chalk, which is colourless off a TTY: the bytes must be the ones a terminal gets
 initTheme("dark", false);
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-live-agent-"));
 test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
 
@@ -29,7 +31,7 @@ function live(hideThinkingBlock = false) {
 	const pi = { on: () => {}, registerMarkdownTransformer: (h: typeof transform) => { transform = h; } } as unknown as ExtensionAPI;
 	const controller = new ThinkingCycleController(pi, () => true, () => NERD);
 	const message = new AssistantMessageComponent({
-		content: [{ type: "thinking", thinking: TEXT }, { type: "text", text: "done" }], stopReason: "stop",
+		content: [{ type: "thinking", thinking: TEXT }, { type: "text", text: "done" }], stopReason: "stop", timestamp: TIME_MS,
 	} as never, hideThinkingBlock, undefined, undefined, 1, [(m: string, c: unknown) => transform!(m, c)] as never);
 	controller.bind({ ui: { theme, setHiddenThinkingLabel: (l?: string) => { label = l; if (l !== undefined) message.setHiddenThinkingLabel(l); }, onTerminalInput: (h: typeof input) => { input = h; return () => {}; } } } as unknown as ExtensionContext);
 	const draw = () => message.render(80);
@@ -48,10 +50,10 @@ const EXPANDED = [
 	"│ built.",
 	"│",
 	"│ Then decide what the fold should hold.",
-	"╰\u{F0B2C} collapse",
+	"╰\u{F0B2C} collapse · 03:11",
 	"done",
 ];
-const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand", "done"];
+const FOLDED = [`╭─${LEFT}Thinking…${RIGHT}`, "╰\u{F0B26} expand · 03:11", "done"];
 
 /**
  * String and template literals of a source holding `...`; a spread and a comment are not literals.

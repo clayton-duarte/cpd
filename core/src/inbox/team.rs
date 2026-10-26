@@ -15,7 +15,9 @@ use serde_json::Value;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::deadline::{self, Failed};
+use crate::host::deadline::Failed;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -183,6 +185,11 @@ fn gh_failed(message: String, stderr: &str) -> CpdError {
 /// request that GitHub cannot find (or whose repo is no `owner/name`) is `None`; any other error of the call, or
 /// an answer without `data`, is `gh_failed`, never "no pull requests". An empty `refs` makes no call.
 pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
+    github_lookup_with(&*Ports::current().runner, home, refs)
+}
+
+/// [`github_lookup`] on `runner`.
+pub fn github_lookup_with(runner: &dyn Runner, home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, CpdError> {
     let mut query = String::from("query { viewer { login }");
     for (i, (repo, number)) in refs.iter().enumerate() {
         let Some((owner, name)) = repo_parts(repo) else { continue };
@@ -197,7 +204,7 @@ pub fn github_lookup(home: &CpdHome, refs: &[(String, u64)]) -> Result<Lookup, C
         .env("NO_COLOR", "1")
         .current_dir(home.root())
         .stdin(std::process::Stdio::null());
-    let out = match deadline::output(&mut cmd, "gh", GITHUB_DEADLINE) {
+    let out = match runner.output(&mut cmd, "gh", GITHUB_DEADLINE) {
         Ok(out) => out,
         Err(Failed::Io(e)) => return Err(gh_failed(format!("Cannot run gh: {e}."), &e.to_string())),
         Err(Failed::Timeout(e)) => return Err(e),

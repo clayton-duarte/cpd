@@ -2,7 +2,7 @@
 //! JSON, every field required, unknown fields refused with `spec_invalid`
 //! (exit 2) and the JSON path of the fault in `details.path`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
@@ -41,6 +41,59 @@ impl Spec {
         Ok(())
     }
 
+    /// The Spec names no primary checkout of any PR of its Plan (commands.md §5.1 "A Spec names no primary
+    /// checkout", §5.2): every string is searched for each `roots` entry's root (a PR key and its repo path),
+    /// or, when that root is inside `home`, its `~`, `$HOME` and `${HOME}` forms. A form matches where it ends
+    /// at the end of the string or before a character outside `[A-Za-z0-9._-]`; the first match in field order
+    /// (goal, context, touches, acceptance, out_of_scope, tests, test_files) then PR order is `spec_invalid`
+    /// with `details {path, primary, pr}`. Pure: no I/O, so unit tests reach it.
+    pub fn check_primary_roots(&self, roots: &[(String, PathBuf)], home: &Path) -> Result<(), CpdError> {
+        let mut fields: Vec<(String, &str)> =
+            vec![("$.goal".to_owned(), self.goal.as_str()), ("$.context".to_owned(), self.context.as_str())];
+        let lists: [(&str, Option<&Vec<String>>); 5] = [
+            ("touches", Some(&self.touches)),
+            ("acceptance", Some(&self.acceptance)),
+            ("out_of_scope", Some(&self.out_of_scope)),
+            ("tests", self.tests.as_ref()),
+            ("test_files", self.test_files.as_ref()),
+        ];
+        for (name, values) in lists {
+            if let Some(values) = values {
+                for (i, value) in values.iter().enumerate() {
+                    fields.push((format!("$.{name}[{i}]"), value.as_str()));
+                }
+            }
+        }
+        for (path, value) in &fields {
+            for (key, root) in roots {
+                if names_root(value, root, home) {
+                    let primary = root.display().to_string();
+                    return Err(invalid(
+                        path,
+                        format!(
+                            "the Spec names {primary}, the primary checkout of the repo of PR {key}; a Worker works in its own worktree; write paths relative to the repo, and to read the latest main say `git fetch origin` then `git show origin/main:<path>`"
+                        ),
+                    )
+                    .with("primary", primary)
+                    .with("pr", key.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `test_files` are repo-relative: no leading `/` (commands.md §5, the rule of the `protected` list,
+    /// contract §7.5). Checked after [`Spec::check_primary_roots`], which reports a primary checkout first.
+    pub fn check_files_relative(&self) -> Result<(), CpdError> {
+        let Some(files) = &self.test_files else { return Ok(()) };
+        for (i, file) in files.iter().enumerate() {
+            if file.starts_with('/') {
+                return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
+            }
+        }
+        Ok(())
+    }
+
     /// The Spec as a Job holds it.
     pub fn stored(&self) -> JobSpec {
         JobSpec {
@@ -64,6 +117,47 @@ pub fn read(path: &Path) -> Result<Spec, CpdError> {
 
 fn invalid(path: &str, why: impl std::fmt::Display) -> CpdError {
     CpdError::new(ErrorCode::SpecInvalid, format!("The Spec is invalid at {path}: {why}.")).with("path", path)
+}
+
+/// Whether `value` names `root`, directly or by a home form of it: the forms are `<root>` and, when `root` is
+/// inside `home`, `~/<rest>`, `$HOME/<rest>` and `${HOME}/<rest>`.
+fn names_root(value: &str, root: &Path, home: &Path) -> bool {
+    if boundaried(value, &root.to_string_lossy()) {
+        return true;
+    }
+    if home.as_os_str().is_empty() {
+        return false;
+    }
+    let Ok(rest) = root.strip_prefix(home) else {
+        return false;
+    };
+    let rest = rest.to_string_lossy();
+    ["~", "$HOME", "${HOME}"].into_iter().any(|prefix| {
+        let form = if rest.is_empty() { prefix.to_owned() } else { format!("{prefix}/{rest}") };
+        boundaried(value, &form)
+    })
+}
+
+/// Whether `form` occurs in `value` ending at the end of `value` or before a character outside
+/// `[A-Za-z0-9._-]` (commands.md §5.1 "A Spec names no primary checkout").
+fn boundaried(value: &str, form: &str) -> bool {
+    if form.is_empty() {
+        return false;
+    }
+    let mut from = 0;
+    while let Some(pos) = value[from..].find(form) {
+        let at = from + pos;
+        let end = at + form.len();
+        let boundary = match value[end..].chars().next() {
+            None => true,
+            Some(c) => !(c.is_alphanumeric() || matches!(c, '.' | '_' | '-')),
+        };
+        if boundary {
+            return true;
+        }
+        from = at + value[at..].chars().next().unwrap().len_utf8();
+    }
+    false
 }
 
 pub fn parse(text: &str) -> Result<Spec, CpdError> {
@@ -101,14 +195,12 @@ fn tests_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError>
     Ok(tests)
 }
 
-/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`, no leading `/`
-/// (the rule of the `protected` list, contract §7.5).
+/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`
+/// (the rule of the `protected` list, contract §7.5). The leading-`/` rule runs after
+/// [`Spec::check_primary_roots`] ([`Spec::check_files_relative`]).
 fn test_files_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
     let files = list_field(fields, "test_files", true)?;
     for (i, file) in files.iter().enumerate() {
-        if file.starts_with('/') {
-            return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
-        }
         if file.split('/').any(|part| part == "..") {
             return Err(invalid(&format!("$.test_files[{i}]"), "must not contain .."));
         }
@@ -222,7 +314,9 @@ mod tests {
         assert_eq!(path_of(&with(r#"["a\nb"]"#, r#"["f"]"#)), "$.tests[0]");
         assert_eq!(path_of(&with(r#"[1]"#, r#"["f"]"#)), "$.tests[0]");
         assert_eq!(path_of(&with(r#"["a"]"#, "[]")), "$.test_files");
-        assert_eq!(path_of(&with(r#"["a"]"#, r#"["f", "/abs"]"#)), "$.test_files[1]");
+        let absolute = with(r#"["a"]"#, r#"["f", "/abs"]"#);
+        let err = parse(&absolute).unwrap().check_files_relative().unwrap_err();
+        assert_eq!(err.details()["path"], "$.test_files[1]");
         assert_eq!(path_of(&with(r#"["a"]"#, r#"["../f"]"#)), "$.test_files[0]");
         assert_eq!(path_of(&with(r#"["a"]"#, r#"["d/../f"]"#)), "$.test_files[0]");
         parse(&with(r#"["a"]"#, r#"["d/", "f..g"]"#)).unwrap();

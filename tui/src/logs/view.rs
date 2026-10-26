@@ -157,11 +157,7 @@ fn line(e: &Event, width: usize) -> Line<'static> {
         _ => palette::read_only_text(),
     };
     let room = width.saturating_sub("00:00:00 ".len());
-    let text = if text.chars().count() <= room {
-        text.clone()
-    } else {
-        text.chars().take(room.saturating_sub(1)).chain(['…']).collect()
-    };
+    let text = crate::cells::truncate(text, room);
     Line::from(vec![muted(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
@@ -222,6 +218,10 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     };
     Sample { buf: terminal.backend().buffer().clone(), container: pane, boxes }
 }
+
+#[cfg(test)]
+#[path = "width_tests.rs"]
+mod width_tests;
 
 #[cfg(test)]
 mod tests {

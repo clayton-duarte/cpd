@@ -229,10 +229,10 @@ test("the border is colour 15 when the pane has no focus", async () => {
 	} finally { s.dispose(); }
 });
 
-test("the border is colour 12 when the pane has focus and before any focus report", async () => {
+test("the border is colour 15 before any focus report and colour 12 after focus in", async () => {
 	const s = await session({ text: "hi" });
 	try {
-		assert.deepEqual([...borderFgs(s.editor.render(30))], ["94"], "before any report");
+		assert.deepEqual([...borderFgs(s.editor.render(30))], ["97"], "before any report");
 		s.focus(false);
 		s.focus(true);
 		assert.deepEqual([...borderFgs(s.editor.render(30))], ["94"], "after focus in");
@@ -273,7 +273,7 @@ test("the thinking level and bash mode do not colour the border", async () => {
 		}
 		s.editor.borderColor = (text: string) => theme.getBashModeBorderColor()(text);
 		for (const fg of borderFgs(s.editor.render(30))) seen.add(String(fg));
-		assert.deepEqual([...seen], ["94"], "one colour whatever pi assigns to borderColor");
+		assert.deepEqual([...seen], ["97"], "one colour whatever pi assigns to borderColor");
 		// Typed text keeps the default colour.
 		const text = cells(s.editor.render(30)[1]!).filter((cell) => /[hi]/u.test(cell.ch));
 		assert.ok(text.length >= 2 && text.every((cell) => cell.fg === undefined));
@@ -283,6 +283,8 @@ test("the thinking level and bash mode do not colour the border", async () => {
 test("a focus report changes the colour and asks for a render", async () => {
 	const s = await session({ text: "hi" });
 	try {
+		s.focus(true);
+		assert.deepEqual([...borderFgs(s.editor.render(30))], ["94"], "focus in");
 		const before = s.renders();
 		s.focus(false);
 		assert.ok(s.renders() > before, "focus out asks for a render");

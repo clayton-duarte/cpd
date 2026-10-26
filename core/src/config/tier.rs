@@ -261,6 +261,39 @@ impl Catalog {
         Ok(None)
     }
 
+    /// The Tier a Worker takes when the catalog refuses `tier` (hs-n465,
+    /// hs-d632): `None` when a Worker may not have `tier` (hs-d554);
+    /// otherwise the lowest valid, Worker-allowed Tier at or above `tier`'s
+    /// effort, its own letter first and then `H → S` (the Tier itself when the
+    /// catalog accepts it).
+    pub fn step_up(&self, tier: Tier) -> Option<Tier> {
+        if !tier.is_worker_allowed() {
+            return None;
+        }
+        let allowed = |t: &Tier| t.is_worker_allowed() && self.is_valid(*t);
+        // Same letter first: its lowest valid effort at or above the Tier's.
+        if let Some(same) = self
+            .model(tier.letter)
+            .efforts
+            .iter()
+            .copied()
+            .find(|e| *e >= tier.effort)
+            .and_then(|effort| Tier::new(tier.letter, effort))
+            .filter(allowed)
+        {
+            return Some(same);
+        }
+        // Then `H → S`, at the lowest valid effort at or above the Tier's.
+        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
+        for letter in &Letter::LADDER[at + 1..] {
+            let lowest = self.model(*letter).efforts.iter().copied().find(|e| *e >= tier.effort);
+            if let Some(next) = lowest.and_then(|effort| Tier::new(*letter, effort)).filter(allowed) {
+                return Some(next);
+            }
+        }
+        None
+    }
+
     /// The Tier of automatic Attempt `n` (from 1): `next` applied `n - 1`
     /// times from the Job's Tier; `None` when the ladder runs out first.
     pub fn attempt_tier(&self, job_tier: Tier, n: u32) -> Result<Option<Tier>, CpdError> {
@@ -371,5 +404,121 @@ mod tests {
         assert_eq!(at("H3", 2).as_deref(), Some("S3"));
         assert_eq!(at("H3", 3), None);
         assert_eq!(at("H3", 9), None);
+    }
+}
+
+#[cfg(test)]
+mod tier_g {
+    //! Tier G, written `GX` (contract §9 "Tier rules", hs-d562): the syntax, and G as no Worker's Tier.
+    use super::*;
+
+    #[test]
+    fn g_is_a_tier_written_gx() {
+        let g = Tier::parse("GX").unwrap();
+        assert_eq!(g.to_string(), "GX");
+        assert_eq!(g.letter().as_char(), 'G');
+        assert_eq!(g.level(), "off");
+    }
+
+    #[test]
+    fn g_has_no_number() {
+        for n in 0..=5 {
+            let name = format!("G{n}");
+            let err = Tier::parse(&name).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::TierInvalid, "{name}");
+            let m = err.message();
+            assert!(m.contains("GX") && m.contains("hs-d562"), "{name}: {m}");
+        }
+        for name in ["gx", "G", "GXX", "OX", "SX", "HX"] {
+            assert_eq!(Tier::parse(name).unwrap_err().code(), ErrorCode::TierInvalid, "{name}");
+        }
+        for name in ["H5", "S3", "O1"] {
+            assert_eq!(Tier::parse(name).unwrap().to_string(), name);
+        }
+    }
+
+    #[test]
+    fn gx_is_never_a_workers_tier() {
+        let g = Tier::parse("GX").unwrap();
+        assert!(!g.is_worker_allowed());
+        let err = g.check_worker().unwrap_err();
+        assert_eq!(err.code(), ErrorCode::TierNotAllowed);
+        assert_eq!(err.details()["allowed"], "H3, S0-S3");
+        assert_eq!(err.details()["rule"], "hs-d554");
+    }
+}
+
+#[cfg(test)]
+mod worker_tiers {
+    //! The Worker Tier range and ladder (contract §9, hs-d554).
+    use super::*;
+
+    fn catalog() -> Catalog {
+        Catalog {
+            pi_version: "1.3.0".into(),
+            o: TierModel { model: "p/opus".into(), efforts: vec![1, 2, 3, 4, 5] },
+            s: TierModel { model: "p/sonnet".into(), efforts: vec![0, 1, 2, 3, 4, 5] },
+            g: TierModel { model: "p/gemini".into(), efforts: vec![] },
+            h: TierModel { model: "p/haiku".into(), efforts: vec![0, 1, 2, 3] },
+        }
+    }
+
+    fn t(s: &str) -> Tier {
+        Tier::parse(s).unwrap()
+    }
+
+    #[test]
+    fn worker_range_allows_only_h3_and_s0_to_s3() {
+        for letter in [Letter::O, Letter::S, Letter::H] {
+            for effort in 0..=5 {
+                let tier = Tier::new(letter, effort).unwrap();
+                let expected = matches!(tier.to_string().as_str(), "H3" | "S0" | "S1" | "S2" | "S3");
+                assert_eq!(tier.is_worker_allowed(), expected, "{tier}");
+                assert_eq!(tier.check_worker().is_ok(), expected, "{tier}");
+            }
+        }
+    }
+
+    #[test]
+    fn worker_range_refusal_names_the_range_the_rule_and_hs_d554() {
+        for name in ["H2", "S4", "S5", "O3"] {
+            let err = t(name).check_worker().unwrap_err();
+            assert_eq!(err.code(), ErrorCode::TierNotAllowed, "{name}");
+            assert_eq!(err.details()["tier"], name);
+            assert_eq!(err.details()["allowed"], "H3, S0-S3");
+            assert_eq!(err.details()["rule"], "hs-d554");
+            let m = err.message();
+            assert!(m.starts_with(&format!("Tier {name} is not allowed for a Worker")), "{m}");
+            for part in ["hs-d554", "cost", "H3, S0-S3"] {
+                assert!(m.contains(part), "{part} in {m}");
+            }
+        }
+    }
+
+    #[test]
+    fn worker_ladder_ends_at_s3() {
+        let c = catalog();
+        assert_eq!(c.next(t("S0")).unwrap(), Some(t("S1")));
+        assert_eq!(c.next(t("S1")).unwrap(), Some(t("S2")));
+        assert_eq!(c.next(t("S2")).unwrap(), Some(t("S3")));
+        assert_eq!(c.next(t("S3")).unwrap(), None);
+    }
+
+    #[test]
+    fn worker_ladder_steps_h3_to_s3_and_gives_h0_to_h2_s4_s5_o3_none() {
+        let c = catalog();
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S3")));
+        for name in ["H0", "H1", "H2", "S4", "S5", "O3"] {
+            assert_eq!(c.next(t(name)).unwrap(), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn worker_attempt_tiers_follow_the_ladder_and_stop_at_s3() {
+        let c = catalog();
+        let at = |job: &str, n| c.attempt_tier(t(job), n).unwrap();
+        assert_eq!([1, 2, 3, 4].map(|n| at("S1", n)), [Some(t("S1")), Some(t("S2")), Some(t("S3")), None]);
+        assert_eq!([1, 2, 3].map(|n| at("H3", n)), [Some(t("H3")), Some(t("S3")), None]);
+        assert_eq!(at("H2", 2), None);
     }
 }

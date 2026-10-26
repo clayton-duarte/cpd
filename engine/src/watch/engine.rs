@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5, E7–E11, E12 and E13 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7–E11, E12–E14 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -16,16 +16,18 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
-use cpd_core::clock;
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::pi::{self, PiDirs};
+use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::pr::start::{self as start_pr, By, Failed};
 use cpd_core::store::{Persist, Store};
 
@@ -50,6 +52,8 @@ pub(super) struct Engine {
     pub store: Store,
     pub tmux: Tmux,
     pub log: Log,
+    /// The seams the steps read time and start processes through: `Ports::real()` for `cpd watch`.
+    pub ports: Ports,
     report: Report,
     /// pi's catalog, read at most once per tick and only when a step needs it.
     catalog: Option<Catalog>,
@@ -61,6 +65,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// The `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
+    /// The `@cpd_host_alert` value last set on the tmux server (`None` when it was unset).
+    pub host_alert: Option<String>,
     /// E9: the (highest record `seq`, uncurated count) of each Context's latest distill run in this engine's life, with the batch size it was given.
     pub distill_started: HashMap<ContextId, ((i64, i64), u8)>,
     /// E10: the retitle runs this engine started and has not seen end.
@@ -69,32 +75,54 @@ pub(super) struct Engine {
     pub team: team::State,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
+    /// The detached runs whose pid file the engine removes when it sees them end ([`super::sweep_detached`]).
+    pub detached: Vec<(Pid, std::path::PathBuf)>,
 }
 
 impl Engine {
-    /// An engine on `home` (its config and store) and `tmux`, for the steps' tests.
+    /// An engine on `home` (its config and store) and `tmux`, reading time and starting processes through `ports`.
+    #[cfg(test)]
+    pub(super) fn with_ports(home: CpdHome, tmux: Tmux, ports: &Ports) -> Engine {
+        let config = Config::load(&home).expect("the test home's config");
+        let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms)).expect("the test home's store");
+        store.use_clock(ports.clock.clone());
+        let log = Log::open(&home).expect("the test home's log");
+        Engine::assemble(home, config, store, tmux, log, Report::new(Duration::from_secs(60)), ports)
+    }
+
+    /// An engine on `home` and `tmux` on the real ports, for the steps' tests.
     #[cfg(test)]
     pub(super) fn for_test(home: CpdHome, tmux: Tmux) -> Engine {
-        let config = Config::load(&home).expect("the test home's config");
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms)).expect("the test home's store");
-        let log = Log::open(&home).expect("the test home's log");
+        Engine::with_ports(home, tmux, &Ports::real())
+    }
+
+    fn assemble(home: CpdHome, config: Config, store: Store, tmux: Tmux, log: Log, report: Report, ports: &Ports) -> Engine {
         Engine {
             home,
             config,
             store,
             tmux,
             log,
-            report: Report::new(Duration::from_secs(60)),
+            ports: ports.clone(),
+            report,
             catalog: None,
             last_poll_end: None,
             poll: None,
             paused_until: None,
             workers: None,
+            host_alert: None,
             distill_started: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
             restart_started: None,
+            detached: Vec::new(),
         }
+    }
+
+    /// The catalog a step test gives the engine, so E3 never runs pi's Node or opens the real home for it.
+    #[cfg(test)]
+    pub(super) fn set_catalog(&mut self, catalog: Catalog) {
+        self.catalog = Some(catalog);
     }
 
     /// Reports a failure of `step` for `about` (once until it clears).
@@ -117,12 +145,13 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5, E7–E11, E12 and E13 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 15] = [
+        let steps: [fn(&mut Engine); 17] = [
             restart::drain,
             workers::run,
+            host_alert::run,
             escalations::run,
             liveness::run,
             schedule::run,
@@ -136,6 +165,7 @@ impl Engine {
             team::run,
             archive::run,
             sleep::run,
+            archive_leads::run,
         ];
         for step in steps {
             if stopping() {
@@ -144,6 +174,24 @@ impl Engine {
             step(self);
         }
     }
+}
+
+/// Whether incident mode holds `step` machine-wide (contract §3.7): E9 (Context curation), E10 (Session
+/// titles) and E11 (team review) do nothing and write nothing while one `incident` row exists; E1, E2, E5,
+/// E8, E12 and E13 run as usual. E3 starts only a Job of an incident Plan or an urgent one ([`schedule`]);
+/// E4 and E7 act per PR ([`incident_holds_plan`]).
+pub(super) fn incident_holds(engine: &mut Engine, step: Step) -> bool {
+    if !matches!(step, Step::E9 | Step::E10 | Step::E11) {
+        return false;
+    }
+    engine.store.read(|conn| Ok(cpd_core::incident::is_on(conn))).unwrap_or(false)
+}
+
+/// Whether incident mode holds `plan` for E4 and E7 (contract §3.7, hs-d643): the incident is on and
+/// the Plan is not in `incident_plans` (`cpd_core::incident::is_held`). A held Plan's PRs get no
+/// `open` Job and are not started.
+pub(super) fn incident_holds_plan(conn: &rusqlite::Connection, plan: &PlanId) -> bool {
+    cpd_core::incident::is_held(conn, plan)
 }
 
 /// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
@@ -158,17 +206,31 @@ fn startable() -> String {
     )
 }
 
+/// The ready `waiting` PRs E7 starts, the Plan-scoped incident hold applied (contract §3.7): a PR of
+/// a held Plan is left alone. Oldest Plan first, then by key (the query's order).
+pub(super) fn startable_prs(engine: &mut Engine) -> Result<Vec<(PlanId, PrKey)>, CpdError> {
+    engine.store.read(|conn| {
+        let mut stmt = conn.prepare(&startable())?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut waiting = Vec::new();
+        for (plan, key) in rows {
+            let plan = PlanId::parse(&plan)?;
+            let key = PrKey::parse(&key)?;
+            // Incident mode on: a held Plan's PR is not started (§3.7 E7).
+            if !incident_holds_plan(conn, &plan) {
+                waiting.push((plan, key));
+            }
+        }
+        Ok(waiting)
+    })
+}
+
 /// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
 /// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
 /// `error` `pr_start_failed` for the Lead; the engine does not try that PR again,
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
-    let waiting = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(&startable())?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.into_iter().map(|(plan, key)| Ok((PlanId::parse(&plan)?, PrKey::parse(&key)?))).collect::<Result<Vec<_>, CpdError>>()
-    });
-    let waiting = match waiting {
+    let waiting = match startable_prs(engine) {
         Ok(waiting) => {
             engine.clear(Step::E7, &About::Machine);
             waiting
@@ -265,7 +327,8 @@ pub(super) fn mark_restart() -> Result<Output, CpdError> {
         .and_then(|d| serde_json::from_str::<Value>(&d).ok())
         .and_then(|d| d["pid"].as_i64())
         .ok_or_else(|| CpdError::new(ErrorCode::WatchNotStarted, "No engine has started in this home."))?;
-    let marker = json!({"by": "install-cpd.sh", "at": clock::now(), "engine_pid": pid});
+    // The time of the ports in scope (`Ports::current`): the system's, or a test's `ManualClock`.
+    let marker = json!({"by": "install-cpd.sh", "at": clock::timestamp(Ports::current().clock.utc()), "engine_pid": pid});
     let io = |e: std::io::Error| CpdError::new(ErrorCode::Internal, format!("Cannot write {}: {e}.", marker_path(&home).display()));
     std::fs::create_dir_all(home.run_dir()).map_err(io)?;
     let tmp = home.run_dir().join(format!("install-restart.json.tmp.{}", std::process::id()));
@@ -275,8 +338,10 @@ pub(super) fn mark_restart() -> Result<Output, CpdError> {
 }
 
 /// Reads and deletes the marker; the pid of the engine it says is being retired when it is well formed and
-/// was written at `at <= now` and at most the max age ago. Nothing else is a marker; an unreadable file is logged once.
-fn consume_marker(home: &CpdHome, log: &mut Log, now: OffsetDateTime) -> Option<i64> {
+/// was written at `at <= now` (the time `clock` reads, `Clock::utc`) and at most the max age ago. Nothing else is a
+/// marker; an unreadable file is logged once.
+pub(super) fn consume_marker_with(clock: &dyn Clock, home: &CpdHome, log: &mut Log) -> Option<i64> {
+    let now = clock.utc();
     let path = marker_path(home);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -301,24 +366,30 @@ fn consume_marker(home: &CpdHome, log: &mut Log, now: OffsetDateTime) -> Option<
 }
 
 /// How long the engine was down before this start (contract §3.7, hs-d328).
-struct Downtime {
+pub(super) struct Downtime {
     /// When the previous engine stopped: its `watch-stopped`, else the last time it was alive.
-    since: OffsetDateTime,
+    pub(super) since: OffsetDateTime,
     /// Whether the previous engine said it stopped (`watch-stopped`): otherwise it crashed or was killed.
-    said: bool,
-    down: time::Duration,
+    pub(super) said: bool,
+    pub(super) down: time::Duration,
     /// The previous engine's pid and the install's marker for it, when the stop was an install's planned restart.
-    planned: bool,
+    pub(super) planned: bool,
     /// The marker was valid but the engine stayed down past the quiet bound.
-    overdue: bool,
+    pub(super) overdue: bool,
 }
 
 impl Downtime {
     /// None for the first engine this home has seen. The previous engine's last Event is `watch-stopped`
     /// (its `at` is when it stopped), or `watch-started` with no stop (a crash, SIGKILL): then it was last
     /// alive at the lock file's modification time (the engine marks it every tick), or at its start when
-    /// that engine did not mark it.
-    fn since_previous(store: &mut Store, lock: &WatchLock, lock_existed: bool, marker: Option<i64>) -> Result<Option<Downtime>, CpdError> {
+    /// that engine did not mark it. Now is the time `clock` reads (`Clock::utc`).
+    pub(super) fn since_previous_with(
+        clock: &dyn Clock,
+        store: &mut Store,
+        lock: &WatchLock,
+        lock_existed: bool,
+        marker: Option<i64>,
+    ) -> Result<Option<Downtime>, CpdError> {
         let last: Option<(String, String)> = store.read(|conn| {
             Ok(conn
                 .query_row(
@@ -341,13 +412,13 @@ impl Downtime {
         let said = kind == "watch-stopped";
         // A lock file this engine created says nothing of the previous one: it is dated by its `watch-started`.
         let since = if said || !lock_existed { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
-        let down = (OffsetDateTime::now_utc() - since).max(time::Duration::ZERO);
+        let down = (clock.utc() - since).max(time::Duration::ZERO);
         let quiet = down.as_seconds_f64() <= PLANNED_RESTART_QUIET_SECS;
         Ok(Some(Downtime { since, said, down, planned: marked && quiet, overdue: marked && !quiet }))
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
-    fn sentence(&self) -> String {
+    pub(super) fn sentence(&self) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
         let at = clock::timestamp(self.since);
         let secs = self.down.as_seconds_f64();
@@ -361,20 +432,33 @@ impl Downtime {
     }
 }
 
-/// `cpd watch`: the engine in the foreground.
+/// [`run`] on `ports` and `home`: the ticks and the naps between them read `ports.clock`, the steps start nothing but
+/// through `ports`, and the loop ends when `until` is set (checked between ticks and between naps).
+pub(super) fn run_with(ports: &Ports, home: &CpdHome, until: &AtomicBool) -> Result<Output, CpdError> {
+    serve(ports, home, until, || Ok(()))
+}
+
+/// `cpd watch`: the engine in the foreground, until a signal.
 pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
+    serve(&Ports::real(), &home, &STOP, catch_signals)
+}
+
+/// The engine's life: lock, `watch-started`, ticks until `until`, `watch-stopped`. `catch` runs once the store is
+/// open, where the signal handlers are put in.
+fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce() -> Result<(), CpdError>) -> Result<Output, CpdError> {
+    let clock = &*ports.clock;
+    let config = Config::load(home)?;
     let lock_existed = home.watch_lock().exists();
-    let lock = WatchLock::take(&home)?;
-    let mut log = Log::open(&home)?;
+    let lock = WatchLock::take(home)?;
+    let mut log = Log::open(home)?;
     // A tick's steps give up waiting when the engine is told to stop.
-    let mut store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist(&home, stopping)?)?;
-    catch_signals()?;
+    let mut store = Store::open_persistent_with(ports.clock.clone(), home, u64::from(config.timeouts.store_busy_ms), persist(home, stopping)?)?;
+    catch()?;
     let pid = std::process::id();
     // What the previous engine left, read before this one's `watch-started` hides it.
-    let marker = consume_marker(&home, &mut log, OffsetDateTime::now_utc());
-    let down = Downtime::since_previous(&mut store, &lock, lock_existed, marker)?;
+    let marker = consume_marker_with(clock, home, &mut log);
+    let down = Downtime::since_previous_with(clock, &mut store, &lock, lock_existed, marker)?;
     let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
     watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
@@ -382,32 +466,16 @@ pub(super) fn run() -> Result<Output, CpdError> {
         log.line(&down.sentence());
     }
 
-    let tmux = Tmux::new(config.tmux.socket.as_str());
+    let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());
     let report = Report::new(Duration::from_secs(u64::from(config.watch.error_repeat_seconds)));
-    let mut engine = Engine {
-        home,
-        config,
-        store,
-        tmux,
-        log,
-        report,
-        catalog: None,
-        last_poll_end: None,
-        poll: None,
-        paused_until: None,
-        workers: None,
-        distill_started: HashMap::new(),
-        titles: titles::Runs::default(),
-        team: team::State::default(),
-        restart_started: None,
-    };
+    let mut engine = Engine::assemble(home.clone(), config, store, tmux, log, report, ports);
 
     let tick = engine.config.watch.tick_seconds.duration();
     let mut failing = false;
-    while !stopping() {
-        let began = Instant::now();
+    while !until.load(Ordering::SeqCst) {
+        let began = clock.now();
         // The next engine says when this one stopped from it when it leaves no `watch-stopped`.
-        if let Err(e) = lock.touch() {
+        if let Err(e) = lock.touch_with(clock) {
             engine.log.line(&format!("{} ({})", e.message(), e.code().as_str()));
         }
         engine.tick();
@@ -416,7 +484,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         let mut committed = false;
         // The next tick comes at the earliest of a tick from its start, E5's due time and, when another process
         // committed, half a second from its start (§3.7). A finished poll is applied at the next nap.
-        while !stopping() {
+        while !until.load(Ordering::SeqCst) {
             pr::reap(&mut engine);
             if !committed {
                 match (&seen, engine.store.data_version()) {
@@ -434,12 +502,12 @@ pub(super) fn run() -> Result<Output, CpdError> {
                     (Err(_), Ok(_)) => committed = true,
                 }
             }
-            let now = Instant::now();
+            let now = clock.now();
             let next = wake::next_tick(began, now, tick, pr::due(&engine, now), committed);
             if now >= next {
                 break;
             }
-            std::thread::sleep(NAP.min(next - now));
+            clock.sleep(NAP.min(next - now));
         }
     }
 

@@ -1,34 +1,21 @@
 //! `cpd session retitle <session> --width <cols>` as hs-d543 amends it (commands.md §10.14): the input is the last 2
-//! turns, the limit is N = cols - 8 characters (never cut, no word cap) and a width below 9 is a usage refusal. Run as
-//! the built binary with a fake `pi` install whose Tier catalog is seeded in the cache. The helpers are copies of
-//! those of `session_titles.rs`, cut down to one Lead.
+//! turns, the limit is N = cols - 8 characters (never cut, no word cap) and a width below 9 is a usage refusal. Run in
+//! this process (`Fx::with_ports`) with a `pi` route of the `FakeRunner` (`FakePi`) over a Tier catalog seeded in the
+//! cache. The session file and `setup` are variants of those of `session_titles.rs`, cut down to one Lead; `show` and
+//! the fixture writer (`env.sql`) are the harness's.
 
 use crate::common;
 
 use std::fs;
+use std::sync::Arc;
 
+use common::fx::Fx;
+use common::session::{FakePi, show};
 use common::{Run, TestEnv, refused};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::{Store, WriteTxn};
+use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
 const LEAD: &str = "lead1";
-
-fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
-    tx.execute_batch(sql)?;
-    Ok(())
-}
-
-fn fixture(env: &TestEnv, sql: &str) {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap().write("fixture", |tx| exec(tx, sql)).unwrap();
-}
-
-/// The fake pi records its stdin, prints `answer` (a file the test writes) on stdout and exits 0.
-const FAKE_PI: &str = r#"d="$(dirname "$0")/.."
-cat > "$d/stdin.txt"
-cat "$d/answer""#;
 
 /// A session file of `messages`, each `(role, text)`, as pi writes them, with entries that are not messages of the
 /// conversation between them.
@@ -52,7 +39,8 @@ fn turns(turns: usize) -> Vec<(&'static str, String)> {
 
 /// `config.toml`, the fake pi install and its catalog, Context `ctx`, Plan `pay` and its Lead `lead1`, whose file holds
 /// 5 turns.
-fn setup(env: &TestEnv) {
+fn setup(fx: &Fx) -> Arc<FakePi> {
+    let env = &fx.env;
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -61,8 +49,8 @@ fn setup(env: &TestEnv) {
         ),
     )
     .unwrap();
-    env.fake_pi(FAKE_PI);
-    answer(env, "TITLE: Dynamic session titles\n");
+    let pi = FakePi::install(fx);
+    answer(&pi, "TITLE: Dynamic session titles\n");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
     let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
@@ -71,8 +59,7 @@ fn setup(env: &TestEnv) {
         fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
     }
     let file = session_file(env, LEAD, &turns(5));
-    fixture(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES
                ('1.0.0', 'O', 'p/opus', '[0,1,2,3,4,5]', 't'), ('1.0.0', 'S', 'p/sonnet', '[1,2,3,4,5]', 't'),
@@ -84,29 +71,26 @@ fn setup(env: &TestEnv) {
             file = file.display(),
         ),
     );
+    pi
 }
 
 /// What the fake pi answers next.
-fn answer(env: &TestEnv, stdout: &str) {
-    fs::write(env.root().join("answer"), stdout).unwrap();
-    fs::write(env.root().join("status"), "0").unwrap();
+fn answer(pi: &FakePi, stdout: &str) {
+    pi.say(Reply::ok(stdout));
 }
 
-fn retitle(env: &TestEnv, width: &str) -> Run {
-    env.cpd(&["session", "retitle", LEAD, "--width", width])
+fn retitle(fx: &Fx, width: &str) -> Run {
+    fx.cpd(&["session", "retitle", LEAD, "--width", width])
 }
 
-fn show(env: &TestEnv) -> Value {
-    env.cpd(&["session", "show", LEAD]).ok()["session"].clone()
+/// What the last run of pi read on its stdin.
+fn pi_stdin(fx: &Fx) -> String {
+    let stdin = fx.calls("pi").pop().expect("pi was called").stdin.expect("pi was given a stdin");
+    String::from_utf8(stdin).unwrap()
 }
 
-fn pi_stdin(env: &TestEnv) -> String {
-    fs::read_to_string(env.root().join("stdin.txt")).unwrap()
-}
-
-/// Nothing was written: no title and no `titled_at`.
-fn nothing_written(env: &TestEnv) {
-    let row = show(env);
+/// Nothing was written to the Session `row`: no title and no `titled_at`.
+fn nothing_written(row: &Value) {
     assert_eq!((&row["title"], &row["titled_at"]), (&Value::Null, &Value::Null), "{row}");
 }
 
@@ -114,10 +98,10 @@ fn nothing_written(env: &TestEnv) {
 
 #[test]
 fn stdin_holds_only_the_last_two_turns() {
-    let env = TestEnv::new();
-    setup(&env);
-    retitle(&env, "80").ok();
-    let stdin = pi_stdin(&env);
+    let fx = Fx::with_ports();
+    setup(&fx);
+    retitle(&fx, "80").ok();
+    let stdin = pi_stdin(&fx);
     let found: Vec<usize> =
         (1..=5).filter(|i| stdin.contains(&format!("question {i}")) || stdin.contains(&format!("answer {i}"))).collect();
     assert_eq!(found, [4, 5], "only turns 4 and 5: {stdin}");
@@ -133,49 +117,51 @@ fn stdin_holds_only_the_last_two_turns() {
 
 #[test]
 fn the_limit_is_the_width_less_8() {
-    let env = TestEnv::new();
-    setup(&env);
     let forty_two = "a".repeat(42);
-    answer(&env, &format!("TITLE: {forty_two}\n"));
-    let out = retitle(&env, "50").ok();
-    assert_eq!(out["title"], json!(forty_two));
-    assert_eq!(show(&env)["title"], json!(forty_two));
-    let calls = env.calls("pi");
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    let prompt = calls[0].last().unwrap();
-    assert!(prompt.contains("42"), "the prompt names the limit, 50 - 8 = 42: {prompt}");
+    {
+        let fx = Fx::with_ports();
+        let pi = setup(&fx);
+        answer(&pi, &format!("TITLE: {forty_two}\n"));
+        let out = retitle(&fx, "50").ok();
+        assert_eq!(out["title"], json!(forty_two));
+        assert_eq!(show(&fx, LEAD)["title"], json!(forty_two));
+        let calls = fx.calls("pi");
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let prompt = calls[0].args.last().unwrap();
+        assert!(prompt.contains("42"), "the prompt names the limit, 50 - 8 = 42: {prompt}");
+    }
 
-    // One character more is not a title: malformed, nothing written, never cut.
-    let env = TestEnv::new();
-    setup(&env);
-    answer(&env, &format!("TITLE: {}\n", "a".repeat(43)));
-    let error = refused(&retitle(&env, "50"), "title_failed", 1);
+    // One character more is not a title: malformed, nothing written, never cut. A new env: the first `Fx` is dropped.
+    let fx = Fx::with_ports();
+    let pi = setup(&fx);
+    answer(&pi, &format!("TITLE: {}\n", "a".repeat(43)));
+    let error = refused(&retitle(&fx, "50"), "title_failed", 1);
     assert_eq!(error["details"]["reason"], "malformed");
-    nothing_written(&env);
+    nothing_written(&show(&fx, LEAD));
 }
 
 #[test]
 fn a_title_may_have_more_than_ten_words() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    let pi = setup(&fx);
     let title = "Reviewing the retitle tests for the width limit after the last two turns ended";
     assert_eq!(title.split_whitespace().count(), 14);
     assert!(title.chars().count() <= 100 - 8);
-    answer(&env, &format!("TITLE: {title}\n"));
-    let out = retitle(&env, "100").ok();
+    answer(&pi, &format!("TITLE: {title}\n"));
+    let out = retitle(&fx, "100").ok();
     assert_eq!(out["title"], json!(title));
-    assert_eq!(show(&env)["title"], json!(title));
+    assert_eq!(show(&fx, LEAD)["title"], json!(title));
 }
 
 // ---------- the width ----------
 
 #[test]
 fn a_width_below_9_is_refused() {
-    let env = TestEnv::new();
-    setup(&env);
+    let fx = Fx::with_ports();
+    setup(&fx);
     for width in ["8", "1", "0"] {
-        refused(&retitle(&env, width), "usage", 2);
+        refused(&fx.cpd(&["session", "retitle", LEAD, "--width", width]), "usage", 2);
     }
-    assert!(env.calls("pi").is_empty(), "refused before pi");
-    nothing_written(&env);
+    assert!(fx.calls("pi").is_empty(), "refused before pi");
+    nothing_written(&fx.cpd(&["session", "show", LEAD]).ok()["session"]);
 }
