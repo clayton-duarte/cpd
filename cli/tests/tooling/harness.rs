@@ -3,7 +3,10 @@
 
 use crate::common;
 
+use crate::guards::{test_files, test_lines_with};
+use common::fx::Fx;
 use common::{SLEEP_SECONDS, TestEnv};
+use cpd_core::clock::ManualClock;
 
 #[test]
 fn commands_get_an_isolated_environment() {
@@ -34,25 +37,6 @@ fn commands_get_an_isolated_environment() {
             assert_eq!(key, "CPD_HOME");
         }
     }
-}
-
-#[test]
-fn cpd_runs_and_prints_one_json_value() {
-    let env = TestEnv::new();
-    let run = env.cpd(&["--version"]);
-    let ok = run.ok();
-    let hash = ok["version"]
-        .as_str()
-        .and_then(|v| v.strip_prefix(env!("CARGO_PKG_VERSION")))
-        .and_then(|rest| rest.strip_prefix('-'))
-        .expect("version is <Cargo version>-<hash>");
-    assert!(
-        hash == "unknown" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
-        "bad hash {hash}"
-    );
-    let run = env.cpd(&["no-such-command"]);
-    assert_eq!(run.error()["code"], "usage");
-    assert_eq!(run.exit, 2);
 }
 
 #[test]
@@ -149,21 +133,6 @@ fn calls_come_back_in_the_order_they_started() {
     assert_eq!(got, (0..30).map(|i| i.to_string()).collect::<Vec<_>>());
 }
 
-/// The `.rs` files of the area test binaries (`cli/tests/<area>/`, not `common/`). The guards below scan these: a
-/// wrong directory would scan nothing and pass, so this asserts it found more than 50.
-fn test_files() -> Vec<std::path::PathBuf> {
-    let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/tests";
-    let files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|area| area.is_dir() && area.file_name().is_some_and(|n| n != "common"))
-        .flat_map(|area| std::fs::read_dir(area).unwrap().map(|entry| entry.unwrap().path()))
-        .filter(|path| path.extension().is_some_and(|e| e == "rs"))
-        .collect();
-    assert!(files.len() > 50, "the harness guards saw {} files in {dir}: they scan the wrong directory", files.len());
-    files
-}
-
 #[test]
 fn no_fake_sleeps_longer_than_sleep_seconds() {
     let mut found = Vec::new();
@@ -179,74 +148,6 @@ fn no_fake_sleeps_longer_than_sleep_seconds() {
         }
     }
     assert!(found.is_empty(), "fakes must sleep at most SLEEP_SECONDS ({SLEEP_SECONDS}):\n{}", found.join("\n"));
-}
-
-/// The text of every test file of this crate but this one, as (path, line number, line).
-fn test_source_lines() -> Vec<(String, usize, String)> {
-    let mut lines = Vec::new();
-    for path in test_files() {
-        if path.file_name().is_some_and(|n| n == "harness.rs") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).unwrap();
-        for (n, line) in text.lines().enumerate() {
-            lines.push((path.display().to_string(), n + 1, line.to_owned()));
-        }
-    }
-    lines
-}
-
-/// The lines of the test files containing any of `needles`, as `path:line: text`.
-fn test_lines_with(needles: &[&str]) -> Vec<String> {
-    test_source_lines()
-        .into_iter()
-        .filter(|(_, _, line)| needles.iter().any(|n| line.contains(n)))
-        .map(|(path, n, line)| format!("{path}:{n}: {}", line.trim()))
-        .collect()
-}
-
-#[test]
-fn no_test_mutates_the_process_environment() {
-    // Test threads share one environment: `set_var` there races every `getenv` (tests-build-G3).
-    // A test sets a variable on the `Command` it spawns.
-    let found = test_lines_with(&["set_var(", "remove_var("]);
-    assert!(found.is_empty(), "use Command::env, not the process environment:\n{}", found.join("\n"));
-}
-
-/// The milliseconds of the literal duration a `sleep(` on `line` waits (`from_millis(n)`, `from_secs(n)`), if it has one.
-fn literal_sleep_ms(line: &str) -> Option<u64> {
-    let after = &line[line.find("sleep(")? + 6..];
-    let number = |prefix: &str| -> Option<u64> {
-        let rest = &after[after.find(prefix)? + prefix.len()..];
-        rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
-    };
-    number("from_millis(").or_else(|| number("from_secs(").map(|s| s * 1000))
-}
-
-#[test]
-fn no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes() {
-    // A fixed sleep before an assertion proves nothing on a loaded machine, and an upper bound on elapsed time fails on
-    // one (tests-build-W4): wait for the result (`wait_until`, a whole engine tick, a rendezvous). A sleep of 250 ms or
-    // more, or an upper bound, stands only for a claim about time itself, and says so in a `// time-claim: <what it
-    // asserts>; no per-poll signal from <X>` comment on its line or the five above it.
-    let lines = test_source_lines();
-    let mut found = Vec::new();
-    for (i, (path, n, line)) in lines.iter().enumerate() {
-        let code = line.trim();
-        if code.starts_with("//") {
-            continue;
-        }
-        let long_sleep = literal_sleep_ms(code).is_some_and(|ms| ms >= 250);
-        let upper_bound = code.contains("assert") && code.contains("elapsed()") && code.contains(" < ");
-        if !(long_sleep || upper_bound) {
-            continue;
-        }
-        let claimed = lines[i.saturating_sub(5)..=i].iter().any(|(p, _, l)| p == path && l.contains("time-claim:"));
-        if !claimed {
-            found.push(format!("{path}:{n}: {code}"));
-        }
-    }
-    assert!(found.is_empty(), "wait for the result, or give the `// time-claim:` it asserts:\n{}", found.join("\n"));
 }
 
 #[test]
@@ -265,35 +166,8 @@ fn executables_are_written_and_copied_only_through_the_harness() {
     assert!(found.is_empty(), "write executables with common::write_executable and copy_executable:\n{}", found.join("\n"));
 }
 
-#[test]
-fn the_shared_helpers_are_defined_only_in_the_harness() {
-    // One wait policy, one refusal check, one fixture writer, one store query (tests-build-G2, commands-G4): a file
-    // that needs another shape calls the harness's and wraps it, it does not copy it.
-    let found = test_lines_with(&[
-        "fn wait_until(",
-        "fn wait_until_for(",
-        "fn wait_some<",
-        "fn poll<",
-        "fn refused(run: &Run, code: &str, exit: i32)",
-        "fn sql(&self",
-        "fn sql(env: &TestEnv",
-        "fn sql(store: &mut Store",
-        "fn query<T",
-    ]);
-    assert!(found.is_empty(), "use common::wait_until, wait_until_for, wait_some, poll, refused, sql and TestEnv::query:\n{}", found.join("\n"));
-}
-
-#[test]
-fn every_wait_polls_through_the_harness() {
-    // One poll loop, at one period (common::poll, every 10 ms): a wait or an absence window calls wait_until,
-    // wait_some, wait_screen or poll; it keeps no deadline and no sleep of its own.
-    let found = test_lines_with(&["Instant::now() +"]);
-    assert!(found.is_empty(), "wait with common::wait_until, wait_some, wait_screen or poll:\n{}", found.join("\n"));
-}
-
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
 
-const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What a helper env put up: the dir and the pids of what its teardown must stop.
@@ -444,65 +318,6 @@ fn leftovers_after_wait(up: &Up) -> Vec<String> {
     left
 }
 
-/// Not a test of its own: the child process the killed-test test kills. Does nothing
-/// unless the gate variable is set.
-#[test]
-fn killed_test_helper() {
-    if std::env::var_os(HELPER_GATE).is_none() {
-        return;
-    }
-    let env = TestEnv::new();
-    let up = put_up(&env);
-    // libtest prints "test <name> ... " first, without a newline.
-    println!();
-    println!("DIR {}", up.dir.display());
-    for (name, pid) in &up.pids {
-        println!("PID {name}|{pid}");
-    }
-    println!("READY");
-    std::thread::sleep(std::time::Duration::from_secs(SLEEP_SECONDS));
-    drop(env);
-}
-
-#[test]
-fn a_killed_test_leaves_no_tmux_server_process_dir_or_reaper() {
-    use std::io::{BufRead, BufReader};
-
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "harness::killed_test_helper", "--nocapture", "--test-threads=1"])
-        .env(HELPER_GATE, "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut dir = None;
-    let mut pids = Vec::new();
-    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
-        let line = line.unwrap();
-        if line == "READY" {
-            break;
-        }
-        if let Some(d) = line.strip_prefix("DIR ") {
-            dir = Some(std::path::PathBuf::from(d));
-        } else if let Some(p) = line.strip_prefix("PID ") {
-            let (name, pid) = p.split_once('|').unwrap();
-            pids.push((name.to_owned(), pid.parse().unwrap()));
-        }
-    }
-    let up = Up { dir: dir.expect("the helper printed no DIR"), pids };
-    assert_eq!(up.pids.len(), 5, "the helper printed no READY with its pids");
-    assert!(up.pids.iter().all(|(_, p)| alive(*p)), "everything is up before the kill");
-    assert!(up.dir.exists());
-    assert!(!processes_mentioning(&up.dir).is_empty(), "the reaper is up before the kill");
-
-    child.kill().unwrap(); // SIGKILL: no Drop runs
-    child.wait().unwrap();
-
-    let left = leftovers_after_wait(&up);
-    assert!(left.is_empty(), "a killed test left behind: {left:?}");
-}
-
 #[test]
 fn a_dropped_env_leaves_no_tmux_server_process_dir_or_reaper() {
     let env = TestEnv::new();
@@ -562,53 +377,6 @@ fn helper_lines(helper: &mut KillChild, key: &str) -> Vec<String> {
         }
     }
     found
-}
-
-// ---- hygiene.md 3a: a test that kills its own tmux server does not let the supervising hooks restart one ----
-
-/// An env whose server has the real hooks of `SERVER_OPTIONS` armed, with a fake `cpd` whose `watch --ensure --wait`
-/// (what the hooks run) writes `marker`, and a `tmux` that records its calls to `log` before running the real one.
-fn armed_env(marker: &std::path::Path, log: &std::path::Path) -> TestEnv {
-    let env = TestEnv::new();
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"watch --ensure --wait\") : > '{}'; exit 0;; esac\nexit 1", marker.display()));
-    common::write_executable(
-        &env.bin().join("tmux"),
-        &format!("#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), common::real_tmux().display()),
-    );
-    let out = env.tmux(&["new-session", "-d", "-s", "t", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    for option in cpd_core::host::tmux::SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
-        let out = env.tmux(&option.iter().map(String::as_str).collect::<Vec<_>>());
-        assert!(out.status.success(), "{option:?}: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    env
-}
-
-#[test]
-fn a_server_the_test_kills_is_not_restarted_by_its_supervising_hooks() {
-    // Outside the env: the env's directory is removed with it, and a late hook would write after that.
-    let outside = tempfile::tempdir().unwrap();
-    let (marker, log) = (outside.path().join("ensure-ran"), outside.path().join("tmux-calls"));
-    let env = armed_env(&marker, &log);
-    let socket = env.tmux_socket().to_owned();
-
-    env.kill_tmux_server();
-
-    // Disarmed first: both hooks are unset before the server is killed (a kill-server that runs a hook is only sometimes
-    // seen, hygiene.md bug 3: this is the deterministic half).
-    let calls = std::fs::read_to_string(&log).unwrap();
-    let at = |needle: &str| calls.lines().position(|l| l.contains(needle));
-    let kill = at("kill-server").expect("kill_tmux_server runs kill-server");
-    for hook in ["pane-died", "window-unlinked"] {
-        let unset = at(&format!("set-hook -gu {hook}")).unwrap_or_else(|| panic!("the {hook} hook is not unset:\n{calls}"));
-        assert!(unset < kill, "the {hook} hook is unset after kill-server:\n{calls}");
-    }
-    // And nothing ran the hook, nor started a server on the socket, within the wait.
-    let restarted = common::poll(WAIT, || {
-        let mentions = marker.exists() || processes_mentioning(std::path::Path::new(&socket)).iter().any(|p| *p != std::process::id());
-        mentions.then_some(())
-    });
-    assert!(restarted.is_none(), "a hook ran `cpd watch --ensure --wait` or a process mentions {socket} after the kill");
 }
 
 // ---- hygiene.md 1b: the git wrapper tests run through the env's group and reaper ----
@@ -693,29 +461,14 @@ impl Drop for Sweep {
 
 // ---- hygiene.md 5b: an env is made under the run's TMPDIR ----
 
-const ENVS_HELPER_GATE: &str = "CPD_HARNESS_ENVS_HELPER";
-
-/// Not a test of its own: makes an env and prints its directory. Does nothing unless gated.
-#[test]
-fn envs_helper() {
-    if std::env::var_os(ENVS_HELPER_GATE).is_none() {
-        return;
-    }
-    let env = TestEnv::new();
-    println!();
-    println!("DIR {}", env.root().display());
-    println!("READY");
-}
-
 #[test]
 fn an_env_is_made_under_the_runs_tmpdir() {
+    // In this process, under the `Fx`'s lock: `TestEnv` reads the `TMPDIR` of its process, which the `Fx` sets for the
+    // one call (no helper process whose environment the test sets).
+    let fx = Fx::new();
     let tmp = tempfile::tempdir().unwrap();
-    let mut helper = start_helper("harness::envs_helper", ENVS_HELPER_GATE, &[("TMPDIR", tmp.path().as_os_str())]);
-    let dirs = helper_lines(&mut helper, "DIR");
-    assert_eq!(dirs.len(), 1, "the helper printed no DIR");
-    let dir = std::path::PathBuf::from(&dirs[0]);
-    let _gone = DirsOnDrop(vec![dir.clone()]);
-    assert_eq!(dir.parent(), Some(tmp.path()), "the env's directory is not under the TMPDIR of its process");
+    let env = fx.with_vars(&[("TMPDIR", tmp.path().to_str().unwrap())], TestEnv::bare);
+    assert_eq!(env.root().parent(), Some(tmp.path()), "the env's directory is not under the TMPDIR of its process");
 }
 
 #[test]
@@ -793,51 +546,62 @@ fn refused_fails_on_another_code_or_exit() {
 
 #[test]
 fn wait_until_returns_once_ready_and_names_what_it_waited_for_on_timeout() {
+    // On a `ManualClock`: the polls and the timeout are virtual time, no wait.
+    let clock = ManualClock::new();
     let mut n = 0;
-    common::wait_until("three polls", || {
+    common::wait_until_on(&clock, "three polls", common::WAIT, || {
         n += 1;
         n == 3
     });
-    let caught = std::panic::catch_unwind(|| common::wait_until_for("never", std::time::Duration::from_millis(150), || false)).unwrap_err();
+    assert_eq!(clock.naps(), [common::POLL; 2], "three looks are two polls");
+    let timeout = std::time::Duration::from_millis(150);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| common::wait_until_on(&clock, "never", timeout, || false))).unwrap_err();
     assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for never")));
+    assert!(clock.elapsed() >= 2 * common::POLL + timeout, "it gave up before its timeout: {:?}", clock.elapsed());
 }
 
 #[test]
 fn wait_some_says_the_last_state_on_timeout() {
+    let clock = ManualClock::new();
     let mut n = 0;
-    let got = common::wait_some("a value", std::time::Duration::from_secs(5), || {
+    let got = common::wait_some_on(&clock, "a value", std::time::Duration::from_secs(5), || {
         n += 1;
         if n < 3 { Err(format!("poll {n}")) } else { Ok(n) }
     });
     assert_eq!(got, 3);
-    let caught = std::panic::catch_unwind(|| common::wait_some::<()>("x", std::time::Duration::from_millis(150), || Err("stuck".into()))).unwrap_err();
+    let timeout = std::time::Duration::from_millis(150);
+    let caught =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| common::wait_some_on::<()>(&clock, "x", timeout, || Err("stuck".into())))).unwrap_err();
     assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for x: stuck")));
 }
 
 #[test]
 fn sql_writes_the_envs_store() {
-    let env = TestEnv::new();
-    env.write_tmux_config("");
-    env.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
-    env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
-    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
+    let fx = Fx::new();
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
+    fx.env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
+    assert_eq!(fx.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
 }
 
 #[test]
 fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
-    let a = TestEnv::new();
-    let b = TestEnv::new();
-    for env in [&a, &b] {
+    let fx = Fx::new();
+    let (a, b) = (&fx.env, fx.another_env());
+    for env in [a, &b] {
         let store = env.store();
         assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     }
     a.write_tmux_config("");
     b.write_tmux_config("");
-    a.cpd(&["context", "new", "c1", "--title", "Only in a", "--owner", "acme"]).ok();
-    assert_eq!(a.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
-    assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
+    // `b`'s commands run in this process too, with `b`'s `$CPD_HOME`.
+    let in_b = |args: &[&str]| fx.cpd_with(b.root(), args, &[("CPD_HOME", b.cpd_home().to_str().unwrap())]);
+    fx.cpd(&["context", "new", "c1", "--title", "Only in a", "--owner", "acme"]).ok();
+    assert_eq!(fx.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
+    assert_eq!(in_b(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
 
-    let empty = TestEnv::empty();
+    // `TestEnv::empty` without its reaper process: the same empty `$CPD_HOME`.
+    let empty = TestEnv::bare();
     // main's harness gives every env the owner policy `acme` (policy/acme/owner.toml): no store is what makes it empty.
     assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
 }

@@ -11,6 +11,7 @@ import { install } from "@sinonjs/fake-timers";
 import { initTheme, ToolExecutionComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import { setClockFocused } from "../../compact-tools/extensions/compact-tools-clock.ts";
 
 export const INDICATOR_INTERVAL_MS = 45;
 /** One whole pulse and a frame past it, so the wrap back to the first frame is pinned too. */
@@ -40,6 +41,11 @@ export function elapse(ms: number): void {
 /** Move the pinned wall clock, which durations are measured by. */
 export function advance(ms: number): void {
 	now += ms;
+}
+
+/** Set the pinned wall clock to an absolute instant, so a test can name the local time a row draws. */
+export function setNow(ms: number): void {
+	now = ms;
 }
 
 export function restoreClocks(): void {
@@ -77,7 +83,7 @@ export interface Harness {
  */
 export async function loadExtension(
 	config: object,
-	options: { tui?: boolean; idle?: boolean; reason?: string; defaults?: boolean } = {},
+	options: { tui?: boolean; idle?: boolean; reason?: string; defaults?: boolean; sessionManager?: unknown } = {},
 ): Promise<Harness> {
 	const { Container } = await import("@earendil-works/pi-tui");
 	let level = "medium";
@@ -128,8 +134,11 @@ export async function loadExtension(
 		isProjectTrusted: () => false,
 		ui,
 	};
+	if (options.sessionManager !== undefined) ctx.sessionManager = options.sessionManager;
 	if (options.idle !== undefined) ctx.isIdle = () => options.idle;
 	handlers.get("session_start")!({ reason: options.reason ?? "startup" }, ctx as unknown as ExtensionContext);
+	// An unreported pane is unfocused; these tests drive a pane that is in view.
+	setClockFocused(true);
 	const setThinkingLevel = (next: string) => {
 		const previousLevel = level;
 		level = next;

@@ -20,17 +20,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
+use crate::clock::{Clock, SystemClock};
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 use crate::pill::spec;
+use crate::ports::Ports;
 
-use super::deadline::{self, Failed};
+use super::deadline::Failed;
+use super::runner::Runner;
+use super::spawn::{Pid as ProcessId, Spawn as ProcessPort};
 use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
@@ -77,25 +80,40 @@ pub const OPT_VIEW: &str = "@cpd_view";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
+/// The three view titles' base (unfocused) colours, in the cursor cycle order (hs-d648, hs-d671):
+/// `Context` (view tree) sakura 5, `Plan` (view plan) shiro 7, `Deploy` (view widgets) midori 2.
+/// They are read-only base indices: a clickable mark takes `spec().clickable(base)`, so the
+/// status buttons are 13, 15 and 10.
+const DANGO: [u8; 3] = [5, 7, 2];
+
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
 /// the placeholder say what they are; the views have their column titles; any
 /// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
 /// text (reversed) on a block with no padding, between a rounded cap on each
-/// side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 7, hs-d534)
-/// and blue on the focused pane, set in the format itself (`pane_active`), so the
+/// side, `\u{e0b6}` and `\u{e0b4}`. A Lead's, the Worker's and another pane's pill is grey
+/// (colour 7, hs-d534) and blue on the focused pane, set in the format itself (`pane_active`);
+/// the three view pills are dango ([`DANGO`], hs-d671) and keep their colour when focused, so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
-/// border line characters before the format; one `━` more in the pill's colour
-/// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
-/// private server).
+/// border line characters before the format; the leading `━` is always colour 7,
+/// the pane-border line colour, and stands before the pill's own colour, so the
+/// caps keep it and the left cap lands at column 3 from the pane's edge (hs-d478,
+/// hs-d684, checked on a private server).
 pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
-    let colour = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
-    let title = |text: &str| pill::pill(&colour, "━", text);
+    let plain = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
+    let view_colour = format!(
+        "#{{?#{{==:#{{@cpd_view}},tree}},{},#{{?#{{==:#{{@cpd_view}},plan}},{},#{{?#{{==:#{{@cpd_view}},widgets}},{},{}}}}}}}",
+        pill::fg(DANGO[0]),
+        pill::fg(DANGO[1]),
+        pill::fg(DANGO[2]),
+        plain
+    );
+    let title = |fg: &str, text: &str| format!("{}━{}", pill::fg(7), pill::pill(fg, "", text));
     format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
-        title("#{@cpd_title}"),
-        title(concat!(
+        title(&plain, "#{@cpd_title}"),
+        title(&view_colour, concat!(
             "#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
             "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"
         )),
@@ -206,24 +224,28 @@ pub const LOGS_GLYPH: &str = logs_glyph!();
 
 // The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
 macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
-// Whether the long workers form fits: the right group's long width (the engine's, whose one space is the join),
-// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), and the preview.
+// Whether the long workers form fits: the long workers pill's width (tmux's `#{w:@cpd_workers}` plus its two caps,
+// whose one space is the join), the closing `━`'s cell, the left group's 12 and a fill of at least 1 (14 in all), the
+// preview, the version pill and the incident pill.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{e|+:#{e|+:#{w:@cpd_workers},2},14},", preview_width!(), "},", version_width!(), "},", incident_width!(), "}}")
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
 macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
+// The incident pill's width (0 while `@cpd_incident` is unset): a join, two caps and the 15-cell label
+// `Incident Mode: ` plus the value.
+macro_rules! incident_width { () => { "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}" }; }
 // The fill's first column, F0: the left group's 12 cells and the preview pill.
 macro_rules! fill_start { () => { concat!("#{e|+:12,", preview_width!(), "}") }; }
-// The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill and the
-// right group's workers pill in the form drawn plus the closing `─`.
+// The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill, the incident
+// pill and the right group's workers pill in the form drawn plus the closing `━`.
 macro_rules! fill_count {
     () => {
         concat!(
-            "#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
-            "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}"
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},", incident_width!(), "},",
+            "#{e|+:#{?", long_fits!(), ",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}},1}}"
         )
     };
 }
@@ -234,71 +256,90 @@ macro_rules! max { ($a:expr, $b:expr) => { concat!("#{?#{e|>:", $a, ",", $b, "},
 macro_rules! min { ($a:expr, $b:expr) => { concat!("#{?#{e|<:", $a, ",", $b, "},", $a, ",", $b, "}") }; }
 // The vertical border's column right of the visited pane.
 macro_rules! border_column { () => { "#{e|+:#{pane_right},1}" }; }
-// The fill: today's run of `─` in a zoomed window; else, per bottom-row pane in index order, its columns that lie in
-// the fill as a run of `─`, then a `┸` at its right border's column when that is in the fill and the pane is not at the right edge.
+// The fill: today's run of `━` in a zoomed window; else, per bottom-row pane in index order, its columns that lie in
+// the fill as a run of `━`, then a `┻` at its right border's column when that is in the fill and the pane is not at the right edge.
 macro_rules! fill {
     () => {
         concat!(
-            "#{?window_zoomed_flag,#{R:\u{2500},", fill_count!(), "},",
+            "#{?window_zoomed_flag,#{R:\u{2501},", fill_count!(), "},",
             "#{P/i/:#{?pane_at_bottom,",
-            "#{R:\u{2500},", max!("0", concat!("#{e|+:#{e|-:", min!("#{pane_right}", concat!("#{e|-:", fill_end!(), ",1}")), ",", max!("#{pane_left}", fill_start!()), "},1}")), "}",
-            "#{?#{&&:#{!:#{pane_at_right}},#{&&:#{e|>=:", border_column!(), ",", fill_start!(), "},#{e|<:", border_column!(), ",", fill_end!(), "}}},\u{2538},}",
+            "#{R:\u{2501},", max!("0", concat!("#{e|+:#{e|-:", min!("#{pane_right}", concat!("#{e|-:", fill_end!(), ",1}")), ",", max!("#{pane_left}", fill_start!()), "},1}")), "}",
+            "#{?#{&&:#{!:#{pane_at_right}},#{&&:#{e|>=:", border_column!(), ",", fill_start!(), "},#{e|<:", border_column!(), ",", fill_end!(), "}}},\u{253B},}",
             ",}}}"
         )
     };
 }
-// A join: one grey `─`, outside the click ranges.
-macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
+// A join: one grey `━`, outside the click ranges.
+macro_rules! join { () => { "#[fg=colour8]\u{2501}#[default]" }; }
 
 /// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
-/// one grey (colour 8) `\u{2500}` line across the full width that starts and ends with a
-/// `\u{2500}`. Every item is a pill, its text between the caps with no padding. At the
+/// one grey (colour 8) `\u{2501}` line across the full width that starts and ends with a
+/// `\u{2501}`. Every item is a pill, its text between the caps with no padding. At the
 /// left, the three one-glyph buttons (a cap `\u{e0b6}`, the glyph as a grey block, a cap
-/// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2500}` outside
+/// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2501}` outside
 /// the ranges (a range also owns the cell after it, so the join does what the space did;
-/// the leading `\u{2500}` is outside the first range): the left group is 12 cells.
-/// Then the `\u{2500}` fill over the free width: `#{client_width}` minus
+/// the leading `\u{2501}` is outside the first range): the left group is 12 cells.
+/// Then the `\u{2501}` fill over the free width: `#{client_width}` minus
 /// the left group's 12, the preview pill and the right group in the form drawn (the
-/// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
-/// bg 8 (text 0), joined by a single `\u{2500}`: the workers counts (User, hs-d198): the long form in
+/// workers pill's width, `#{w:@cpd_workers}` plus its two caps, plus the closing `\u{2501}`).
+/// At the right, each its own pill on
+/// bg 8 (text 0), joined by a single `\u{2501}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
-/// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
-/// whose width is `@cpd_workers_short_width`.
+/// least `#{w:@cpd_workers}` plus the two caps and 14), else the short form in
+/// `@cpd_workers_short`, whose width is `#{w:@cpd_workers_short}`.
 ///
 /// The fill is split by a `#{P/i/:}` loop over the window's panes in index order (tmux 3.6+): each
-/// bottom-row pane adds a run of `\u{2500}` over its columns inside the fill, then a `\u{2538}` (colour 8) at
+/// bottom-row pane adds a run of `\u{2501}` over its columns inside the fill, then a `\u{253B}` (colour 8) at
 /// its right border's column (`pane_right + 1`) when the pane is not at the right edge and that column
 /// is in the fill (so none under a button, the preview pill or the right group); a zoomed window has
 /// the plain fill. The row keeps its width; the contract (§6.1, the junctions) is the long form.
 ///
 /// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a
-/// pill `preview: <value>` follows the buttons, joined by a single `\u{2500}`, and the
+/// pill `preview: <value>` follows the buttons, joined by a single `\u{2501}`, and the
 /// fill is shorter by its width (`#{n:@cpd_preview}` + 12: the join, two caps and
 /// `preview: `). Styles inside a conditional are one attribute per `#[…]`, because a
 /// comma there would split the branch.
 ///
 /// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a second
 /// right-hand pill, the version, follows the workers pill, joined by a single
-/// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
+/// `\u{2501}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
+/// While `@cpd_host_alert` is set (E6, hs-d618) the version pill is the bright red block (index 9,
+/// the clickable pair of the failed colour) inside `#[range=user|host]`, the range a click runs;
+/// else it stays the grey (index 8) pill it always was.
 ///
-/// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 8,
+/// While `@cpd_incident` is set (incident mode is on, hs-d634, hs-d640), the incident pill, the literal
+/// `Incident Mode: ` followed by the elapsed duration in colour 9 with reverse video and the `italics`
+/// attribute, follows the fill before the workers pill, joined to it by a single `\u{2501}`; the
+/// fill and the long-form test are shorter by its width (a join, two caps and the 15-cell label, 18
+/// cells); the range `incident` wraps the whole pill, caps included, and a click opens the
+/// incident's Lead.
+///
+/// Colours follow §6.1.1 (hs-d534): the reset, legend and logs buttons take the bright pair of
+/// dango ([`DANGO`], 13, 15 and 10, hs-d671), the workers and version pills bg 8,
 /// the preview pill bg 3, all text 0; lines colour 8.
 pub static STATUS_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let m = &spec().meanings;
-    let button = |range: &str, glyph: &str| {
-        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.plain)), "", glyph)))
+    let button = |range: &str, glyph: &str, base: u8| {
+        pill::range(range, &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(base)), "", glyph)))
     };
     let status = |index: u8, text: &str| format!("{}#[default]", pill::pill(&pill::fg(index), "", text));
+    // The incident pill is red on a red block in the `incident` click range: the contract (§6.1.1) gives it the
+    // `Meaning::Failed` bright pair (index 9).
+    let incident = pill::range("incident", &format!("{}#[default]", pill::italic_pill(&pill::fg(spec().clickable(m.failed)), "", "Incident Mode: #{@cpd_incident}")));
     format!(
-        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{preview},}}#[fg=colour8]{fill}#[default]#[align=right]{workers}#{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{version},}}{join}",
+        "{join}{reset}{join}{legend}{join}{logs}#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{preview},}}#[fg=colour8]{fill}#[default]#{{?@cpd_incident,{incident}{join},}}{workers}#{{?#{{@cpd_host_alert}},#[fg=colour8]\u{2501}{alert},{plain}}}{join}",
         join = join!(),
-        reset = button("reset", reset_glyph!()),
-        legend = button("legend", legend_glyph!()),
-        logs = button("logs", logs_glyph!()),
+        reset = button("reset", reset_glyph!(), DANGO[0]),
+        legend = button("legend", legend_glyph!(), DANGO[1]),
+        logs = button("logs", logs_glyph!(), DANGO[2]),
         preview = status(m.review, "preview: #{@cpd_preview}"),
         fill = fill!(),
         workers = status(m.nothing, concat!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}")),
-        version = status(m.nothing, "#{@cpd_version}"),
+        incident = incident,
+        // The red branch: the bright red clickable pair of the failed meaning, in the click range.
+        alert = pill::range("host", &format!("{}#[default]", pill::pill(&pill::fg(spec().clickable(m.failed)), "", "#{@cpd_version}"))),
+        // The plain branch: the grey pill, only while `@cpd_version` is set.
+        plain = format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}", status(m.nothing, "#{@cpd_version}")),
     )
 });
 
@@ -451,18 +492,114 @@ pub struct Tmux {
     tmpdir: Option<PathBuf>,
     /// The tmux program every call runs, when set (see [`Tmux::on_server_binary`]); otherwise `tmux` from `PATH`.
     program: Option<PathBuf>,
+    /// What starts the processes: how a call runs, not which server it is, so it takes no part in equality.
+    runner: Handle,
+    /// What `kill-server` reads and naps on: the time, not which server it is, so it takes no part in equality.
+    clock: Time,
+    /// What names a process's executable (`server_exe`): how a pid is read, not which server it is, so it takes no part in equality.
+    procs: Procs,
 }
+
+/// The [`ProcessPort`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Procs(Arc<dyn ProcessPort>);
+
+impl Default for Procs {
+    fn default() -> Procs {
+        Procs(Ports::current().spawn)
+    }
+}
+
+impl fmt::Debug for Procs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Spawn")
+    }
+}
+
+impl PartialEq for Procs {
+    fn eq(&self, _: &Procs) -> bool {
+        true
+    }
+}
+
+impl Eq for Procs {}
+
+/// The [`Clock`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Time(Arc<dyn Clock>);
+
+impl Default for Time {
+    fn default() -> Time {
+        Time(Arc::new(SystemClock))
+    }
+}
+
+impl fmt::Debug for Time {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Clock")
+    }
+}
+
+impl PartialEq for Time {
+    fn eq(&self, _: &Time) -> bool {
+        true
+    }
+}
+
+impl Eq for Time {}
+
+/// The [`Runner`] of a [`Tmux`]: always equal to another, printed by name.
+#[derive(Clone)]
+struct Handle(Arc<dyn Runner>);
+
+impl Default for Handle {
+    fn default() -> Handle {
+        Handle(Ports::current().runner)
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Runner")
+    }
+}
+
+impl PartialEq for Handle {
+    fn eq(&self, _: &Handle) -> bool {
+        true
+    }
+}
+
+impl Eq for Handle {}
 
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None, program: None }
+        Tmux { socket: socket.into(), tmpdir: None, program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None, runner: Handle::default(), clock: Time::default(), procs: Procs::default() }
+    }
+
+    /// This server, with every call run by `runner` instead of the real processes.
+    pub fn with_runner(mut self, runner: Arc<dyn Runner>) -> Tmux {
+        self.runner = Handle(runner);
+        self
+    }
+
+    /// This server, whose `kill-server` waits on `clock` instead of the real time.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Tmux {
+        self.clock = Time(clock);
+        self
+    }
+
+    /// This server, whose `server_exe` asks `spawn` for the executable of a pid instead of the real process table.
+    pub fn with_spawn(mut self, spawn: Arc<dyn ProcessPort>) -> Tmux {
+        self.procs = Procs(spawn);
+        self
     }
 
     pub fn socket(&self) -> &str {
@@ -517,9 +654,9 @@ impl Tmux {
         }
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
-            Some(limit) => deadline::output(&mut cmd, "tmux", limit),
-            // In its own process group, as every other call.
-            None => cmd.process_group(0).output().map_err(Failed::Io),
+            Some(limit) => self.runner.0.output(&mut cmd, "tmux", limit),
+            // No deadline; the runner starts it in its own process group, as every other call.
+            None => self.runner.0.output_unbounded(&mut cmd, "tmux").map_err(Failed::Io),
         };
         ran.map_err(|e| match e {
             Failed::Io(e) => CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
@@ -656,10 +793,18 @@ impl Tmux {
     /// later replaced in place at the same path is not seen as running another one (what `libproc` returns for an
     /// unlinked executable: unverified).
     pub fn pid_exe(pid: u32) -> Option<PathBuf> {
-        #[cfg(target_os = "macos")]
-        return libproc::proc_pid::pidpath(i32::try_from(pid).ok()?).ok().map(PathBuf::from);
+        Tmux::pid_exe_with(&*Ports::current().spawn, pid)
+    }
+
+    /// [`Tmux::pid_exe`] asking `spawn` (`Spawn::exe_of`) whether the process exists and what it runs. On Linux the real
+    /// `Spawn` is answered with `/proc/<pid>/exe` itself, not the file it points to: that stays readable after an upgrade.
+    pub fn pid_exe_with(spawn: &dyn ProcessPort, pid: u32) -> Option<PathBuf> {
+        let exe = spawn.exe_of(ProcessId(pid))?;
         #[cfg(not(target_os = "macos"))]
-        return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+        if spawn.kind() == "ProcessSpawn" {
+            return Some(PathBuf::from(format!("/proc/{pid}/exe")));
+        }
+        Some(exe)
     }
 
     /// `display -p '#{version}'`: the version of the tmux the server runs
@@ -675,18 +820,13 @@ impl Tmux {
     /// file (accepted). A client of another version cannot attach to the server (hs-n224).
     pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
         let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
-        #[cfg(target_os = "macos")]
-        let exe = {
-            let pid: i32 = out.trim().parse().map_err(|e| {
-                CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
-            })?;
-            PathBuf::from(libproc::proc_pid::pidpath(pid).map_err(|e| {
-                CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid}): {e}."))
-                    .with("pid", pid.to_string())
-            })?)
-        };
-        #[cfg(not(target_os = "macos"))]
-        let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
+        let pid: u32 = out.trim().parse().map_err(|e| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("The tmux server's pid {:?} is not a number: {e}.", out.trim()))
+        })?;
+        let exe = Tmux::pid_exe_with(&*self.procs.0, pid).ok_or_else(|| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary (pid {pid})."))
+                .with("pid", pid.to_string())
+        })?;
         std::fs::metadata(&exe).map_err(|e| {
             CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
                 .with("path", exe.display().to_string())
@@ -795,15 +935,16 @@ impl Tmux {
         if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
             return Err(self.failed(&args, &out));
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let clock = &self.clock.0;
+        let deadline = clock.now() + Duration::from_secs(10);
         loop {
             if self.program_gone() {
                 return Ok(());
             }
             match self.liveness()? {
                 Liveness::Gone => return Ok(()),
-                Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
+                Liveness::Answering | Liveness::Dying if clock.now() < deadline => {
+                    clock.sleep(Duration::from_millis(50));
                 }
                 // Its connection closed on us: the server is dead, only its cleanup is left.
                 Liveness::Dying => return Ok(()),
@@ -921,18 +1062,28 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
+    installed_version_with(&*Ports::current().runner)
+}
+
+/// [`installed_version`], the call run by `runner`.
+pub fn installed_version_with(runner: &dyn Runner) -> Result<String, CpdError> {
     let argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-V".to_owned()];
-    let out = client(PROGRAM).arg("-V").output().map_err(|e| {
+    let cannot = |e: std::io::Error| {
         CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
             .with("argv", argv.clone())
             .with("exit", serde_json::Value::Null)
             .with("stderr", e.to_string())
-    })?;
+    };
+    let out = match runner.output(client(PROGRAM).arg("-V"), "tmux", DEADLINE) {
+        Ok(out) => out,
+        Err(Failed::Io(e)) => return Err(cannot(e)),
+        Err(Failed::Timeout(e)) => return Err(e),
+    };
     let text = String::from_utf8_lossy(&out.stdout);
     match (out.status.success(), text.trim().strip_prefix("tmux ")) {
         (true, Some(version)) => Ok(version.to_owned()),
         _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
-            .with("argv", argv)
+            .with("argv", argv.clone())
             .with("exit", out.status.code())
             .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
@@ -1068,7 +1219,13 @@ fn strings(args: &[&str]) -> Vec<String> {
 pub mod pill;
 
 #[cfg(test)]
+mod pill_lines_tests;
+
+#[cfg(test)]
 mod pill_tests;
+
+#[cfg(test)]
+mod incident_tests;
 
 #[cfg(test)]
 mod no_inbox;
@@ -1086,18 +1243,23 @@ mod tests {
         }
     }
 
-    /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
+    /// The version pill (§6.1): last on the right, after the workers pill, one `━` join, then the closing `━`, only while `@cpd_version` is set.
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
-        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}";
+        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2501}#[fg=colour8]\u{e0b6}";
         let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {}", *STATUS_FORMAT));
         let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
         assert!(at > workers, "the version pill follows the workers pill: {}", *STATUS_FORMAT);
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
         assert!(tail.contains("fg=colour8") && tail.contains("#[reverse]") && tail.contains("\u{e0b4}"), "{tail}");
-        assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(), 1, "the text is drawn once: {}", *STATUS_FORMAT);
+        assert!(tail.ends_with("#[fg=colour8]\u{2501}#[default]"), "the closing ━ follows the pill: {tail}");
+        assert_eq!(
+            STATUS_FORMAT.matches("#[reverse]#{@cpd_version}#[noreverse]").count(),
+            2,
+            "each branch draws the text once: {}",
+            *STATUS_FORMAT
+        );
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
@@ -1110,6 +1272,150 @@ mod tests {
         assert!(long_fits!().contains(width), "long_fits: {}", long_fits!());
         assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {}", *STATUS_FORMAT);
         assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {}", *STATUS_FORMAT);
+    }
+
+    // ---------- the status line, as `STATUS_FORMAT`'s text (the pane tests of `cli/tests/tui/tui.rs` drew it on a real tmux client) ----------
+    //
+    // tmux renders the format and is not tested. These pin what cpd writes into it: the option names, the arithmetic of `long_fits!`
+    // and of the fill, the preview and version widths, and the order, colours and joins of the pills.
+
+    /// A join: one grey `━`, outside the click ranges.
+    const JOIN: &str = "#[fg=colour8]\u{2501}#[default]";
+    /// The width a pill adds while its option is set, and 0 while it is unset.
+    const PREVIEW_WIDTH: &str = "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}";
+    const VERSION_WIDTH: &str = "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}";
+    const INCIDENT_WIDTH: &str = "#{?@cpd_incident,#{e|+:#{n:@cpd_incident},18},0}";
+    /// The left group: the leading `━`, three buttons of 3 cells and the joins between them.
+    const LEFT_WIDTH: usize = 12;
+    /// The long workers form in the pane tests: `workers 6/6 · 4 waiting · 9 queued` (34 cells) and two caps, `#{w:@cpd_workers}`.
+    const LONG_WIDTH: usize = 34 + 2;
+
+    /// `long_fits!()` as text: the client is at least the workers pill's width plus 14 (the left group's 12, the closing `━` and a
+    /// fill of at least 1), the preview pill, the version pill and the incident pill.
+    fn long_fits() -> String {
+        format!("#{{e|>=:#{{client_width}},#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{e|+:#{{w:@cpd_workers}},2}},14}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}}}}")
+    }
+
+    /// A button of the left group: its click range, its glyph between the two caps (3 cells), a block of the bright pair of `base`.
+    fn button(range: &str, glyph: &str, base: u8) -> String {
+        format!("#[range=user|{range}]#[fg=colour{}]\u{e0b6}#[reverse]{glyph}#[noreverse]\u{e0b4}#[default]#[norange]", spec().clickable(base))
+    }
+
+    /// A pill of colour `colour`: its text between the caps, with no padding, in reverse video.
+    fn pill_of(colour: u8, text: &str) -> String {
+        format!("#[fg=colour{colour}]\u{e0b6}#[reverse]{text}#[noreverse]\u{e0b4}#[default]")
+    }
+
+    /// The workers pill: the long form while the client is wide enough, else the short form.
+    fn workers_pill() -> String {
+        pill_of(8, &format!("#{{?{},#{{@cpd_workers}},#{{@cpd_workers_short}}}}", long_fits()))
+    }
+
+    /// The fill's cell count: the client's width less the left group, the preview, version and incident pills and the right
+    /// group's workers pill in the form drawn plus the closing `━`.
+    fn fill_count() -> String {
+        format!(
+            "#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},{PREVIEW_WIDTH}}},{VERSION_WIDTH}}},{INCIDENT_WIDTH}}},#{{e|+:#{{?{},#{{e|+:#{{w:@cpd_workers}},2}},#{{e|+:#{{w:@cpd_workers_short}},2}}}},1}}}}",
+            long_fits()
+        )
+    }
+
+    /// The preview pill's conditional: the join and `preview: <value>`, empty while `@cpd_preview` is unset.
+    fn preview_branch() -> String {
+        format!("#{{?#{{@cpd_preview}},#[fg=colour8]\u{2501}{},}}", pill_of(3, "preview: #{@cpd_preview}"))
+    }
+
+    /// What follows the logs button in the format.
+    fn after_the_buttons() -> String {
+        let logs = button("logs", LOGS_GLYPH, DANGO[2]);
+        let f: &str = &STATUS_FORMAT;
+        f[f.find(&logs).expect("the logs button") + logs.len()..].to_owned()
+    }
+
+    // The right group is 37 cells wide in the long form (a text of 34 cells, 2 caps, the closing `━`):
+    // with the left group's 12 and a fill of at least 1 it needs a client of 50 columns; one less gets the short form.
+    #[test]
+    fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_50_columns() {
+        let f: &str = &STATUS_FORMAT;
+        assert_eq!(long_fits!(), long_fits(), "`client_width >= w:@cpd_workers + 2 + 14`, plus the pills that are set");
+        assert_eq!(LEFT_WIDTH + 1 + 1, 14, "the left group's 12, the closing `━` and a fill of 1");
+        assert_eq!(LONG_WIDTH + 14, 50, "the long form needs a client of 50 columns");
+        assert!(f.contains(&workers_pill()), "the workers pill reads `@cpd_workers` when the long form fits: {f}");
+        // the line is full: the fill is the width less the left group and the right group in the form drawn
+        assert_eq!(fill_count!(), fill_count());
+        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2501},{}}},", fill_count())), "{f}");
+    }
+
+    #[test]
+    fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_50_columns() {
+        let f: &str = &STATUS_FORMAT;
+        // the short form is the else branch of the long form's test, and the fill subtracts its width then
+        assert!(f.contains(&workers_pill()) && workers_pill().contains(",#{@cpd_workers},#{@cpd_workers_short}}"), "{f}");
+        assert!(fill_count().contains(",#{e|+:#{w:@cpd_workers},2},#{e|+:#{w:@cpd_workers_short},2}}"), "{}", fill_count());
+        // 50 fits and 49 does not: the test is `>=`
+        assert!(long_fits().starts_with("#{e|>=:#{client_width},"), "{}", long_fits());
+        // the format writes no `workers` word of its own: it is in `@cpd_workers`, which the engine sets
+        assert!(!f.replace("@cpd_workers", "").contains("workers"), "{f}");
+    }
+
+    #[test]
+    fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
+        let f: &str = &STATUS_FORMAT;
+        let buttons = format!("{JOIN}{}{JOIN}{}{JOIN}{}", button("reset", RESET_GLYPH, DANGO[0]), button("legend", LEGEND_GLYPH, DANGO[1]), button("logs", LOGS_GLYPH, DANGO[2]));
+        // the leading `━`, then the three buttons joined by a single `━` each: 3 joins and 3 buttons of 3 cells, 12 cells
+        assert!(f.starts_with(&buttons), "{f}");
+        assert_eq!(buttons.matches('\u{2501}').count() + 3 * 3, LEFT_WIDTH);
+        assert!(f.starts_with(&format!("{JOIN}#[range=user|reset]#[fg=colour13]\u{e0b6}")), "the leading line cell, grey, then a button's cap: {f}");
+        // the right group ends with the version conditional, then the closing `━`, grey
+        assert!(f.ends_with(&format!("#{{?#{{@cpd_version}},#[fg=colour8]\u{2501}{},}}}}{JOIN}", pill_of(8, "#{@cpd_version}"))), "{f}");
+        // the right pills are joined by one `━` (never a space), and the left group by the buttons' own
+        assert!(!f.contains("inbox"), "{f}");
+        assert!(!f.contains("\u{e0b4} \u{e0b6}") && !f.contains("\u{e0b4}\u{e0b6}"), "no space and no touching caps between two pills: {f}");
+    }
+
+    #[test]
+    fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
+        let f: &str = &STATUS_FORMAT;
+        // the fill follows the logs button (and the preview pill, while set) in grey, and the right group follows it
+        let after = after_the_buttons();
+        assert!(after.starts_with(&preview_branch()), "{after}");
+        assert!(after[preview_branch().len()..].starts_with("#[fg=colour8]#{?window_zoomed_flag,#{R:\u{2501},"), "{after}");
+        assert!(after.contains("#[default]#{?@cpd_incident,"), "{after}");
+        // a zoomed window's fill is one run of the whole free width, in either form (40 and 100 columns: the short form and the long one)
+        assert!(f.contains(&format!("#{{?window_zoomed_flag,#{{R:\u{2501},{}}},", fill_count())), "{f}");
+        // otherwise it starts after the left group's 12 cells and the preview pill
+        assert!(f.contains(&format!("#{{e|+:12,{PREVIEW_WIDTH}}}")), "{f}");
+    }
+
+    const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+    // The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `━`: 45 cells with
+    // 33 of value. With the left group's 12, the long form's 37 and a fill of 1 it needs 95 columns.
+    #[test]
+    fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_option_is_set() {
+        let f: &str = &STATUS_FORMAT;
+        // `#{n:@cpd_preview}` + 12: the join, two caps and `preview: `
+        assert_eq!(1 + 2 + "preview: ".chars().count(), 12);
+        assert_eq!(PREVIEW.chars().count(), 33);
+        assert_eq!(LONG_WIDTH + 14 + PREVIEW.chars().count() + 12, 95, "the long form fits from 95 columns with this preview");
+        // right after the buttons: a join, then the pill in reverse video on colour 3, unpadded and with no background
+        assert!(after_the_buttons().starts_with(&preview_branch()), "{}", after_the_buttons());
+        assert!(preview_branch().contains("\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}"), "{}", preview_branch());
+        assert!(!f.contains("bg="), "{f}");
+        // the fill and the long form's test are shorter by the pill's width while the option is set
+        assert!(fill_count().contains(PREVIEW_WIDTH) && long_fits().contains(PREVIEW_WIDTH), "{f}");
+        assert!(f.contains(&fill_count()) && f.contains(&long_fits()), "the format uses them: {f}");
+    }
+
+    #[test]
+    fn the_status_line_shows_no_preview_once_the_option_is_unset() {
+        let f: &str = &STATUS_FORMAT;
+        // the pill is a conditional on the option with an empty else branch, and the width one with 0
+        assert!(f.contains(&preview_branch()) && preview_branch().ends_with(",}"), "{f}");
+        assert!(PREVIEW_WIDTH.ends_with(",0}"), "{PREVIEW_WIDTH}");
+        // and the option is used nowhere else: with those two forms taken out, no `@cpd_preview` is left
+        let rest = f.replace(PREVIEW_WIDTH, "").replace(&preview_branch(), "");
+        assert!(!rest.contains("@cpd_preview"), "{rest}");
     }
 
     #[test]
@@ -1262,53 +1568,6 @@ mod tests {
         assert_eq!(cmd.get_args().next().unwrap(), "-u");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
         assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
-    }
-
-    /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
-    /// first answers to `list-sessions` are `server exited unexpectedly`, then a refused connection,
-    /// then `no server running`. Returns the script and the calls it logs.
-    fn dying_server(dir: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("tmux");
-        let script = format!(
-            "#!/bin/sh\n\
-             d='{d}'\n\
-             echo \"$*\" >> \"$d/calls\"\n\
-             case \" $* \" in\n\
-               *' kill-server '*) touch \"$d/killed\"; echo 'server exited unexpectedly' >&2; exit 1;;\n\
-               *' list-sessions '*)\n\
-                 [ -e \"$d/killed\" ] || exit 0\n\
-                 n=$(cat \"$d/n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/n\"\n\
-                 case $n in\n\
-                   1|2) echo 'server exited unexpectedly' >&2;;\n\
-                   3) echo 'lost server' >&2;;\n\
-                   4) echo 'error connecting to /tmp/x (Connection refused)' >&2;;\n\
-                   *) echo 'no server running on /tmp/x' >&2;;\n\
-                 esac; exit 1;;\n\
-             esac\n",
-            d = dir.display()
-        );
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Another test's `fork` may hold the script's write descriptor for a moment: run it until it can be.
-        for _ in 0..100 {
-            match Command::new(&path).arg("warm-up").status() {
-                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(20)),
-                _ => break,
-            }
-        }
-        path
-    }
-
-    #[test]
-    fn a_dying_server_answering_server_exited_unexpectedly_does_not_fail_kill_server() {
-        let dir = tempfile::tempdir().unwrap();
-        let tmux = Tmux::new("dying").with_program(dying_server(dir.path()));
-        tmux.kill_server().unwrap();
-        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
-        let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
-        assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
-        assert!(calls.lines().any(|l| l == "-u -L dying -f /dev/null kill-server"), "{calls}");
     }
 
     #[test]

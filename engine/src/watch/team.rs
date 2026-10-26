@@ -9,15 +9,15 @@
 //! an `error` Event until a run succeeds: the engine tells the Manager of it (hs-d314), no Inbox item.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 
-use super::engine::Engine;
+use super::engine::{Engine, incident_holds};
 use super::pr::printed;
 use super::report::{About, Failure, Step};
 use cpd_core::clock::timestamp;
@@ -25,7 +25,10 @@ use cpd_core::config::catalog::node;
 use cpd_core::config::locate_pi;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::Runner;
+use cpd_core::config::PiInstall;
+use cpd_core::ports::Ports;
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -45,6 +48,10 @@ pub(super) struct State {
 }
 
 pub(super) fn run(engine: &mut Engine) {
+    if incident_holds(engine, Step::E11) {
+        engine.log.line("E11: holding: incident mode is on");
+        return;
+    }
     if engine.config.inbox.team_channel.is_empty() {
         // Switched off: nothing runs and nothing it reported stays.
         engine.clear(Step::E11, &About::Machine);
@@ -59,7 +66,7 @@ pub(super) fn run(engine: &mut Engine) {
             }
         };
         engine.team.running = None;
-        engine.team.last_end = Some(Instant::now());
+        engine.team.last_end = Some(engine.ports.clock.now());
         match answer.and_then(|value| store(engine, &value)) {
             Ok(posts) => {
                 engine.log.line(&format!("E11: cached {posts} post(s) of the team channel"));
@@ -70,14 +77,14 @@ pub(super) fn run(engine: &mut Engine) {
         return;
     }
     let period = Duration::from_secs(u64::from(engine.config.watch.team_review_seconds));
-    if engine.team.last_end.is_some_and(|end| end.elapsed() < period) {
+    if engine.team.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < period) {
         return;
     }
     match start(engine) {
         Ok(running) => engine.team.running = Some(running),
         Err(failure) => {
             // The next try is a period away, as after a run that failed.
-            engine.team.last_end = Some(Instant::now());
+            engine.team.last_end = Some(engine.ports.clock.now());
             engine.fail(Step::E11, About::Machine, failure);
         }
     }
@@ -86,8 +93,17 @@ pub(super) fn run(engine: &mut Engine) {
 /// Starts the helper on its own thread; returns where its answer will arrive.
 fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let pi = locate_pi().map_err(|e| Failure::from(&e))?;
+    start_with(Ports::current().runner, engine, &pi, &node())
+}
+
+/// [`start`] on `runner`, with pi located as `pi` and pi's Node `node`.
+pub(super) fn start_with(
+    runner: Arc<dyn Runner>,
+    engine: &Engine,
+    pi: &PiInstall,
+    node: &Path,
+) -> Result<Receiver<Result<Value, Failure>>, Failure> {
     let script = engine.config.pi_adapter_dir().map_err(|e| Failure::from(&e))?.join("lib").join("slack-channel.ts");
-    let node = node();
     let args = [
         script.display().to_string(),
         "--coding-agent".to_owned(),
@@ -98,7 +114,7 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
         engine.config.inbox.slack_user_id.clone(),
     ];
     let argv: Vec<String> = std::iter::once(node.display().to_string()).chain(args.iter().cloned()).collect();
-    let mut cmd = Command::new(&node);
+    let mut cmd = Command::new(node);
     cmd.args(&args)
         .env("PI_CODING_AGENT_DIR", &pi.agent_dir)
         .env("CPD_HOME", engine.home.root())
@@ -110,7 +126,7 @@ fn start(engine: &Engine) -> Result<Receiver<Result<Value, Failure>>, Failure> {
         .stdin(Stdio::null());
     let (tx, rx) = channel();
     std::thread::spawn(move || {
-        let answer = match deadline::output(&mut cmd, "node", DEADLINE) {
+        let answer = match runner.output(&mut cmd, "node", DEADLINE) {
             Ok(out) => printed(&out, &argv.iter().map(String::as_str).collect::<Vec<_>>()),
             Err(Failed::Io(e)) => Err(Failure::from(
                 &CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)),
@@ -135,7 +151,7 @@ fn store(engine: &Engine, answer: &Value) -> Result<usize, Failure> {
     };
     let cache = json!({
         "version": 1,
-        "polled_at": timestamp(OffsetDateTime::now_utc()),
+        "polled_at": timestamp(engine.ports.clock.utc()),
         "channel": engine.config.inbox.team_channel,
         "read": read,
         "posts": posts,

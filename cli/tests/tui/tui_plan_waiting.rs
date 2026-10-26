@@ -3,7 +3,7 @@
 
 use cpd_tui::palette::{MERGED, QUEUED};
 
-use crate::tui_plan_cancelled::{env, plan, screen_when, start_view};
+use crate::tui_plan_cancelled::{draw, env, plan, rows};
 
 /// The chart rows of the `api` box: those between its top and bottom borders, the borders and the padding cut off.
 fn chart(screen: &[String]) -> Vec<String> {
@@ -16,18 +16,16 @@ fn chart(screen: &[String]) -> Vec<String> {
 }
 
 fn chart_of(jobs: &[crate::tui_plan_cancelled::FixtureJob]) -> Vec<String> {
-    let env = env();
-    plan(&env, &[("api", "api")], jobs);
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains("open") || l.contains(" z│")));
-    chart(&screen)
+    let fx = env();
+    plan(&fx, &[("api", "api")], jobs);
+    chart(&rows(&draw(&fx)))
 }
 
 #[test]
 fn a_waiting_job_pill_is_not_followed_by_a_note() {
-    let env = env();
+    let fx = env();
     plan(
-        &env,
+        &fx,
         &[("api", "api")],
         &[
             ("api", "a", "queued", "work", &[]),
@@ -36,8 +34,7 @@ fn a_waiting_job_pill_is_not_followed_by_a_note() {
             ("api", "c", "queued", "work", &["a", "b", "m"]),
         ],
     );
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains(" c│")));
+    let screen = rows(&draw(&fx));
     assert!(screen.iter().all(|l| !l.contains("waiting")), "{}", screen.join("\n"));
     // every pill row ends at the closing cap of its last pill
     for row in chart(&screen).iter().filter(|r| r.contains('\u{e0b6}')) {
@@ -80,10 +77,9 @@ fn the_open_job_is_drawn_with_needs_edges_from_its_prs_other_jobs() {
 
 #[test]
 fn ready_job_stays_queued() {
-    let env = env();
-    plan(&env, &[("api", "api")], &[("api", "a", "queued", "work", &[])]);
-    let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains(" a│")));
+    let fx = env();
+    plan(&fx, &[("api", "api")], &[("api", "a", "queued", "work", &[])]);
+    let screen = rows(&draw(&fx));
     // `a` is ready to start now: its pill is the queued one, and nothing says it waits for anything
     let a = screen.iter().find(|l| l.contains(" a│")).expect("a's pill");
     assert!(a.contains(cpd_tui::palette::QUEUED), "{a}");

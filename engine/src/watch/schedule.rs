@@ -11,7 +11,8 @@ use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use cpd_core::driver::{self, StartCtx};
+use cpd_core::clock::Clock;
+use cpd_core::driver::{self, Allocation, StartCtx};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::limit::limit;
 use cpd_core::ids::{JobKey, PlanId};
@@ -20,6 +21,14 @@ use cpd_core::ids::{JobKey, PlanId};
 const BACKOFF_CAP_SECONDS: u64 = 300;
 /// The back-off's unit: `2^k` of it (tests shorten it with `CPD_TEST_BACKOFF_UNIT`, [`limit`]).
 const BACKOFF_UNIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Whether incident mode lets E3 start a Ready Job of Plan `plan` and urgency `urgent` (contract
+/// §3.7, hs-d643): the incident is off, or the Plan is in `incident_plans`, or the Job is
+/// explicitly urgent; every other Ready Job holds (the `concurrency + 1` urgent slot rule is
+/// unchanged).
+pub(super) fn incident_starts(conn: &Connection, plan: &PlanId, urgent: bool) -> bool {
+    urgent || !cpd_core::incident::is_held(conn, plan)
+}
 
 /// How long E3 waits after the last of `k` Attempts in a row whose driver never
 /// started: `min(2^k, 300)` seconds.
@@ -52,6 +61,12 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
     Ok(now < ended + wait)
 }
 
+/// [`backing_off`] at the time `clock` reads (`Clock::utc`). The unit is [`BACKOFF_UNIT`] unless `CPD_TEST_BACKOFF_UNIT`
+/// says otherwise (cli/tests/engine/watch.rs still reads it).
+pub(super) fn backing_off_with(conn: &Connection, plan: &PlanId, key: &JobKey, clock: &dyn Clock) -> Result<bool, CpdError> {
+    backing_off(conn, plan, key, clock.utc())
+}
+
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
 /// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),
@@ -74,6 +89,36 @@ pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN 
                            AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
+/// The linear vs parallel allocation E3 derives for each Ready Job it is about to start
+/// (hs-d680/hs-d682/hs-d683), from the PR's live Attempts plus the Jobs being started in this tick in READY order: the
+/// first Job of a PR with no live Attempt is `Linear`, the rest `Parallel`; a Job of a PR that already has a live
+/// Attempt is `Parallel`. One entry per Job of `ready`, in its order.
+fn allocations(conn: &Connection, ready: &[(PlanId, JobKey)]) -> Result<Vec<Allocation>, CpdError> {
+    let mut first: Vec<(String, String)> = Vec::new();
+    let mut out = Vec::with_capacity(ready.len());
+    for (plan, key) in ready {
+        let pr: String = conn.query_row(
+            "SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), key.as_str()],
+            |r| r.get(0),
+        )?;
+        let live: i64 = conn.query_row(
+            "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+              WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended'",
+            params![plan.as_str(), pr.as_str()],
+            |r| r.get(0),
+        )?;
+        let pr_key = (plan.to_string(), pr);
+        if live > 0 || first.contains(&pr_key) {
+            out.push(Allocation::Parallel);
+        } else {
+            first.push(pr_key);
+            out.push(Allocation::Linear);
+        }
+    }
+    Ok(out)
+}
+
 pub(super) fn run(engine: &mut Engine) {
     // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
     match restart::holding(&engine.home) {
@@ -81,18 +126,23 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(false) => {}
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     }
+    let clock = engine.ports.clock.clone();
     let ready = engine.store.read(|conn| {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let active: i64 = conn.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
-        let now = OffsetDateTime::now_utc();
         let mut ready = Vec::new();
         for (p, k, urgent) in rows {
-            let (plan, key) = (PlanId::parse(&p)?, JobKey::parse(&k)?);
+            let plan = PlanId::parse(&p)?;
+            // Incident mode on: a non-urgent Ready Job of a held Plan waits (§3.7 E3).
+            if !incident_starts(conn, &plan, urgent) {
+                continue;
+            }
+            let key = JobKey::parse(&k)?;
             // Its driver could not be started the last times: wait before the next try.
-            if !backing_off(conn, &plan, &key, now)? {
+            if !backing_off_with(conn, &plan, &key, &*clock)? {
                 ready.push((plan, key, urgent));
             }
         }
@@ -117,10 +167,14 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(catalog) => catalog,
         Err(e) => return engine.fail(Step::E3, About::Machine, &e),
     };
-    for (plan, key) in ready {
+    let allocations = match engine.store.read(|conn| allocations(conn, &ready)) {
+        Ok(allocations) => allocations,
+        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
+    };
+    for ((plan, key), allocation) in ready.into_iter().zip(allocations) {
         let about = About::Job(plan.clone(), key.clone());
         let ctx = StartCtx { home: &engine.home, config: &engine.config, catalog: &catalog, command: SOURCE };
-        match driver::start(&mut engine.store, &ctx, &plan, &key) {
+        match driver::start_with_allocation(&engine.ports, &mut engine.store, &ctx, &plan, &key, Some(allocation)) {
             Ok(started) => {
                 engine.log.line(&format!(
                     "E3: started {} of Plan {plan} at Tier {} ({}), driver pid {}",

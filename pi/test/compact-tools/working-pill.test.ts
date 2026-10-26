@@ -1,6 +1,5 @@
-/** The working label is a pill in 6 and the working indicator is the cockpit loader (contract 6.1.1, 6.9). */
+/** The working label is a pill in 6 drawn by the extension's own clock; pi's Loader gets no frames (contract 6.1.1, 6.9). */
 import "./pinned-themes.ts";
-import { MOON_FRAMES } from "./loader-frames.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -10,8 +9,7 @@ import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dis
 
 test.after(() => restoreClocks());
 
-/** The cockpit loader's eight code points, written out so this test does not depend on the module. */
-const LOADER = MOON_FRAMES;
+/** The working pill's caps. */
 const LEFT_CAP = "\ue0b6";
 const RIGHT_CAP = "\ue0b4";
 
@@ -72,15 +70,11 @@ test("every working label keeps its words and ends with …", () => {
 	}
 });
 
-test("the working indicator frames are the cockpit loader, plain, at 100 ms", () => {
+test("the working indicator carries no frames for pi's Loader to animate", () => {
 	const { indicator } = drive((h) => h.get("agent_start")!({}));
 	assert.ok(indicator, "an indicator is set");
-	assert.equal(indicator!.intervalMs, 100);
-	assert.equal(indicator!.frames.length, 8);
-	indicator!.frames.forEach((frame, index) => {
-		assert.equal(strip(frame), LOADER[index], `frame ${index}`);
-		assert.equal(frame, LOADER[index], `frame ${index} has no colour of its own: the pill paints it in text 0`);
-	});
+	assert.deepEqual(indicator!.frames, [], "the empty frame list leaves pi's Loader without an interval");
+	assert.equal(indicator!.intervalMs, undefined, "no interval is named either");
 });
 
 test("the label pill uses only indexed SGR 0-7", () => {

@@ -8,6 +8,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context new` | Create a Context (§3.1) | Lead | yes |
 | `cpd context list` | List the Contexts (§3.2) | Lead, Manager | |
 | `cpd context show` | Show a Context and its records (§3.3) | Lead, Manager | |
+| `cpd context search` | Search the Context's records, ranked by the holographic engine (§3.3) | Lead, Manager | |
+| `cpd context reindex` | Rebuild the Context's holographic engine index (§3.3) | Lead, Manager | |
 | `cpd context decide` | Record a decision (§3.4) | Lead, Manager | |
 | `cpd context note` | Record a note (§3.4) | Lead, Manager | |
 | `cpd context ask` | Record a question (§3.4) | Lead, Manager | |
@@ -99,6 +101,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |
 | `cpd events follow` | Follow Events, one per line (the one streaming command) (§11.2) | | |
+| `cpd incident` | Incident mode (commands.md §25) | | |
+| `cpd incident start` | Turn incident mode on (Manager) (commands.md §25.1) | Manager | |
+| `cpd incident end` | Turn incident mode off (Manager) (commands.md §25.2) | Manager | |
+| `cpd incident status` | Report whether incident mode is on (commands.md §25.3) | Manager, Lead, Worker | |
 | `cpd inbox` | What needs you (commands.md §21) | | |
 | `cpd inbox list` | List what needs you (§21.1) | | |
 | `cpd inbox show` | Show one item (§21.2) | | |
@@ -126,4 +132,25 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
-| `cpd slot` | Run a command inside a test slot (commands.md §23) | Manager, Lead, Worker | |
+| `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
+| `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |
+| `cpd secret list` | List the items of a vault (§24.2) | Lead, Manager | |
+| `cpd secret create` | Create an item with one concealed field; the value is on stdin (§24.3) | Lead, Manager | |
+| `cpd secret edit` | Set one field of an item; the value is on stdin (§24.4) | Lead, Manager | |
+| `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
+| `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
+| `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |
+| `cpd gate` | The Gate's leak check, after the command of `scripts/gate-run.sh` (commands.md §26) | | |
+| `cpd gate finish` | Check what the run left behind, stop and remove it, report it (the Gate's leak check) | | |
+| `cpd host` | Repair the cpd checkout after a skipped install (commands.md §9.11) | | |
+| `cpd host approve` | Record the User's approval for one checkout repair (adapter) (§9.11) | internal | |
+| `cpd host repair` | Repair the skipped cpd install (Manager) (§9.11) | Manager | |
+| `cpd test` | The tests a change reaches, and named tests (commands.md §27) | | |
+| `cpd test changed` | Run the Rust tests the changed files can reach (§26.1) | Manager, Lead, Worker | |
+| `cpd test run` | Run the named tests (§26.2) | Manager, Lead, Worker | |
+| `cpd test list` | Exit 0 only when that one test exists (§26.3) | Manager, Lead, Worker | |
+| `cpd test build` | Compile the Rust tests and typecheck the TypeScript (§26.3) | Manager, Lead, Worker | |
+| `cpd prune` | Remove the leftover worktrees whose work is on origin/main (commands.md §26) | | |
+| `cpd tag` | Tag the commit that set the workspace version (commands.md §26.1) | Lead | |
+| `cpd version` | The release plumbing (commands.md §26.2) | | |
+| `cpd version sync` | Write the version derived from PROTOCOL and the migrations into Cargo.toml and Cargo.lock (commands.md §26.2) | Lead | |

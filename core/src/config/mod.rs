@@ -10,6 +10,9 @@ mod file;
 mod repo;
 mod tier;
 
+#[cfg(test)]
+mod runner_tests;
+
 use serde_json::json;
 
 use crate::error::CpdError;

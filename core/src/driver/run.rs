@@ -7,9 +7,6 @@
 
 use std::time::Duration;
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -26,24 +23,26 @@ use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
-use crate::host::limit::limit;
+use crate::host::spawn::{Pid as SpawnPid, Spawn};
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
+use crate::ports::Ports;
 use crate::plan::locked_fingerprint;
 use crate::store::{Persist, Store};
 
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
 
-/// How often A4 looks at the Attempt, its Session and its pane (tests: `CPD_TEST_DRIVER_POLL`, [`limit`]).
+/// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
 
 /// What A4 knows of the Worker's pane at a poll.
-enum Look {
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Look {
     /// Alive, with its process's pid when tmux gave one (hs-n102).
     Alive(Option<u32>),
     /// Dead or missing: the `crashed` detail.
@@ -58,14 +57,22 @@ enum Look {
 /// the pane ended. A failed `list-panes` is retried at the next poll, once,
 /// before the pane is judged (contract §6.3 liveness, engine-W8).
 #[derive(Default)]
-struct PaneWatch {
+pub(super) struct PaneWatch {
     pid: Option<u32>,
     failed: bool,
 }
 
+/// One A4 poll on `ports`: the nap of `POLL` (500 ms) on `ports.clock`, then the look at the Worker's pane
+/// (`PaneWatch::look_with` on `ports.spawn`).
+pub(super) fn poll_with(ports: &Ports, watch: &mut PaneWatch, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+    ports.clock.sleep(POLL);
+    watch.look_with(&*ports.spawn, tmux, pane)
+}
+
 impl PaneWatch {
-    fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
-        if let Some(pid) = self.pid.filter(|&pid| alive(pid)) {
+    /// The look at the pane: the pid test (`alive`) asks `spawn`.
+    pub(super) fn look_with(&mut self, spawn: &dyn Spawn, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+        if let Some(pid) = self.pid.filter(|&pid| spawn.alive(SpawnPid(pid))) {
             return Ok(Look::Alive(Some(pid)));
         }
         let panes = match tmux.list_panes() {
@@ -89,33 +96,6 @@ impl PaneWatch {
                 Look::Alive(p.pid)
             }
         })
-    }
-}
-
-/// Whether process `pid` runs: `kill(pid, 0)` finds it and it is not a
-/// zombie (ended, not yet reaped by tmux). Linux reads `/proc/<pid>/stat`;
-/// macOS reads the BSD status through `libproc` (`SZOMB`).
-fn alive(pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else { return false };
-    if matches!(kill(Pid::from_raw(raw), None), Err(Errno::ESRCH)) {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use libproc::bsd_info::BSDInfo;
-        // SZOMB, <sys/proc.h>: the process has ended and waits to be reaped.
-        const SZOMB: u32 = 5;
-        return match libproc::proc_pid::pidinfo::<BSDInfo>(raw, 0) {
-            Ok(info) => info.pbi_status != SZOMB,
-            // `kill` found it, `libproc` does not: it was reaped between the two.
-            Err(_) => false,
-        };
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
-        // `pid (comm) state …`; comm may hold spaces and parentheses.
-        stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
     }
 }
 
@@ -168,6 +148,8 @@ struct Driver {
     exe: Exe,
     /// Loaded in A1; the ladder needs it to end an Attempt.
     catalog: Option<Catalog>,
+    /// Time, processes and `exec`: the real ones, or a test's.
+    ports: Ports,
 }
 
 /// Where A1 takes an Attempt up, by its status (§3.4 step 4).
@@ -213,11 +195,13 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // A1: before anything opens a file, so fd 3 cannot be one of ours. Held
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
-    let exe = Exe::current()?;
+    // This executable as the ports tell it (the real ones: the path recorded at process start), so that a test can stand
+    // a file of its own for it and replace that file.
+    let exe = Exe::at(Ports::current().spawn.self_exe()?)?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
     let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
-    let Env { home, config, store } = match opened {
+    let Env { home, config, store, ports, .. } = match opened {
         Ok(env) => env,
         Err(e) => {
             leave_infra(&home, &plan, &id, &e);
@@ -225,7 +209,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
         }
     };
     let tmux = Tmux::new(config.tmux.socket.as_str());
-    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
+    let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None, ports };
 
     let outcome = (|| {
         let target = driver.load()?;
@@ -326,8 +310,10 @@ impl Driver {
             let pr = crate::ids::PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
             crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
         }
-        // A2: the worktree from the Lead Branch HEAD, and pre-start.
-        log("A2: creating the worktree and running pre-start");
+        // A2 (hs-d680): a linear Attempt reuses the PR's workflow worktree as it is; a parallel sibling creates
+        // its own worktree from the Lead Branch HEAD and runs pre-start. A linear Attempt never runs pre-start.
+        let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
+        log(if linear { "A2: reusing the workflow worktree on the Lead Branch" } else { "A2: creating the worktree and running pre-start" });
         let setup = Setup {
             timeout: Duration::from_secs(u64::from(self.config.timeouts.setup_minutes) * 60),
             log: self.home.hook_log(&self.plan, &self.id, Hook::PreStart),
@@ -339,18 +325,29 @@ impl Driver {
                 return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
             }
         };
-        let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
-            Ok(created) => created,
-            Err(e) => {
-                let detail = format!("Setting up the worktree failed: {}", e.message());
-                return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+        let base_sha = if linear {
+            match verify_linear_worktree(target) {
+                Ok(sha) => sha,
+                Err(e) => {
+                    let detail = format!("The workflow worktree is not usable: {}", e.message());
+                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                }
             }
+        } else {
+            let created = match git::create_attempt_worktree_with(&target.repo, &target.lead_worktree, &self.plan, &self.id, &setup, &policy.hooks.pre_start) {
+                Ok(created) => created,
+                Err(e) => {
+                    let detail = format!("Setting up the worktree failed: {}", e.message());
+                    return self.end(target, End::Failed { cause: Cause::SetupFailed, detail }, dirs);
+                }
+            };
+            created.base_sha
         };
         let (plan, id) = (&self.plan, &self.id);
         self.store.write(SOURCE, |tx| {
             tx.execute(
                 "UPDATE attempts SET base_sha = ?3 WHERE plan = ?1 AND id = ?2 AND status = 'starting'",
-                params![plan.as_str(), id.to_string(), created.base_sha],
+                params![plan.as_str(), id.to_string(), base_sha],
             )?;
             Ok(())
         })?;
@@ -365,7 +362,7 @@ impl Driver {
         let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
-            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target, &log)? {
+            match worker::wait_for_lead_with(&self.ports, &mut self.store, &self.config, dirs, target, &log)? {
                 Some(fork) => Some(fork),
                 None => return self.end(target, End::Cancelled, dirs),
             }
@@ -433,7 +430,10 @@ impl Driver {
         }
         log("reload: new cpd installed, re-executing");
         self.lock.keep_across_exec()?;
-        let failed = self.exe.exec(std::env::args_os().skip(1));
+        // The argv this driver was started with (`start` makes it so), from its own fields: a driver run in a test has no process argv.
+        let id = self.id.to_string();
+        let args = ["attempt", "run", id.as_str(), "--plan", self.plan.as_str()];
+        let failed = self.exe.exec_with(&*self.ports.spawn, args);
         // Still here: the `exec` failed. Do not leak the lock to the children.
         let _ = self.lock.close_on_exec();
         Err(failed)
@@ -526,11 +526,9 @@ impl Driver {
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
-        let poll = limit("DRIVER_POLL", POLL);
         loop {
-            std::thread::sleep(poll);
             // The pane before the row: a Worker that submits and exits is seen `merging`.
-            let look = watch.look(&self.tmux, pane)?;
+            let look = poll_with(&self.ports, &mut watch, &self.tmux, pane)?;
             if file.is_none() {
                 file = pi::session_file(dirs, session);
                 if let Some(found) = &file {
@@ -556,7 +554,13 @@ impl Driver {
             }
             match now.stop_request.as_deref() {
                 None => {}
-                Some("cancelled") => return self.end(&now, End::Cancelled, dirs),
+                Some("cancelled") => {
+                    // A real cancel (the Job has `cancel_requested_at`) ends `Cancelled`; incident mode's stop (no
+                    // cancel request) ends `Interrupted`, which requeues the Job at the same Tier (contract §3.7).
+                    let cancelled = self.store.read(|conn| ledger::cancel_request(conn, &now.plan, &now.job))?.is_some();
+                    let end = if cancelled { End::Cancelled } else { End::Interrupted };
+                    return self.end(&now, end, dirs);
+                }
                 Some("timed_out") => {
                     let detail = format!("It used its {} minutes of active time.", self.config.timeouts.attempt_minutes);
                     return self.end(&now, End::Failed { cause: Cause::TimedOut, detail }, dirs);
@@ -577,7 +581,8 @@ impl Driver {
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
             let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
-            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi, span_open)) {
+            let descendants = |pi: u32| self.ports.spawn.descendants(SpawnPid(pi)).into_iter().map(|p| p.0).collect();
+            if let Some(line) = pi.and_then(|pi| stall.check_with(&self.ports, &descendants, &file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
@@ -693,7 +698,7 @@ impl Driver {
         // steps, so nothing can move the Attempt branch afterwards. A failure is
         // reported as A9's is; the merge still runs, A9 tries the kill again.
         let target = self.load()?;
-        if let Err(e) = worker::kill_window(&self.config, &self.tmux, &target) {
+        if let Err(e) = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id) {
             log(&format!("killing the Worker's window failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
         }
@@ -720,8 +725,24 @@ impl Driver {
     /// the driver lock file (this process keeps fd 3 until it exits). A
     /// failure here changes no state: it is reported as an `error` Event.
     fn cleanup(&mut self, target: &Target, merged: bool) {
-        let mut result = worker::kill_window(&self.config, &self.tmux, target);
-        if merged && result.is_ok() {
+        let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
+        let mut result = worker::kill_attempt_window_with(&self.ports, &self.config, &self.tmux, &target.plan, &target.id);
+        if linear {
+            // A9 (hs-d680): a merged linear Attempt keeps the workflow worktree and the Lead Branch. A failed or
+            // cancelled one resets the Lead Branch to its `base_sha` and discards what the Attempt left, then keeps
+            // the worktree.
+            if !merged {
+                match self.linear_base_sha() {
+                    Ok(Some(base_sha)) => {
+                        if let Err(e) = reset_linear_lead_branch(&target.worktree, &target.lead_branch, &base_sha) {
+                            result = result.and(Err(e));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => result = result.and(Err(e)),
+                }
+            }
+        } else if merged && result.is_ok() {
             result = git::remove_merged_attempt(&target.lead_worktree, &target.worktree, &target.branch);
         }
         let removed = lock::remove(&self.home, &self.plan, &self.id);
@@ -730,6 +751,18 @@ impl Driver {
             log(&format!("A9 failed: {}", e.message()));
             let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
         }
+    }
+
+    /// The `base_sha` the Attempt recorded at A2, for the A9 reset of a failed or cancelled linear Attempt.
+    fn linear_base_sha(&mut self) -> Result<Option<String>, CpdError> {
+        let (plan, id) = (&self.plan, &self.id);
+        self.store.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT base_sha FROM attempts WHERE plan = ?1 AND id = ?2",
+                params![plan.as_str(), id.to_string()],
+                |r| r.get::<_, Option<String>>(0),
+            )?)
+        })
     }
 
     /// commands.md §6.4: an unexpected failure appends `error` and ends the
@@ -766,9 +799,57 @@ impl Driver {
     }
 }
 
+/// A2 for a linear Attempt (hs-d680): its workflow worktree must exist, be on the Lead Branch and be clean; the
+/// Lead Branch tip becomes its `base_sha`. No worktree is created and no `pre-start` runs (A2).
+fn verify_linear_worktree(target: &Target) -> Result<String, CpdError> {
+    let worktree = &target.worktree;
+    if !worktree.exists() {
+        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} does not exist", worktree.display())));
+    }
+    match git::run::current_branch(worktree)? {
+        Some(branch) if branch == target.lead_branch => {}
+        Some(branch) => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("the workflow worktree {} is on {branch}, not the Lead Branch {}", worktree.display(), target.lead_branch),
+            ))
+        }
+        None => return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} has a detached HEAD", worktree.display()))),
+    }
+    let status = git::run::ok(worktree, &["--no-optional-locks", "status", "--porcelain"])?;
+    if !status.trim().is_empty() {
+        return Err(CpdError::new(ErrorCode::SetupFailed, format!("the workflow worktree {} is not clean", worktree.display())).with("status", status.trim()));
+    }
+    git::run::rev_parse(worktree, &format!("refs/heads/{}", target.lead_branch))
+}
+
+/// A9 for a linear Attempt (hs-d680/hs-d682/hs-d683): its branch is the PR's Lead Branch, so a
+/// failed or cancelled Attempt puts the Lead Branch back to the `base_sha` it started from (`git -C <workflow
+/// worktree> reset --hard <base_sha>`), discarding what the Attempt left, and the workflow worktree is kept.
+pub(super) fn reset_linear_lead_branch(
+    lead_worktree: &std::path::Path,
+    lead_branch: &str,
+    base_sha: &str,
+) -> Result<(), CpdError> {
+    match git::run::current_branch(lead_worktree)? {
+        Some(branch) if branch == lead_branch => {}
+        other => {
+            return Err(CpdError::new(
+                ErrorCode::SetupFailed,
+                format!("Cannot reset the Lead Branch: the workflow worktree {} is on {other:?}, not {lead_branch}.", lead_worktree.display()),
+            ))
+        }
+    }
+    // One call moves the Lead Branch and discards the Attempt's working-tree changes.
+    git::run::ok(lead_worktree, &["reset", "--hard", base_sha])?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::driver::ports_tests::process;
+    use crate::host::spawn::FakeSpawn;
 
     #[test]
     fn a1_takes_up_starting_running_and_merging() {
@@ -780,17 +861,16 @@ mod tests {
 
     #[test]
     fn a_zombie_or_reaped_process_is_not_alive() {
-        assert!(alive(std::process::id()));
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
+        // The look at a pane asks `Spawn::alive`; the fake's process that ended is the zombie, then the reaped one.
+        let spawn = FakeSpawn::new();
+        let pid = process(&spawn);
+        assert!(spawn.alive(pid));
         // Not reaped yet: a zombie once it has exited.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while alive(pid) {
-            assert!(std::time::Instant::now() < deadline, "{pid} still alive");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        child.wait().unwrap();
-        assert!(!alive(pid));
+        spawn.exit(pid, 0);
+        assert!(!spawn.alive(pid));
+        assert_eq!(spawn.try_wait(pid).unwrap().map(|s| s.success()), Some(true), "waited for: reaped");
+        assert!(!spawn.alive(pid));
+        assert!(!spawn.alive(SpawnPid(4_000_000)), "a pid nobody started");
     }
 
     #[test]

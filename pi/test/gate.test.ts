@@ -18,7 +18,7 @@ test("the verify script runs the portability check and pi-check, in the document
       '(t=$(mktemp -d) && TMPDIR=$t ' + "npm" + ' test; s=$?; rm -rf "$t"; exit $s)',
       "scripts/pi-check.sh node_modules/.bin/pi",
       "export CPD_COMMIT=$(git rev-parse --short HEAD)",
-      "scripts/cargo.sh nextest run --workspace",
+      'PATH="$PWD/scripts/tripwire:$PATH" scripts/cargo.sh nextest run --workspace',
     ].join(" && "),
   );
 

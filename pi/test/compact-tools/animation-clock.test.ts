@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { install } from "@sinonjs/fake-timers";
-import { onTick } from "../../compact-tools/extensions/compact-tools-clock.ts";
+import { onTick, setClockFocused } from "../../compact-tools/extensions/compact-tools-clock.ts";
 
 test("indicators and labels use one timer, retain their rates, and stop when idle", () => {
+	setClockFocused(true);
 	const clock = install({ toFake: ["setInterval", "clearInterval"] });
 	let fast = 0, slow = 0;
 	const stopSlow = onTick(() => slow++);
@@ -26,6 +27,7 @@ test("indicators and labels use one timer, retain their rates, and stop when idl
 });
 
 test("dispatch skips disposed listeners and gives newly added listeners their own next tick", () => {
+	setClockFocused(true);
 	const clock = install({ toFake: ["setInterval", "clearInterval"] });
 	let later = 0, added = 0;
 	let stopLater = () => {}, stopAdded = () => {};

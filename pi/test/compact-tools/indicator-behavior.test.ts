@@ -189,7 +189,7 @@ for (const [mode, config] of Object.entries(MODE_CONFIGS)) {
 						const patch = mode === "codex" && (name === "edit" || name === "write");
 						// Codex opens only a command with more than its preview; drawn opened, it reads `$ cmd`.
 						const command = mode === "codex" && expanded && (name === "bash" || name === "powershell")
-							&& row.render(width).some((line) => line.replace(/\x1b\[[0-9;]*m/gu, "").startsWith(" $ "));
+							&& row.render(width).some((line) => line.replace(/\x1b\[[0-9;]*m/gu, "").startsWith("$ "));
 						const settled = command ? undefined : patch ? (failed ? undefined : dotOf(["\x1b[90m•\x1b[39m"]))
 							: dotOf([paintIndicator(failed ? "error" : "success", glyphOf(mode))]);
 						assert.equal(dotOf(row.render(width)), settled, `${key}: settled dot`);

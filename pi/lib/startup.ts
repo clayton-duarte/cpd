@@ -16,6 +16,8 @@ import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
 import { adapterPath, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
+import { registerSecretTool } from "./secret.ts";
+import { registerHostApproveTool } from "./hostapprove.ts";
 import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
@@ -191,6 +193,8 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     }
     chatToReopen = { reviews: reopen, title: latestTitle };
     registerTool(host);
+    registerSecretTool(host);
+    registerHostApproveTool(host);
     registerPlanReviewCommand(host);
   }
   if (host.run !== r) return;

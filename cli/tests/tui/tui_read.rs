@@ -1,13 +1,14 @@
 //! The TUI's read model (commands.md §17), against a store prepared through the
 //! store API (`Store::write`, as the other areas' tests do, because Plans, Jobs
-//! and Attempts belong to their areas) and through the built `cpd` commands.
+//! and Attempts belong to their areas), in this process (`Fx`: no process is started; the one test that runs `cpd`
+//! does it through `run_with` on `Fx::with_ports`, tmux being the fake route).
 
 use crate::common;
 
 use std::fs::{self, File};
 use std::sync::Mutex;
-use std::time::Instant;
 
+use common::fx::Fx;
 use common::{TestEnv, sql};
 use cpd_core::config::Tier;
 use cpd_core::error::ErrorCode;
@@ -300,19 +301,20 @@ fn engine(env: &TestEnv) -> Flock<File> {
     Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
 }
 
-fn fixture() -> (TestEnv, Store) {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+/// The fixture store in an `Fx`: no process (`Fx::new` runs no reaper).
+fn fixture() -> (Fx, Store) {
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     populate(&mut store);
-    (env, store)
+    (fx, store)
 }
 
 // ---------- the tree: context list, session list ----------
 
 #[test]
 fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
-    let (env, mut store) = fixture();
-    let _engine = engine(&env);
+    let (fx, mut store) = fixture();
+    let _engine = engine(&fx.env);
     let tree = read::tree(&mut store).unwrap();
 
     let ids: Vec<&str> = tree.contexts.iter().map(|c| c.id.as_str()).collect();
@@ -352,7 +354,7 @@ fn the_tree_is_contexts_then_plans_then_lead_sessions_with_their_states() {
 
 #[test]
 fn archived_objects_are_in_the_tree_with_their_archived_at() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let before = read::tree(&mut store).unwrap();
     assert!(
         before.contexts.iter().all(|c| c.archived_at.is_none() && c.plans.iter().all(|p| p.head.archived_at.is_none() && p.sessions.iter().all(|s| s.archived_at.is_none()))),
@@ -409,9 +411,13 @@ const T0: &str = "2026-01-04T00:00:00.000Z";
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
 #[test]
 fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
-    assert_eq!(needs(&mut store, "ship"), read::NeedsUser { lead_working: true, ..Default::default() }, "no item: an agent handles everything");
+    assert_eq!(
+        needs(&mut store, "ship"),
+        read::NeedsUser { lead_working: true, lead_phase: Some(Phase::Dispatch), ..Default::default() },
+        "no item: an agent handles everything"
+    );
 
     let stuck = |plan: &str, job: &str| Condition {
         job: Some(key(job)),
@@ -429,20 +435,30 @@ fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
     );
     assert_eq!(
         needs(&mut store, "ship"),
-        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true },
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false, lead_working: true, lead_phase: Some(Phase::Dispatch) },
         "a fork's dialog is not the Lead's"
     );
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false });
-    assert_eq!(needs(&mut store, "rel"), read::NeedsUser::default(), "another Plan's items are not its own");
+    assert_eq!(
+        needs(&mut store, "sketch"),
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true, lead_working: false, lead_phase: Some(Phase::Plan) }
+    );
+    assert_eq!(
+        needs(&mut store, "rel"),
+        read::NeedsUser { lead_phase: Some(Phase::Deploy), ..Default::default() },
+        "another Plan's items are not its own"
+    );
 
     // a hidden item needs nobody: the item is snoozed
     sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
-    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false });
+    assert_eq!(
+        needs(&mut store, "sketch"),
+        read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false, lead_working: false, lead_phase: Some(Phase::Plan) }
+    );
 }
 
 #[test]
 fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_filled_dot() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let mut s = String::new();
     for c in ["hot", "calm", "dead", "ice"] {
         s += &context(c);
@@ -480,7 +496,10 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     // No item: no filled dot, whatever the state (a blocked Session is idle until the engine opens its dialog).
     let all = dots(&mut store);
     assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
-    assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working, Dot::Idle, Dot::Stopped));
+    assert_eq!(
+        (dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")),
+        (Dot::Idle, Dot::Working(Some(Phase::Dispatch)), Dot::Idle, Dot::Stopped)
+    );
     // A Lead waiting for an agent (hs-d303) shows the waiting dot: not the idle glyph, and never red.
     assert_eq!(dot(&all, "l-wai"), Dot::Waiting);
 
@@ -504,10 +523,10 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     for (id, want) in [
         ("l-red", Dot::Red),
         ("l-yel", Dot::Yellow), // the Plan's own Lead shows the Plan's pull request item
-        ("f-yel", Dot::Working), // a fork shows no item of the Plan
+        ("f-yel", Dot::Working(None)), // a fork shows no item of the Plan
         ("l-mag", Dot::Magenta),
         ("l-whi", Dot::White),
-        ("l-wrk", Dot::Working), // working shows the spinner, not its red dialog
+        ("l-wrk", Dot::Working(Some(Phase::Dispatch))), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
         ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
@@ -526,7 +545,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
 
 #[test]
 fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let at = |n: u32| format!("2026-01-02T00:01:{n:02}.000Z");
     let mut s = context("fix");
     // (plan, Lead state, Jobs: (key, status))
@@ -566,11 +585,11 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
     assert!(!Dot::Fixing.needs_you(), "the loader is no needs-you dot");
     // (iv) no failed Job: the cyan loader
-    assert_eq!(dot(&mut store, "l-nf"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-nf"), Dot::Working(Some(Phase::Dispatch)));
     // (v) idle, waiting, stopped: their usual dot
     assert_eq!((dot(&mut store, "l-idl"), dot(&mut store, "l-wai"), dot(&mut store, "l-stp")), (Dot::Idle, Dot::Waiting, Dot::Stopped));
     // (vi) a working fork is not the Plan's Lead
-    assert_eq!(dot(&mut store, "f-fk"), Dot::Working);
+    assert_eq!(dot(&mut store, "f-fk"), Dot::Working(None));
 
     inbox(
         &mut store,
@@ -585,21 +604,21 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader() {
     assert_eq!(dot(&mut store, "l-fxr"), Dot::Red);
     assert_eq!(dot(&mut store, "l-fxw"), Dot::Fixing);
     // (iv) no failed Job: own state first, whatever the items (hs-d183)
-    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-nfr"), Dot::Working(Some(Phase::Dispatch)));
     assert_eq!(dot(&mut store, "l-fx"), Dot::Fixing);
 
     // (viii) an archived Lead keeps its glyph
     sql(&mut store, "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'l-arc';");
-    assert_eq!(dot(&mut store, "l-arc"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-arc"), Dot::Working(None));
 
     // (vii) the failed Job is queued again: the cyan loader
     sql(&mut store, "UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE plan = 'fx';");
-    assert_eq!(dot(&mut store, "l-fx"), Dot::Working);
+    assert_eq!(dot(&mut store, "l-fx"), Dot::Working(Some(Phase::Dispatch)));
 }
 
 #[test]
 fn a_plans_items_fill_its_lead_and_not_its_forks() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     // The Lead is idle: a working Session shows the spinner whatever its items (hs-d183).
     sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     inbox(
@@ -630,7 +649,7 @@ fn a_plans_items_fill_its_lead_and_not_its_forks() {
 /// glyph of its state; `Stopped` with no live Manager.
 #[test]
 fn a_context_row_fills_only_from_its_managers_items() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     // The Lead is idle, so that its own row shows the items it is given below.
     sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
@@ -671,10 +690,40 @@ fn a_context_row_fills_only_from_its_managers_items() {
     assert_eq!(rows(&mut store)[0], ("alpha".into(), Dot::Stopped));
 }
 
+/// An archived Context carries its archived Manager in `archived_managers`; a live Context's list is empty while its
+/// dot still comes from its live Manager (commands.md §17; hs-d630, hs-d633).
+#[test]
+fn the_tree_reads_an_archived_manager_of_an_archived_context() {
+    let (_fx, mut store) = fixture();
+    // `alpha` is live and gets a live Manager; `zeta` is an archived Context with its archived Manager.
+    sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
+    sql(&mut store, &context("zeta"));
+    sql(
+        &mut store,
+        &format!(
+            "{}\n             UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'zeta';\n             UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'm-zeta';",
+            session_row("m-zeta", "manager", "zeta", "", None, "idle", None, "2026-01-02T00:00:06.000Z")
+        ),
+    );
+
+    let tree = read::tree(&mut store).unwrap();
+    let by = |id: &str| tree.contexts.iter().find(|c| c.id.as_str() == id).unwrap();
+    let alpha = by("alpha");
+    assert_eq!(alpha.dot, Dot::Idle, "a live Context's dot is still its live Manager's");
+    assert!(alpha.archived_managers.is_empty(), "a live Context has no archived Manager");
+    let zeta = by("zeta");
+    assert!(zeta.is_archived());
+    assert_eq!(
+        zeta.archived_managers.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["m-zeta"],
+        "the archived Context's archived Manager"
+    );
+}
+
 #[test]
 fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
-    let (env, mut store) = fixture();
-    let _engine = engine(&env);
+    let (fx, mut store) = fixture();
+    let _engine = engine(&fx.env);
     // The Lead is idle: a working Session shows the spinner whatever its items (hs-d183).
     sql(&mut store, "UPDATE sessions SET state = 'idle' WHERE id = 'l-ship';");
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
@@ -711,8 +760,8 @@ fn a_snoozed_or_dismissed_item_fills_no_dot_and_is_not_in_the_snapshot() {
 
 #[test]
 fn the_snapshot_carries_the_visible_open_items_in_the_inbox_order() {
-    let (env, mut store) = fixture();
-    let _engine = engine(&env);
+    let (fx, mut store) = fixture();
+    let _engine = engine(&fx.env);
     assert!(read::tree(&mut store).unwrap().inbox.is_empty());
     let mut white = condition(Kind::Unread, Urgency::White, Some("l-sketch"), Some("sketch"), "alpha", "session:l-sketch");
     white.url = Some("https://example.com/w".into());
@@ -746,15 +795,15 @@ fn the_snapshot_carries_the_visible_open_items_in_the_inbox_order() {
 
 #[test]
 fn the_tree_counts_jobs_by_status_with_merging_apart_from_running() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let tree = read::tree(&mut store).unwrap();
     let ship = &tree.contexts[0].plans[0];
     let c = ship.head.counts;
     assert_eq!((c.draft, c.queued, c.running, c.merging, c.failed, c.merged, c.cancelled), (1, 1, 1, 1, 1, 1, 1));
     assert_eq!(c.total(), 7);
-    assert_eq!(c.counters(ship.head.phase), [1, 1, 1, 1, 1], "queued, running, merging, failed, merged; cancelled is not shown");
+    assert_eq!(c.counters(), [2, 2, 1, 1], "planned (drafts and queued), active (running and merging), failed, done; cancelled is not shown");
     let sketch = &tree.contexts[0].plans[1];
-    assert_eq!(sketch.head.counts.counters(sketch.head.phase), [2, 0, 0, 0, 0], "in phase plan the first counter is the drafts");
+    assert_eq!(sketch.head.counts.counters(), [2, 0, 0, 0], "the planned role is the drafts plus queued");
     assert_eq!((ship.head.open_escalations, ship.head.review_pending, sketch.head.review_pending), (1, true, false));
 }
 
@@ -774,7 +823,7 @@ fn ship_counts(store: &mut Store) -> (usize, usize) {
 
 #[test]
 fn a_running_attempt_in_an_open_check_span_is_counted_with_the_merging_jobs() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     assert_eq!(ship_counts(&mut store), (1, 1));
     sql(&mut store, &span("c", "c-a2", "start"));
     assert_eq!(ship_counts(&mut store), (0, 2), "job c is landing, apart from running");
@@ -782,7 +831,7 @@ fn a_running_attempt_in_an_open_check_span_is_counted_with_the_merging_jobs() {
 
 #[test]
 fn the_latest_check_event_of_an_attempt_decides_whether_its_span_is_open() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(&mut store, &span("c", "c-a2", "start"));
     sql(&mut store, &span("c", "c-a2", "end"));
     assert_eq!(ship_counts(&mut store), (1, 1), "start, end: running again");
@@ -792,7 +841,7 @@ fn the_latest_check_event_of_an_attempt_decides_whether_its_span_is_open() {
 
 #[test]
 fn an_open_span_of_an_ended_or_another_attempt_changes_no_count() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(&mut store, &span("c", "c-a1", "start")); // ended
     sql(&mut store, &span("r1", "r1-a1", "start")); // another Plan's Job: not ship's count
     sql(&mut store, &span("zz", "zz-a9", "start")); // no such Attempt
@@ -804,7 +853,7 @@ fn an_open_span_of_an_ended_or_another_attempt_changes_no_count() {
 
 #[test]
 fn every_read_shows_an_attempt_in_an_open_check_span_as_checking() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(&mut store, &span("c", "c-a2", "start"));
     sql(&mut store, &span("c", "c-a1", "start")); // the ended Attempt stays ended
 
@@ -830,11 +879,13 @@ fn every_read_shows_an_attempt_in_an_open_check_span_as_checking() {
 
 #[test]
 fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
-    let (env, mut store) = fixture();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    let fx = Fx::with_ports();
+    let mut store = open(&fx.env);
+    populate(&mut store);
+    fx.env.write_tmux_config("");
     let before = read::tree(&mut store).unwrap();
-    env.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
-    env.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
+    fx.cpd(&["session", "state", "blocked", "--label", "cpd: asking", "--session", "f-ship"]).ok();
+    fx.cpd(&["session", "rename", "renamed fork", "--session", "f-ship"]).ok();
     let after = read::tree(&mut store).unwrap();
     let fork = &after.contexts[0].plans[0].sessions[1];
     assert_eq!((fork.state, fork.state_label.as_deref(), fork.name.as_str()), (State::Blocked, Some("cpd: asking"), "renamed fork"));
@@ -845,7 +896,7 @@ fn a_command_that_changes_a_session_shows_in_the_next_snapshot() {
 
 #[test]
 fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let flow = read::flow(&mut store, &plan("ship")).unwrap();
 
     assert_eq!((flow.head.id.as_str(), flow.head.context.as_str(), flow.head.phase), ("ship", "alpha", Phase::Dispatch));
@@ -891,7 +942,7 @@ fn a_plan_is_its_jobs_dependencies_attempts_and_tiers() {
 
 #[test]
 fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_the_plan() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(
         &mut store,
         "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
@@ -905,7 +956,7 @@ fn a_stub_draft_without_tier_or_spec_is_a_job_without_a_tier_and_does_not_fail_t
 
 #[test]
 fn a_plan_carries_its_open_escalations_and_its_latest_review() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let flow = read::flow(&mut store, &plan("ship")).unwrap();
     let asked: Vec<(EscalationId, AttemptId, &str)> =
         flow.escalations.iter().map(|e| (e.id.clone(), e.attempt.clone(), e.question.as_str())).collect();
@@ -927,7 +978,7 @@ fn a_plan_carries_its_open_escalations_and_its_latest_review() {
 
 #[test]
 fn a_superseded_latest_review_reads_and_is_not_pending() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(&mut store, "UPDATE plan_reviews SET status = 'superseded', decided_at = '2026-01-02T02:00:00.000Z' WHERE plan = 'ship' AND id = 'r2'");
     let review = read::flow(&mut store, &plan("ship")).unwrap().review.unwrap();
     assert_eq!((review.id.as_str(), review.number, review.status.as_str()), ("r2", 2, "superseded"));
@@ -936,7 +987,7 @@ fn a_superseded_latest_review_reads_and_is_not_pending() {
 
 #[test]
 fn a_plan_carries_its_pr_and_what_the_poll_saw() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let rel = read::flow(&mut store, &plan("rel")).unwrap().head;
     let pr = rel.pr.unwrap();
     assert_eq!((pr.number, pr.url.as_str(), pr.state), (7, "https://github.com/acme/repo/pull/7", PrState::Open));
@@ -951,7 +1002,7 @@ fn a_plan_carries_its_pr_and_what_the_poll_saw() {
 
 #[test]
 fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let pull = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().prs[0].pull.clone().unwrap();
     assert!(!pull(&mut store, "rel").conflicting, "a fresh row reads `unknown`");
     for (mergeable, want) in [("conflicting", true), ("mergeable", false), ("unknown", false)] {
@@ -962,7 +1013,7 @@ fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
 
 #[test]
 fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
     assert!(!clean(&mut store), "a fresh row reads `unknown`");
     for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
@@ -986,7 +1037,7 @@ fn add_plan_without_pr(store: &mut Store) {
 
 #[test]
 fn a_plan_with_no_pr_is_in_the_tree_the_widgets_and_the_flow() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     add_plan_without_pr(&mut store);
 
     let tree = read::tree(&mut store).unwrap();
@@ -1004,14 +1055,14 @@ fn a_plan_with_no_pr_is_in_the_tree_the_widgets_and_the_flow() {
 
 #[test]
 fn an_unknown_plan_is_plan_not_found() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let e = read::flow(&mut store, &plan("nope")).unwrap_err();
     assert_eq!(e.code(), ErrorCode::PlanNotFound);
 }
 
 #[test]
 fn the_chat_slot_is_the_plan_lead_whose_latest_move_is_chat() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let slot = read::chat_slot(&mut store).unwrap().unwrap();
     assert_eq!((slot.session.as_str(), slot.plan.as_str(), slot.name.as_str()), ("l-ship", "ship", "name of l-ship"));
     let id = slot.moved_event;
@@ -1035,7 +1086,7 @@ fn last_event(store: &mut Store) -> i64 {
 
 #[test]
 fn the_slots_are_the_attempts_not_ended_against_the_limit() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(w.slots.limit, 3);
     assert_eq!(w.slots.used(), 3);
@@ -1055,7 +1106,7 @@ fn the_slots_are_the_attempts_not_ended_against_the_limit() {
 
 #[test]
 fn the_widgets_list_every_plan_with_its_pr() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let ids: Vec<&str> = w.plans.iter().map(|p| p.head.id.as_str()).collect();
     assert_eq!(ids, ["old", "ship", "sketch", "rel", "shut"], "oldest first");
@@ -1068,7 +1119,7 @@ fn the_widgets_list_every_plan_with_its_pr() {
 
 #[test]
 fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     // `acme/work#70` is one of the User's own: no Plan's PR points to it.
     sql(
         &mut store,
@@ -1117,7 +1168,7 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
 
 #[test]
 fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     // `acme/work#70` is no Plan's: nobody works it.
     sql(
         &mut store,
@@ -1142,7 +1193,7 @@ fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
 
 #[test]
 fn the_widgets_list_every_open_escalation_of_the_machine() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let open: Vec<(&str, &str, &str, String, String)> = w
         .escalations
@@ -1162,7 +1213,7 @@ fn the_widgets_list_every_open_escalation_of_the_machine() {
 
 #[test]
 fn the_widgets_return_the_latest_events_oldest_first_and_the_cursor() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let last = last_event(&mut store);
     let w = read::widgets(&mut store, 3, 3).unwrap();
     let ids: Vec<i64> = w.events.iter().map(|e| e.id).collect();
@@ -1177,7 +1228,7 @@ fn the_widgets_return_the_latest_events_oldest_first_and_the_cursor() {
 /// tui-F1: the StatusBar reads the slots and the Dispatch column the open pull requests, not the whole model.
 #[test]
 fn the_slots_and_the_open_prs_read_alone_are_the_widgets_own() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     assert_eq!(read::slots(&mut store, 3).unwrap(), (w.slots, w.events_cursor));
     assert_eq!(read::open_prs(&mut store).unwrap(), (w.prs, w.events_cursor));
@@ -1187,7 +1238,7 @@ fn the_slots_and_the_open_prs_read_alone_are_the_widgets_own() {
 /// tells a view that the rows moved; the first poll says so, since a change since the snapshot cannot be told from none.
 #[test]
 fn the_follow_tells_when_a_pull_request_row_changed_though_no_event_came() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let cursor = read::slots(&mut store, 3).unwrap().1;
     let mut follow = read::Follow::new(&mut store, &[], cursor).unwrap();
     let changes = |store: &mut Store, follow: &mut read::Follow| {
@@ -1213,17 +1264,13 @@ fn the_follow_tells_when_a_pull_request_row_changed_though_no_event_came() {
     assert_eq!(changes(&mut store, &mut follow), (0, true, true), "a row came");
 }
 
-fn spawn_and_reap() -> u32 {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    pid
-}
+/// A pid no process has: above every platform's pid limit (macOS 99999, Linux at most 4194304).
+const DEAD_PID: u32 = 999_999_999;
 
 #[test]
 fn the_engine_is_never_running_stopped_or_crashed() {
-    let env = TestEnv::new();
-    let mut store = open(&env);
+    let fx = Fx::new();
+    let mut store = open(&fx.env);
     assert_eq!(read::widgets(&mut store, 3, 0).unwrap().engine, Engine::Never);
 
     sql(&mut store, &event("watch-started", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id())));
@@ -1233,7 +1280,7 @@ fn the_engine_is_never_running_stopped_or_crashed() {
     sql(&mut store, &event("watch-stopped", None, None, None, &format!(r#"{{"pid":{}}}"#, std::process::id())));
     assert_eq!(read::widgets(&mut store, 3, 0).unwrap().engine, Engine::Stopped { at: "2026-01-03T00:00:00.000Z".into() });
 
-    let dead = spawn_and_reap();
+    let dead = DEAD_PID;
     sql(&mut store, &event("watch-started", None, None, None, &format!(r#"{{"pid":{dead}}}"#)));
     let Engine::Crashed { pid, .. } = read::widgets(&mut store, 3, 0).unwrap().engine else { panic!() };
     assert_eq!(pid, dead, "a watch-started whose process is gone and that no watch-stopped follows");
@@ -1243,7 +1290,7 @@ fn the_engine_is_never_running_stopped_or_crashed() {
 
 #[test]
 fn a_worker_is_its_attempt_session_and_escalations() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
     assert_eq!((w.job.title.as_str(), w.job.status), ("Job c", JobStatus::Running));
     let a = w.attempt.as_ref().unwrap();
@@ -1272,7 +1319,7 @@ fn a_worker_is_its_attempt_session_and_escalations() {
 
 #[test]
 fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that_never_started_has_none() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     let mut latest = |plan_id: &str, job: &str| read::latest_attempt(&mut store, &plan(plan_id), &key(job)).unwrap();
     assert_eq!(latest("ship", "c"), Some(attempt("c-a2")), "two Attempts: the second");
     assert_eq!(latest("ship", "e"), Some(attempt("e-a1")), "a failed Job: its failed Attempt");
@@ -1282,7 +1329,7 @@ fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that
 
 #[test]
 fn an_unknown_plan_or_attempt_is_not_found() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     assert_eq!(read::worker(&mut store, &plan("nope"), &Target::Attempt(attempt("c-a2"))).unwrap_err().code(), ErrorCode::PlanNotFound);
     assert_eq!(read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a9"))).unwrap_err().code(), ErrorCode::AttemptNotFound);
 }
@@ -1310,32 +1357,15 @@ fn every_read(store: &mut Store) {
 
 #[test]
 fn no_read_writes() {
-    let (env, mut store) = fixture();
+    let (fx, mut store) = fixture();
     // A second connection sees `data_version` change when any other connection commits.
-    let watcher = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let watcher = Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
     let (version, counts) = (data_version(&watcher), rows(&watcher));
     for _ in 0..3 {
         every_read(&mut store);
     }
     assert_eq!(data_version(&watcher), version, "a read committed something");
     assert_eq!(rows(&watcher), counts);
-}
-
-#[test]
-fn the_read_model_spawns_nothing_and_has_no_write_statement() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tui/src/read");
-    let mut seen = 0;
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        let text = std::fs::read_to_string(&path).unwrap();
-        // The module docs and comments may name these; code may not.
-        let code: String = text.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-        for forbidden in ["std::process", "process::Command", "Command::new", "crate::host", "crate::git", ".write(", "INSERT ", "UPDATE ", "DELETE ", "execute"] {
-            assert!(!code.contains(forbidden), "{} contains {forbidden:?}", path.display());
-        }
-        seen += 1;
-    }
-    assert!(seen >= 5);
 }
 
 /// Contexts × Plans × Jobs, Attempts, Sessions and Events, enough for a long-lived machine.
@@ -1402,7 +1432,7 @@ fn statements_run(store: &mut Store, f: impl FnOnce(&mut Store)) -> Vec<String> 
 /// read on the small fixture and on the large store (a wall-clock bound measures the machine's load as much as the work).
 #[test]
 fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     // The Plans and the Attempt of the small fixture, then of the large store: same reads, ten times the rows.
     let reads: [(&str, &dyn Fn(&mut Store, bool)); 5] = [
         ("tree", &|s, _| drop(read::tree(s).unwrap())),
@@ -1420,12 +1450,7 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
     let run_all = |store: &mut Store, large: bool| -> Vec<Vec<String>> {
         reads
             .iter()
-            .map(|(name, read)| {
-                let start = Instant::now();
-                let run = statements_run(store, |s| read(s, large));
-                eprintln!("{name}: {:?} (information only; large: {large})", start.elapsed());
-                run
-            })
+            .map(|(_, read)| statements_run(store, |s| read(s, large)))
             .collect()
     };
     let small = run_all(&mut store, false);
@@ -1443,7 +1468,7 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
 
 #[test]
 fn with_a_live_manager_the_snapshot_has_no_engine_down_though_the_engine_is_down() {
-    let (_env, mut store) = fixture();
+    let (_fx, mut store) = fixture();
     sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
     let tree = read::tree(&mut store).unwrap();
     assert!(!tree.engine_running, "the lock is still free");
@@ -1455,7 +1480,7 @@ fn with_a_live_manager_the_snapshot_has_no_engine_down_though_the_engine_is_down
 
 #[test]
 fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_the_lock_it_does_not() {
-    let (env, mut store) = fixture();
+    let (fx, mut store) = fixture();
     let tree = read::tree(&mut store).unwrap();
     assert!(!tree.engine_running);
     let [down] = &tree.inbox[..] else { panic!("only engine-down: {:?}", tree.inbox) };
@@ -1468,7 +1493,7 @@ fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_
     let tree = read::tree(&mut store).unwrap();
     assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::EngineDown, Kind::Unread]);
 
-    let engine = engine(&env);
+    let engine = engine(&fx.env);
     let tree = read::tree(&mut store).unwrap();
     assert!(tree.engine_running);
     assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::Unread]);

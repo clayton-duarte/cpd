@@ -11,21 +11,23 @@ use serde_json::Value;
 use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
+use crate::clock::Clock;
+#[cfg(test)]
+use crate::clock::SystemClock;
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
-use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
 use crate::host::{PaneId, Tmux, WindowId};
 use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
-use crate::session::run::{quiet_since, turn_finished};
+use crate::ports::Ports;
+use crate::session::run::{quiet_since_with, turn_finished};
 use crate::spec::{self, Answer, Cause, Input, JobKind, Previous};
 use crate::store::Store;
 
-/// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1; tests:
-/// `CPD_TEST_LEAD_POLL`, [`limit`]).
+/// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1).
 const LEAD_POLL: Duration = Duration::from_secs(2);
 
 /// A3's wait for the Lead logs one line this often (§3.4 A4).
@@ -270,8 +272,20 @@ pub fn wait_for_lead(
     target: &Target,
     log: &dyn Fn(&str),
 ) -> Result<Option<Fork>, CpdError> {
+    wait_for_lead_with(&Ports::current(), store, config, dirs, target, log)
+}
+
+/// [`wait_for_lead`] on `ports`: the 2 s poll naps on `ports.clock`, the quiet of the Lead's file is read on its `utc()`.
+pub fn wait_for_lead_with(
+    ports: &Ports,
+    store: &mut Store,
+    config: &Config,
+    dirs: &PiDirs,
+    target: &Target,
+    log: &dyn Fn(&str),
+) -> Result<Option<Fork>, CpdError> {
     let quiet = Duration::from_secs(u64::from(config.timeouts.fork_quiet_seconds));
-    let began = Instant::now();
+    let began = ports.clock.now();
     let mut waits = WaitLog::new(WAIT_LOG, began);
     loop {
         if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
@@ -281,15 +295,16 @@ pub fn wait_for_lead(
         let file = recorded.map(PathBuf::from).filter(|p| p.is_file()).or_else(|| pi::session_file(dirs, &session));
         if let Some(file) = file
             && matches!(state.as_str(), "idle" | "stopped")
-            && quiet_since(&file, quiet)
+            && quiet_since_with(&*ports.clock, &file, quiet)
             && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
         {
             return Ok(Some(Fork { session, file }));
         }
-        if waits.due(Instant::now()) {
-            log(&format!("A3: still waiting for the Lead to be idle ({} minutes so far)", began.elapsed().as_secs() / 60));
+        let now = ports.clock.now();
+        if waits.due(now) {
+            log(&format!("A3: still waiting for the Lead to be idle ({} minutes so far)", now.duration_since(began).as_secs() / 60));
         }
-        std::thread::sleep(limit("LEAD_POLL", LEAD_POLL));
+        ports.clock.sleep(LEAD_POLL);
     }
 }
 
@@ -348,14 +363,26 @@ pub fn start(
     Ok(Pane { pane, window })
 }
 
-/// A9 (§3.4): `kill-window` is tried this many times, `KILL_PAUSE` apart (tests: `CPD_TEST_KILL_PAUSE`).
+/// A9 (§3.4): `kill-window` is tried this many times, `KILL_PAUSE` apart.
 const KILL_TRIES: u32 = 3;
 const KILL_PAUSE: Duration = Duration::from_secs(1);
 
 /// Runs `kill` up to `tries` times, `pause` apart; a failure after which
 /// `gone` says the window is already gone counts as success. The last error
 /// is returned when every try failed.
+#[cfg(test)]
 fn retry_kill(
+    tries: u32,
+    pause: Duration,
+    kill: impl FnMut() -> Result<(), CpdError>,
+    gone: impl FnMut() -> bool,
+) -> Result<(), CpdError> {
+    retry_kill_with(&SystemClock, tries, pause, kill, gone)
+}
+
+/// [`retry_kill`] whose `pause` is a nap on `clock`, never after the last try.
+pub(super) fn retry_kill_with(
+    clock: &dyn Clock,
     tries: u32,
     pause: Duration,
     mut kill: impl FnMut() -> Result<(), CpdError>,
@@ -368,7 +395,7 @@ fn retry_kill(
             Ok(()) => return Ok(()),
             Err(_) if gone() => return Ok(()),
             Err(e) if tried >= tries => return Err(e),
-            Err(_) => std::thread::sleep(pause),
+            Err(_) => clock.sleep(pause),
         }
     }
 }
@@ -383,6 +410,17 @@ pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), 
 /// [`kill_window`] for Attempt `id` of `plan`: the one A9 kill, shared by the
 /// driver, E2 and R.
 pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+    kill_attempt_window_with(&Ports::current(), config, tmux, plan, id)
+}
+
+/// [`kill_attempt_window`] on `ports`: the pause between two tries of `kill-window` naps on `ports.clock`.
+pub fn kill_attempt_window_with(
+    ports: &Ports,
+    config: &Config,
+    tmux: &Tmux,
+    plan: &PlanId,
+    id: &AttemptId,
+) -> Result<(), CpdError> {
     let name = attempt_window(plan, id);
     let windows: Vec<WindowId> = tmux
         .list_panes()?
@@ -392,7 +430,7 @@ pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &Att
         .collect();
     for window in windows {
         let gone = || tmux.list_panes().is_ok_and(|panes| panes.iter().all(|p| p.window != window));
-        retry_kill(KILL_TRIES, limit("KILL_PAUSE", KILL_PAUSE), || tmux.kill_window(&window), gone)?;
+        retry_kill_with(&*ports.clock, KILL_TRIES, KILL_PAUSE, || tmux.kill_window(&window), gone)?;
     }
     Ok(())
 }

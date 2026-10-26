@@ -8,6 +8,7 @@
 import { Editor, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hookMethod } from "./compact-tools-hook.ts";
+import { setClockFocused } from "./compact-tools-clock.ts";
 import { INDEX, RUNNING, paint, pill } from "./compact-tools-indices.ts";
 import { LOADER_FRAMES } from "./compact-tools-loader.ts";
 
@@ -21,7 +22,7 @@ const FOCUS_IN = "\x1b[I";
 const FOCUS_OUT = "\x1b[O";
 
 interface EditorState {
-	/** The terminal pane has focus; true before the first report. */
+	/** The terminal pane has focus; false until a focus report says otherwise. */
 	focused: boolean;
 	/** The words of the working label while the agent works, without padding. */
 	words: string | undefined;
@@ -31,8 +32,13 @@ interface EditorState {
 
 function state(): EditorState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: EditorState };
-	holder[STATE_KEY] ??= { focused: true, words: undefined, frame: 0 };
+	holder[STATE_KEY] ??= { focused: false, words: undefined, frame: 0 };
 	return holder[STATE_KEY];
+}
+
+/** The pane focus state the box tracks; the cursor reads it so focus is not tracked twice. */
+export function editorFocused(): boolean {
+	return state().focused;
 }
 
 /** Progress tells the box what the working label says; undefined when nothing is working. */
@@ -123,7 +129,8 @@ export class EditorBoxController {
 	bind(ctx: ExtensionContext): void {
 		this.release();
 		hookEditor();
-		state().focused = true;
+		state().focused = false;
+		setClockFocused(false);
 		let tui: TUI | undefined;
 		ctx.ui.setWidget(WIDGET_KEY, (host) => {
 			tui = host;
@@ -134,6 +141,7 @@ export class EditorBoxController {
 			const focused = data === FOCUS_IN;
 			if (state().focused === focused) return;
 			state().focused = focused;
+			setClockFocused(focused);
 			tui?.requestRender();
 		};
 		const stopListener = ctx.ui.onTerminalInput((data) => {
@@ -159,6 +167,8 @@ export class EditorBoxController {
 
 	dispose(ctx?: ExtensionContext): void {
 		this.release();
+		state().focused = false;
+		setClockFocused(false);
 		state().words = undefined;
 		ctx?.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
 	}
