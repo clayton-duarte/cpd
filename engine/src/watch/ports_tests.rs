@@ -300,7 +300,7 @@ fn an_engine_that_stopped_is_down_from_its_stop_to_the_clock() {
     assert!(down.said);
     assert_eq!(down.down, time::Duration::milliseconds(3200));
     assert_eq!(down.since, w.start);
-    assert_eq!(down.sentence(&w.ports.clock.zone()), format!("The engine was down for 3.2 s: it stopped at {}.", w.stamp(0)));
+    assert_eq!(down.sentence(&w.ports.clock.zone()), format!("The engine was down for 3.2 s: it stopped at {}.", cpd_core::clock::prose(w.start, &w.ports.clock.zone())));
 }
 
 #[test]

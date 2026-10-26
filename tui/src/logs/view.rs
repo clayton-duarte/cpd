@@ -129,9 +129,12 @@ fn muted(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), palette::muted_text())
 }
 
-/// `HH:MM:SS` (UTC) of an RFC 3339 time, as the Events carry it.
-fn clock(at: &str) -> &str {
-    at.get(11..19).unwrap_or(at)
+/// The local `HH:MM:SS` of an RFC 3339 time, as the Events carry it.
+fn clock(at: &str, zone: &cpd_core::clock::TimeZone) -> String {
+    match time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339) {
+        Ok(t) => cpd_core::clock::time_of_day(t, zone),
+        Err(_) => at.to_owned(),
+    }
 }
 
 /// The `error` codes of a failure the engine hit for a Lead, whose source is still `watch`: the Lead handles them
@@ -149,7 +152,7 @@ fn addressed_to_lead(e: &Event) -> bool {
 /// The Event's line, as the Dispatch column showed it: its time of day (muted), then its `text`, or its kind when
 /// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
 /// handles it). Cut to `width` columns with `…`.
-pub(crate) fn line(e: &Event, width: usize, _zone: &cpd_core::clock::TimeZone) -> Line<'static> {
+pub(crate) fn line(e: &Event, width: usize, zone: &cpd_core::clock::TimeZone) -> Line<'static> {
     let text = if e.text.is_empty() { &e.kind } else { &e.text };
     let style = match (e.kind.as_str(), addressed_to_lead(e)) {
         ("error", true) => palette::fg(Meaning::Waiting),
@@ -158,7 +161,7 @@ pub(crate) fn line(e: &Event, width: usize, _zone: &cpd_core::clock::TimeZone) -
     };
     let room = width.saturating_sub("00:00:00 ".len());
     let text = crate::cells::truncate(text, room);
-    Line::from(vec![muted(clock(&e.at)), " ".into(), Span::styled(text, style)])
+    Line::from(vec![muted(clock(&e.at, zone)), " ".into(), Span::styled(text, style)])
 }
 
 /// Draws the title, then the visible Events, in `area`, and the error in its last row. Call [`Log::fit`] with its

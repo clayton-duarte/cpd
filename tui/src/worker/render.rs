@@ -16,7 +16,7 @@ const RESULT: &str = "\u{F060C}";
 use crate::palette::{self, Ui};
 
 /// The text of a session file, as lines. Continuation rows of a long line are made by [`crate::scroll::wrap`].
-pub(crate) fn render(text: &str, _zone: &cpd_core::clock::TimeZone) -> Vec<Line<'static>> {
+pub(crate) fn render(text: &str, zone: &cpd_core::clock::TimeZone) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in text.lines() {
         let Ok(entry) = serde_json::from_str::<Value>(raw) else { continue };
@@ -24,7 +24,11 @@ pub(crate) fn render(text: &str, _zone: &cpd_core::clock::TimeZone) -> Vec<Line<
             continue;
         }
         let role = entry["message"]["role"].as_str().unwrap_or("");
-        let time = entry["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("");
+        let stamp = entry["timestamp"].as_str().unwrap_or("");
+        let time = match time::OffsetDateTime::parse(stamp, &time::format_description::well_known::Rfc3339) {
+            Ok(t) => cpd_core::clock::time_of_day(t, zone),
+            Err(_) => String::new(),
+        };
         let time = || Span::styled(format!("{time} "), palette::muted_text());
         let parts = entry["message"]["content"].as_array().map_or(&[][..], Vec::as_slice);
         for part in parts {

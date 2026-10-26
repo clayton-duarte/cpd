@@ -418,9 +418,9 @@ impl Downtime {
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
-    pub(super) fn sentence(&self, _zone: &cpd_core::clock::TimeZone) -> String {
+    pub(super) fn sentence(&self, zone: &cpd_core::clock::TimeZone) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
-        let at = clock::timestamp(self.since);
+        let at = clock::prose(self.since, zone);
         let secs = self.down.as_seconds_f64();
         if self.overdue {
             format!("The engine was down for {secs:.1} s: {how} at {at}; it was an install's restart that took longer than {PLANNED_RESTART_QUIET_SECS:.0} s.")
