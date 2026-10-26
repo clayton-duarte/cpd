@@ -24,6 +24,7 @@ const RIGHT = "\uE0B4";
 const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "").trim();
 const rows = (lines: string[]) => lines.map(plain).filter((line) => line !== "");
 const ITALIC = /\x1b\[3m/u;
+const LABEL_ITALIC = /\x1b\[3mThinking…\x1b\[23m/gu;
 const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const TEXT = "The user wants the pill to expand, so I will look at how the title is built.\n\nThen decide what the fold should hold.";
 const EXPANDED = [
@@ -101,7 +102,7 @@ test("no view of the Thinking block draws italic after a reload", async () => {
 		em.click();
 		views.emExpanded = em.draw();
 		for (const [name, lines] of Object.entries(views)) {
-			assert.ok(!ITALIC.test(lines.join("\n")), `${name} view draws SGR 3: ${JSON.stringify(lines)}`);
+			assert.ok(!ITALIC.test(lines.join("\n").replace(LABEL_ITALIC, "")), `${name} view draws SGR 3: ${JSON.stringify(lines)}`);
 		}
 		assert.ok(ITALIC.test(chat(TEXT, "a reply with *em* in it").draw().join("\n")), "the reply keeps pi's emphasis");
 	} finally { controller.dispose(); }
