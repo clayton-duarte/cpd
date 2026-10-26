@@ -7,7 +7,7 @@
  * (thinking level, bash mode) is ignored. Indexed SGR only.
  */
 import { Editor, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { setClockFocused } from "./compact-tools-clock.ts";
 import { italic } from "../../lib/italic.ts";
@@ -129,12 +129,16 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 }
 
 export function hookEditor(): void {
-	// Any key the editor takes is evidence the pane has focus (6.9).
-	hookMethod(Editor.prototype, "handleInput", "editor.box.input", (self, args, original) => {
+	// Any key the pane receives for its editor is evidence it has focus (6.9). CustomEditor handles extension shortcuts and
+	// app actions before it calls Editor, so it is wrapped too; Editor's wrapper skips it so a key counts once.
+	const focusOnKey = (self: unknown, args: unknown[], original: (...args: unknown[]) => unknown): unknown => {
 		// A focus report that reaches the editor as a key is not evidence of focus.
 		if (args[0] !== FOCUS_IN && args[0] !== FOCUS_OUT) focusSetter?.(true);
-		return original.call(self, ...args);
-	});
+		return original.apply(self, args);
+	};
+	hookMethod(Editor.prototype, "handleInput", "editor.box.input", (self, args, original) =>
+		self instanceof CustomEditor ? original.apply(self, args) : focusOnKey(self, args, original));
+	hookMethod(CustomEditor.prototype, "handleInput", "custom-editor.box.input", focusOnKey);
 	hookMethod(Editor.prototype, "render", "editor.box.render", (self, args, original) =>
 		boxRows(self, args[0], (width) => original.call(self, width)));
 	// A click's column is counted from the text column, in the text area's width.

@@ -9,6 +9,7 @@
  * after the last keystroke, on a visible phase in that same colour. The cursor blinks as before while idle.
  */
 import { Editor } from "@earendil-works/pi-tui";
+import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { onTick } from "./compact-tools-clock.ts";
 import { editorFocused, editorFocusGains } from "./compact-tools-editor.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
@@ -59,7 +60,10 @@ export class CursorController {
 		this.subscribe();
 		hookMethod(Editor.prototype, "render", "editor.cursor", (self, args, original) =>
 			this.render(self, args, original));
+		// CustomEditor takes some keys before Editor does; Editor's wrapper skips it so a key holds the cursor once.
 		hookMethod(Editor.prototype, "handleInput", "editor.cursor.input", (self, args, original) =>
+			self instanceof CustomEditor ? original.apply(self, args) : this.input(self, args, original));
+		hookMethod(CustomEditor.prototype, "handleInput", "custom-editor.cursor.input", (self, args, original) =>
 			this.input(self, args, original));
 	}
 
