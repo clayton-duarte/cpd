@@ -209,8 +209,11 @@ fn a_right_click_where_the_inbox_was_opens_no_inbox_menu() {
         tree.right_click(10, row);
         tree.idle();
         let screen = tree.screen();
-        assert!(the_menu_is_closed(&screen), "row {row}:\n{}", screen.join("\n"));
+        // the empty area keeps the tree's own `New Context…` menu (Lead's answer deploy-act-impl-a1-q1); no Inbox entry in it
         assert!(!menu_open(&screen, "Snooze 15 min") && !screen.iter().any(|r| r.contains("Dismiss")), "row {row}: {screen:?}");
+        tree.keys(&["Escape"]);
+        tree.idle();
+        assert!(the_menu_is_closed(&tree.screen()), "row {row}");
     }
     assert_eq!(tree.screen(), the_tree());
     assert!(drive::calls(&fx).is_empty(), "{:?}", drive::calls(&fx));
