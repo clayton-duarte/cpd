@@ -197,7 +197,7 @@ fn e3_holds_a_ready_job_while_a_linear_attempt_of_its_pr_is_live() {
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "no Attempt row");
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 
-    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'lin-a1'; UPDATE jobs SET status = 'failed' WHERE key = 'lin';");
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'lin-a1'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'lin';");
     tick_on_fake_ports(&mut fx);
     assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "alone, it starts linear");
 }
