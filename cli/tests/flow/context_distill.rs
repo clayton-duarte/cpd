@@ -43,10 +43,11 @@ impl Deref for Fx {
 /// The config, `node` (pi's catalog) and pi's install directory of every test here.
 fn configure(fx: &InProcess) {
     let env = &fx.env;
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\ncontext_curation_min_records = 1\n\
              [watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
             common::TICK_SECONDS,
             env.tmux_socket()
@@ -926,7 +927,7 @@ fn the_distiller_runs_on_gx_with_the_g_model() {
     let calls = fx.calls("pi");
     let args = &calls[0].args;
     let at = args.iter().position(|a| a == "--model").expect("--model") + 1;
-    assert_eq!(args[at], "github-copilot/gemini-3.8-flash:off", "{args:?}");
+    assert_eq!(args[at], "p/gemini:off", "{args:?}");
 }
 
 #[test]

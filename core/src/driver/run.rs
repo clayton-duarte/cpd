@@ -284,7 +284,8 @@ impl Driver {
 
     /// A1: the catalog, the Job, its fingerprint.
     fn begin(&mut self, target: &Target) -> Result<jobs::Job, CpdError> {
-        self.catalog = Some(load_catalog(&self.config)?);
+        let models = self.store.read(|conn| crate::policy::model::models_of_job(conn, &self.home, &target.plan, target.job.as_str()))?;
+        self.catalog = Some(load_catalog(&self.config, &models)?);
         let all = self.store.read(|conn| jobs::load(conn, &target.plan))?;
         let job = all.into_iter().find(|j| j.key == target.job.as_str()).ok_or_else(|| {
             CpdError::new(ErrorCode::JobNotFound, format!("No Job {} in Plan {}.", target.job, target.plan))

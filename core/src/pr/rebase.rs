@@ -564,7 +564,9 @@ pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &Pla
     loop {
         if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
-                *catalog = Some(config::load_catalog(&env.config)?);
+                let home = env.home.clone();
+                let models = env.store.read(|conn| crate::policy::model::models_of_pr(conn, &home, plan, key))?;
+                *catalog = Some(config::load_catalog(&env.config, &models)?);
             }
             let catalog = catalog.as_ref().expect("loaded above");
             let ctx = merge::Ctx { home: &env.home, config: &env.config, catalog, source: COMMAND, metrics: &|_| None };

@@ -129,7 +129,7 @@ pub(super) fn retitle(args: RetitleArgs) -> Result<Output, CpdError> {
     let Some(text) = conversation(read.file.as_deref())? else {
         return Ok(Output::success(json!({"session": id, "title": null, "skipped": "no_messages"})));
     };
-    let title = run_pi(&env, &id, &text, limit(args.width))?;
+    let title = run_pi(&mut env, &read, &text, limit(args.width))?;
     let (event, titled_at) = env.store.write("session retitle", |tx| {
         // The Session may have been archived since it was read.
         check(&row::load(tx, &id)?)?;
@@ -225,8 +225,10 @@ fn message_text(line: &str) -> Option<String> {
 
 /// Steps 3 and 4: pi on Tier `GX` (the G model, no effort, hs-d562), the conversation on stdin, in `run/titles/`;
 /// its answer sanitised. pi's stderr is passed on to this run's stderr (the engine's log).
-fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, CpdError> {
-    let catalog = load_catalog(&env.config)?;
+fn run_pi(env: &mut Env, row: &Row, text: &str, limit: usize) -> Result<Title, CpdError> {
+    let id = &row.id;
+    let models = row::models_of(env, row)?;
+    let catalog = load_catalog(&env.config, &models)?;
     let model = catalog.model_arg(Tier::new(Letter::G, 0).expect("GX"))?;
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;

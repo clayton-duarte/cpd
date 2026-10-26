@@ -218,8 +218,19 @@ impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
     /// unless a Worker may have it: H3 or S0-S3 (hs-d554).
-    fn check_tier(&mut self, tier: Tier) -> Result<(), CpdError> {
-        config::catalog::load_with(&self.config, &mut self.store)?.check(tier)?;
+    ///
+    /// The models are those of the Job's PR repo key (contract §8.3 "Models" (5)): `pr` is the PR the Job is
+    /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
+    fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&PrKey>, tier: Tier) -> Result<(), CpdError> {
+        let home = self.home.clone();
+        let models = self.store.read(|conn| {
+            plan_phase(conn, plan)?;
+            match pr {
+                Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
+                None => crate::policy::model::models_of_job(conn, &home, plan, job.as_str()),
+            }
+        })?;
+        config::catalog::load_with(&models, &mut self.store)?.check(tier)?;
         tier.check_worker()
     }
 }

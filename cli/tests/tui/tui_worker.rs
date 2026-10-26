@@ -30,8 +30,9 @@ use serde_json::json;
 // ---------- the prepared store ----------
 
 fn config(env: &TestEnv) {
+    env.write_models();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{}\"\n",
         env.tmux_socket()
     );
     env.write_config(&config);

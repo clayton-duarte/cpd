@@ -55,10 +55,11 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
 /// The config on this env's tmux server (`config_extra` is more TOML), a fake pi install whose Tier catalog is
 /// seeded in the cache by [`seed_rows`], and the policy file of the repo `acme/pay`.
 pub(super) fn seed_home(env: &TestEnv, config_extra: &str) {
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n{config_extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\n{config_extra}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
