@@ -132,7 +132,13 @@ impl Rig {
     fn built_says_no_store(&self) {
         let built = self.built();
         let says = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
-        (*self.fakes.runner).clone().on("cpd", move |c| Path::new(&c.program) == built && c.args == ["--version"], Reply::ok(says));
+        let migrated = r#"{"ok":true,"migrated":[]}"#;
+        let version = built.clone();
+        let migrate = built;
+        (*self.fakes.runner)
+            .clone()
+            .on("cpd", move |c| Path::new(&c.program) == version && c.args == ["--version"], Reply::ok(says))
+            .on("cpd", move |c| Path::new(&c.program) == migrate && c.args == ["config", "--migrate"], Reply::ok(migrated));
     }
 
     /// Runs the install on the rig's ports.
