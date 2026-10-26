@@ -532,34 +532,6 @@ fn the_frozen_check_passes_on_no_change_and_on_a_new_migration() {
     clone.check().unwrap();
 }
 
-/// hs-d704: a breaking migration that is already on the base may not be renumbered to
-/// a newer name, even with its body untouched; only the hs-d700 restore (back to an
-/// older name a live store already applied) is allowed.
-#[test]
-fn the_frozen_check_refuses_a_renumber_of_a_migration_on_the_base() {
-    let clone = Clone::new();
-    let old = clone.migrations().join(MAIN_FILES[1].0);
-    let new = clone.migrations().join("20260301T0000-kind-tables.sql");
-    fs::rename(&old, &new).unwrap();
-    clone.commit();
-    let why = clone.check().expect_err("a base migration may not be renumbered");
-    assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{why}");
-}
-
-/// hs-d704: a migration the branch adds is not on the base, so renumbering it to a
-/// newer name before it lands is not a change to a frozen file.
-#[test]
-fn the_frozen_check_passes_on_a_renumber_of_a_migration_the_pr_adds() {
-    let clone = Clone::new();
-    let added = clone.migrations().join("20260301T0000-added.sql");
-    fs::write(&added, "-- cpd-migration: breaking after 3\nSELECT 1;\n").unwrap();
-    clone.commit();
-    let renamed = clone.migrations().join("20260401T0000-added.sql");
-    fs::rename(&added, &renamed).unwrap();
-    clone.commit();
-    clone.check().unwrap();
-}
-
 /// The module is named `migrations` (not `tests`) so nextest prefixes each test with the
 /// file: `migrations::<fn>` is the name the Job's acceptance lists.
 mod migrations {
@@ -585,6 +557,34 @@ mod migrations {
         let clone = Clone::new();
         let file = clone.migrations().join(MAIN_FILES[1].0);
         fs::write(&file, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// hs-d704: a breaking migration that is already on the base may not be renumbered to
+    /// a newer name, even with its body untouched; only the hs-d700 restore (back to an
+    /// older name a live store already applied) is allowed.
+    #[test]
+    fn the_frozen_check_refuses_a_renumber_of_a_migration_on_the_base() {
+        let clone = Clone::new();
+        let old = clone.migrations().join(MAIN_FILES[1].0);
+        let new = clone.migrations().join("20260301T0000-kind-tables.sql");
+        fs::rename(&old, &new).unwrap();
+        clone.commit();
+        let why = clone.check().expect_err("a base migration may not be renumbered");
+        assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{why}");
+    }
+
+    /// hs-d704: a migration the branch adds is not on the base, so renumbering it to a
+    /// newer name before it lands is not a change to a frozen file.
+    #[test]
+    fn the_frozen_check_passes_on_a_renumber_of_a_migration_the_pr_adds() {
+        let clone = Clone::new();
+        let added = clone.migrations().join("20260301T0000-added.sql");
+        fs::write(&added, "-- cpd-migration: breaking after 3\nSELECT 1;\n").unwrap();
+        clone.commit();
+        let renamed = clone.migrations().join("20260401T0000-added.sql");
+        fs::rename(&added, &renamed).unwrap();
         clone.commit();
         clone.check().unwrap();
     }
