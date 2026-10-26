@@ -382,25 +382,25 @@ mod tests {
     }
 
     #[test]
-    fn inbox_list_orders_red_yellow_magenta_blue_white_oldest_first() {
+    fn inbox_list_orders_red_yellow_magenta_cyan_white_oldest_first() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
         // opened newest tier-first, so only the tier rank (and then age) can produce the expected order
         for (at, rows) in [
             ("t1", vec![(Urgency::White, "w-old")]),
-            ("t2", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old")]),
-            ("t3", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old"), (Urgency::Magenta, "m-old")]),
-            ("t4", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old"), (Urgency::Magenta, "m-old"), (Urgency::Yellow, "y-old")]),
+            ("t2", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old")]),
+            ("t3", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old"), (Urgency::Magenta, "m-old")]),
+            ("t4", vec![(Urgency::White, "w-old"), (Urgency::Cyan, "b-old"), (Urgency::Magenta, "m-old"), (Urgency::Yellow, "y-old")]),
             (
                 "t5",
                 vec![
                     (Urgency::White, "w-old"),
-                    (Urgency::Blue, "b-old"),
+                    (Urgency::Cyan, "b-old"),
                     (Urgency::Magenta, "m-old"),
                     (Urgency::Yellow, "y-old"),
                     (Urgency::Red, "r-old"),
-                    (Urgency::Blue, "b-new"),
+                    (Urgency::Cyan, "b-new"),
                 ],
             ),
         ] {
