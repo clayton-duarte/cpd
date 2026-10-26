@@ -370,19 +370,19 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     // web below api, the line from api's bottom border into web's top border
     // `web` waits for `api`, which has not merged (hs-d521): its title says on what
     let (merged_row, queued_row) = (
-        format!(" │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                 │"),
-        format!(" │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                              │"),
+        format!(" │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                  │"),
+        format!(" │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                               │"),
     );
-    let title = format!(" ╭─ api · api-server 󱦰 main · #12 open {CUE} ╮");
+    let title = format!(" ╭─ api · api-server 󱦰 main · #12 open {CUE} ─╮");
     let want = [
         title.as_str(),
         merged_row.as_str(),
-        " ╰───────────────────┬───────────────────╯",
-        "                     │",
-        "                     │",
-        " ╭─ web · web 󱦰 develop · waiting on api ╮",
+        " ╰───────────────────┬────────────────────╯",
+        "                     ╰───────────────────╮",
+        "                                         │",
+        " ╭─ web · web 󱦰 develop · waiting on api ┴╮",
         queued_row.as_str(),
-        " ╰───────────────────────────────────────╯",
+        " ╰────────────────────────────────────────╯",
     ];
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
 }
@@ -481,7 +481,7 @@ fn a_pull_request_box_title_ends_in_a_link_to_it() {
     fx.env.sql(&plan_under_review(2, "pending"));
     let buf = draw(&fx);
     let screen = rows(&buf);
-    assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮")), "{}", screen.join("\n"));
+    assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ─╮")), "{}", screen.join("\n"));
     // the link wraps its whole text, from `#` through `󱆭`, and nothing else
     assert_eq!(linked_text(&buf, "https://github.com/acme/repo/pull/7"), format!("#7 open {CUE}"), "{}", screen.join("\n"));
 }
@@ -583,7 +583,7 @@ fn a_pending_plan_review_draws_no_row_above_the_boxes() {
         let screen = rows(&buf);
         let shown = screen.join("\n");
         assert_eq!(screen[0], "", "{shown}");
-        assert_eq!(screen[1], format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮"), "{shown}");
+        assert_eq!(screen[1], format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ─╮"), "{shown}");
         assert!(screen.iter().all(|l| !l.contains("Plan review")), "{shown}");
         assert!(!(0..buf.area.height).any(|y| (0..buf.area.width).any(|x| buf[(x, y)].symbol().contains("localhost"))));
     }
@@ -611,7 +611,7 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     let screen = rows(&draw(&fx));
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
-    assert_eq!(screen[1], " ╭─ repo · repo 󱦰 main · dispatch ╮");
+    assert_eq!(screen[1], " ╭─ repo · repo 󱦰 main · dispatch ─╮");
     assert!(screen[2].starts_with(&format!(" │ \u{e0b6}{QUEUED} a│S3\u{e0b4}")), "{:?}", screen[2]);
     assert!(screen[3].starts_with(" ╰─"), "{:?}", screen[3]);
     assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));

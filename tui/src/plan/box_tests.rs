@@ -52,7 +52,7 @@ fn a_pr_box_title_follows_the_corner_and_one_dash() {
     terminal.draw(|f| ui.draw(f, Some(&centre))).unwrap();
     let buf = terminal.backend().buffer();
     // row 1 is the box's top: the margin column, then `╭`, the dash and the title
-    assert_eq!(row(buf, 1).trim_end(), " ╭─ api · api-repo 󱦰 main · dispatch ╮");
+    assert_eq!(row(buf, 1).trim_end(), " ╭─ api · api-repo 󱦰 main · dispatch ─╮");
     // the wall is one margin column in, the padding is the next column, and the body starts after both
     let wall = spacing::MARGIN_X;
     let body = wall + 1 + spacing::PAD_X;
@@ -81,19 +81,19 @@ fn a_need_connector_reaches_the_top_border_with_no_arrowhead() {
     let c = boxes::layout(&prs, &jobs, &read::NeedsUser::default(), 0).chart;
 
     let want = "\
-╭─ api · api-repo 󱦰 main · dispatch ╮
-│ 󰝦 a│S1─────󰝦 b│S1             │
-╰─────────────────┬─────────────────╯
-                  │
-                  │
-╭─ web · web-repo 󱦰 main · dispatch ╮
-│ 󰝦 c│S1                          │
-╰───────────────────────────────────╯";
+╭─ api · api-repo 󱦰 main · dispatch ─╮
+│ 󰝦 a│S1─────󰝦 b│S1              │
+╰─────────────────┬──────────────────╯
+                  ╰─────────────────╮
+                                    │
+╭─ web · web-repo 󱦰 main · dispatch ┴╮
+│ 󰝦 c│S1                           │
+╰────────────────────────────────────╯";
     let got = text(&c);
     assert_eq!(got, want, "\n{got}");
     assert!(!got.contains('\u{F19B3}'), "the 󱦳 arrowhead is gone: {got:?}");
     let rows: Vec<&str> = got.lines().collect();
-    assert_eq!(rows[4], "                  │", "the routed line reaches the cell above web's top border: {got:?}");
+    assert_eq!(rows[4], format!("{}│", " ".repeat(36)), "the routed line reaches the cell above web's top border: {got:?}");
     assert!(rows[0].contains('\u{F19B0}'), "the TO title arrow is still in api's top row");
     assert!(rows[5].contains('\u{F19B0}'), "the TO title arrow is still in web's top row");
 }
