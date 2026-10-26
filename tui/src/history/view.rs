@@ -1,5 +1,5 @@
 //! The history view's state, keys and drawing: the lines of the Session's
-//! file under a top line, scrolled like the Worker view's (`worker/view.rs`).
+//! file under a top line, scrolled with the kit's `Scroller`.
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
@@ -56,7 +56,7 @@ mod tests {
 
     use super::*;
     use crate::test_text::rows;
-    use crate::worker::render::render;
+    use crate::history::render::render;
 
     fn lines(n: usize) -> Vec<Line<'static>> {
         (1..=n).map(|i| Line::from(format!("line {i}"))).collect()
@@ -97,11 +97,11 @@ mod tests {
     #[test]
     fn a_fixture_session_file_is_drawn_under_the_top_line() {
         let mut v = View::new("Plan lead", true);
-        v.set_lines(render(include_str!("../worker/fixtures/session.jsonl"), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())));
+        v.set_lines(render(include_str!("fixtures/session.jsonl"), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())));
         let rows = rows(&draw(&mut v, 200, 30));
         assert_eq!(rows[0], "", "the pad's first row is blank");
         assert_eq!(rows[1], " Plan lead (archived, read-only)");
-        assert_eq!(rows[2..=24].to_vec(), render(include_str!("../worker/fixtures/session.jsonl"), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())).iter().map(|l| {
+        assert_eq!(rows[2..=24].to_vec(), render(include_str!("fixtures/session.jsonl"), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())).iter().map(|l| {
             let content = l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
             let content = content.trim_end();
             if content.is_empty() { String::new() } else { format!(" {content}") }

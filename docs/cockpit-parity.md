@@ -77,9 +77,9 @@ Status values: **same**, **differs**, **missing**, **extra**.
 | Separator under the tabs | `Borders::TOP` block, colour 8 | same | same | — |
 | Chart area | `body.inner(Margin{2,1})` (`main.rs:710`) | same (`plan/mod.rs:152`) | same | — |
 | Messages | `no Workflow yet`, `loading… (first fetch)`, the note (`main.rs:661–665`) | `message()` (`plan/mod.rs:91`) | differs (text) | `no Plan yet` / note; keep the one-row message area at the bottom of the window (`main.rs:712`) |
-| Flow layout | `flow.rs` (cards, buses, brackets, transitive reduction, column width, `aN`) | `plan/flow.rs` port | verify | The captured chart starts one row lower in the reference: verify against `tui/tests/fixtures/cpd2-jobs.json` / `cpd2-chart.txt` |
+| Flow layout | `flow.rs` (cards, buses, brackets, transitive reduction, column width, `aN`) | `plan/flow.rs` port | verify | The captured chart starts one row lower in the reference: verify against `tui/tests/fixtures/cpd2-jobs.json` / `cpd2-chart.txt` Superseded (pro-d62, pro-d63, 2026-10-26 EDT): the label is now `#N`, before the tier. |
 | Pill style | the status colour inverted (palette::pill; captured as `ESC[7m` on `ESC[38;5;8m`) | same | — |
-| Selection keys | ←→/hl, ↑↓/kj, Enter, Esc, clicks (`main.rs:743–744`) | same (`plan/mod.rs:256–267`) | same | — |
+| Selection keys | ←→/hl, ↑↓/kj, Enter, Esc, clicks (`main.rs:743–744`) | same (`plan/mod.rs:256–267`) | same | — Superseded (pro-d62, pro-d63, 2026-10-26 EDT): removed; a Job pill is neither clickable nor selectable, so there is no selection and no keys. |
 | `q` | not handled | quits (`plan/mod.rs:264`) | extra | remove (a dead layout pane stays dead in cpd 2) |
 | Wheel | 3 rows / 4 columns (`main.rs:773–776`) | same (`plan/mod.rs:298–301`) | same | — |
 | Tab click | switches the centre and focuses the chat | opens that Lead in the chat slot | same (verify the focus) | `select-pane` on the chat after `session open` |
@@ -117,6 +117,8 @@ Status values: **same**, **differs**, **missing**, **extra**.
 | A missing bar | — | added without a reset (`cockpit.rs` `add_missing_statusbar`) | differs | Reset after adding it |
 
 ### 1.5 Worker view
+
+Superseded (pro-d62, pro-d63, 2026-10-26 EDT): the Worker view and its pane are removed; the table below is history.
 
 | Element | Reference | cpd 2 | Status | Exact change |
 |---|---|---|---|---|
@@ -163,12 +165,15 @@ Status values: **same**, **differs**, **missing**, **extra**.
 **The contract changes.**
 - **§6.1:** add `focus-events on`, `pane-active-border-style fg=blue`, the `pane-border-format` (titles: Context, Plan, Dispatch, ` Worker · <job> (read-only) `; none for Leads, the chat placeholder and the StatusBar), the root `MouseDown1Pane` binding, and the conditional `pane-died` hook. All are set at every server start.
 - **§6.2:** a Worker pane carries `@cpd_view worker`, `@cpd_job`, `@cpd_attempt`. The sizes stay the reference's.
+  Superseded (pro-d62, pro-d63, 2026-10-26 EDT): the Worker pane and its `@cpd_view worker`, `@cpd_job` and `@cpd_attempt` are removed.
 - **§6.3:** add `respawn-pane -k` (Worker retarget; `tui --respawn`) and `set-hook`.
+  Superseded (pro-d62, pro-d63, 2026-10-26 EDT): `respawn-pane -k` no longer retargets a Worker view; `tui --respawn` and `set-hook` stay.
 - **§10 (new):** `cpd2 session close <id>`: kill the Lead's pane (pi stops, the session file stays), `stopped`, `session-moved {place: none}`. Refuses the Session in the chat slot.
 - **§13.1:** `tui --respawn`; a StatusBar added to an existing `main` is followed by the reset.
 - **§13.2, keys per view:**
   - tree: ↑↓/jk, Enter, `n`, `x`, `?`;
   - plan: ←→↑↓/hjkl, Enter, Esc, wheel, clicks;
+    Superseded (pro-d62, pro-d63, 2026-10-26 EDT): now wheel and the remaining clicks only.
   - widgets: `q`;
   - worker: `q`/Esc, ↑↓/jk, PageUp/PageDown, End/G, wheel;
   - statusbar: clicks;

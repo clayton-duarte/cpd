@@ -91,21 +91,3 @@ fn pr_poll_does_not_queue_a_conflict_update_for_a_held_plan() {
     assert_eq!(update_jobs(&mut f, "pay"), vec![key.as_str().to_owned()], "the incident Plan's update Job is queued");
     assert_eq!(last_reason(&mut f, "pay").as_deref(), Some("conflict"), "the incident Plan's Job carries the conflict cause");
 }
-
-#[test]
-fn pr_poll_still_queues_a_feedback_update_for_a_held_plan() {
-    let mut f = fixture();
-    let ops = PlanId::parse("ops").unwrap();
-    let ops_pr = PrRow::fixture("web", "/r", "main", &[], "open");
-
-    // The skip is cause-specific: the same held Plan's conflict queues nothing...
-    let conflict = f.store.write("pr poll", |tx| queue_update(tx, &ops, &ops_pr, Tier::parse("S2").unwrap(), "poll", Cause::Conflict)).unwrap();
-    assert_eq!(conflict, None, "the held Plan's conflict still queues nothing");
-    assert!(update_jobs(&mut f, "ops").is_empty(), "the conflict wrote no update Job");
-
-    // ...while a feedback fix Job, the Lead's own work, is not blocked.
-    let queued = f.store.write("job add", |tx| queue_update(tx, &ops, &ops_pr, Tier::parse("S2").unwrap(), "job add", Cause::Feedback)).unwrap();
-    let key = queued.expect("a feedback fix Job is not blocked by the hold");
-    assert_eq!(update_jobs(&mut f, "ops"), vec![key.as_str().to_owned()], "the feedback update Job is queued for the held Plan");
-    assert_eq!(last_reason(&mut f, "ops").as_deref(), Some("feedback"), "the feedback Job carries the feedback cause");
-}

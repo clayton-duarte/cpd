@@ -134,15 +134,12 @@ pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool
 pub enum Cause {
     /// The poll saw the pull request conflict with its base.
     Conflict,
-    /// A fix Job of the PR was queued: the PR's changes have to reach its pull request.
-    Feedback,
 }
 
 impl Cause {
     pub fn as_str(self) -> &'static str {
         match self {
             Cause::Conflict => "conflict",
-            Cause::Feedback => "feedback",
         }
     }
 }
@@ -151,8 +148,7 @@ impl Cause {
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
 pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
-    // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract
-    // §3.7 E5). A feedback fix Job is the Lead's, and is queued as always.
+    // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract §3.7 E5).
     if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
         return Ok(None);
     }

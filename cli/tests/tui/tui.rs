@@ -444,6 +444,47 @@ fn tui_removes_an_old_statusbar_pane_then_resets_the_layout() {
     assert_eq!(steps(&fx, again), Vec::<String>::new());
 }
 
+#[test]
+fn tui_removes_an_old_worker_pane_then_resets_the_layout() {
+    let fx = fx();
+    tui(&fx, &[]);
+    let full = main_panes(&fx);
+    // A main built by an older cpd: a Worker pane, and the sizes changed by the User.
+    let bar = shown(&fx, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &full[0].id, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    out(&fx, &["set", "-p", "-t", &bar, "@cpd_view", "worker"]);
+    out(&fx, &["resize-pane", "-t", &view(&full, "tree").id, "-x", "80"]);
+    let before = main_panes(&fx);
+    assert_eq!(before.len(), 5, "{before:?}");
+
+    let from = mark(&fx);
+    let (result, stderr) = fx.with_stderr(|| tui(&fx, &[]));
+    assert_eq!(result["built"], false, "{result}");
+    assert!(!stderr.contains("worker"), "no warning about the old pane: {stderr}");
+    // The bar is killed, the others get their sizes back (the reset steps), and the status line is on.
+    assert_eq!(
+        steps(&fx, from),
+        [
+            format!("kill-pane -t {bar}"),
+            "resize-pane -t %0 -x 20%".to_owned(),
+            "resize-pane -t %2 -x 30%".to_owned(),
+            "resize-pane -t %1 -y 30%".to_owned(),
+        ]
+    );
+    let after = main_panes(&fx);
+    assert_eq!(after.len(), 4, "{after:?}");
+    // They are the same panes, still alive.
+    for old in before.iter().filter(|p| p.id != bar) {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
+    }
+
+    // Rerunning removes nothing more.
+    let again = mark(&fx);
+    tui(&fx, &[]);
+    assert_eq!(main_panes(&fx), after);
+    assert_eq!(steps(&fx, again), Vec::<String>::new());
+}
+
 /// Kills `gone` (views of `main`) after a build, runs `cpd tui`, and asserts it added them back where they go and sized the
 /// layout again with `want` (the commands, in order, of that one run), the panes that were not killed unchanged, and that
 /// rerunning adds nothing.
@@ -749,8 +790,7 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     let border = shown(&fx, &["show", "-gv", "pane-border-format"]);
     // No padding inside the caps: the title between them, nothing around it; one cap on each side of every pill.
     assert!(border.contains("\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4}"), "{border}");
-    assert!(border.contains("\u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker},Worker"), "{border}");
-    assert!(border.contains("#{pane_current_command}}}}}#[noreverse]\u{e0b4}"), "{border}");
+    assert!(border.contains("#{pane_current_command}}}}#[noreverse]\u{e0b4}"), "{border}");
     assert_eq!(border.matches('\u{e0b6}').count(), 2, "{border}");
     assert_eq!(border.matches('\u{e0b4}').count(), 2, "{border}");
     assert!(!border.contains("\u{e0b6}#[reverse] ") && !border.contains(" #[noreverse]"), "{border}");
@@ -758,7 +798,7 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     // of its own (it takes the border line's style, pro-d61), then the pill's colour, then the left cap.
     assert_eq!(border.matches('\u{2501}').count(), 2, "{border}");
     assert!(!border.contains("#[fg=colour7]\u{2501}"), "{border}");
-    // The Lead's, the Worker's and another pane's pill is colour 7 (grey) and, on the focused pane, blue (colour 4): the format
+    // The Lead's and another pane's pill is colour 7 (grey) and, on the focused pane, blue (colour 4): the format
     // itself says it (`pane_active`), whatever the border's colour is. The three views' pills keep their dango colour.
     assert!(border.contains("\u{2501}#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}"), "{border}");
     let plain = "#{?pane_active,#[fg=colour4],#[fg=colour7]}";
@@ -813,11 +853,9 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     let engine = start_engine_pane(&fx);
     let engine_pid = pid_of(&fx, &engine);
 
-    // A Lead takes the chat slot and its placeholder is parked; a Worker view opens beside it.
+    // A Lead takes the chat slot and its placeholder is parked.
     let placeholder = view(&main_panes(&fx), "chat").clone();
     let lead = lead_takes_the_slot(&fx, &placeholder.id);
-    let worker = shown(&fx, &["split-window", "-h", "-d", "-t", &lead, "-l", "50%", "-P", "-F", "#{pane_id}", "sleep", "3601"]);
-    out(&fx, &["set", "-p", "-t", &worker, "@cpd_view", "worker"]);
     let before = main_panes(&fx);
     let lead_pid = before.iter().find(|p| p.id == lead).unwrap().pid;
 
@@ -828,7 +866,7 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
     respawned.sort();
     let mut views: Vec<String> = before.iter().filter(|p| !p.view.is_empty()).map(|p| p.id.clone()).collect();
     views.sort();
-    assert_eq!(views.len(), 4, "tree, plan, widgets and the Worker view: {before:?}");
+    assert_eq!(views.len(), 3, "tree, plan and widgets: {before:?}");
     assert_eq!(respawned, views, "{before:?}");
     // Each live view is restarted in place, killing its process (`respawn-pane -k`), and nothing is made, killed or sized.
     let mut restarts = steps(&fx, from);
@@ -848,8 +886,7 @@ fn tui_respawn_restarts_every_live_view_and_no_lead_or_engine() {
             assert_ne!(new.pid, old.pid, "{} runs again", old.view);
         }
     }
-    // Each view reruns its own command: the Worker view keeps its argv, the tree its view.
-    assert_eq!(argv_of(&fx, &worker), ["sleep", "3601"]);
+    // Each view reruns its own command: the tree its view.
     assert_eq!(argv_of(&fx, &view(&after, "tree").id), ["cpd", "tui", "view", "tree"]);
     // The parked placeholder (not in main) and the engine are not touched.
     assert_eq!(pid_of(&fx, &placeholder.id), placeholder.pid);

@@ -94,6 +94,5 @@ fn pill_atom_follows_the_spec_for_every_meaning() {
     ];
     for (index, meaning) in all {
         assert_eq!(fg(palette::pill(meaning)), n(index), "{meaning:?}");
-        assert_eq!(fg(palette::pill_clickable(meaning)), n(s.clickable(index)), "{meaning:?}");
     }
 }

@@ -29,7 +29,7 @@ use cpd_core::error::CpdError;
 use cpd_core::host::runner::Reply;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
-use cpd_tui::{logs, plan, widgets, worker};
+use cpd_tui::{logs, plan, widgets};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -99,8 +99,7 @@ fn running_job(plan: &str, key: &str) -> String {
     )
 }
 
-/// Context `ctx`; Plan `ship` (fat, its Lead in the chat slot) and Plan `other`, which has the running Job `o1` for the
-/// worker view. Nothing is working, so nothing spins.
+/// Context `ctx`; Plan `ship` (fat, its Lead in the chat slot) and Plan `other`, which has the running Job `o1`. Nothing is working, so nothing spins.
 fn fixture() -> String {
     format!(
         "INSERT INTO contexts (id, title, jira, created_at, created_on) VALUES ('ctx', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
@@ -119,16 +118,6 @@ fn no_command(_: Vec<OsString>) -> Result<Output, CpdError> {
     panic!("the view ran a cpd command, and no click was sent")
 }
 
-/// The arguments of `cpd tui view worker <argv>`, parsed as the command's parser does.
-fn worker_args(argv: &[&str]) -> worker::Args {
-    #[derive(Parser)]
-    struct Command {
-        #[command(flatten)]
-        args: worker::Args,
-    }
-    Command::try_parse_from(std::iter::once("worker").chain(argv.iter().copied())).unwrap().args
-}
-
 /// The arguments of `cpd tui view logs`.
 fn logs_args() -> logs::Args {
     #[derive(Parser)]
@@ -140,7 +129,7 @@ fn logs_args() -> logs::Args {
 }
 
 /// The views this file runs, by name: one terminal of 120 x 30 each.
-const VIEWS: [&str; 5] = ["tree", "plan", "widgets", "logs", "worker"];
+const VIEWS: [&str; 4] = ["tree", "plan", "widgets", "logs"];
 
 fn start(fx: &Fx, name: &str) -> Tree {
     let entry: Box<drive::Entry> = match name {
@@ -148,9 +137,6 @@ fn start(fx: &Fx, name: &str) -> Tree {
         "plan" => Box::new(|ports, tty, out, terminal, input| plan::run_on(ports, no_command, tty, out, terminal, input)),
         "widgets" => Box::new(|ports, tty, out, terminal, input| widgets::run_on(ports, no_command, tty, out, terminal, input)),
         "logs" => Box::new(|ports, tty, out, terminal, input| logs::run_on(ports, logs_args(), tty, out, terminal, input)),
-        "worker" => Box::new(|ports, tty, out, terminal, input| {
-            worker::run_on(ports, worker_args(&["o1-a1", "--plan", "other"]), tty, out, terminal, input)
-        }),
         other => panic!("no view {other:?}"),
     };
     Tree::run(fx, name, 120, 30, entry)
@@ -237,7 +223,7 @@ fn a_commit_that_concerns_a_view_makes_it_take_a_snapshot_and_a_key_makes_it_flu
     let fx = env();
     let _engine = engine(&fx);
     fx.env.sql(&fixture());
-    for name in ["tree", "plan", "widgets", "worker"] {
+    for name in ["tree", "plan", "widgets"] {
         let mut view = start(&fx, name);
         let mut noise = fx.env.store();
         noisy(&fx, &mut view, &mut noise, SETTLE);

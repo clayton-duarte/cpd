@@ -13,7 +13,7 @@
 //! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
 //! one file a view writes, its own state.
 //!
-//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
+//! Input: the wheel scrolls; clicks open a Lead tab, a Pulse row or a PR link; a Job pill is neither clickable nor selectable. There is no `q`: a layout pane that
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
@@ -31,14 +31,13 @@ use std::time::{Duration, Instant};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{Event as Input, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use self::actions::Actions;
 use self::boxes::Boxes;
-use self::flow::{Dir, Selection};
 use crate::box_widget::spacing;
 use crate::dialog::scroll::Scroll;
 use crate::palette;
@@ -55,7 +54,7 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::store::Store;
@@ -240,7 +239,6 @@ fn spaced(parts: Vec<Span<'static>>) -> Vec<Span<'static>> {
 /// The User's state in the view, and where the last draw put things (for clicks).
 #[derive(Default)]
 struct Ui {
-    selected: Selection,
     /// The window's top-left in the chart.
     scroll: (u16, u16),
     /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
@@ -279,13 +277,12 @@ impl Ui {
         }
     }
 
-    /// A different Lead is in the slot, `from` its Plan before and `to` its Plan now: nothing is selected, the chart
+    /// A different Lead is in the slot, `from` its Plan before and `to` its Plan now: the chart
     /// is at the offset `to` was left at, or at its corner. Leads of one Plan share the Plan's offset.
     fn switch(&mut self, from: Option<&PlanId>, to: Option<&PlanId>) {
         if let Some(from) = from {
             self.remembered.insert(from.clone(), self.scroll);
         }
-        self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
     }
 
@@ -337,12 +334,7 @@ impl Ui {
         self.body = window;
         self.links = crate::link::Links::default();
         let Some(c) = centre else { return };
-        let sel = self.selected.resolve(&c.boxes.chart); // keeps the User's selection, never creates one
-        if let (true, Some(i)) = (self.selected.follow, sel) {
-            self.scroll = c.boxes.chart.scroll_to(i, self.scroll, (window.width, window.height));
-            self.selected.follow = false;
-        }
-        self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+        self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll);
         (self.links, self.links_origin) = (c.boxes.links.clone(), c.boxes.links_origin);
     }
 }
@@ -413,25 +405,8 @@ impl Offsets {
     }
 }
 
-/// An arrow key: as [`Selection::arrow`], each step taken across the boxes ([`Boxes::step`]).
-fn arrow(selected: &mut Selection, boxes: &Boxes, dir: Dir) {
-    match selected.resolve(&boxes.chart) {
-        Some(i) => {
-            selected.key = Some(boxes.chart.pills[boxes.step(i, dir)].key.clone());
-            selected.follow = true;
-        }
-        None => selected.arrow(&boxes.chart, dir),
-    }
-}
-
-/// The Attempt a pill opens: the Job's current one.
-fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
-    let job = centre.plan.jobs.iter().find(|j| j.key.as_str() == key)?;
-    job.current_attempt().map(|a| a.id.clone())
-}
-
 /// The view's first frame for `store` at `now_ms` (Unix ms), drawn on `f` as `run` draws it: one snapshot, at the corner of its
-/// chart, with nothing selected. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+/// chart. Tests draw it on a `TestBackend` instead of running the view in a terminal.
 pub fn draw_first_frame(store: &mut Store, f: &mut Frame, now_ms: i64) -> Result<(), CpdError> {
     let snap = snapshot(store, f.area().width, now_ms)?;
     Ui::default().draw_snapshot(f, &snap);
@@ -570,11 +545,11 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
     let mut reads = Reads::<Read>::on(&pump);
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
-    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
+    // the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
     // from there ([`Actions::report`]), so the view only draws again
-    let mut worker = Background::<()>::on(&pump);
+    let mut background = Background::<()>::on(&pump);
     loop {
-        while worker.finished().is_some() {
+        while background.finished().is_some() {
             redraw = true;
         }
         while let Some(done) = trace.read(|| reads.take()) {
@@ -653,7 +628,7 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
         let save_at = offsets.due_at(&ui.remembered);
         let until = crate::pump::wake(now, wall_ms, &needs(snap, taken), [schedule.deadline(now), save_at].into_iter().flatten().min());
         let signal = if pump.is_driven() {
-            pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out() || worker.busy())
+            pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out() || background.busy())
         } else {
             pump.wait(until)
         };
@@ -674,8 +649,6 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
             }
         };
         redraw = true; // a key, a click, a resize
-        let mut open = None::<String>;
-        let mut unselect = None::<String>; // the Job whose Worker pane closes
         let mut lead = None::<SessionId>; // the Lead a click on a Pulse row opens
         match input {
             Input::Resize(..) => schedule.force(), // the bucket count changes
@@ -692,47 +665,14 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
                     _ => {}
                 }
             }
-            Input::Key(k) if k.kind == KeyEventKind::Press => {
-                let dir = match k.code {
-                    KeyCode::Down | KeyCode::Char('j') => Some(Dir::Down),
-                    KeyCode::Up | KeyCode::Char('k') => Some(Dir::Up),
-                    KeyCode::Left | KeyCode::Char('h') => Some(Dir::Left),
-                    KeyCode::Right | KeyCode::Char('l') => Some(Dir::Right),
-                    _ => None,
-                };
-                let boxes = snap.centre.as_ref().map(|c| &c.boxes);
-                match (k.code, dir, boxes) {
-                    (_, Some(d), Some(b)) => arrow(&mut ui.selected, b, d),
-                    (KeyCode::Enter, ..) => open = ui.selected.enter(),
-                    (KeyCode::Esc, ..) => unselect = ui.selected.clear(),
-                    _ => {}
-                }
-            }
             Input::Mouse(m) => match ui.click(ports, m) {
                 // a PR box title's link: the pull request is opened and nothing else changes
                 Ok(true) => {}
                 Err(e) => {
                     let actions = Arc::clone(actions);
-                    worker.submit(move || actions.report("Open Pull Request", &e));
+                    background.submit(move || actions.report("Open Pull Request", &e));
                 }
                 Ok(false) => match m.kind {
-                    MouseEventKind::Down(MouseButton::Left) if ui.body.contains(Position::new(m.column, m.row)) => {
-                        let hit = snap.centre.as_ref().and_then(|c| {
-                            let (x, y) = (m.column - ui.body.x + ui.scroll.0, m.row - ui.body.y + ui.scroll.1);
-                            c.boxes.chart.pill_at(x, y).map(|i| c.boxes.chart.pills[i].key.clone())
-                        });
-                        match hit {
-                            Some(key) if ui.selected.key.as_ref() == Some(&key) => {
-                                ui.selected.click(key.clone());
-                                unselect = Some(key);
-                            }
-                            Some(key) => {
-                                ui.selected.click(key.clone());
-                                open = Some(key);
-                            }
-                            None => unselect = ui.selected.clear(),
-                        }
-                    }
                     MouseEventKind::ScrollUp => ui.scroll.1 = ui.scroll.1.saturating_sub(3),
                     MouseEventKind::ScrollDown => ui.scroll.1 = ui.scroll.1.saturating_add(3), // clamped when drawn
                     MouseEventKind::ScrollLeft => ui.scroll.0 = ui.scroll.0.saturating_sub(4),
@@ -744,32 +684,11 @@ pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared) -
         }
         if let Some(lead) = lead {
             let actions = Arc::clone(actions);
-            worker.submit(move || {
+            background.submit(move || {
                 if let Err(e) = actions.open_lead(&lead) {
                     actions.report("Open Lead", &e);
                 }
             });
-        }
-        let Some(centre) = snap.centre.as_ref() else { continue };
-        if let Some(key) = unselect {
-            let actions = Arc::clone(actions);
-            worker.submit(move || {
-                if let Err(e) = actions.close_worker(&key) {
-                    actions.report("Close Worker", &e);
-                }
-            });
-        }
-        if let Some(key) = open {
-            match attempt_of(centre, &key) {
-                attempt => {
-                    let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
-                    worker.submit(move || {
-                        if let Err(e) = actions.toggle_worker(&plan, &key, attempt.as_ref()) {
-                            actions.report("Open Worker", &e);
-                        }
-                    });
-                }
-            }
         }
     }
 }
@@ -887,6 +806,8 @@ mod box_tests;
 
 #[cfg(test)]
 mod margin_tests;
+#[cfg(test)]
+mod pill_label_tests;
 #[cfg(test)]
 mod lines_tests;
 #[cfg(test)]
@@ -1014,19 +935,18 @@ mod tests {
     }
 
     #[test]
-    fn switching_plans_and_back_restores_the_offset_with_no_selection() {
+    fn switching_plans_and_back_restores_the_offset() {
         let (a, b) = (plan("plan-a"), plan("plan-b"));
         let mut ui = Ui::default();
         draw(&mut ui, &scroll_centre("plan-a", 30));
         ui.scroll = (0, 7);
-        ui.selected.key = Some("job-3".into());
 
         ui.switch(Some(&a), Some(&b));
-        assert_eq!((ui.scroll, &ui.selected), ((0, 0), &Selection::default()), "B starts at its corner");
+        assert_eq!(ui.scroll, (0, 0), "B starts at its corner");
         ui.scroll = (0, 2);
 
         ui.switch(Some(&b), Some(&a));
-        assert_eq!((ui.scroll, &ui.selected), ((0, 7), &Selection::default()));
+        assert_eq!(ui.scroll, (0, 7));
         ui.switch(Some(&a), Some(&b));
         assert_eq!(ui.scroll, (0, 2), "each Plan has its own");
     }
