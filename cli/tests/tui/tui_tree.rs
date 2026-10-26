@@ -330,13 +330,18 @@ fn a_missing_folds_file_is_every_context_open() {
     let _engine = engine(&fx);
     populate_in(&fx);
     archive_for_folds(&fx.env);
-    let tree = Tree::start(&fx, 46, 26);
+    let mut tree = Tree::start(&fx, 46, 26);
     let screen = ready(&tree);
     assert!(alpha_is_expanded(&screen), "{screen:?}");
-    let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
-    assert_eq!(screen[beta + 1].trim(), format!("╰{DOWN} expand"), "the archived Context starts folded: {screen:?}");
+    // the archived Context beta is under the archive row: the row starts folded and beta is not drawn
+    assert!(!screen.iter().any(|r| r.contains(" beta")), "the folder starts folded: {screen:?}");
     assert!(screen.iter().all(|r| !r.contains("fold state")), "{screen:?}");
     assert!(!folds_file(&fx.env).exists(), "nothing is written");
+    let archive = screen.iter().position(|r| r.trim() == format!("{DOWN} archive")).expect("the archive row");
+    tree.click(5, archive as u16);
+    let screen = tree.until("the archive row expanded", |s| s.iter().any(|r| r.contains(" beta")));
+    let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
+    assert_eq!(screen[beta + 1].trim(), format!("╰{DOWN} expand"), "the archived Context starts folded: {screen:?}");
 }
 
 #[test]
@@ -785,12 +790,15 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
     tree.click(5, toggle);
     let screen = tree.until("alpha folded", |s| s.get(5).is_some_and(|r| r.trim() == format!("╰{DOWN} expand")));
     assert!(screen.iter().any(|r| r.contains("sketch")) && !screen.iter().any(|r| r.contains("ship·f-bl")), "{screen:#?}");
-    // the archived Context beta starts folded: its `╰󰬦 expand` row, right under its title row
+    // the archived Context beta is under the archive row: open the row, then beta is folded right under it
+    let archive = screen.iter().position(|r| r.trim() == format!("{DOWN} archive")).expect("the archive row");
+    tree.click(5, archive as u16);
+    let screen = tree.until("the archive row expanded", |s| s.iter().any(|r| r.contains(" beta")));
     let beta = screen.iter().position(|r| r.contains(" beta")).unwrap();
     assert_eq!(screen[beta + 1].trim(), format!("╰{DOWN} expand"), "{screen:#?}");
     tree.click(5, beta as u16 + 1);
     let before = tree.until("beta expanded", |s| s.iter().position(|r| r.contains(" beta")).is_some_and(|b| s[b + 1].contains("rel")));
-    wait_for_folds(&mut tree, &fx.env, r#"{"collapsed":["alpha"],"expanded":[["beta"]]}"#);
+    wait_for_folds(&mut tree, &fx.env, r#"{"collapsed":["alpha"],"expanded":[["beta"]],"archived":true}"#);
 
     // restart the view: the same screen comes back
     drop(tree);
