@@ -48,7 +48,7 @@ fn done(out: Result<std::process::Output, crate::host::deadline::Failed>) -> Don
 }
 
 /// The code and the message of a cpd error value, else its text as it is.
-fn describe(text: &str) -> String {
+pub(super) fn describe(text: &str) -> String {
     let error = serde_json::from_str::<serde_json::Value>(text).ok().and_then(|v| v.get("error").cloned());
     let field = |name: &str| error.as_ref().and_then(|e| e.get(name)).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned);
     match (field("code"), field("message")) {
