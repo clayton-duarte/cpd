@@ -8,22 +8,24 @@ mod ask;
 mod attempt;
 mod config;
 mod context_curation;
-mod context_digest;
-mod context_delete;
+mod gate;
+mod context_on_demand;
+mod context_topic;
 mod context_distill;
+mod context_engine;
 mod context_manager;
 mod context_manager_by_user;
 mod context_pending;
 mod context_pending_waiting;
+mod context_reindex;
+mod context_search;
 mod context;
-// Wrapped so the test names read `flow::driver_idle::...`; `#[path = "."]` keeps the file here, in this directory.
-#[path = "."]
-mod flow {
-    mod driver_idle;
-}
+mod driver_idle;
+mod driver_open;
 mod driver_reload;
 mod driver;
 mod context_inbox_cyan;
+mod host_repair;
 mod job;
 mod metrics;
 mod plan_cancel;
@@ -47,5 +49,5 @@ mod secret_grants;
 mod secret_guard;
 mod secret_op;
 mod spec;
-mod repo_config;
 mod repo_cmds;
+mod repo_config;

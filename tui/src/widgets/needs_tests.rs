@@ -16,6 +16,7 @@ fn pr(working: bool) -> read::OpenPr {
         lead: Some(SessionId::parse("l-a").unwrap()),
         lead_working: working,
         plan_failed: false,
+        plan_phase: None,
         merging: false,
     }
 }

@@ -32,6 +32,7 @@ use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
+use cpd_core::ports::Ports;
 use cpd_core::session::State;
 use serde_json::Value;
 use crate::palette;
@@ -61,8 +62,8 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
     let ask = match *row {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
-        Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
-        Row::Toggle => return None,
+        Row::Fork(_, _, s) | Row::Manager(_, s) => Ask::RenameSession(s.id.clone()),
+        Row::Toggle | Row::NewPlan(_) => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
 }
@@ -85,8 +86,8 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
     match *row {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
-        Row::Fork(_, _, s) => Some(Subject::Session(s.id.clone())),
-        Row::Toggle => None,
+        Row::Fork(_, _, s) | Row::Manager(_, s) => Some(Subject::Session(s.id.clone())),
+        Row::Toggle | Row::NewPlan(_) => None,
     }
 }
 
@@ -273,7 +274,7 @@ impl View {
     /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| matches!(s.dot, Dot::Working | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
+        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
     }
 
     /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
@@ -319,9 +320,15 @@ impl View {
     }
 
     /// Writes the folds when they have changed (at most once a second); a failure is the log line returned, and is retried.
+    #[cfg(test)]
     pub fn save_folds(&mut self) -> Option<String> {
+        self.save_folds_with(&Ports::real())
+    }
+
+    /// [`View::save_folds`] with the second counted on the clock of `ports`.
+    pub fn save_folds_with(&mut self, ports: &Ports) -> Option<String> {
         let file = self.folds.as_mut()?;
-        file.save(&Folds::of(&self.state, &self.tree)).err()
+        file.save_with(ports, &Folds::of(&self.state, &self.tree)).err()
     }
 
     fn cursor_shown(&self) -> bool {
@@ -595,8 +602,8 @@ impl View {
         let archiving: Vec<&SessionNode> = match *row {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
-            Row::Fork(_, _, s) => vec![s],
-            Row::Toggle => return Some(None),
+            Row::Fork(_, _, s) | Row::Manager(_, s) => vec![s],
+            Row::Toggle | Row::NewPlan(_) => return Some(None),
         };
         let manager_in_chat = matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
         if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
@@ -645,6 +652,10 @@ impl View {
         // history
         if rows::click_toggle(&mut self.state, &self.tree, &path) {
             return Effect::None;
+        }
+        // a live empty Context's `╰󰬪 new` row opens the same New Plan popup the context menu's New Plan… does (hs-d688)
+        if let Some(Row::NewPlan(c)) = rows::row(&self.tree, &path) {
+            return Effect::Ask(self.new_plan_in(c));
         }
         if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
             let open = Action::OpenManager(c.id.clone());
@@ -715,6 +726,7 @@ impl View {
     }
 
     /// [`View::draw_at`] now.
+    #[cfg(test)]
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         self.draw_at(f, frame, OffsetDateTime::now_utc());
     }
@@ -887,7 +899,7 @@ mod tests {
         };
         let mut tree = sample();
         each(&mut tree, &|s| {
-            if s.dot == Dot::Working {
+            if s.dot == Dot::Working(None) {
                 s.archived_at = Some("2026-02-01T00:00:00.000Z".into());
             }
         });
@@ -899,18 +911,18 @@ mod tests {
     #[test]
     fn nothing_acts_until_an_arrow_key_shows_the_cursor() {
         let mut view = View::new(sample(), true);
-        assert_eq!(view.state.selected(), ["alpha", "ship"], "the first Session is selected from the start");
+        assert_eq!(view.state.selected(), ["beta", "rel"], "the first Session is selected from the start");
         for key in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Char('n')] {
             assert_eq!(press(&mut view, key), Effect::None);
         }
         press(&mut view, KeyCode::Down);
-        assert_eq!(view.state.selected(), ["alpha", "ship"], "the first arrow only shows the cursor");
+        assert_eq!(view.state.selected(), ["beta", "rel"], "the first arrow only shows the cursor");
         press(&mut view, KeyCode::Char('j'));
-        assert_eq!(view.state.selected(), ["alpha", "sketch"]);
+        assert_eq!(view.state.selected(), ["alpha", "f-blocked"]);
         press(&mut view, KeyCode::Char('k'));
-        assert_eq!(view.state.selected(), ["alpha", "ship"]);
+        assert_eq!(view.state.selected(), ["beta", "rel"]);
         press(&mut view, KeyCode::Up);
-        assert_eq!(view.state.selected(), ["alpha", "ship"], "a Context row is never selected");
+        assert_eq!(view.state.selected(), ["beta", "rel"], "a Context row is never selected");
     }
 
     #[test]
@@ -1064,16 +1076,16 @@ mod tests {
         press(&mut view, KeyCode::Down);
         view.state.select(vec!["alpha".into(), "sketch".into()]);
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 8, 7), Effect::None, "the `╰󰬬 collapse` row of the Context `alpha`");
+        assert_eq!(click(&mut view, 8, 10), Effect::None, "the `╰󰬬 collapse` row of the Context `alpha`");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!((rows[1].as_str(), rows[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), EXPAND), "the live rows stay: {rows:?}");
+        assert_eq!((rows[4].as_str(), rows[8].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), EXPAND), "the live rows stay: {rows:?}");
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "only the archived rows are hidden: {rows:?}");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "a click selects nothing");
         assert!(!view.cursor_shown());
-        assert_eq!(click(&mut view, 8, 5), Effect::None, "`╰󰬦 expand` unfolds it");
+        assert_eq!(click(&mut view, 8, 8), Effect::None, "`╰󰬦 expand` unfolds it");
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
-        assert_eq!(click(&mut view, 8, 4), Effect::Run(Action::Open(sid("f-idle"))), "a fork row");
+        assert_eq!(click(&mut view, 8, 5), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row");
+        assert_eq!(click(&mut view, 8, 7), Effect::Run(Action::Open(sid("f-idle"))), "a fork row");
         assert_eq!(click(&mut view, 8, 15), Effect::None, "below the tree");
         assert_eq!(view.state.selected(), ["alpha", "sketch"], "no click moved the cursor");
     }
@@ -1084,18 +1096,18 @@ mod tests {
         drawn(&mut view, 44, 16);
         let manager = Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()));
         for column in [1, 3, 5, 42] {
-            assert_eq!(click(&mut view, column, 1), manager, "column {column} of the title row");
+            assert_eq!(click(&mut view, column, 4), manager, "column {column} of the title row");
         }
-        assert_eq!(drawn(&mut view, 44, 16)[7], COLLAPSE, "no click on the title folds");
+        assert_eq!(drawn(&mut view, 44, 16)[10], COLLAPSE, "no click on the title folds");
         for column in [1, 3, 8, 42] {
-            assert_eq!(click(&mut view, column, 7), Effect::None, "column {column} of the closing row runs no command");
-            assert_eq!(drawn(&mut view, 44, 16)[5], EXPAND, "and folds it");
-            assert_eq!(click(&mut view, column, 5), Effect::None, "`╰󰬦 expand` runs no command");
-            assert_eq!(drawn(&mut view, 44, 16)[7], COLLAPSE, "and unfolds it");
+            assert_eq!(click(&mut view, column, 10), Effect::None, "column {column} of the closing row runs no command");
+            assert_eq!(drawn(&mut view, 44, 16)[8], EXPAND, "and folds it");
+            assert_eq!(click(&mut view, column, 8), Effect::None, "`╰󰬦 expand` runs no command");
+            assert_eq!(drawn(&mut view, 44, 16)[10], COLLAPSE, "and unfolds it");
         }
-        click(&mut view, 8, 7);
+        click(&mut view, 8, 10);
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 5, 1), manager, "a folded Context opens its Manager too");
+        assert_eq!(click(&mut view, 5, 4), manager, "a folded Context opens its Manager too");
         let Effect::Run(action) = manager else { unreachable!() };
         assert_eq!(action.argv(), ["context", "manager", "--context=alpha", "--by-user"]);
     }
@@ -1119,14 +1131,14 @@ mod tests {
     #[test]
     fn row_0_is_blank_and_the_rows_follow_one_lower_and_clicks_land_on_the_row_under_the_pointer() {
         let mut view = View::new(sample(), true);
-        let rows = drawn(&mut view, 44, 12);
+        let rows = drawn(&mut view, 44, 16);
         assert_eq!(rows[0], "", "the blank row at the top");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
-        assert!(rows[2].starts_with(&format!(" ├─{WORKING} ship")), "{rows:?}");
+        assert_eq!(rows[4], format!(" ╭{NEEDS_YOU} alpha"));
+        assert!(rows[6].starts_with(&format!(" ├─{WORKING} ship")), "{rows:?}");
         assert_eq!(click(&mut view, 8, 0), Effect::None, "the blank row is no row: not the Context row below it, not the first Session");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not folded");
-        assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the first Session's row");
-        assert_eq!(click(&mut view, 8, 3), Effect::Run(Action::Open(sid("l-sketch"))), "the Session below it");
+        assert_eq!(click(&mut view, 8, 6), Effect::Run(Action::Open(sid("l-ship"))), "the Plan's row");
+        assert_eq!(click(&mut view, 8, 7), Effect::Run(Action::Open(sid("l-sketch"))), "the Session below it");
         assert_eq!(right_click(&mut view, 8, 0), Effect::None);
         assert_eq!(view.menu.as_ref().map(|m| m.path.clone()), Some(vec![]), "the blank row is the empty area: its menu");
     }
@@ -1177,9 +1189,9 @@ mod tests {
     fn the_counters_end_at_width_minus_4_and_the_cursor_row_is_inverted_between_the_margins() {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
-        let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
-        let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
+        let ship: String = (0..44).map(|x| buf[(x, 6)].symbol()).collect();
+        assert!(ship.trim_end().ends_with("2⋅2⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
+        let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 6)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
 
@@ -1187,14 +1199,14 @@ mod tests {
     fn a_click_on_the_first_drawn_cell_of_a_row_acts_on_that_row_and_the_margins_are_no_row() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 1, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row's branch");
-        assert_eq!(click(&mut view, 1, 3), Effect::Run(Action::Open(sid("l-sketch"))));
-        assert_eq!(click(&mut view, 42, 3), Effect::Run(Action::Open(sid("l-sketch"))), "the last cell of the list");
-        for row in [2, 3] {
+        assert_eq!(click(&mut view, 1, 6), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row's branch");
+        assert_eq!(click(&mut view, 1, 7), Effect::Run(Action::Open(sid("l-sketch"))));
+        assert_eq!(click(&mut view, 42, 7), Effect::Run(Action::Open(sid("l-sketch"))), "the last cell of the list");
+        for row in [6, 7] {
             assert_eq!(click(&mut view, 0, row), Effect::None, "the left margin of row {row}");
             assert_eq!(click(&mut view, 43, row), Effect::None, "the right margin of row {row}");
         }
-        assert_eq!(click(&mut view, 1, 1), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())), "the title row keeps its action");
+        assert_eq!(click(&mut view, 1, 4), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())), "the title row keeps its action");
         let rows = drawn(&mut view, 44, 16);
         assert_eq!(click(&mut view, 1, 12), Effect::None, "a terminator closing row has nothing to fold");
         assert_eq!(drawn(&mut view, 44, 16), rows, "and folds nothing");
@@ -1235,20 +1247,20 @@ mod tests {
     fn the_archived_rows_are_inside_the_expanded_block_with_one_toggle_row_that_folds_them_and_a_click_on_one_resumes_it() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 23);
-        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")), "{rows:?}");
-        assert_eq!(rows[6], format!(" ├─{NEEDS_YOU} ship·f-bl"));
-        assert_eq!(rows[7], COLLAPSE, "one closing row for alpha, its archived rows included");
-        assert_eq!(rows[8], "", "one empty row between two Contexts");
-        assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
+        assert!(rows[8].starts_with(&format!(" ├─{STOPPED} old")), "{rows:?}");
+        assert_eq!(rows[9], format!(" ├─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[10], COLLAPSE, "one closing row for alpha, its archived rows included");
+        assert_eq!(rows[11], "", "one empty row between two Contexts");
+        assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
         assert!(!rows.iter().any(|r| r.contains('\u{F01D8}')), "no `󰇘` row: {rows:?}");
         // a click on an archived row resumes it: the unarchive of its outermost archived object, then the Open
-        assert_eq!(click(&mut view, 3, 5), Effect::Run(resume(Subject::Plan(pid("old")), Action::Open(sid("l-old")))));
-        assert_eq!(click(&mut view, 3, 6), Effect::Run(resume(Subject::Session(sid("f-blocked")), Action::Open(sid("f-blocked")))));
+        assert_eq!(click(&mut view, 3, 8), Effect::Run(resume(Subject::Plan(pid("old")), Action::Open(sid("l-old")))));
+        assert_eq!(click(&mut view, 3, 9), Effect::Run(resume(Subject::Session(sid("f-blocked")), Action::Open(sid("f-blocked")))));
         assert_eq!(drawn(&mut view, 44, 23), rows, "a click on an archived row changes nothing");
         // the closing row folds the archived rows only: the live ones stay
-        assert_eq!(click(&mut view, 3, 7), Effect::None);
+        assert_eq!(click(&mut view, 3, 10), Effect::None);
         let rows = drawn(&mut view, 44, 23);
-        assert_eq!((rows[4].as_str(), rows[5].as_str(), rows[6].as_str(), rows[7].as_str()), (format!(" ├─{IDLE} ship·f-id").as_str(), EXPAND, "", format!(" ╭{NEEDS_YOU} beta").as_str()));
+        assert_eq!((rows[7].as_str(), rows[8].as_str(), rows[9].as_str(), rows[10].as_str()), (format!(" ├─{IDLE} ship·f-id").as_str(), EXPAND, "", format!(" ╭{STOPPED} gamma").as_str()));
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "{rows:?}");
         // an archived Context unfolds at its own closing row
         assert_eq!(click(&mut view, 1, 14), Effect::None);
@@ -1281,7 +1293,7 @@ mod tests {
         assert!(rows.iter().any(|r| r.contains("ship·f-id")) && !rows.iter().any(|r| r.contains(" old")), "{rows:#?}");
         let zeta = rows.iter().position(|r| r.contains("zeta")).expect("the archived Context zeta, folded");
         click(&mut view, 4, row_of(&rows, zeta, DOWN_EXPAND)); // expands it
-        view.state.select(vec!["beta".into(), "rel".into()]);
+        view.state.select(vec!["alpha".into(), "sketch".into()]);
         view.save_folds();
         let shown = drawn(&mut view, 44, 30);
         assert!(shown.iter().any(|r| r.contains("zp")), "zeta's Plan shows: {shown:#?}");
@@ -1289,7 +1301,7 @@ mod tests {
         let mut again = View::new(archived(), true);
         again.keep_folds(file_in(&dir));
         assert_eq!(drawn(&mut again, 44, 30), shown, "the folds are back");
-        assert_ne!(again.state.selected(), ["beta", "rel"], "the cursor is not kept");
+        assert_ne!(again.state.selected(), ["alpha", "sketch"], "the cursor is not kept");
     }
 
     #[test]
@@ -1343,12 +1355,12 @@ mod tests {
         drawn(&mut view, 44, 23);
         click(&mut view, 1, 16);
         let rows = drawn(&mut view, 44, 23);
-        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
+        assert!(rows[8].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
         // fork: each unarchives its outermost archived object, then opens its Session
         let archived_objects = [
-            ((8, 5), Subject::Plan(pid("old")), "l-old"),
-            ((8, 6), Subject::Session(sid("f-blocked")), "f-blocked"),
+            ((8, 8), Subject::Plan(pid("old")), "l-old"),
+            ((8, 9), Subject::Session(sid("f-blocked")), "f-blocked"),
             ((8, 16), Subject::Context(cid("zeta")), "l-zp"),
             ((8, 17), Subject::Context(cid("zeta")), "f-zp"),
         ];
@@ -1407,7 +1419,7 @@ mod tests {
         let mut view = View::new(sample(), true);
         assert_eq!(menu_at(&mut view, 5, 1), ["New Plan…", "Rename…", "Copy id", "Archive"], "a Context");
         assert_eq!(menu_at(&mut view, 8, 2), ["New session…", "Rename…", "Copy id", "Archive"], "a Plan");
-        assert_eq!(menu_at(&mut view, 8, 5), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"], "a fork");
+        assert_eq!(menu_at(&mut view, 8, 9), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"], "a fork");
         assert_eq!(menu_at(&mut view, 8, 17), ["New Context…"], "the empty area");
         assert_eq!(menu_at(&mut view, 8, 13), ["New Context…"], "below the last row");
         let mut view = View::new(View::new(archived(), true).tree, true);
@@ -1415,13 +1427,13 @@ mod tests {
     }
 
     /// A view of `archived()` with the archived Context unfolded (a tall pane, 24 rows): the archived Plan `old` is
-    /// at row 5, its fork `f-blocked` at 6, the archived Context `zeta` at 15, its Plan at 16 and fork at 17.
+    /// at row 8, its fork `f-blocked` at 9, the archived Context `zeta` at 15, its Plan at 16 and fork at 17.
     fn archived_open() -> View {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 24);
         click(&mut view, 1, 16); // `╰󰬦 expand` of the archived Context
         let rows = drawn(&mut view, 44, 24);
-        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
+        assert!(rows[8].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         view
     }
 
@@ -1430,14 +1442,14 @@ mod tests {
         let mut view = archived_open();
         // the archived Plan, its fork, an archived Context and its Plan and fork
         // (a Plan or a Context row also offers Delete, hs-d527; a fork does not)
-        for (column, row, delete) in [(8, 5, true), (8, 6, false), (8, 15, true), (8, 16, true), (8, 17, false)] {
+        for (column, row, delete) in [(8, 8, true), (8, 9, false), (8, 15, true), (8, 16, true), (8, 17, false)] {
             let items: &[&str] = if delete { &["Rename…", "Copy id", "Unarchive", "Delete"] } else { &["Rename…", "Copy id", "Unarchive"] };
             assert_eq!(menu_at(&mut view, column, row), items, "({column}, {row})");
             press(&mut view, KeyCode::Esc);
         }
         // the closing rows have none, the empty area has one
         drawn(&mut view, 44, 24);
-        for (column, row) in [(3, 7), (3, 13), (3, 18), (1, 19)] {
+        for (column, row) in [(3, 10), (3, 13), (3, 18), (1, 19)] {
             let _ = right_click(&mut view, column, row);
             assert_eq!(view.menu.is_some(), row == 19, "({column}, {row}): a closing row has none, the empty area has one");
             view.menu = None;
@@ -1450,9 +1462,9 @@ mod tests {
         drawn(&mut view, 44, 16);
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(rows[5], format!(" ├─{IDLE} shi╭─────────╮"), "{rows:?}");
-        assert_eq!(rows[6], format!(" ╰─{NEEDS_YOU} shi│ Open    │"));
-        assert_eq!(rows[7], "        │ Rename… │", "drawn over the tree, an empty row too: {rows:?}");
+        assert!(rows[5].ends_with(&format!("shi╭─────────╮")), "{rows:?}");
+        assert!(rows[6].contains(&format!("shi│ Open    │")), "{rows:?}");
+        assert!(rows[7].contains("│ Rename… │"), "drawn over the tree: {rows:?}");
         assert_eq!(rows[12], "        ╰─────────╯", "over the empty row below the tree");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
@@ -1476,10 +1488,10 @@ mod tests {
     fn enter_on_the_menu_picks_its_selected_item_and_esc_closes_it_running_nothing() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5); // a fork: f-idle
+        right_click(&mut view, 8, 9); // a fork: f-idle
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-idle"))));
         assert!(view.menu.is_none());
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 9);
         assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.menu.is_none());
     }
@@ -1501,32 +1513,32 @@ mod tests {
     fn archive_asks_to_confirm_in_a_popup_and_runs_only_when_it_is_confirmed() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5); // the fork `f-idle`, which is not in the chat slot
+        right_click(&mut view, 8, 5); // the fork `f-blocked`, which is not in the chat slot
         for _ in 0..5 {
             press(&mut view, KeyCode::Down);
         }
         let question = asked(press(&mut view, KeyCode::Enter));
         assert_eq!(
             question,
-            Question::archive("ship fork", Action::Archive { subject: Subject::Session(sid("f-idle")), free: None }),
+            Question::archive("ship review", Action::Archive { subject: Subject::Session(sid("f-blocked")), free: None }),
             "the question is `Archive <label>?`"
         );
         assert_eq!(answered(question.clone(), None), Ok(None), "a cancel runs nothing");
-        assert_eq!(answered(question, Some("")), Ok(Some(Action::Archive { subject: Subject::Session(sid("f-idle")), free: None })));
+        assert_eq!(answered(question, Some("")), Ok(Some(Action::Archive { subject: Subject::Session(sid("f-blocked")), free: None })));
         assert!(view.menu.is_none());
         // a click picks it as well
         right_click(&mut view, 8, 5);
         let effect = view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: 11, modifiers: KeyModifiers::NONE });
-        assert_eq!(confirmed(effect), archive_of(Subject::Session(sid("f-idle"))));
+        assert_eq!(confirmed(effect), archive_of(Subject::Session(sid("f-blocked"))));
         // a Plan and a Context name their own objects: `sketch` and `beta` hold no Lead of the chat slot
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 3);
+        right_click(&mut view, 8, 7);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
         assert_eq!(confirmed(press(&mut view, KeyCode::Enter)), archive_of(Subject::Plan(PlanId::parse("sketch").unwrap())));
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 5, 8);
+        right_click(&mut view, 5, 1);
         for _ in 0..3 {
             press(&mut view, KeyCode::Down);
         }
@@ -1552,20 +1564,20 @@ mod tests {
     fn archive_of_the_chat_slots_lead_opens_the_next_live_session_in_tree_order_first() {
         // rows: alpha, ship (l-ship in the chat slot), sketch, old, f-idle, f-blocked, its toggle, beta, rel
         let ship = Subject::Plan(PlanId::parse("ship").unwrap());
-        assert_eq!(archive_at(sample(), 8, 2), freed(ship, Free::Open(sid("l-sketch"))), "a Plan row: the Plan below it");
+        assert_eq!(archive_at(sample(), 8, 6), freed(ship, Free::Open(sid("l-sketch"))), "a Plan row: the Plan below it");
         let mut tree = sample();
         tree.contexts[0].plans[0].sessions[0].place = crate::read::Place::Parked;
-        tree.contexts[0].plans[0].sessions[1].place = crate::read::Place::Chat;
+        tree.contexts[0].plans[0].sessions[2].place = crate::read::Place::Chat;
         assert_eq!(
             archive_at(tree.clone(), 8, 5),
-            freed(Subject::Session(sid("f-idle")), Free::Open(sid("f-blocked"))),
-            "a fork row: the fork below it"
+            freed(Subject::Session(sid("f-blocked")), Free::Open(sid("l-ship"))),
+            "a fork row: the next live Session below it"
         );
         // the Plan whose side fork holds the slot: the fork is archived with it, so it is not the next
-        assert_eq!(archive_at(tree, 8, 2), freed(Subject::Plan(PlanId::parse("ship").unwrap()), Free::Open(sid("l-sketch"))));
+        assert_eq!(archive_at(tree, 8, 6), freed(Subject::Plan(PlanId::parse("ship").unwrap()), Free::Open(sid("l-sketch"))));
         // a Context row: the first live Session below it, none of its own
         assert_eq!(
-            archive_at(sample(), 5, 1),
+            archive_at(sample(), 5, 4),
             freed(Subject::Context(ContextId::parse("alpha").unwrap()), Free::Open(sid("l-rel")))
         );
     }
@@ -1577,7 +1589,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[0].place = crate::read::Place::Parked;
         tree.contexts[0].plans.pop(); // `old`
         tree.contexts[1].plans[0].sessions[0].place = crate::read::Place::Chat;
-        assert_eq!(archive_at(tree, 8, 8), freed(Subject::Plan(PlanId::parse("rel").unwrap()), Free::Open(sid("f-blocked"))));
+        assert_eq!(archive_at(tree, 8, 2), freed(Subject::Plan(PlanId::parse("rel").unwrap()), Free::Open(sid("f-blocked"))));
     }
 
     #[test]
@@ -1608,7 +1620,7 @@ mod tests {
     fn archive_ignores_the_slot_when_a_snapshot_dropped_the_row() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 2);
+        right_click(&mut view, 8, 6);
         for _ in 0..2 {
             press(&mut view, KeyCode::Down);
         }
@@ -1622,7 +1634,7 @@ mod tests {
     fn close_in_the_menu_asks_as_x_does_and_refuses_the_session_in_the_chat_slot() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 9);
         for _ in 0..4 {
             press(&mut view, KeyCode::Down);
         }
@@ -1635,7 +1647,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[1].place = crate::read::Place::Chat;
         let mut view = View::new(tree, true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 9);
         for _ in 0..4 {
             press(&mut view, KeyCode::Down);
         }
@@ -1646,8 +1658,8 @@ mod tests {
     fn rename_and_unarchive_on_an_archived_row_run_without_asking_to_confirm() {
         let mut view = archived_open();
         for (row, subject) in [
-            (5, Subject::Plan(PlanId::parse("old").unwrap())),
-            (6, Subject::Session(sid("f-blocked"))),
+            (8, Subject::Plan(PlanId::parse("old").unwrap())),
+            (9, Subject::Session(sid("f-blocked"))),
             (15, Subject::Context(ContextId::parse("zeta").unwrap())),
         ] {
             right_click(&mut view, 8, row);
@@ -1657,7 +1669,7 @@ mod tests {
             assert!(view.menu.is_none());
         }
         // Rename… starts from the label of the archived row and runs the rename of the object
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 8);
         let rename = Question::input("Rename", Ask::RenamePlan(PlanId::parse("old").unwrap()), "Old".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         assert_eq!(
@@ -1670,7 +1682,7 @@ mod tests {
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         // and of an archived fork: its name
         drawn(&mut view, 44, 24);
-        right_click(&mut view, 8, 6);
+        right_click(&mut view, 8, 9);
         let rename = Question::input("Rename", Ask::RenameSession(sid("f-blocked")), "ship review".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
     }
@@ -1679,7 +1691,7 @@ mod tests {
     fn copy_id_copies_the_shown_id_of_every_kind_of_row() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        for (column, row, index, id) in [(5, 1, 2, "alpha"), (8, 2, 2, "ship"), (8, 5, 3, "ship·f-id")] {
+        for (column, row, index, id) in [(5, 4, 2, "alpha"), (8, 6, 2, "ship"), (8, 9, 3, "ship·f-id")] {
             right_click(&mut view, column, row);
             for _ in 0..index {
                 press(&mut view, KeyCode::Down);
@@ -1689,7 +1701,7 @@ mod tests {
         }
         // archived rows: a Plan, a fork of it, an archived Context
         let mut view = archived_open();
-        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (15, "zeta")] {
+        for (row, id) in [(8, "old"), (9, "ship·f-bl"), (15, "zeta")] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
             assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyId(id.into())), "row {row}");
@@ -1716,7 +1728,7 @@ mod tests {
     fn rename_opens_an_input_popup_from_the_current_label_and_runs_the_rename_of_the_row() {
         let mut view = View::new(sample(), true);
         // a Context: its title
-        let question = popup_at(&mut view, 5, 1, 1);
+        let question = popup_at(&mut view, 5, 4, 1);
         assert!(view.menu.is_none());
         let id = ContextId::parse("alpha").unwrap();
         assert_eq!(question, Question::input("Rename", Ask::RenameContext(id.clone()), "Alpha".into()));
@@ -1724,11 +1736,11 @@ mod tests {
         assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
         // a Plan: its title
         let id = PlanId::parse("ship").unwrap();
-        let question = popup_at(&mut view, 8, 2, 1);
+        let question = popup_at(&mut view, 8, 6, 1);
         assert_eq!(question, Question::input("Rename", Ask::RenamePlan(id.clone()), "Ship".into()));
         assert_eq!(answered(question, Some("Release")), Ok(Some(Action::RenamePlan { id, title: "Release".into() })));
         // a fork: its name
-        let question = popup_at(&mut view, 8, 5, 1);
+        let question = popup_at(&mut view, 8, 9, 1);
         assert_eq!(question, Question::input("Rename", Ask::RenameSession(sid("f-idle")), "ship fork".into()));
         assert_eq!(
             answered(question, Some("ship fork!")),
@@ -1740,14 +1752,14 @@ mod tests {
     fn fork_and_new_session_open_an_input_popup_for_a_name_and_fork_the_right_source() {
         let mut view = View::new(sample(), true);
         // a fork row: Fork… forks that fork
-        let question = popup_at(&mut view, 8, 5, 2);
+        let question = popup_at(&mut view, 8, 9, 2);
         assert_eq!(question, Question::input("Fork", Ask::Fork { source: sid("f-idle") }, "ship fork (fork)".into()));
         assert_eq!(
             answered(question, Some("ship fork (fork)")),
             Ok(Some(Action::Fork { source: sid("f-idle"), name: "ship fork (fork)".into() }))
         );
         // a Plan row: New session… forks the Plan's Lead, from the Plan's title
-        let question = popup_at(&mut view, 8, 2, 0);
+        let question = popup_at(&mut view, 8, 6, 0);
         assert_eq!(question, Question::input("New session", Ask::Fork { source: sid("l-ship") }, "Ship (fork)".into()));
         assert_eq!(
             answered(question.clone(), Some("Ship again")),
@@ -1761,7 +1773,7 @@ mod tests {
         let mut tree = sample();
         tree.contexts[0].plans[1].head.title = "x".repeat(150);
         let mut view = View::new(tree, true);
-        let Question::Input { initial, .. } = popup_at(&mut view, 8, 3, 0) else { panic!("an input") };
+        let Question::Input { initial, .. } = popup_at(&mut view, 8, 7, 0) else { panic!("an input") };
         assert_eq!(initial.chars().count(), 80);
         assert!(initial.ends_with("x (fork)"));
     }
@@ -1825,7 +1837,7 @@ mod tests {
     #[test]
     fn new_plan_opens_an_input_popup_for_a_title_derives_the_id_and_asks_no_repo() {
         let mut view = View::new(sample(), true);
-        let question = popup_at(&mut view, 5, 1, 0);
+        let question = popup_at(&mut view, 5, 4, 0);
         let Question::Input { title, ref ask, ref initial } = question else { panic!("an input") };
         assert_eq!((title, initial.as_str()), ("New Plan", ""));
         assert!(matches!(ask, Ask::NewPlan { context, .. } if context.as_str() == "alpha"), "{ask:?}");
@@ -1899,7 +1911,7 @@ mod tests {
     fn a_click_on_an_item_picks_it() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 9);
         let rect = view.menu.as_ref().unwrap().rect(view.pane);
         assert_eq!(click(&mut view, rect.x + 2, rect.y + 1), Effect::Run(Action::Open(sid("f-idle"))));
         assert!(view.menu.is_none());
@@ -1919,7 +1931,7 @@ mod tests {
     fn a_snapshot_that_drops_the_menus_row_makes_its_item_do_nothing() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        right_click(&mut view, 8, 5);
+        right_click(&mut view, 8, 9);
         let mut tree = sample();
         tree.contexts[0].plans[0].sessions.retain(|s| s.id.as_str() != "f-idle");
         view.refresh(tree);
@@ -2019,7 +2031,7 @@ mod tests {
         assert_eq!(rows[title - 1], "", "the empty row above the title");
         assert_eq!(rows[title + 2], "", "the empty row below the closing row");
         assert_eq!(rows.len(), title + 3, "and it is the last: no row below it");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree above is where it was");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"), "the tree above is where it was");
     }
 
     #[test]
@@ -2087,13 +2099,13 @@ mod tests {
     fn a_tree_taller_than_its_rows_scrolls_to_keep_the_cursor_visible_between_cues() {
         let mut view = with_inbox(5);
         press(&mut view, KeyCode::Down);
-        view.state.select(vec!["beta".into(), "rel".into()]);
+        view.state.select(vec!["alpha".into(), "f-idle".into()]);
         let rows = text_rows(&draw_now(&mut view, 43, 14));
         assert_eq!(rows[8], header(5), "{rows:?}");
         assert_eq!(rows[7], "", "the empty row above it");
         assert_eq!(rows[1], cue_row_at('▲', 5), "the tree's cue is right-aligned: {rows:?}");
         assert_eq!(rows[6], cue_row_at('▼', 3), "{rows:?}");
-        assert!(rows[2..6].iter().any(|r| r.starts_with(&format!(" ╰─{NEEDS_YOU} rel"))), "the cursor's Session is between the cues: {rows:?}");
+        assert!(rows[2..6].iter().any(|r| r.starts_with(&format!(" ╰─{IDLE} ship·f-id"))), "the cursor's Session is between the cues: {rows:?}");
         assert!(!rows[1..7].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
     }
 
@@ -2154,7 +2166,7 @@ mod tests {
         assert_eq!(click(&mut view, 41, 19), Effect::None, "unread, its Lead in the chat slot already: nothing, anywhere on the row, the age too");
         assert_eq!(click(&mut view, 10, 14), Effect::None, "the header");
         // the section's rows are not the tree's: the Session row above is its own
-        assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))));
+        assert_eq!(click(&mut view, 8, 6), Effect::Run(Action::Open(sid("l-ship"))));
     }
 
     #[test]
@@ -2516,7 +2528,7 @@ mod tests {
         let mut view = with_inbox(5);
         let rows = text_rows(&draw_now(&mut view, 43, 5));
         assert_eq!(rows[0], "");
-        assert!(rows[1].starts_with(&format!(" ├─{WORKING} ship")), "one row for the tree, scrolled to the cursor: {rows:?}");
+        assert!(rows[1].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "one row for the tree, scrolled to the cursor: {rows:?}");
         assert_eq!((rows[2].as_str(), rows[3].as_str()), ("", header(5).as_str()), "{rows:?}");
         view.error = Some("closed".into());
         let rows = text_rows(&draw_now(&mut view, 43, 8));
@@ -2558,8 +2570,8 @@ mod tests {
         assert_eq!(view.inbox_area, Rect::new(1, 13, 41, 27), "what the 12-row tree leaves of the column, pinned to the bottom");
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(50));
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree is above it");
-        assert_eq!(rows[12], " ╰󰬪", "the tree's rows are its 12, then the section's empty row");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"), "the tree is above it");
+        assert_eq!(rows[12], " ╰󰬪 new", "the tree's rows are its 12, then the section's empty row");
         assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
         assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
         assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
@@ -2694,8 +2706,8 @@ mod tests {
     fn both_fit_each_takes_its_rows_and_the_leftover_is_empty_between_them() {
         let (view, rows) = shared(sample(), 3, false, 31);
         assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
-        assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")), "{rows:?}");
-        assert_eq!(rows[12], " ╰󰬪", "the tree's last row: {rows:?}");
+        assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{rows:?}");
+        assert_eq!(rows[12], " ╰󰬪 new", "the tree's last row: {rows:?}");
         assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
         assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰬪", ""), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
@@ -2948,17 +2960,18 @@ mod tests {
         let rows = drawn(&mut View::new(sample(), true), 44, 26);
         let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
         assert_eq!(rows[0], "", "the first block's empty row above");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
-        starts(2, format!(" ├─{WORKING} ship"));
-        starts(3, format!(" ├─{IDLE} sketch"));
-        starts(4, format!(" ├─{STOPPED} old"));
-        starts(5, format!(" ├─{IDLE} ship·f-id"));
-        starts(6, format!(" ╰─{NEEDS_YOU} ship·f-bl"));
-        assert_eq!(rows[7], "", "one empty row between two blocks, not two (the Lead's assumption: adjacent margins collapse)");
-        assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
-        starts(9, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"));
+        starts(2, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[3], "", "one empty row between two blocks, not two (the Lead's assumption: adjacent margins collapse)");
+        assert_eq!(rows[4], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(5, format!(" ├─{NEEDS_YOU} ship·f-bl"));
+        starts(6, format!(" ├─{WORKING} ship"));
+        starts(7, format!(" ├─{IDLE} sketch"));
+        starts(8, format!(" ├─{STOPPED} old"));
+        starts(9, format!(" ╰─{IDLE} ship·f-id"));
         assert_eq!(rows[10], "");
-        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰬪").count(), 1, "no terminator line but the Context with no row's: {rows:#?}");
+        assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰬪 new").count(), 1, "no terminator line but the live Context with no row's new row: {rows:#?}");
     }
 
     #[test]
@@ -2966,19 +2979,19 @@ mod tests {
         let rows = drawn(&mut View::new(archived(), true), 44, 26);
         let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
         assert_eq!(rows[0], "");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
-        starts(2, format!(" ├─{WORKING} ship"));
-        starts(3, format!(" ├─{IDLE} sketch"));
-        starts(4, format!(" ├─{IDLE} ship·f-id"));
-        starts(5, format!(" ├─{STOPPED} old"));
-        starts(6, format!(" ├─{NEEDS_YOU} ship·f-bl"));
-        assert_eq!(rows[7], COLLAPSE, "the closing row of the expanded Context");
-        assert_eq!(rows[8], "");
-        assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
-        starts(10, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} beta"));
+        starts(2, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[3], "");
+        assert_eq!(rows[4], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(5, format!(" ├─{WORKING} ship"));
+        starts(6, format!(" ├─{IDLE} sketch"));
+        starts(7, format!(" ├─{IDLE} ship·f-id"));
+        starts(8, format!(" ├─{STOPPED} old"));
+        starts(9, format!(" ├─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[10], COLLAPSE, "the closing row of the expanded Context");
         assert_eq!(rows[11], "");
         assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[13], " ╰󰬪", "a Context with no row at all ends with the terminator");
+        assert_eq!(rows[13], " ╰󰬪 new", "a live Context with no row at all ends with the clickable new row");
         assert_eq!(rows[14], "");
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
         assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰬦 expand`");
@@ -2989,7 +3002,7 @@ mod tests {
     fn a_context_with_no_row_at_all_is_its_title_and_the_terminator() {
         let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
         let rows = drawn(&mut View::new(tree, true), 44, 10);
-        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), format!(" ╰{}", crate::fold::TERMINATOR)]);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰󰬪 new".to_owned()]);
     }
 
     #[test]
@@ -3018,7 +3031,7 @@ mod tests {
         // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
         let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
         assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[12], " ╰󰬪");
+        assert_eq!(rows[12], " ╰󰬪 new");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
         assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));

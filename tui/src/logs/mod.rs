@@ -12,23 +12,32 @@
 #[cfg(test)]
 mod margin_tests;
 #[cfg(test)]
+mod popup_tests;
+#[cfg(test)]
 pub(crate) use view::layout_sample;
 mod view;
 
+use std::io::Write;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 
 pub use self::view::{Log, draw};
+use super::popup;
 use super::read;
-use super::widgets::legend;
 use super::runner::{ViewError, kept};
-use super::{Capture, run_view};
+use super::widgets::legend;
+use super::view_ports::{Ctx, Input, Tty, run_view_with};
+use super::{Capture, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::events::Selection;
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
+use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
 /// How many Events the view starts with (the `events list` default).
@@ -44,38 +53,66 @@ pub struct Args {
 /// The popup's share of the client, in percent, at most.
 const SHARE: u16 = 80;
 
+/// The tmux border around the legend's own frame.
+const POPUP_BORDER: u16 = 2;
+
 /// The tmux arguments that open the log in a popup: sized like the legend's, at most [`SHARE`] % of the client's
 /// size `(columns, rows)`; the view opens at the Event `event` when there is one.
 pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
+    let (w, h) = legend::size();
     let cap = |n: u16| (u32::from(n) * u32::from(SHARE) / 100) as u16;
-    let mut args = legend::popup_args((cap(client.0), cap(client.1)));
-    args[3] = " logs ".to_owned();
-    *args.last_mut().expect("popup_args ends with the command") = match event {
-        Some(id) => format!("cpd tui view logs --event {id}"),
-        None => "cpd tui view logs".to_owned(),
+    let size = ((w + POPUP_BORDER).min(cap(client.0)), (h + POPUP_BORDER).min(cap(client.1)));
+    let command = match event {
+        Some(id) => format!("{PROGRAM} tui view logs --event {id}"),
+        None => format!("{PROGRAM} tui view logs"),
     };
-    args
+    popup::args(popup::Popup {
+        title: Some(" logs "),
+        border: false,
+        client: None,
+        dash: false,
+        size,
+        command: &command,
+    })
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    run_view(
-        "logs",
-        Capture::Mouse,
-        || {
-            let home = CpdHome::from_env()?;
-            let config = Config::load(&home)?;
-            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let first = read::logs(&mut store, RECENT)?;
-            let log = match args.event {
-                Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
-                None => Log::new(first.events),
-            };
-            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
-            Ok((store, poll, follow, log))
-        },
-        |terminal, (mut store, poll, follow, log)| show(terminal, &mut store, poll, follow, log),
-    )
+/// What the view reads before it draws: the store, the poll, the follow and the log.
+type Opened = (Store, Duration, read::Follow, Log);
+
+/// The first read: a failure is the command's error, with the screen untouched.
+fn open(args: Args) -> Result<Opened, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let first = read::logs(&mut store, RECENT)?;
+    let log = match args.event {
+        Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
+        None => Log::new(first.events),
+    };
+    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+    let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+    Ok((store, poll, follow, log))
+}
+
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    run_view_on(ports, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+        show_with(ctx, &mut store, poll, follow, log)
+    })
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn.
+pub fn run_on<B: Backend, W: Write>(
+    ports: &Ports,
+    args: Args,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    run_view_with(ports, tty, out, terminal, input, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+        show_with(ctx, &mut store, poll, follow, log)
+    })
 }
 
 /// The keys that close the view.
@@ -84,9 +121,9 @@ fn closes(code: KeyCode) -> bool {
 }
 
 /// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
-/// until a read succeeds ([`kept`]).
-fn show(
-    terminal: &mut ratatui::DefaultTerminal,
+/// until a read succeeds ([`kept`]). Input, the wait and frames are the [`Ctx`]'s.
+pub fn show_with<B: Backend>(
+    ctx: &mut Ctx<B>,
     store: &mut Store,
     poll: Duration,
     mut follow: read::Follow,
@@ -95,15 +132,15 @@ fn show(
     let mut redraw = true; // the pane is written to only when something changed: Events, an error, input, a resize
     loop {
         if redraw {
-            terminal.draw(|f| {
+            ctx.draw(|f| {
                 log.fit(f.area().height);
                 draw(f, f.area(), &log);
             })?;
             redraw = false;
         }
-        if event::poll(poll)? {
+        if ctx.input.poll(poll)? {
             redraw = true;
-            match event::read()? {
+            match ctx.input.read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
                 Event::Key(key) => drop(log.key(key)),
                 Event::Mouse(mouse) => drop(log.mouse(mouse)),
@@ -122,7 +159,7 @@ fn show(
 
 /// `events` (the latest, oldest first), with the Event `id` before them when it is older than all of them. An `id`
 /// that no Event has leaves them as they are.
-fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
+pub fn with_event(store: &mut Store, mut events: Vec<cpd_core::events::Event>, id: i64) -> Result<Vec<cpd_core::events::Event>, CpdError> {
     if events.first().is_some_and(|e| e.id <= id) {
         return Ok(events);
     }

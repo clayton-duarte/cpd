@@ -22,4 +22,5 @@ time.workspace = true
 tui-tree-widget.workspace = true
 
 [dev-dependencies]
+cpd-core = { path = "../core", features = ["fakes"] }
 tempfile.workspace = true

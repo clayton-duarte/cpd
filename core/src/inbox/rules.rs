@@ -5,7 +5,7 @@
 //! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
@@ -17,8 +17,9 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
-use crate::ids::{ContextId, JobKey, PlanId, SessionId};
+use crate::ids::{ContextId, JobKey, PlanId, PrKey, SessionId};
 use crate::plan::Phase;
+use crate::ports::Ports;
 use crate::session::LOOP_GUARD_LABEL;
 use crate::store::Store;
 
@@ -41,13 +42,19 @@ static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 /// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
 /// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    conditions_on(&Ports::current(), store, home)
+}
+
+/// [`conditions`] on `ports`: `ports.clock.utc()` is the time of the review window, `ports.clock.now()` the memo's, and
+/// `ports.runner` runs `gh`.
+pub fn conditions_on(ports: &Ports, store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
     let mut github = |refs: &[(String, u64)]| {
         let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
-        held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
+        held.get_or_insert_with(Memo::default).get(refs, ports.clock.now(), |refs| team::github_lookup_with(&*ports.runner, home, refs))
     };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
-    conditions_with(store, home, OffsetDateTime::now_utc(), config.loop_guard_turns, config.context_curation_min_records, team)
+    conditions_with(store, home, ports.clock.utc(), config.loop_guard_turns, config.context_curation_min_records, team)
 }
 
 /// [`conditions`] at `now` with `loop_guard_turns` (§8.2) and the team review rule's inputs given; `None` switches that kind off.
@@ -330,6 +337,8 @@ fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StuckJob {
     pub plan: PlanId,
+    /// The Job's PR key: E8 groups the stuck Jobs of one PR into one message (hs-d647).
+    pub pr: PrKey,
     pub job: JobKey,
     /// The Plan's Context.
     pub context: ContextId,
@@ -347,7 +356,7 @@ pub struct StuckJob {
 pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
     store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT j.plan, j.key, p.context, e.id, e.at, j.failed_cause
+            "SELECT j.plan, j.pr, j.key, p.context, e.id, e.at, j.failed_cause
                FROM jobs j
                JOIN plans p ON p.id = j.plan
                JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
@@ -358,14 +367,15 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
-            let (plan, key, context, event, at, cause): (String, String, String, i64, String, String) =
-                (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+            let (plan, pr, key, context, event, at, cause): (String, String, String, String, i64, String, String) =
+                (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?);
             let age = now - time_of("Event time", &at)?;
             if age < stuck_after {
                 continue;
             }
             out.push(StuckJob {
                 plan: id("Plan id", &plan, PlanId::parse)?,
+                pr: id("PR key", &pr, PrKey::parse)?,
                 job: id("Job key", &key, JobKey::parse)?,
                 context: id("Context id", &context, ContextId::parse)?,
                 event,
@@ -375,6 +385,42 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
         }
         Ok(out)
     })
+}
+
+/// The stuck Jobs of one PR (hs-d647): the manager is told once per pull request, not once per Job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StuckGroup {
+    pub plan: PlanId,
+    pub pr: PrKey,
+    /// The Plan's Context, and its Manager's.
+    pub context: ContextId,
+    /// The group's newest `job-failed` Event id: the once-record must be newer than it.
+    pub event: i64,
+    /// The group's Jobs, oldest `job-failed` Event first.
+    pub jobs: Vec<StuckJob>,
+}
+
+/// Groups the stuck Jobs by their Plan and PR, keeping `jobs`' oldest-first order inside a group and ordering the groups
+/// by their first Job's `job-failed` Event id (hs-d647). `jobs` is the oldest-first result of [`stuck_jobs`].
+#[must_use]
+pub fn stuck_groups(jobs: Vec<StuckJob>) -> Vec<StuckGroup> {
+    let mut groups: Vec<StuckGroup> = Vec::new();
+    for job in jobs {
+        match groups.iter_mut().find(|g| g.plan == job.plan && g.pr == job.pr) {
+            Some(group) => {
+                group.event = group.event.max(job.event);
+                group.jobs.push(job);
+            }
+            None => groups.push(StuckGroup {
+                plan: job.plan.clone(),
+                pr: job.pr.clone(),
+                context: job.context.clone(),
+                event: job.event,
+                jobs: vec![job],
+            }),
+        }
+    }
+    groups
 }
 
 // ---- Pull requests: pr-ready, review-requested -------------------------------------------
@@ -1006,6 +1052,7 @@ mod tests {
             stuck,
             [StuckJob {
                 plan: PlanId::parse("pay").unwrap(),
+                pr: PrKey::parse("p1").unwrap(),
                 job: JobKey::parse("a").unwrap(),
                 context: ContextId::parse("ctx").unwrap(),
                 event: latest,
@@ -1017,6 +1064,44 @@ mod tests {
 
         f.sql("UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'a'");
         assert!(f.stuck().is_empty(), "retried");
+    }
+
+    #[test]
+    fn stuck_jobs_of_one_pr_group_with_the_newest_event_and_oldest_first() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        for (key, status) in [("a", "failed"), ("b", "failed")] {
+            f.job(key, status);
+            f.event("job-failed", None, Some(key), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        }
+        let a = f.event("job-failed", None, Some("a"), "2026-01-01T23:00:00.000Z", r#"{}"#);
+        let b = f.event("job-failed", None, Some("b"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        let groups = stuck_groups(f.stuck());
+        assert_eq!(groups.len(), 1, "one PR, one group");
+        let group = &groups[0];
+        assert_eq!((&group.plan, &group.pr, group.event), (&PlanId::parse("pay").unwrap(), &PrKey::parse("p1").unwrap(), b));
+        assert_eq!(group.jobs.iter().map(|j| j.job.as_str()).collect::<Vec<_>>(), ["a", "b"], "oldest Event first");
+        assert_eq!(group.jobs[0].event, a);
+    }
+
+    #[test]
+    fn stuck_jobs_of_different_prs_are_separate_groups_in_first_event_order() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        f.job("a", "failed");
+        f.sql(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', 'p2', '/r', 'main', 'dispatch', 'cpd/pay/p2', '/lw', 1, '{T}', '{T}');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                               fingerprint, created_txn, created_at, failed_cause)
+               VALUES ('pay', 'p2', 'b', 'J', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'failed', 0, '{FP}', 1, '{T}', 'crashed');"
+        ));
+        f.event("job-failed", None, Some("a"), T, r#"{}"#);
+        f.event("job-failed", None, Some("b"), T, r#"{}"#);
+        f.event("job-failed", None, Some("b"), "2026-01-01T22:00:00.000Z", r#"{}"#);
+        f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
+        let groups = stuck_groups(f.stuck());
+        assert_eq!(groups.iter().map(|g| g.pr.as_str()).collect::<Vec<_>>(), ["p2", "p1"], "the group of the oldest first Event leads");
     }
 
     #[test]

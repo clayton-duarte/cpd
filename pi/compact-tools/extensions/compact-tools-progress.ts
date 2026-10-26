@@ -97,7 +97,7 @@ export class ProgressController {
 		if (!message) this.activeTools.clear();
 		this.message = undefined;
 		ctx.ui.setWorkingVisible(true);
-		ctx.ui.setWorkingIndicator({ frames: [...LOADER_FRAMES], intervalMs: LOADER_INTERVAL_MS });
+		ctx.ui.setWorkingIndicator({ frames: [] });
 		if (message) this.setMessage(message);
 	}
 

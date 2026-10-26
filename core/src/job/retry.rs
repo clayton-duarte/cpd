@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::{Env, RetryArgs, find, plan_phase};
+use super::{Env, RetryArgs, check_needs_not_cancelled, find, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
@@ -74,6 +74,8 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, tier: &str) -> Result<
         .with("job", key.as_str())
         .with("status", job.status.as_str()));
     }
+    // A cancelled need can never be retried back, so retrying a Job held by one is refused (§5.4, hs-d647).
+    check_needs_not_cancelled(&all, plan, &job.needs)?;
     Ok(Decision::Queue(job.clone()))
 }
 

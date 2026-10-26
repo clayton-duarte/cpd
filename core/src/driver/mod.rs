@@ -8,8 +8,10 @@
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
 pub mod lock;
+#[cfg(test)]
+pub(crate) mod ports_tests;
 mod run;
-mod stall;
+pub(crate) mod stall;
 mod start;
 pub mod worker;
 
@@ -21,8 +23,9 @@ use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
+use crate::ports::Ports;
 
-pub use start::{Origin, StartCtx, Started, slot_limit, start};
+pub use start::{Allocation, Origin, StartCtx, Started, slot_limit, start, start_with, start_with_allocation};
 
 /// The arguments of `cpd attempt run` (commands.md §6.4).
 #[derive(clap::Args, Debug)]
@@ -53,10 +56,12 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// `cpd job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let catalog = load_catalog(&config)?;
     let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
-    let started = start(&mut store, &ctx, &plan, &args.key)?;
+    // A manual dispatch asks for the linear Attempt; the starter refuses it (CasLost) when a sibling
+    // of the PR is live, so two Attempts never share the workflow worktree (hs-d680/hs-d682/hs-d683).
+    let started = start_with_allocation(&Ports::current(), &mut store, &ctx, &plan, &args.key, Some(Allocation::Linear))?;
     Ok(Output::success(json!({
         "attempt": started.attempt,
         "tier": started.tier.to_string(),

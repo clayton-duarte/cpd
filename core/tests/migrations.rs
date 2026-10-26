@@ -435,8 +435,23 @@ fn an_additive_migration_may_not_add_a_required_column_a_unique_index_or_a_trigg
 // N5: scripts/check-migrations-frozen.sh
 // ---------------------------------------------------------------------------
 
-const MAIN_FILES: [(&str, &str); 2] =
-    [("0001-initial.sql", "CREATE TABLE a (x);\n"), ("20260101T0000-kind-tables.sql", "-- cpd-migration: breaking after 1\n")];
+/// The breaking migration's text: the header plus a body that a renumber may not touch.
+/// The body is long enough that git still reads the file as renamed when only its header
+/// (the `after n` count) changes, as the N5 exception allows.
+const BREAKING_TEXT: &str = "\
+-- cpd-migration: breaking after 1
+DROP TRIGGER jobs_status;
+CREATE TRIGGER jobs_status AFTER UPDATE ON jobs BEGIN
+  SELECT RAISE(ABORT, 'illegal_transition');
+END;
+";
+
+/// The base tree: a legacy migration, a breaking one and a named additive one.
+const MAIN_FILES: [(&str, &str); 3] = [
+    ("0001-initial.sql", "CREATE TABLE a (x);\n"),
+    ("20260101T0000-kind-tables.sql", BREAKING_TEXT),
+    ("20260202T0000-additive.sql", "-- cpd-migration: additive\n"),
+];
 
 /// A scratch clone (`work/`) of a bare `origin.git` whose `main` has [`MAIN_FILES`];
 /// HEAD is a branch off it.
@@ -517,13 +532,34 @@ fn the_frozen_check_passes_on_no_change_and_on_a_new_migration() {
     clone.check().unwrap();
 }
 
+/// N5 after hs-d661: the O3 repair may rename a breaking migration to a newer name
+/// when only its header (the `after n` count) changes and its body is untouched.
 #[test]
-fn the_frozen_check_fails_on_an_edited_deleted_or_renamed_migration() {
-    let cases: [(&str, &str, fn(&Clone)); 3] = [
-        ("modified", MAIN_FILES[0].0, |c| fs::write(c.migrations().join(MAIN_FILES[0].0), "CREATE TABLE a (y);\n").unwrap()),
+fn the_frozen_check_passes_on_a_breaking_renumber_with_an_unchanged_body() {
+    let clone = Clone::new();
+    let old = clone.migrations().join(MAIN_FILES[1].0);
+    let new = clone.migrations().join("20260301T0000-kind-tables.sql");
+    // The additive migration now sorts before the new name, so the count rises from 1 to 2.
+    fs::rename(&old, &new).unwrap();
+    fs::write(&new, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
+    clone.commit();
+    clone.check().unwrap();
+}
+
+/// Everything that is not that one renumber still fails: an edit, a delete, and a rename
+/// of a migration without the breaking header (legacy or additive).
+#[test]
+fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
+    let cases: [(&str, &str, fn(&Clone)); 4] = [
+        ("modified", MAIN_FILES[0].0, |c| {
+            fs::write(c.migrations().join(MAIN_FILES[0].0), "CREATE TABLE a (y);\n").unwrap()
+        }),
         ("deleted", MAIN_FILES[0].0, |c| fs::remove_file(c.migrations().join(MAIN_FILES[0].0)).unwrap()),
-        ("renamed", MAIN_FILES[1].0, |c| {
-            fs::rename(c.migrations().join(MAIN_FILES[1].0), c.migrations().join("20260101T0001-kind-tables.sql")).unwrap()
+        ("legacy renamed", MAIN_FILES[0].0, |c| {
+            fs::rename(c.migrations().join(MAIN_FILES[0].0), c.migrations().join("20260202T0000-initial.sql")).unwrap()
+        }),
+        ("additive renamed", MAIN_FILES[2].0, |c| {
+            fs::rename(c.migrations().join(MAIN_FILES[2].0), c.migrations().join("20260302T0000-additive.sql")).unwrap()
         }),
     ];
     for (what, file, change) in cases {
@@ -532,6 +568,31 @@ fn the_frozen_check_fails_on_an_edited_deleted_or_renamed_migration() {
         clone.commit();
         let why = clone.check().expect_err(what);
         assert!(why.contains("frozen check failed") && why.contains(file), "{what}: {why}");
+    }
+}
+
+/// A breaking renumber that changes a body line, or moves to an older name, is refused.
+#[test]
+fn the_frozen_check_fails_on_a_rename_that_changes_the_body_or_goes_backwards() {
+    let cases: [(&str, fn(&Clone)); 2] = [
+        ("body changed", |c| {
+            let old = c.migrations().join(MAIN_FILES[1].0);
+            let new = c.migrations().join("20260301T0000-kind-tables.sql");
+            fs::rename(&old, &new).unwrap();
+            fs::write(&new, BREAKING_TEXT.replace("DROP TRIGGER jobs_status;", "DROP TRIGGER jobs_status_old;")).unwrap();
+        }),
+        ("older name", |c| {
+            let old = c.migrations().join(MAIN_FILES[1].0);
+            let new = c.migrations().join("20250101T0000-kind-tables.sql");
+            fs::rename(&old, &new).unwrap();
+        }),
+    ];
+    for (what, change) in cases {
+        let clone = Clone::new();
+        change(&clone);
+        clone.commit();
+        let why = clone.check().expect_err(what);
+        assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{what}: {why}");
     }
 }
 

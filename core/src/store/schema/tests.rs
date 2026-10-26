@@ -1026,7 +1026,7 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
 }
 
 #[test]
-fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
+fn the_inbox_items_table_accepts_the_urgency_cyan_and_refuses_others() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut store = Store::open(&home, 5000).unwrap();
@@ -1036,7 +1036,7 @@ fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
     for urgency in ["white", "cyan", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
     }
-    assert!(write(&mut store, &item("cyan")).is_err());
+    assert!(write(&mut store, &item("blue")).is_err());
     assert!(write(&mut store, &item("")).is_err());
 }
 
@@ -1785,7 +1785,7 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
         assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
         assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(21)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements` and `record_curations`
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(23)); // 17, `plannotator_reviews`, `board_posts`, `record_retirements`, `record_curations`, `incident` and `incident_plans`
         let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
         assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
         assert_eq!(txns_after.len(), txns_before.len() + 1);
@@ -1816,6 +1816,10 @@ fn converts_keeping_every_row_and_id(n: usize) {
         // `curation` made two tables, and they are empty.
         assert_eq!(rows_after.remove("record_retirements"), Some(Vec::new()));
         assert_eq!(rows_after.remove("record_curations"), Some(Vec::new()));
+        // `incident` made a table, and it is empty.
+        assert_eq!(rows_after.remove("incident"), Some(Vec::new()));
+        // `incident-plans` made another, and it is empty too.
+        assert_eq!(rows_after.remove("incident_plans"), Some(Vec::new()));
         let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
         assert_eq!(history_after[..history_before.len()], history_before[..]);
         assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
@@ -2871,8 +2875,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation` and the one of `loop-guard`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep`, the two of `delete-tombstone`, the three of `curation`, the one of `loop-guard`, the two of `incident` and the one of `incident-plans-event`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2 + 3 + 1 + 2 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
