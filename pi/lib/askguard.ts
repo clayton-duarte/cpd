@@ -5,7 +5,7 @@ export const LIMIT = 1500;
 
 /** G2's reason, one line (§15.13). */
 export const longReason = (characters: number): string =>
-  `cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${characters} characters (limit ${LIMIT})`;
+  `φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${characters} characters (limit ${LIMIT})`;
 
 const length = (v: unknown): number => (typeof v === "string" ? v.length : 0);
 
@@ -33,7 +33,7 @@ export function tooLong(input: unknown): string | undefined {
 
 /** G4's reason, one line (§15.13). */
 export const unseenReason = (labels: string[]): string =>
-  `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels.join(", ")} stated nowhere`;
+  `φ: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels.join(", ")} stated nowhere`;
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null;

@@ -25,18 +25,34 @@ pub fn policy_invalid(file: &Path, key: Option<&str>, why: impl std::fmt::Displa
         .with("key", key.map_or(serde_json::Value::Null, |k| serde_json::Value::String(k.to_owned())))
 }
 
+/// The machine file's table of MCP servers: read by `machine::parse_machine` (contract §8.3 "MCP servers"), not a domain of [`Scope`].
+const MCP: &str = "mcp";
+
 /// Parses the text of the scope file `file`.
 pub fn parse_scope(file: &Path, text: &str) -> Result<Scope, CpdError> {
+    parse_scope_of(file, text, None)
+}
+
+/// [`parse_scope`] for a file of `kind`: the `[mcp]` table of a machine file is left to `machine::parse_machine`; in any other file it is refused.
+fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Scope, CpdError> {
     let mut table: Table = text.parse().map_err(|e: toml::de::Error| {
         policy_invalid(file, None, format!("not valid TOML ({})", e.message()))
     })?;
+    if kind == Some(ScopeKind::Machine) {
+        table.remove(MCP);
+    }
     // `[hooks]` is read from the text, which keeps the file order of a block's commands (a `Table` sorts keys).
     let hooks = table.remove(HOOKS).map(|_| hooks_set(file, text)).transpose()?;
     let mut scope = match Value::Table(table.clone()).try_into::<Scope>() {
         Ok(scope) => scope,
         Err(e) => {
-            let key = bad_key::<Scope>(&table).join(".");
-            return Err(policy_invalid(file, Some(&key), e.message()));
+            let path = bad_key::<Scope>(&table);
+            let why = if path.first().is_some_and(|k| k == "mcp") {
+                "`mcp` is set in a machine file (policy/host.toml), not in an owner or repo file".to_owned()
+            } else {
+                e.message().to_owned()
+            };
+            return Err(policy_invalid(file, Some(&path.join(".")), why));
         }
     };
     scope.hooks = hooks;
@@ -93,7 +109,7 @@ fn hooks_set(file: &Path, text: &str) -> Result<HooksSet, CpdError> {
 /// The deepest key path that makes `table` fail to read as `T`, found by
 /// reading one entry at a time (a table entry is descended into only when it
 /// is acceptable empty: an unknown table is itself the bad key).
-fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
+pub(super) fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
     fn nest(path: &[String], leaf: Value) -> Table {
         path.iter().rev().fold(leaf, |acc, k| Value::Table(Table::from_iter([(k.clone(), acc)]))).try_into().unwrap_or_default()
     }
@@ -139,7 +155,7 @@ pub fn load_scope_file(path: &Path, kind: ScopeKind) -> Result<Option<(PathBuf, 
         CpdError::new(ErrorCode::FileUnreadable, format!("Cannot resolve {}: {e}.", path.display()))
             .with("file", path.display().to_string())
     })?;
-    let scope = parse_scope(&real, &text)?;
+    let scope = parse_scope_of(&real, &text, Some(kind))?;
     check_exposed(&real, kind, &scope)?;
     Ok(Some((real, scope)))
 }

@@ -18,14 +18,15 @@ use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
-use cpd_core::config::{Catalog, Config, load_catalog};
+use cpd_core::config::{Catalog, Config, load_catalog_with};
+use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, NewEvent};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::host::pi::{self, PiDirs};
 use cpd_core::host::spawn::Pid;
-use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
+use cpd_core::ids::{AttemptId, ContextId, PlanId, PrKey, SessionId};
 use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::pr::start::{self as start_pr, By, Failed};
@@ -55,8 +56,10 @@ pub(super) struct Engine {
     /// The seams the steps read time and start processes through: `Ports::real()` for `cpd watch`.
     pub ports: Ports,
     report: Report,
-    /// pi's catalog, read at most once per tick and only when a step needs it.
-    catalog: Option<Catalog>,
+    /// pi's catalogs, one per distinct `[model]` table a step needed this tick (a repo's policy sets its own).
+    catalogs: Vec<(Models, Catalog)>,
+    /// The catalog a step test gives the engine for every key.
+    fixed_catalog: Option<Catalog>,
     /// When E5's last `pr poll` ended.
     pub last_poll_end: Option<Instant>,
     /// E5's `pr poll` in flight.
@@ -105,7 +108,8 @@ impl Engine {
             log,
             ports: ports.clone(),
             report,
-            catalog: None,
+            catalogs: Vec::new(),
+            fixed_catalog: None,
             last_poll_end: None,
             poll: None,
             paused_until: None,
@@ -122,7 +126,7 @@ impl Engine {
     /// The catalog a step test gives the engine, so E3 never runs pi's Node or opens the real home for it.
     #[cfg(test)]
     pub(super) fn set_catalog(&mut self, catalog: Catalog) {
-        self.catalog = Some(catalog);
+        self.fixed_catalog = Some(catalog);
     }
 
     /// Reports a failure of `step` for `about` (once until it clears).
@@ -135,19 +139,34 @@ impl Engine {
         self.report.clear(step, about);
     }
 
-    /// pi's catalog (§9), for the ladder and E3.
-    pub(super) fn catalog(&mut self) -> Result<Catalog, CpdError> {
-        if let Some(catalog) = &self.catalog {
+    /// pi's catalog (§9) of the models of the Job `job` of `plan` (its PR's repo key), for the ladder and E3.
+    pub(super) fn catalog_of_job(&mut self, plan: &PlanId, job: &str) -> Result<Catalog, CpdError> {
+        let home = self.home.clone();
+        self.catalog_of(|store| store.read(|conn| models_of_job(conn, &home, plan, job)))
+    }
+
+    /// [`Engine::catalog_of_job`] of the Job of Attempt `id`.
+    pub(super) fn catalog_of_attempt(&mut self, plan: &PlanId, id: &AttemptId) -> Result<Catalog, CpdError> {
+        let home = self.home.clone();
+        self.catalog_of(|store| store.read(|conn| models_of_attempt(conn, &home, plan, &id.to_string())))
+    }
+
+    fn catalog_of(&mut self, models: impl FnOnce(&mut Store) -> Result<Models, CpdError>) -> Result<Catalog, CpdError> {
+        if let Some(catalog) = &self.fixed_catalog {
             return Ok(catalog.clone());
         }
-        let catalog = load_catalog(&self.config)?;
-        self.catalog = Some(catalog.clone());
+        let models = models(&mut self.store)?;
+        if let Some((_, catalog)) = self.catalogs.iter().find(|(m, _)| *m == models) {
+            return Ok(catalog.clone());
+        }
+        let catalog = load_catalog_with(&models, &mut self.store)?;
+        self.catalogs.push((models, catalog.clone()));
         Ok(catalog)
     }
 
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
-        self.catalog = None;
+        self.catalogs.clear();
         let steps: [fn(&mut Engine); 17] = [
             restart::drain,
             workers::run,
@@ -418,9 +437,9 @@ impl Downtime {
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
-    pub(super) fn sentence(&self) -> String {
+    pub(super) fn sentence(&self, zone: &cpd_core::clock::TimeZone) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
-        let at = clock::timestamp(self.since);
+        let at = clock::prose(self.since, zone);
         let secs = self.down.as_seconds_f64();
         if self.overdue {
             format!("The engine was down for {secs:.1} s: {how} at {at}; it was an install's restart that took longer than {PLANNED_RESTART_QUIET_SECS:.0} s.")
@@ -459,11 +478,11 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
     // What the previous engine left, read before this one's `watch-started` hides it.
     let marker = consume_marker_with(clock, home, &mut log);
     let down = Downtime::since_previous_with(clock, &mut store, &lock, lock_existed, marker)?;
-    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
+    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence(&ports.clock.zone()))).unwrap_or_default();
     watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
     if let Some(down) = down {
-        log.line(&down.sentence());
+        log.line(&down.sentence(&ports.clock.zone()));
     }
 
     let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());

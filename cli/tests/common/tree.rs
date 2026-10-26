@@ -331,9 +331,10 @@ fn read_log(home: &Path) -> String {
 /// An `Fx` on fake ports with the config the tree needs (`cpd` is faked: no real binary, no tmux server).
 pub fn fx() -> Fx {
     let fx = Fx::with_ports();
+    fx.env.write_models();
     // The socket is the env's own, the one `Fx::tmux` and `dialogs` start the fake server on.
     fx.env.write_config(&format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
         fx.env.tmux_socket()
     ));
     fx

@@ -2,6 +2,7 @@ import { callCpd, CpdError, isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import { switchModel } from "./retier.ts";
 import { POLICY_SECTION } from "./policy.ts";
+import { TIME_ZONE_SECTION, zoneLine } from "./time.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { type Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 
@@ -37,6 +38,12 @@ export function registerAgentState(host: Host): void {
       r.sectionsReported = true;
       host.deliver("policy section", new CpdError("sections_missing", "this pi gives no systemPromptOptions.sections: the policy is not delivered"));
     }
+  });
+
+  // §15.10: the time-zone line, every role, with or without a policy, built each turn. `policyHandler` reports a missing `sections`.
+  pi.on("before_agent_start", function timeZoneHandler(event) {
+    const sections = event?.systemPromptOptions?.sections;
+    if (isObject(sections)) sections[TIME_ZONE_SECTION] = zoneLine(new Date());
   });
 
   pi.on("input", (event) => {

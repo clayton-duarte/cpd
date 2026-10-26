@@ -21,9 +21,10 @@ pub(crate) const FP: &str = "000000000000000000000000000000000000000000000000000
 /// An `Fx` whose config has `concurrency = 4`.
 pub(crate) fn env() -> Fx {
     let fx = Fx::new();
+    fx.env.write_models();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
-        "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+        "version = 1\nmachine = \"m1\"\nconcurrency = 4\n",
     )
     .unwrap();
     fx

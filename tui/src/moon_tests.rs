@@ -22,7 +22,7 @@ const WAITING_GLYPH: &str = "\u{F1853}";
 const HOLLOW: &str = "\u{E3D5}";
 
 const ALL_DOTS: [Dot; 10] =
-    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working(None), Dot::Fixing, Dot::White, Dot::Blue, Dot::Red, Dot::Yellow, Dot::Magenta];
+    [Dot::Stopped, Dot::Idle, Dot::Waiting, Dot::Working(None), Dot::Fixing, Dot::White, Dot::Cyan, Dot::Red, Dot::Yellow, Dot::Magenta];
 
 fn is_circle_slice(c: char) -> bool {
     ('\u{F0A9E}'..='\u{F0AA5}').contains(&c)
@@ -60,7 +60,7 @@ fn the_frame_wraps_every_28_fiftieths_of_a_second_on_the_shared_clock() {
 fn the_needs_you_dot_is_the_filled_moon_alt_new_and_the_idle_and_stopped_dots_the_hollow_moon_alt_full() {
     assert_eq!(dot_span(Dot::Idle, 0, false).content, HOLLOW);
     assert_eq!(dot_span(Dot::Stopped, 0, false).content, HOLLOW);
-    for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White] {
+    for dot in [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Cyan, Dot::White] {
         assert_eq!(dot_span(dot, 0, false).content, FILLED, "{dot:?}");
     }
     assert_eq!(dot_span(Dot::Idle, 0, false).style, Style::new().fg(Color::White), "idle: 15");

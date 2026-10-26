@@ -35,6 +35,10 @@ interface Session {
 	indicator(): { frames: string[]; intervalMs?: number } | undefined;
 	/** The terminal reports focus in (true) or out (false), through the path an extension sees. */
 	focus(inside: boolean): void;
+	/** Pi restarts the extension: session_shutdown, then session_start with reason reload. */
+	reload(): void;
+	/** Pi ends a session and starts the next with the given reason. */
+	switchSession(reason: string): void;
 	dispose(): void;
 }
 
@@ -79,6 +83,14 @@ async function session(): Promise<Session> {
 		indicator: () => indicator,
 		focus(inside) {
 			for (const handler of inputs) handler(inside ? FOCUS_IN : FOCUS_OUT);
+		},
+		reload() {
+			emit("session_shutdown", { reason: "reload" });
+			emit("session_start", { reason: "reload" });
+		},
+		switchSession(reason) {
+			emit("session_shutdown", { reason });
+			emit("session_start", { reason });
 		},
 		dispose() {
 			emit("session_shutdown", { reason: "quit" });
@@ -126,6 +138,32 @@ test("focus in starts the clock and focus out stops it and renders once", async 
 	} finally { stop(); s.dispose(); clock.uninstall(); }
 });
 
+test("a reload keeps the focus the pane reported", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	let ticks = 0;
+	const stop = onTick(() => { ticks++; });
+	try {
+		s.focus(true);
+		assert.equal(editorFocused(), true, "the pane reported its field focused");
+		assert.equal(clock.countTimers(), 1, "the focused pane runs the shared clock");
+		s.reload();
+		assert.equal(editorFocused(), true, "a reload keeps the focus the pane reported");
+		assert.equal(clock.countTimers(), 1, "the reloaded focused pane runs the shared clock again");
+		clock.tick(80);
+		assert.equal(ticks, 1, "the reloaded focused pane still ticks");
+	} finally { stop(); s.dispose(); clock.uninstall(); }
+});
+
+test("a fresh pane with no report is still unfocused", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		assert.equal(editorFocused(), false, "a fresh pane has no focus report, so it is unfocused");
+		assert.equal(clock.countTimers(), 0, "a fresh unfocused pane owns no clock");
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
 test("the working indicator carries no frames for pi to animate", async () => {
 	const s = await session();
 	try {
@@ -133,4 +171,32 @@ test("the working indicator carries no frames for pi to animate", async () => {
 		assert.ok(indicator, "the extension sets pi's working indicator");
 		assert.deepEqual(indicator!.frames, [], "an empty frame list leaves pi's Loader without an interval");
 	} finally { s.dispose(); }
+});
+
+test("new, resume and fork sessions keep the focus the pane reported and startup does not", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		for (const reason of ["new", "resume", "fork"]) {
+			s.focus(true);
+			s.switchSession(reason);
+			assert.equal(editorFocused(), true, `${reason} keeps the focus`);
+			assert.equal(clock.countTimers(), 1, `${reason} keeps the shared clock running`);
+		}
+		s.switchSession("startup");
+		assert.equal(editorFocused(), false, "startup begins unfocused");
+		assert.equal(clock.countTimers(), 0, "startup owns no clock");
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("a keystroke focuses a pane that reported nothing and asks one render", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		const before = s.renders();
+		s.editor.handleInput("x");
+		assert.equal(editorFocused(), true, "the key is evidence of focus");
+		assert.equal(clock.countTimers(), 1, "the shared clock runs");
+		assert.equal(s.renders() - before, 1, "exactly one render asked");
+	} finally { s.dispose(); clock.uninstall(); }
 });

@@ -10,6 +10,8 @@
 //! - [`popup_args`] and [`open_at`]: the popup, which `cpd tui action logs` and the Inbox click open.
 
 #[cfg(test)]
+mod local_time_tests;
+#[cfg(test)]
 mod margin_tests;
 #[cfg(test)]
 mod popup_tests;
@@ -80,14 +82,14 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
 type Opened = (Store, Duration, read::Follow, Log);
 
 /// The first read: a failure is the command's error, with the screen untouched.
-fn open(args: Args) -> Result<Opened, CpdError> {
+fn open(args: Args, zone: cpd_core::clock::TimeZone) -> Result<Opened, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let first = read::logs(&mut store, RECENT)?;
     let log = match args.event {
-        Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
-        None => Log::new(first.events),
+        Some(id) => Log::at(with_event(&mut store, first.events, id)?, id, zone),
+        None => Log::new(first.events, zone),
     };
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
     let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
@@ -95,7 +97,7 @@ fn open(args: Args) -> Result<Opened, CpdError> {
 }
 
 pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
-    run_view_on(ports, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+    run_view_on(ports, "logs", Capture::Mouse, || open(args, ports.clock.zone()), |ctx, (mut store, poll, follow, log)| {
         show_with(ctx, &mut store, poll, follow, log)
     })
 }
@@ -110,7 +112,7 @@ pub fn run_on<B: Backend, W: Write>(
     terminal: Terminal<B>,
     input: &mut dyn Input,
 ) -> Result<Output, CpdError> {
-    run_view_with(ports, tty, out, terminal, input, "logs", Capture::Mouse, || open(args), |ctx, (mut store, poll, follow, log)| {
+    run_view_with(ports, tty, out, terminal, input, "logs", Capture::Mouse, || open(args, ports.clock.zone()), |ctx, (mut store, poll, follow, log)| {
         show_with(ctx, &mut store, poll, follow, log)
     })
 }

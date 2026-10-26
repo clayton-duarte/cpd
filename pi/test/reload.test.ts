@@ -26,7 +26,7 @@ const install = (f: Fixture, files: Record<string, string> = { "extension.ts": G
   touch(f.adapterDir);
 };
 
-const noticeFor = (reason: string) => `cpd: adapter update not loaded: ${reason}`;
+const noticeFor = (reason: string) => `\x1b[1mφ\x1b[22m: adapter update not loaded: ${reason}`;
 
 /** An extension the fake pi never finishes loading (a top-level await that never settles). */
 const HANGS = "await new Promise(() => {});\nexport default function () {}\n";
@@ -165,7 +165,7 @@ test("a changed adapter directory triggers its command once, with expandPromptTe
   await until(t, f, "the reload", () => f.pi.reloads > 0);
   await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
   assert.deepEqual(f.pi.userMessages, [{ content: `/${RELOAD_COMMAND}`, options: { expandPromptTemplates: true } }]);
-  assert.ok(!f.pi.notices.some((n) => n.includes("cpd: adapter updated")), "no notice on a normal reload");
+  assert.ok(!f.pi.notices.some((n) => n.includes("φ: adapter updated")), "no notice on a normal reload");
   assert.equal(f.pi.reloads, 1);
   const watching = logLines(f).filter((l) => l.includes("poll: watching"));
   assert.equal(watching.length, 2, "the new load starts a poll");
@@ -376,7 +376,7 @@ for (const [name, files, reasonOf] of refused) {
     assert.deepEqual(f.pi.errorNotices, [noticeFor(reason)], "once, not once per poll");
     assert.equal(f.pi.reloads, 0);
     assert.deepEqual(f.pi.userMessages, []);
-    assert.equal(f.pi.notices.includes("cpd: adapter updated, reloading"), false);
+    assert.equal(f.pi.notices.includes("φ: adapter updated, reloading"), false);
     assert.deepEqual(f.argvs().filter((a) => a[0] !== "plan" && a[0] !== "session" && a[0] !== "review"), [], "no cpd command for it");
     assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), []);
     // The same directory, repaired: the new identity is checked again and reloaded once.
@@ -614,7 +614,7 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
-  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("cpd: cannot write the reload log"));
+  const failures = () => f.pi.errorNotices.filter((n) => n.startsWith("\x1b[1mφ\x1b[22m: cannot write the reload log"));
   let beforeReload = -1;
   f.pi.onReload = async () => {
     beforeReload = failures().length; // every line of the first run (watching, changed, stable, validated, trigger, reloading) is written by now

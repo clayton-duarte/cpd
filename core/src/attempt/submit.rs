@@ -70,7 +70,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     // 5 and 6. The checks, in ONE `checks` span (contract §7.7): the Worker's clocks stop from the first check to the end of the
     // merge. A review Job has no checks and no span. Every way out ends the span once, before the error returns.
     let span = if review { None } else { Some(span::open(&mut env, &plan, &id, &job.key)?) };
-    let checked = if review { Ok(()) } else { run_checks(&mut env, &plan, &id, &job, &attempt.job, &root, &base, &sha) };
+    let checked = if review { Ok(()) } else { run_checks(&mut env, &plan, &id, &job, &attempt.job, &attempt.branch, &root, &base, &sha) };
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
     let checked = checked.and_then(|()| match git::run::rev_parse(&root, "HEAD") {
@@ -148,6 +148,7 @@ fn run_checks(
     id: &AttemptId,
     job: &crate::plan::jobs::Job,
     key: &str,
+    branch: &str,
     root: &Path,
     base: &str,
     sha: &str,
@@ -157,13 +158,17 @@ fn run_checks(
         let (lead, repo, pr_base) = lead_branch(conn, plan, key)?;
         Ok((lead, crate::pr::start::tamper_bases(conn, root, &repo, &pr_base)?))
     })?;
-    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, &env.config.host, plan, key))?;
-    git::tamper::check_over(root, &lead, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
+    // A linear Attempt runs on the Lead Branch, so the Lead Branch diff `lead...sha` is empty: its tamper and
+    // red-test diffs compare against the Attempt's `base_sha` instead (hs-d716), as the merge does (hs-d680).
+    let compare = if git::worktree::is_linear(branch, &lead) { base } else { &lead };
+    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, plan, key))?;
+    git::tamper::check_over(root, compare, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
-    kind::guard_tests(env, plan, job, root, &lead, base, sha)?;
-    // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`.
+    kind::guard_tests(env, plan, job, root, compare, base, sha)?;
+    // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`. The test Job's diff
+    // is the Attempt's base for every Attempt (a parallel Attempt's `base_sha` is its branch point too).
     if kind::has_checks(job) {
-        kind::check(env, plan, id, job, &policy, root, &lead, sha)?;
+        kind::check(env, plan, id, job, &policy, root, &lead, base, sha)?;
     }
     Ok(())
 }

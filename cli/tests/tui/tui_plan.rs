@@ -805,10 +805,11 @@ fn the_view_starts_no_subprocess_and_asks_gh_nothing() {
 /// An `Fx` on fake ports whose config is the chart tests' plus the private tmux server (the fake): the Worker pane's tests.
 fn tmux_fx() -> Fx {
     let fx = Fx::with_ports();
+    fx.env.write_models();
     fs::write(
         fx.env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n\
              [events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
             fx.env.tmux_socket()
         ),

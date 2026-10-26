@@ -38,6 +38,7 @@ const MARK_OK: &str = r#"{"ok":true,"marked":true,"engine_pid":1}"#;
 const MARK_FAILS: &str = r#"{"ok":false,"error":{"code":"watch_not_started","message":"No engine has started in this home."}}"#;
 const ENSURE_FAILS: &str = r#"{"ok":false,"error":{"code":"watch_start_failed","message":"The engine did not start."}}"#;
 const NO_VERDICT: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":null}"#;
+const MIGRATED: &str = r#"{"ok":true,"migrated":[]}"#;
 const REFUSING: &str = r#"{"ok":true,"version":"0.0.0","protocol":1,"store":{"opens":false,"refusal":{"code":"store_failed","message":"not a store"}}}"#;
 
 /// What one run of the install left: its exit and its stderr.
@@ -283,11 +284,16 @@ impl Rig {
             engine: Mutex::default(),
         });
         let tag = install.root.join("scripts/tag-version.sh");
+        let built_migrate = {
+            let built = built.clone();
+            move |c: &Call| Path::new(&c.program) == built && c.args == ["config", "--migrate"]
+        };
         let built_version = move |c: &Call| Path::new(&c.program) == built && c.args == ["--version"];
         let runner = (*fakes.runner).clone().with_git(&route);
         let runner = if script.refuse_first { runner.once("cpd", built_version.clone(), Reply::ok(REFUSING)) } else { runner };
         runner
             .on("cpd", built_version, Reply::ok(NO_VERDICT))
+            .on("cpd", built_migrate, Reply::ok(MIGRATED))
             .on("tag-version.sh", move |c| Path::new(&c.program) == tag, script.tag)
             .route("tmux", tmux.clone())
             .route("cpd", new_cpd);

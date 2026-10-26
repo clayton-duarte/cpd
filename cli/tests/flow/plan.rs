@@ -1036,7 +1036,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A PR appended after the lock is not reviewed: the review stays current.
     let web = fx.keyed_repo("web");
-    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--plan", "pay"]).ok();
+    fx.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--title", "Change the PR", "--base", "main", "--shape", "config", "--no-needs", "--plan", "pay"]).ok();
     // Its stub drafts are drafts of the review's kind: cancelled, they are none, and the review stays current.
     assert_eq!(inproc::show(&fx, "pay")["review"]["current"], false, "a stub draft is a draft the review did not cover");
     fx.cpd(&["job", "cancel", "web-config", "--reason", "a stub of the template", "--plan", "pay"]).ok();
@@ -1772,12 +1772,10 @@ fn archive_refuses_a_lead_in_the_chat_slot_before_closing_any_pane() {
 
 // ---------- stub drafts (hs-d241, R1; commands.md §4.5, §4.6, §4.8, §5.1, §5.2) ----------
 
-/// What `job edit --tier` checks: the `[tiers]` of the config and a fake pi install whose Tier catalog
+/// What `job edit --tier` checks: the `[model]` of the machine policy and a fake pi install whose Tier catalog
 /// is cached, as in `cli/tests/job.rs`, so no node runs.
 fn seed_tiers(env: &TestEnv) {
-    let config_path = env.cpd_home().join("config.toml");
-    let config = fs::read_to_string(&config_path).unwrap();
-    fs::write(&config_path, format!("{config}[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n")).unwrap();
+    env.write_models();
     env.fake_pi("exit 0");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();

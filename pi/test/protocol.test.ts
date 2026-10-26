@@ -27,11 +27,12 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
 });
 
-test("hs-d634: the protocol is 14 and the incident kinds are known", () => {
-  assert.equal(PROTOCOL, 14); // hs-d634 raised it from 13 for incident-started and incident-ended
-  for (const kind of ["incident-started", "incident-ended"]) {
+test("hs-d634, pro-d8: the protocol is 15, the incident kinds and mcp-attached are known", () => {
+  assert.equal(PROTOCOL, 15); // hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
+  for (const kind of ["incident-started", "incident-ended", "mcp-attached"]) {
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
   }
+  assert.equal((LEAD_MESSAGES as Record<string, unknown>)["mcp-attached"], undefined, "mcp-attached is not a LEAD_MESSAGES entry: delivery none");
   assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
   // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-resumed"], undefined, "session-resumed is not a LEAD_MESSAGES entry");

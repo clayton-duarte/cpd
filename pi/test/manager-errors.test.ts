@@ -159,7 +159,7 @@ async function outcome(role: Role) {
 test("a Manager's adapter error is still delivered with no turn", async () => {
   const manager = await outcome("manager");
   assert.equal(manager.errors.length, 1);
-  assert.match(manager.errors[0]!.message.content, /^cpd adapter: events follow: invalid_event: /);
+  assert.match(manager.errors[0]!.message.content, /^φ adapter: events follow: invalid_event: /);
   assert.deepEqual(manager.errors[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.deepEqual(manager.reports, [], "a Manager reports to no one");
   // the role decides: the same error of a Lead is reported and not delivered
@@ -171,7 +171,7 @@ test("a Manager's adapter error is still delivered with no turn", async () => {
 test("a Worker's adapter error is still delivered with no turn", async () => {
   const worker = await outcome("worker");
   assert.equal(worker.errors.length, 1);
-  assert.match(worker.errors[0]!.message.content, /^cpd adapter: events follow: invalid_event: /);
+  assert.match(worker.errors[0]!.message.content, /^φ adapter: events follow: invalid_event: /);
   assert.deepEqual(worker.errors[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.deepEqual(worker.reports, [], "a Worker reports to no one");
   const lead = await outcome("lead");

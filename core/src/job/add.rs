@@ -67,7 +67,12 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     }
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
-        env.check_tier(tier)?;
+        let prs = env.store.read(|conn| {
+            super::plan_phase(conn, &plan)?;
+            load_prs(conn, &plan)
+        })?;
+        let pr = args.pr.select(&plan, &prs)?.key.clone();
+        env.check_tier(&plan, &args.key, Some(&pr), tier)?;
     }
     let open_tier = env.config.open_tier;
     let wanted = Wanted {

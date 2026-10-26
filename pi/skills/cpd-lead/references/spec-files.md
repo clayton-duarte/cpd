@@ -56,7 +56,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H3` or `S0`–`S3` only**; the ladder of a Worker ends at `S3`. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku), `G` (gemini, auxiliary only); effort 0–5, or `GX` for G. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H0`–`H4` or `S0`–`S3` only** (pro-d53); the ladder of a Worker ends at `S3`. `cpd tiers` prints the efforts each model accepts; the catalog can cut further. G (written `GX`, no effort levels) is never a Job's Tier: it is for auxiliary one-shot pi runs only (the distiller, title writer, and similar helpers), never a Worker's, Lead's or Manager's.
 
 | Work | Tier | Why |
 |---|---|---|
@@ -87,13 +87,13 @@ A PR that changes behaviour has a test Job and an implementation Job after its d
   run   = "<run the named tests, {{ tests }}: exit non-zero when one fails>"
   ```
 
-  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is refused `repo_unconfigured` and one with no `[test-commands]` table is refused `tests_unconfigured`: a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
+  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no policy file is fine (it inherits the owner's policy); a `tdd` PR that needs `[test-commands]` is refused `tests_unconfigured`: a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
 
 ## Research Jobs
 
 Grounding that needs more than reading (a large codebase survey, comparing libraries, checking an API against its source) goes to a Worker as an ordinary Job.
 
 - Spec: the question as `goal`; where to look and what a good answer contains as `context`; `touches` is the one Markdown file for the findings (for example `docs/research/<topic>.md`); `acceptance` says what the file must answer and cite. Tier `S1` to `S3`.
-- Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first and add the follow-up Jobs as drafts right after the lock (`job add --draft`), listing them in its `context`. When it is Merged (`job-merged`), revise the drafts with what it found, then start them with `cpd_plan_review` (with a `title`). Tell the User what the batch holds.
+- Jobs run only after the lock, so a research Job cannot ground the Plan that contains it. Put it in the Plan first and add the follow-up Jobs as drafts right after the lock (`job add --draft`), listing them in its `context`. When it is Merged (`job-merged`), revise the drafts with what it found, then start them with `cpd_plan_review` (with a `title`). Tell the User what the batch holds. A follow-up that is its own PR is added right after the lock with `cpd pr add <key> --repo <path> --title "<title>" --needs <research-pr>` so it waits on the research PR's merge, with its stub drafts; the research findings are read from main when it starts.
 - A research Job obeys the [bounded commands](#bounded-commands): it commits its findings file early and measures only under `timeout`, with real data, never a synthetic benchmark.
 - If the question is cheap to answer by reading, read instead.

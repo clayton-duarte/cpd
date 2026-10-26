@@ -4,9 +4,9 @@ import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`.
+ * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`, 14 is `incident-started` and `incident-ended`, 15 is `mcp-attached`.
  */
-export const PROTOCOL = 14;
+export const PROTOCOL = 15;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
@@ -20,7 +20,7 @@ export const KINDS = [
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "session-resumed", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-base-changed", "pr-opened", "pr-merged",
-  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "error",
+  "watch-started", "watch-stopped", "review-opened", "review-closed", "incident-started", "incident-plans", "incident-ended", "error", "mcp-attached",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 
@@ -33,6 +33,7 @@ type Needed = {
   "session-renamed": { name: string };
   "attempt-nudge": { prompt: string };
   "session-message": { text: string; from: string | null };
+  "mcp-attached": { name: string; server: Record<string, unknown> };
 };
 
 type Base = {
@@ -59,6 +60,7 @@ const NEEDED: { [K in keyof Needed]: readonly (keyof Needed[K] & string)[] } = {
   "session-renamed": ["name"],
   "attempt-nudge": ["prompt"],
   "session-message": ["text"],
+  "mcp-attached": ["name"],
 };
 
 const NULLABLE = ["context", "plan", "job", "attempt", "session"] as const;
@@ -90,6 +92,7 @@ export function parseLine(text: string): Line {
   if (!(KINDS as readonly string[]).includes(json.kind)) return { type: "unknown-kind", id }; // well-formed, but not a kind this adapter acts on
   const kind = json.kind as Kind;
   for (const f of (NEEDED as Partial<Record<string, readonly string[]>>)[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
+  if (kind === "mcp-attached" && !isObject(json.data.server)) return bad("mcp-attached: `data.server` is not an object");
   if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };
 }

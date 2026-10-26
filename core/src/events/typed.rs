@@ -245,8 +245,8 @@ impl NewEvent {
         )
     }
 
-    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, needs: impl Serialize, appended: bool) -> NewEvent {
-        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "needs": needs, "appended": appended}))
+    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, head_ref: Option<&str>, author: Option<&str>, needs: impl Serialize, appended: bool) -> NewEvent {
+        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "head_ref": head_ref, "author": author, "needs": needs, "appended": appended}))
     }
 
     pub fn pr_edited(text: impl Into<String>, pr: impl Serialize, fields: impl Serialize) -> NewEvent {
@@ -364,6 +364,10 @@ impl NewEvent {
 
     pub fn session_retiered(text: impl Into<String>, from: &str, to: &str) -> NewEvent {
         make(Kind::SessionRetiered, text, json!({"from": from, "to": to}))
+    }
+
+    pub fn mcp_attached(text: impl Into<String>, name: &str, server: impl Serialize) -> NewEvent {
+        make(Kind::McpAttached, text, json!({"name": name, "server": server}))
     }
 
     pub fn session_asleep(text: impl Into<String>) -> NewEvent {
@@ -548,7 +552,7 @@ mod tests {
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
-            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, [s], b)],
+            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, None, None, [s], b)],
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
@@ -568,6 +572,7 @@ mod tests {
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
+            Kind::McpAttached => vec![NewEvent::mcp_attached(T, s, json!({}))],
             Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
             Kind::SessionResumed => vec![NewEvent::session_resumed(T)],
             Kind::PlanDeleted => vec![NewEvent::plan_deleted(T, &Counts::default())],

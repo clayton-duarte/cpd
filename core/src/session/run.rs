@@ -385,7 +385,8 @@ fn record_file(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, Cpd
 /// input while a fork waits for a source that can never become idle.
 fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, CpdError> {
     // The row's current Tier, also on a resume (hs-d506): pi uses `--model` instead of the model its file recorded.
-    let (model, level) = row::model_and_level(&env.config, &row.id, &row.tier)?;
+    let models = row::models_of(env, row)?;
+    let (model, level) = row::model_and_level(&models, &row.id, &row.tier)?;
     let model = format!("{model}:{level}");
     let ports = env.ports.clone();
     if let Some(file) = existing_file(dirs, row) {

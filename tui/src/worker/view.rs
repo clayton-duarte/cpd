@@ -4,7 +4,7 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::cells;
@@ -50,7 +50,9 @@ impl View {
         f.render_widget(Paragraph::new(header), top);
         self.body.draw(f, body);
         let line = if self.note.is_empty() {
-            Line::styled(format!(" {}", self.status), palette::muted_text())
+            let mut spans = vec![Span::styled(" ".to_owned(), palette::muted_text())];
+            spans.extend(crate::phi::spans(&self.status, palette::muted_text()));
+            Line::from(spans)
         } else {
             Line::styled(format!(" {}", self.note), palette::error())
         };

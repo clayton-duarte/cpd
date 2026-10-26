@@ -30,6 +30,7 @@ test("start-up runs §15.2's steps in order and follows from the cursor", async 
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
+  await f.trackerListed();
 
   assert.deepEqual(f.argvs(), [
     ["session", "show", ID],
@@ -118,7 +119,7 @@ test("a failing session show is delivered as an error and nothing else starts", 
   await f.quiet();
   assert.deepEqual(f.argvs(), [["session", "show", ID]], "a refusal is permanent: not retried");
   assert.equal(f.pi.sent.length, 1, "reported once");
-  assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: session_not_found: No such Session.");
+  assert.equal(f.pi.sent[0]!.message.content, "φ adapter: session show: session_not_found: No such Session.");
   assert.equal((f.pi.sent[0]!.message.details as any).code, "session_not_found");
 });
 
@@ -130,10 +131,11 @@ test("a session show that fails once then succeeds starts the adapter normally (
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: store_busy: Store busy.");
+  assert.equal(f.pi.sent[0]!.message.content, "φ adapter: session show: store_busy: Store busy.");
   await waitFor("a retry", () => f.argvs().filter((a) => a[1] === "show").length >= 3);
   f.respond("session-show", shown());
   await waitFor("the follower", () => f.follows().length > 0);
+  await f.trackerListed();
   assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
   assert.deepEqual(f.argvs().slice(-3), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"], ["review", "list", "--session", ID]]);
   assert.equal(f.pi.sessionName, "the lead");
@@ -171,7 +173,7 @@ test("stdout that is not JSON is an error with a code", async (t) => {
   f.respond("session-show", "boom, not json");
   f.load();
   await f.pi.fire("session_start");
-  assert.match(f.pi.sent[0]!.message.content, /^cpd adapter: session show: bad_output: /);
+  assert.match(f.pi.sent[0]!.message.content, /^φ adapter: session show: bad_output: /);
 });
 
 test("start-up: open Escalations of the Plan block the Lead before the first state", async (t) => {
@@ -181,7 +183,7 @@ test("start-up: open Escalations of the Plan block the Lead before the first sta
   f.load();
   await f.pi.fire("session_start");
   await waitFor("blocked", () => stateCalls(f).length === 2);
-  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:φ: Worker question"]);
 });
 
 test("a Worker does not read the Plan", async (t) => {

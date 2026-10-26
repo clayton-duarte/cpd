@@ -55,10 +55,11 @@ fn fx() -> Fx {
 
 /// The config the views read and the pull request `o/r#7` in `env`'s store.
 fn configure(env: &TestEnv) {
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"m1\"\nconcurrency = 4\n\
              [tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),

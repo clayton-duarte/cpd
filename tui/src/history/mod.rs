@@ -84,9 +84,9 @@ fn open(args: Args) -> Result<History, CpdError> {
 
 /// The view's first frame for the Session `name` over the text of its file, drawn on `f` as `run` draws it (the view starts at
 /// the end). Tests draw it on a `TestBackend` instead of running the view in a terminal.
-pub fn draw_history(name: &str, archived: bool, text: &str, f: &mut ratatui::Frame) {
+pub fn draw_history(name: &str, archived: bool, text: &str, zone: &cpd_core::clock::TimeZone, f: &mut ratatui::Frame) {
     let mut view = View::new(name, archived);
-    view.set_lines(render(text));
+    view.set_lines(render(text, zone));
     view.draw(f);
 }
 
@@ -117,7 +117,7 @@ const IDLE: Duration = Duration::from_secs(60);
 /// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
 pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
     let mut view = View::new(name, archived);
-    view.set_lines(render(text));
+    view.set_lines(render(text, &ctx.ports.clock.zone()));
     loop {
         ctx.draw(|f| view.draw(f))?;
         while !ctx.input.poll(IDLE)? {}
