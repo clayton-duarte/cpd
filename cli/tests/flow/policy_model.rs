@@ -160,6 +160,8 @@ const BIFROST: &str = "[model]\nO = \"bifrost/vertex/o\"\nS = \"bifrost/vertex/s
 fn assert_mixed(error: &Value, file: &str) {
     assert_eq!(error["details"]["file"], file, "{error}");
     assert_eq!(error["details"]["key"], "model", "{error}");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("bifrost") && message.contains("github-copilot"), "the message names the providers: {error}");
 }
 
 #[test]
@@ -347,5 +349,6 @@ fn m7_no_selector_is_the_machine_layer() {
 #[test]
 fn m7_repo_without_owner_is_usage() {
     let fx = tiers_world();
+    tiers(&fx, &["--owner", "acme", "--repo", "r1"]).ok();
     refused(&tiers(&fx, &["--repo", "r1"]), "usage", 2);
 }
