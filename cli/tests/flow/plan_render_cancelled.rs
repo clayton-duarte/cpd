@@ -166,5 +166,7 @@ fn summary_counts_leave_cancelled_out() {
     assert_eq!(before["counts"]["cancelled"], 2, "{before}");
     assert_eq!(before["counts"]["queued"], 1, "{before}");
     let summary = fs::read_to_string(out["summary"].as_str().unwrap()).unwrap();
-    assert!(!summary.contains("o1") && !summary.contains("gone"), "the summary does not count them: {summary}");
+    // the "Full plan (<path>)" line holds a random temp dir that may contain "o1"; only the other lines are checked
+    let body: String = summary.lines().filter(|l| !l.starts_with("Full plan (")).collect::<Vec<_>>().join("\n");
+    assert!(!body.contains("o1") && !body.contains("gone"), "the summary does not count them: {summary}");
 }
