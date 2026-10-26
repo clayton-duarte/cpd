@@ -2577,7 +2577,7 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Job pill text (icon, key, tier, `aN`) | part of the pill | inherits inversion | pill |
 | Selected Job pill | yes | block: 4 inverted, caps 4 | `palette::pill_focus()` |
 | Chart lines (`─`, `│`, junctions) | no | fg 8 | palette: muted |
-| PR box border and its `┬` exit and connector | no | fg 8 | palette: muted |
+| PR box border and its `┬` exit, `┴` landing and connector | no | fg 8 | palette: muted |
 | PR box title: the key (bold), ` · repo 󱦰 base · ` | no | fg 7 | palette: read-only text |
 | PR box title: `#12` | yes (inside the link) | fg 15 | palette: clickable text |
 | PR box title: state `open` | yes (the link) | fg 15; fg 11 when the PR is ready to merge | palette: clickable text, bright meaning |
