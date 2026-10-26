@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::fx::Fx as Kit;
-use common::{Run, TestEnv};
+use common::{Run, TestEnv, empty_comments};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -1493,17 +1493,6 @@ fn viewer(node: String, did_author: bool, requested: bool) -> String {
 /// 812, the Plan's pull request.
 pub(super) fn pay(state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
     node("acme/pay", 812, state, review, rollup)
-}
-
-/// The comments read's answer when a test scripted none: an empty read (updatedAt `U1`) of every alias the query names.
-fn empty_comments(query: &str) -> String {
-    let n = query.matches(": repository(").count();
-    let empty = json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
-    let mut data = json!({"viewer": {"login": "me"}});
-    for i in 0..n {
-        data[format!("p{i}")] = json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
-    }
-    json!({"data": data}).to_string()
 }
 
 const RESET: &str = "2026-10-20T11:00:00Z";

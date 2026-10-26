@@ -133,7 +133,7 @@ fn view_prints_the_checks_reviews_comments_and_inline_comments() {
                 {"name": "ci/old", "conclusion": "SUCCESS"}],
             "reviews": [{"id": "PRR_1", "author": "reviewer", "state": "CHANGES_REQUESTED", "body": "Please add a test."}],
             "comments": [{"id": "IC_1", "author": "reviewer", "body": "Thanks for the fix."}],
-            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}]})
+            "inline_comments": [{"id": "1893", "author": "reviewer", "path": "src/payout.rs", "body": "This retry never backs off."}], "feedback": null})
     );
     let gh = fx.gh_calls();
     assert_eq!(gh[0][..3], ["pr", "view", "812"]);
