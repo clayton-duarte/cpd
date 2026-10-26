@@ -24,3 +24,20 @@ export function localDateTime(at: string): string {
   const { date, time } = localParts(at);
   return `${date} ${time}`;
 }
+
+/** Stub: the PROSE FORMAT `YYYY-MM-DD HH:MM ZZZ`. */
+export function proseTime(at: string, _timeZone?: string): string {
+  return localDateTime(at);
+}
+
+/** Stub: `HH:MM ZZZ`. */
+export function zoneTime(at: string, _timeZone?: string): string {
+  return localTime(at);
+}
+
+/** Stub: the system prompt line naming the zone. */
+export function zoneLine(_now: Date, _timeZone?: string): string {
+  return "";
+}
+
+export const TIME_ZONE_SECTION = "cpd-time-zone";

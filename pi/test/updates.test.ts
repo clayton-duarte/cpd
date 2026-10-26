@@ -27,7 +27,7 @@ test("cursor: registered_event, then the greatest event of this Session's cpd-co
 
 const SEQ0 = 40;
 const record = (n: number, over: Partial<ContextRecord> = {}): ContextRecord => ({
-  seq: SEQ0 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}`, ...over,
+  seq: SEQ0 + n, id: `hs-n${n}`, kind: "note", at: "(2026-10-17 UTC)T09:00:00.000Z", by: OTHER, text: `note ${n}`, ...over,
 });
 const recordEvent = (n: number): RecordEvent => ({ event: 200 + n, record: `hs-n${n}`, seq: SEQ0 + n });
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
@@ -40,27 +40,27 @@ test("message: 1 record, in full, with its date; answers and supersedes name the
   const m = contextUpdate("ctx", ID, [recordEvent(1)], [record(1)])!;
   assert.equal(m.customType, "cpd-context");
   assert.equal(m.display, true);
-  assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 note (2026-10-17): note 1");
+  assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 note (2026-10-17 UTC): note 1");
   assert.deepEqual(m.details, { event: 201, delivered_to: ID, records: ["hs-n1"], plan_events: 0, plans_pending: 0 });
 
   const both = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [
     record(1, { id: "hs-n1", kind: "answer", text: "Yes.", question: "hs-q8" }),
     record(2, { kind: "decision", text: "One table.", supersedes: "hs-d12" }),
   ])!;
-  assert.deepEqual(both.content.split("\n").slice(1), ["- hs-n1 answer (2026-10-17): Yes. Answers hs-q8.", "- hs-n2 decision (2026-10-17): One table. Supersedes hs-d12."]);
+  assert.deepEqual(both.content.split("\n").slice(1), ["- hs-n1 answer (2026-10-17 UTC): Yes. Answers hs-q8.", "- hs-n2 decision (2026-10-17 UTC): One table. Supersedes hs-d12."]);
 });
 
 test("message: a brief is shown short: its first line and its Plan, never the rest", () => {
   const brief = record(1, { id: "hs-b1", kind: "brief", text: "Retry payouts.\nSecond line, with detail.", plan: "pay" });
   const m = contextUpdate("ctx", ID, [recordEvent(1)], [{ ...brief, id: "hs-n1" }])!;
-  assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 brief (2026-10-17): Retry payouts. Plan pay.");
+  assert.equal(m.content, "Context ctx: 1 new records since your last turn.\n- hs-n1 brief (2026-10-17 UTC): Retry payouts. Plan pay.");
   assert.ok(!m.content.includes("detail"));
   const noPlan = contextUpdate("ctx", ID, [recordEvent(1)], [{ ...brief, id: "hs-n1", plan: undefined }])!;
-  assert.equal(noPlan.content.split("\n")[1], "- hs-n1 brief (2026-10-17): Retry payouts.");
+  assert.equal(noPlan.content.split("\n")[1], "- hs-n1 brief (2026-10-17 UTC): Retry payouts.");
 });
 
 test("parseRecords: a record's plan is its Plan id", () => {
-  const raw = { seq: 1, id: "hs-b1", kind: "brief", at: "2026-10-17T09:00:00.000Z", by: { session: null, plan: null }, text: "Retry.", short: true, plan: { id: "pay", machine: "hs" } };
+  const raw = { seq: 1, id: "hs-b1", kind: "brief", at: "(2026-10-17 UTC)T09:00:00.000Z", by: { session: null, plan: null }, text: "Retry.", short: true, plan: { id: "pay", machine: "hs" } };
   assert.equal(parseRecords({ records: [raw] })[0]!.plan, "pay");
   assert.equal("plan" in parseRecords({ records: [{ ...raw, plan: undefined }] })[0]!, false);
 });
@@ -76,8 +76,8 @@ test("message: 25 records list 20 and name the 5 more with the seq before the fi
   const lines = m.content.split("\n");
   assert.equal(lines[0], "Context ctx: 25 new records since your last turn.");
   assert.equal(lines.length, 1 + 20 + 1);
-  assert.equal(lines[1], "- hs-n1 note (2026-10-17): note 1");
-  assert.equal(lines[20], "- hs-n20 note (2026-10-17): note 20");
+  assert.equal(lines[1], "- hs-n1 note (2026-10-17 UTC): note 1");
+  assert.equal(lines[20], "- hs-n20 note (2026-10-17 UTC): note 20");
   assert.equal(lines[21], `and 5 more: cpd context show --context ctx --since ${SEQ0 + 20}`);
   assert.equal((m.details as any).event, 225);
   assert.equal((m.details as any).records.length, 25);
@@ -129,7 +129,7 @@ test("a Manager's run with 3 new records by others gets one cpd-context message,
   const m = (result as any).message;
   assert.equal(m.customType, "cpd-context");
   assert.equal(m.display, true);
-  assert.equal(m.content, ["Context ctx: 3 new records since your last turn.", ...range(3).map((n) => `- hs-n${n} note (2026-10-17): note ${n}`)].join("\n"));
+  assert.equal(m.content, ["Context ctx: 3 new records since your last turn.", ...range(3).map((n) => `- hs-n${n} note (2026-10-17 UTC): note ${n}`)].join("\n"));
   assert.equal(m.details.event, 204);
   assert.equal(m.details.delivered_to, ID);
   assert.deepEqual(m.details.records, ["hs-n1", "hs-n2", "hs-n3"]);
@@ -374,7 +374,7 @@ test("a Lead gets one cpd-context message with new decisions, board posts and op
       "- hs-n4: Cut the wake.",
       "",
       "Board:",
-      "- User (2026-10-21 21:00): PR #207 opened",
+      "- User (2026-10-21 21:00 +05:30): PR #207 opened",
       "",
       "PRs:",
       "- PR api opened: https://github.com/o/r/pull/211",
@@ -417,7 +417,7 @@ test("board posts are taken at turn start and shown in full", async (t) => {
   f.respond("board-take", take({ id: 1, from_session: null, text: long }, { id: 2, from_session: null, text: "Second post" }));
   const m = await beforeTurn(f);
   assert.equal(m.content.split("\n")[0], "Context ctx: 2 board posts");
-  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21 21:00): ${long}`, "- User (2026-10-21 21:00): Second post"]);
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21 21:00 +05:30): ${long}`, "- User (2026-10-21 21:00 +05:30): Second post"]);
   assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
   assert.deepEqual(f.pi.sent, [], "a post never starts a turn");
 });
@@ -504,4 +504,23 @@ test("the Manager's digest counts engine errors by code", async (t) => {
   const m = await beforeTurn(f);
   assert.equal(m.content, "Errors: 3 (gh_failed x2, pr_start_failed x1): cpd events list --kind error --since 100");
   assert.equal(m.details.event, 403);
+});
+
+test("record lines are labelled UTC", () => {
+  const at = "2026-10-26T03:03:34.352Z";
+  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [
+    record(1, { id: "pro-d41", kind: "decision", at, text: "One table." }),
+    record(2, { id: "pro-b1", kind: "brief", at, text: "Retry payouts." }),
+  ])!;
+  assert.deepEqual(m.content.split("\n").slice(1), ["- pro-d41 decision (2026-10-26 UTC): One table.", "- pro-b1 brief (2026-10-26 UTC): Retry payouts."]);
+});
+
+test("board posts show the local date, time and zone", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("board-take", take({ id: 1, from_session: null, text: "hello", at: "2026-10-25T22:29:00.000Z" }));
+  const m = await beforeTurn(f);
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", "- User (2026-10-26 03:59 +05:30): hello"]);
 });
