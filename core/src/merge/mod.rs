@@ -76,7 +76,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("status", target.status));
     }
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &ctx.config.host, &target)? };
+    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
@@ -135,7 +135,7 @@ fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::HostName, target: &Attempt) -> Result<Stepped, CpdError> {
+fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -206,7 +206,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::
             crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
-        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, host, &target.plan, target.job.as_str()))?;
+        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
         // A linear Attempt diffs `base_sha...submitted_sha`; every other Attempt `old...branch`.
         let (lead_compare, diff_base, diff_head): (&str, &str, &str) =
             if linear { (base_sha.as_str(), base_sha.as_str(), submitted) } else { (&old, &old, &target.branch) };

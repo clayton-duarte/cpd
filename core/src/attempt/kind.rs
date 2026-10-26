@@ -57,7 +57,7 @@ pub(super) fn guard_tests(env: &mut Env, plan: &PlanId, job: &Job, root: &Path, 
 fn unconfigured(job: &str) -> CpdError {
     CpdError::new(
         ErrorCode::TestsUnconfigured,
-        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/repos/<owner>/<name>.toml; the file may not exist yet); a PR with no behaviour is made with --shape docs or --shape config.",
+        "The repo's policy has no [test-commands], so the tests of this Job cannot be checked. The Lead adds the table to the repo's policy file ($CPD_HOME/policy/<owner>/<repo>.toml; the file may not exist yet); a PR with no behaviour is made with --shape docs or --shape config.",
     )
     .with("job", job)
 }
