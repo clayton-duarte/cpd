@@ -94,11 +94,11 @@ pub(super) fn live(config_extra: &str) -> Live {
 }
 
 impl Live {
-    fn runner(&self) -> FakeRunner {
+    pub(super) fn runner(&self) -> FakeRunner {
         (*self.fx.fakes.runner).clone()
     }
 
-    fn fixture(&self, sql: &str) {
+    pub(super) fn fixture(&self, sql: &str) {
         fixture(&self.fx.env, sql);
     }
 
@@ -133,7 +133,7 @@ impl Live {
         self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/repo"])
     }
 
-    fn remote(&self, branch: &str) -> String {
+    pub(super) fn remote(&self, branch: &str) -> String {
         self.fx.git(&self.origin, &["rev-parse", &format!("refs/heads/{branch}")])
     }
 
@@ -161,7 +161,7 @@ impl Live {
     }
 
     /// What the Gates noted: `<command> head=<sha>`, one per run of a hook, in order.
-    fn gate_runs(&self) -> Vec<String> {
+    pub(super) fn gate_runs(&self) -> Vec<String> {
         self.hooks.runs.lock().unwrap().iter().map(|r| format!("{} head={}", r.command, r.head)).collect()
     }
 
@@ -192,12 +192,12 @@ impl Live {
     }
 
     /// `gh`'s calls that are not the poll's or a lookup's: `pr list`, `pr create`.
-    fn gh_pr_calls(&self) -> Vec<Vec<String>> {
+    pub(super) fn gh_pr_calls(&self) -> Vec<Vec<String>> {
         self.fx.calls("gh").into_iter().map(|c| c.args).filter(|a| a[0] == "pr").collect()
     }
 
     /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
-    fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
+    pub(super) fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
         store(&self.fx.env)
             .read(|c| {
                 let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
@@ -309,7 +309,7 @@ impl Live {
 }
 
 /// What `attempt submit` answered the Worker.
-fn submit(live: &Live, id: &str) -> Value {
+pub(super) fn submit(live: &Live, id: &str) -> Value {
     // The environment of the Worker's window: its Plan and its Attempt.
     let r = live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json();
     r
@@ -332,7 +332,7 @@ fn merge_the_base_and_submit(live: &Live, id: &str) -> Value {
 /// PR `repo` as `pr start` leaves it, with a bare `origin` that holds `main` and the Lead Branch as the lock pushed it, the policy
 /// both Gates `local` (`[gate] merge` and `pr`, contract §8.3) with a `pre-commit` and a `pre-merge` hook that note the commit they run on, Job `api` merged (its commit `api.txt` is on
 /// the Lead Branch, **not pushed**), and the PR's `open` Job `open-repo` queued. `gh` is the test's to script.
-fn open_live() -> Live {
+pub(super) fn open_live() -> Live {
     let live = live("");
     live.fx.env.owner_policy("acme", "[gate]\nmerge = \"local\"\npr = \"local\"\n");
     let merged = live.commit(&live.lead, "api.txt", "api\n", "api");
@@ -345,7 +345,7 @@ fn open_live() -> Live {
 }
 
 /// The same with the pull request already open (812, as `pr open` leaves it), the Plan in `deploy`, and no `open` Job.
-fn open_pr_live() -> Live {
+pub(super) fn open_pr_live() -> Live {
     let live = open_live();
     live.fixture(&format!(
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'opened', cancel_requested_at = 't' WHERE key = 'open-repo';

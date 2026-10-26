@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 // ---------- fixtures ----------
 
-fn store(env: &TestEnv) -> Store {
+pub(super) fn store(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
 }
 
@@ -31,7 +31,7 @@ fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
 }
 
 /// The pull request row (`acme/<repo>#<number>`, migration 5) that a PR in status `open` (or `merged`) points to.
-fn pull_request(repo: &str, number: i64, state: &str) -> String {
+pub(super) fn pull_request(repo: &str, number: i64, state: &str) -> String {
     let merged = if state == "merged" { "'t'" } else { "NULL" };
     format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
@@ -40,7 +40,7 @@ fn pull_request(repo: &str, number: i64, state: &str) -> String {
 }
 
 /// Runs `sql` in one write transaction.
-fn fixture(env: &TestEnv, sql: &str) {
+pub(super) fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
@@ -48,7 +48,7 @@ fn fixture(env: &TestEnv, sql: &str) {
 const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[0,1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
 
 /// `config.toml`, a fake pi install, and its Tier catalog in the cache.
-fn setup(env: &TestEnv) {
+pub(super) fn setup(env: &TestEnv) {
     env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
@@ -76,7 +76,7 @@ fn setup(env: &TestEnv) {
 }
 
 /// Plan `id` in `phase`, with its Lead session, moved there one phase at a time.
-fn plan(env: &TestEnv, id: &str, phase: &str) {
+pub(super) fn plan(env: &TestEnv, id: &str, phase: &str) {
     // (phase, what else the Plan gets, its PR's status and what else the PR gets)
     const STEPS: [(&str, &str, &str, &str); 4] = [
         ("plan", "", "waiting", ""),
@@ -118,11 +118,11 @@ fn write_spec(env: &TestEnv, name: &str, text: &str) -> String {
     path.to_str().unwrap().to_owned()
 }
 
-fn spec_file(env: &TestEnv) -> String {
+pub(super) fn spec_file(env: &TestEnv) -> String {
     write_spec(env, "spec.json", &spec_json().to_string())
 }
 
-fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]) -> Run {
+pub(super) fn job_add(fx: &Fx, plan: &str, key: &str, tier: &str, needs: &[&str]) -> Run {
     let spec = spec_file(&fx.env);
     let title = format!("Title of {key}");
     let needs = needs.join(",");
@@ -140,11 +140,11 @@ fn job(env: &Fx, args: &[&str], plan: &str) -> Run {
     env.cpd(&all)
 }
 
-fn events(fx: &Fx, kind: &str) -> Vec<Value> {
+pub(super) fn events(fx: &Fx, kind: &str) -> Vec<Value> {
     fx.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
-fn count(env: &TestEnv, table: &str) -> i64 {
+pub(super) fn count(env: &TestEnv, table: &str) -> i64 {
     env.query(&format!("SELECT count(*) FROM {table}"))
 }
 
@@ -158,7 +158,7 @@ fn drafted(fx: &Fx) {
 
 /// What `plan lock` does to the Jobs: phase `dispatch`, every draft `queued`
 /// with its Locked-Job fingerprint.
-fn lock(env: &TestEnv, plan_id: &str) {
+pub(super) fn lock(env: &TestEnv, plan_id: &str) {
     let id = PlanId::parse(plan_id).unwrap();
     let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
     let mut sql = format!(
@@ -1450,7 +1450,7 @@ fn list_and_show_carry_urgent() {
 // ---------- kinds (contract §2.2 "Job kinds"; commands.md §5.1, §5.2, §5.6, §5.7) ----------
 
 /// A Spec file for a `test` Job: the Spec of every Job and the named tests with the files that hold them.
-fn test_spec_file(env: &TestEnv, name: &str, tests: Value, files: Value) -> String {
+pub(super) fn test_spec_file(env: &TestEnv, name: &str, tests: Value, files: Value) -> String {
     let mut spec = spec_json();
     spec["tests"] = tests;
     spec["test_files"] = files;
@@ -1458,12 +1458,12 @@ fn test_spec_file(env: &TestEnv, name: &str, tests: Value, files: Value) -> Stri
 }
 
 /// `job add <key> --kind <kind> --spec <spec>` into PR `pr` of Plan `plan`, a draft, with the Tier S2.
-fn add_kind(fx: &Fx, plan: &str, key: &str, kind: &str, spec: &str, pr: &str) -> Run {
+pub(super) fn add_kind(fx: &Fx, plan: &str, key: &str, kind: &str, spec: &str, pr: &str) -> Run {
     fx.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", spec, "--kind", kind, "--pr", pr, "--plan", plan])
 }
 
 /// PR `key` of Plan `plan`, `waiting`, of the stored `shape`.
-fn shaped_pr(env: &TestEnv, plan: &str, key: &str, shape: &str) {
+pub(super) fn shaped_pr(env: &TestEnv, plan: &str, key: &str, shape: &str) {
     fixture(
         env,
         &format!(
