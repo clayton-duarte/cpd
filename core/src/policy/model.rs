@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::domain::{HasText, Set};
@@ -38,6 +39,10 @@ impl Models {
 /// The models of the Job `job` of `plan`: its PR's repo key (contract §8.3 "Models" (5)). A Worker Attempt, a Job's
 /// Tier check, the ladder and the `open` and `update` Jobs read them here. A key that does not resolve is its error.
 pub fn models_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Models, CpdError> {
+    let held: Option<i64> = conn.query_row("SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0)).optional()?;
+    if held.is_none() {
+        return Err(CpdError::new(crate::error::ErrorCode::JobNotFound, format!("No Job {job} in Plan {plan}.")).with("plan", plan.as_str()).with("job", job));
+    }
     Ok(Models::of(&crate::pr::policy_of_job(conn, home, plan, job)?))
 }
 

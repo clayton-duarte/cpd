@@ -134,7 +134,7 @@ fn the_title_writer_runs_pi_on_gx() {
     assert_eq!(calls.len(), 1, "{calls:?}");
     let call = &calls[0];
     let argv = &call.args;
-    assert_eq!(argv[..6], ["--print", "--no-session", "--no-extensions", "--model", "github-copilot/gemini-3.8-flash:off", "--"], "{argv:?}");
+    assert_eq!(argv[..6], ["--print", "--no-session", "--no-extensions", "--model", "p/gemini:off", "--"], "{argv:?}");
     assert_eq!(argv.len(), 7, "one prompt after `--`: {argv:?}");
     let prompt = &argv[6];
     for asked in ["title", "at most 60 characters", "last happening", "one line", "no quotes"] {

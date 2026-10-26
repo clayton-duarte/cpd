@@ -70,7 +70,9 @@ fn setup(env: &TestEnv) {
         })
         .collect();
     fixture(env, &rows);
-    fixture(env, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Context', 't', 'm1');");
+    // The Context's owner is the key of the PRs' policy, where a Job's Tier models are set: its file is empty.
+    env.owner_policy("acme", "");
+    fixture(env, "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Context', 'acme', 't', 'm1');");
 }
 
 /// Plan `id` in `phase`, with its Lead session, moved there one phase at a time.

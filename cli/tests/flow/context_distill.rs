@@ -927,7 +927,7 @@ fn the_distiller_runs_on_gx_with_the_g_model() {
     let calls = fx.calls("pi");
     let args = &calls[0].args;
     let at = args.iter().position(|a| a == "--model").expect("--model") + 1;
-    assert_eq!(args[at], "github-copilot/gemini-3.8-flash:off", "{args:?}");
+    assert_eq!(args[at], "p/gemini:off", "{args:?}");
 }
 
 #[test]

@@ -61,12 +61,6 @@ fn config_defaults_context_distill_tier_to_gx() {
             "context_engine_timeout_ms": 30000,
             "context_engine_reindex_timeout_ms": 600000,
             "plannotator_ports": "19432-19456",
-            "tiers": {
-                "O": "github-copilot/claude-opus-5.5",
-                "S": "github-copilot/claude-sonnet-5.5",
-                "H": "github-copilot/claude-haiku-4.5",
-                "G": "github-copilot/gemini-3.8-flash"
-            },
             "timeouts": {
                 "attempt_minutes": 30,
                 "ask_minutes": 60,

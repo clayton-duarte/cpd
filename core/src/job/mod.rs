@@ -223,11 +223,11 @@ impl Env {
     /// (or is about to be) on, `None` for the PR the existing Job `job` is on.
     fn check_tier(&mut self, plan: &PlanId, job: &JobKey, pr: Option<&PrKey>, tier: Tier) -> Result<(), CpdError> {
         let home = self.home.clone();
-        let models = self.store.read(|conn| match pr {
-            Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
-            None => {
-                find(&crate::plan::jobs::load(conn, plan)?, plan, job)?;
-                crate::policy::model::models_of_job(conn, &home, plan, job.as_str())
+        let models = self.store.read(|conn| {
+            plan_phase(conn, plan)?;
+            match pr {
+                Some(pr) => crate::policy::model::models_of_pr(conn, &home, plan, pr),
+                None => crate::policy::model::models_of_job(conn, &home, plan, job.as_str()),
             }
         })?;
         config::catalog::load_with(&models, &mut self.store)?.check(tier)?;
