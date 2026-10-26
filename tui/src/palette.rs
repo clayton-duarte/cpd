@@ -439,6 +439,7 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
         Urgency::Cyan => (TIER_CYAN, Meaning::Notice),
+        Urgency::Blue => unimplemented!("blue tier"),
     };
     Span::styled(glyph, fg_clickable(meaning))
 }

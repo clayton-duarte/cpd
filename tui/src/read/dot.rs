@@ -104,6 +104,7 @@ impl From<Urgency> for Dot {
             Urgency::Magenta => Dot::Magenta,
             Urgency::White => Dot::White,
             Urgency::Cyan => Dot::Cyan,
+            Urgency::Blue => unimplemented!("blue tier"),
         }
     }
 }

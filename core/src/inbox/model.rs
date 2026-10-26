@@ -82,6 +82,8 @@ pub enum Urgency {
     Magenta,
     Yellow,
     Red,
+    /// External support: a review asked of the User (pro-d58). Stub.
+    Blue,
 }
 
 impl Urgency {
@@ -92,6 +94,7 @@ impl Urgency {
             Urgency::Yellow => "yellow",
             Urgency::Red => "red",
             Urgency::Cyan => "cyan",
+            Urgency::Blue => unimplemented!("blue tier"),
         }
     }
 

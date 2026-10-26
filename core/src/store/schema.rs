@@ -867,4 +867,6 @@ pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, St
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod blue_tests;
+#[cfg(test)]
 mod cyan_tests;
