@@ -86,7 +86,7 @@ fn a_pr_box_title_draws_number_and_state_underlined_then_the_cue_and_no_cell_hol
     let mut ui = Ui::default();
     let buf = draw(&mut ui, &centre, 10);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
-    assert_eq!(cells(&buf, x, y, 11).concat(), format!("#12 open {CUE}"));
+    assert_eq!(cells(&buf, x, y, 10).concat(), format!("#12 open {CUE}"));
     for dx in 0..8 {
         assert!(underlined(&buf, x + dx, y), "`#12 open` is underlined at +{dx}");
     }
@@ -140,7 +140,7 @@ fn the_lead_working_dot_stays_between_the_state_and_the_cue_inside_the_link() {
     let buf = draw(&mut ui, &centre, 10);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
     let dot = palette::SPINNER[0];
-    assert_eq!(cells(&buf, x, y, 13).concat(), format!("#12 open {dot} {CUE}"));
+    assert_eq!(cells(&buf, x, y, 12).concat(), format!("#12 open {dot} {CUE}"));
     assert!(underlined(&buf, x + 9, y), "the dot is part of the text");
     assert!(!underlined(&buf, x + 10, y) && !underlined(&buf, x + 11, y), "the gap and the cue are not");
     let (ports, runner) = ports_with(Reply::ok(""));

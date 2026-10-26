@@ -669,7 +669,7 @@ mod tests {
         p.pull = Some(pull(12, PrState::Closed));
         let cell = |needs: &NeedsUser| {
             let c = layout(&[p.clone()], &[], needs, 0).chart;
-            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol().contains("\x07cl")).unwrap();
+            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol() == "c" && c.buf[(x + 1, 0)].symbol() == "l").unwrap();
             c.buf[(x, 0)].fg
         };
         assert_eq!(cell(&NeedsUser::default()), palette::color_clickable(Meaning::Waiting));
