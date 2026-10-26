@@ -37,6 +37,8 @@ interface Session {
 	focus(inside: boolean): void;
 	/** Pi restarts the extension: session_shutdown, then session_start with reason reload. */
 	reload(): void;
+	/** Pi ends a session and starts the next with the given reason. */
+	switchSession(reason: string): void;
 	dispose(): void;
 }
 
@@ -85,6 +87,10 @@ async function session(): Promise<Session> {
 		reload() {
 			emit("session_shutdown", { reason: "reload" });
 			emit("session_start", { reason: "reload" });
+		},
+		switchSession(reason) {
+			emit("session_shutdown", { reason });
+			emit("session_start", { reason });
 		},
 		dispose() {
 			emit("session_shutdown", { reason: "quit" });
@@ -165,4 +171,32 @@ test("the working indicator carries no frames for pi to animate", async () => {
 		assert.ok(indicator, "the extension sets pi's working indicator");
 		assert.deepEqual(indicator!.frames, [], "an empty frame list leaves pi's Loader without an interval");
 	} finally { s.dispose(); }
+});
+
+test("new, resume and fork sessions keep the focus the pane reported and startup does not", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		for (const reason of ["new", "resume", "fork"]) {
+			s.focus(true);
+			s.switchSession(reason);
+			assert.equal(editorFocused(), true, `${reason} keeps the focus`);
+			assert.equal(clock.countTimers(), 1, `${reason} keeps the shared clock running`);
+		}
+		s.switchSession("startup");
+		assert.equal(editorFocused(), false, "startup begins unfocused");
+		assert.equal(clock.countTimers(), 0, "startup owns no clock");
+	} finally { s.dispose(); clock.uninstall(); }
+});
+
+test("a keystroke focuses a pane that reported nothing and asks one render", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		const before = s.renders();
+		s.editor.handleInput("x");
+		assert.equal(editorFocused(), true, "the key is evidence of focus");
+		assert.equal(clock.countTimers(), 1, "the shared clock runs");
+		assert.equal(s.renders() - before, 1, "exactly one render asked");
+	} finally { s.dispose(); clock.uninstall(); }
 });

@@ -349,6 +349,16 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
+/// Starts Session `id` (a Lead or Manager) as a parked window, as `command` (what engine E2 calls): [`moves::start_parked`] on
+/// an `Env` of `home` on `ports`. Returns the pane, or none when another process recorded one first.
+pub fn start_parked_as(ports: &Ports, home: crate::home::CpdHome, id: &SessionId, command: &str) -> Result<Option<crate::host::PaneId>, CpdError> {
+    Ports::scope(ports, || {
+        let mut env = Env::open_home_with(ports, home)?;
+        let row = env.store.read(|conn| row::load(conn, id))?;
+        moves::start_parked(&mut env, &row, command)
+    })
+}
+
 impl Env {
     /// The Session `reference` names (commands.md §1.3), resolved once at the boundary.
     fn resolve(&mut self, reference: &SessionRef) -> Result<SessionId, CpdError> {

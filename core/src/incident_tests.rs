@@ -510,7 +510,7 @@ fn incident_started_and_ended_events_are_known_kinds() {
         assert_eq!(spec.required, required, "{kind} requires its data fields");
         assert_eq!(spec.optional, optional, "{kind} may carry its optional fields");
     }
-    assert_eq!(PROTOCOL, 14, "hs-d634 raised the protocol for the two incident kinds");
+    assert!(PROTOCOL >= 14, "hs-d634 raised the protocol to 14 for the two incident kinds, and it only goes up");
 
     let started_event =
         NewEvent::incident_started("Incident mode on.", "mgr", "database migration in progress", "2026-10-14T21:10:00.000Z", ["pay"], None);

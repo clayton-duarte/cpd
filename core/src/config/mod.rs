@@ -17,6 +17,9 @@ mod migrate_tests;
 #[cfg(test)]
 mod runner_tests;
 
+#[cfg(test)]
+mod tier_tests;
+
 use serde_json::json;
 
 use crate::env::Env;

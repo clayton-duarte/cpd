@@ -48,6 +48,8 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 
 Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --pr <key>` a PR's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
 
+MCP servers: nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (not saved: attach again after a restart); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). Give a Worker the command in its Spec when its Job needs the server.
+
 ## Context updates
 
 You start fresh from your brief plus the always-injected AGENTS.md. Read Context records on demand: `cpd context search <query>` to search, `cpd context show --since <seq>` for new records (with `<seq>` the highest record `seq` you have read), `cpd context show --topic <t>` for a topic's rest, or `cpd context show --record <id>` for one record. Read them at four points: grounding; before drafting each batch; before answering a Worker's Escalation from the records; before `pr open`. When a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you. Messages from your Manager (`session-message`) arrive without starting a turn and are in your context at your next turn.
@@ -147,7 +149,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 
 - **Size:** an Attempt gets `attempt_minutes` (the configured value); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**
-- **Tier:** `S1` for coding, `H3` for docs. A Job's Tier is `H3` or `S0`–`S3` only, `tier_not_allowed` otherwise; no `O`.
+- **Tier:** `S1` for coding, `H3` for docs. A Job's Tier is `H0`–`H4` or `S0`–`S3` only, `tier_not_allowed` otherwise (pro-d53); no `O`.
 - **Acceptance names targeted tests:** the test files or modules of what the Job changes plus its new tests, never a full unfiltered run (the whole workspace, `npm test` of everything). The full suite is the Gate's, run by the PR's open Job.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
 - **Repo-relative paths only:** a Spec never names the path of a repo's primary checkout (not `/home/<user>/projects/<repo>`, not `~/projects/<repo>`, not `$HOME/...`); `touches` and every path in the text are relative to the repo, because the Worker works in its own worktree; to point at the latest main write `git fetch origin` then `git show origin/main:<path>`; `cpd job add` and `cpd job edit` refuse such a Spec with `spec_invalid`.

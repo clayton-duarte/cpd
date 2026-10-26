@@ -62,12 +62,12 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!(fx.job_status("api"), "queued");
 }
 
-/// hs-d554: a store written before the rule may hold a queued Job on a Tier outside H3, S0-S3. E3 never starts it:
+/// pro-d53 (hs-d554): a store written before the rule may hold a queued Job on a Tier outside H0-H4, S0-S3. E3 never starts it:
 /// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
 #[test]
 fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
     let mut fx = Fx::with_plan("");
-    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H2")] {
+    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H5")] {
         fx.add_job_on(tier, "repo", key, &[], "");
     }
 
@@ -84,7 +84,7 @@ fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_err
     for (_, _, _, data) in &errors {
         assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
     }
-    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("hs-d554")), "{:?}", texts(&mut fx, "error"));
+    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("pro-d53")), "{:?}", texts(&mut fx, "error"));
     assert_eq!(attempts(&mut fx), 0);
     for key in ["api", "web", "app", "ui"] {
         assert_eq!(fx.job_status(key), "queued", "{key}");

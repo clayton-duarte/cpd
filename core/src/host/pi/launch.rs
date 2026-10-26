@@ -87,6 +87,8 @@ pub struct WorkerLaunch<'a> {
 }
 
 fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
+    // pro-d7: pi's own MCP extension is off; the adapter mounts it with no file config.
+    argv.push("--no-mcp".into());
     for source in extensions {
         argv.push("-e".into());
         argv.push(source.clone());
@@ -321,7 +323,7 @@ mod tests {
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
-            strs(&["pi", "--model", "m/x:high", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
+            strs(&["pi", "--model", "m/x:high", "--no-mcp", "-e", "/opt/cpd/pi", "--session-id", ID, "-n", "ctx-manager", "--", "@/cpd-home/run/ctx/manager-message.md"])
         );
         assert_eq!(
             launch.env,
@@ -380,7 +382,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "github-copilot/claude-opus-5.5:high",
-                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--session-id", ID, "-n", "cpd rust lead", "--", "@/cpd-home/run/cpd2/lead-message.md",
             ])
         );
@@ -409,7 +411,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "m/x:high",
-                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
                 "--fork", "/s/2026_6f1c.jsonl", "--session-id", ID, "-n", "pay-4521", "--", "@/cpd-home/run/cpd2/messages/x.md",
             ])
         );
@@ -426,7 +428,7 @@ mod tests {
             launch.argv,
             strs(&[
                 "pi", "--model", "p/m:high", "--session", "/s/x.jsonl",
-                "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
+                "--no-mcp", "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
             ])
         );
         assert_eq!(launch.env, lead_env(&[]));
@@ -466,7 +468,7 @@ mod tests {
             [crate::host::priority::idle_prefix(), &[
                 "pi", "--approve", "--no-skills", "--exclude-tools",
                 "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox",
-                "-e", "/opt/cpd/pi",
+                "--no-mcp", "-e", "/opt/cpd/pi",
                 "--model", "github-copilot/claude-sonnet-5.5:xhigh",
                 "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
                 "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
@@ -540,3 +542,7 @@ mod tests {
         assert_eq!(env, BTreeMap::from([("PI_SKIP_VERSION_CHECK".to_owned(), "1".to_owned())]));
     }
 }
+
+#[cfg(test)]
+#[path = "launch_no_mcp_tests.rs"]
+mod no_mcp_tests;

@@ -90,7 +90,7 @@ fn the_output_has_exactly_the_documented_fields() {
     let out = show(&fx, &["--owner", "acme"]).ok();
     let mut top: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
     top.sort_unstable();
-    assert_eq!(top, ["files", "key", "ok", "policy", "role"]);
+    assert_eq!(top, ["files", "key", "machine", "markdown", "ok", "policy", "role"]);
     assert_eq!(out["role"], Value::Null);
     let mut domains: Vec<&str> = out["policy"].as_object().unwrap().keys().map(String::as_str).collect();
     domains.sort_unstable();

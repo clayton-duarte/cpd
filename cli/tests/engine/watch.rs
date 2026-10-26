@@ -1379,7 +1379,10 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
     new(&["set", "-p", "-t", &pane, "@cpd_view", "hologram"]);
     fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at)
-           VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
+           VALUES ('s-gone', 'lead', 'ctx', 'old', 'Gone', '/', 'O3', '%999', 'working', 't', 't');
+         -- A done Plan's Lead is not restarted (A4): the restart is tested in session.rs, this test is about the unknown view.
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('old', 'ctx', 'Old', 'done', 's-gone', 't', 't', 't');",
     );
 
     // The product prints the unknown view to its stderr, once per value and process.
@@ -1483,6 +1486,30 @@ fn e3_starts_a_job_whose_stored_tier_the_catalog_refuses_at_the_next_valid_tier(
     fx.fakes.spawn.exit(pid, 1);
     fx.watch_first_tick().unwrap();
     assert_eq!(fx.attempt("api-a1").0, "ended");
+}
+
+/// pro-d53: a Job stored on H0, H1 or H2 is in the Worker range: E3 starts it at that Tier, not refused.
+#[test]
+fn e3_starts_a_job_stored_on_h0_h1_or_h2_at_that_tier() {
+    for tier in ["H0", "H1", "H2"] {
+        let fx = engine_scheduling("");
+        fx.add_job_on(tier, "repo", "api", &[], "");
+
+        fx.watch_first_tick().unwrap();
+
+        let started = fx.events("attempt-started");
+        assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": tier, "origin": "ladder"}))], "{tier}");
+        assert_eq!(
+            fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'error' AND json_extract(data, '$.code') = 'tier_not_allowed'"),
+            0,
+            "{tier}: {:?}",
+            fx.texts("error")
+        );
+        // Its driver was launched; it exits at once and the next tick ends the Attempt crashed.
+        let (_, pid) = driver_launch(&fx, "api-a1");
+        fx.fakes.spawn.exit(pid, 1);
+        fx.watch_first_tick().unwrap();
+    }
 }
 
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
