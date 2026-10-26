@@ -276,6 +276,9 @@ fn placeholder(text: &str) -> Line<'static> {
 mod screen_tests;
 
 #[cfg(test)]
+mod phi_bold_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::read::{AttemptDetail, AttemptStatus, Cause, Origin, Outcome, WorkerJob};

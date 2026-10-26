@@ -1222,6 +1222,9 @@ pub mod pill;
 mod pill_lines_tests;
 
 #[cfg(test)]
+mod title_tests;
+
+#[cfg(test)]
 mod pill_tests;
 
 #[cfg(test)]
