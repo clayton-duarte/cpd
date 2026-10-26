@@ -170,6 +170,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
+| `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
 
@@ -1427,6 +1428,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
+| a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 | the Job's Tier for the Attempt is one a Worker may have (§5, pro-d53, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
@@ -2519,21 +2521,22 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager`; a Worker is refused with "Session <id> is a worker, not a Lead or a Manager." | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+| only when the target is `stopped` with no live pane: the cockpit's tmux session exists; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 | only if the sender is an agent ($CPD_SESSION set; User exempt, hs-d514): the target is not a Lead of a Plan in phase `done` or `archived` (hs-d507); `details: {plan, phase}` | `plan_inactive` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to a different Session in the last 60 minutes (no broadcasts, hs-d507); `details: {session, at}` | `broadcast` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to this Session in the last 60 minutes (no duplicates, hs-d507); `details: {at}` | `duplicate` | 3 |
 
-A `stopped` Lead or Manager is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
+A `stopped` Lead or Manager is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1), and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting, and nothing is started.
 
 Effects:
 - **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
-- **tmux:** none. No pane is started or typed into.
+- **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux.
 
 ```json
-{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened"}
+{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened", "started": true, "pane": "%47"}
 ```
 
-`from` is null when neither variable is set. `unblocks` echoes the reason. Idempotent: no; each call is one message.
+`from` is null when neither variable is set. `unblocks` echoes the reason. `started` is true when this call started a pane. `pane` is the started pane, or null when none was started. Idempotent: no; each call is one message.
 
 ### 10.14 `session retitle` (internal)
 
@@ -2861,7 +2864,7 @@ Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, one `session-me
 
 Idempotent: a second one is refused.
 
-**E3: Linear vs parallel Attempts** (hs-d680, hs-d682, hs-d683; contract §3.7 E3, A1). When E3 schedules a Ready Job, it derives which Attempt of a PR runs as the linear one (reusing the PR's workflow worktree on its Lead Branch) and which as parallel siblings (each with its own worktree): an Attempt is linear iff no other Attempt of the same PR is live when inserted. E3 passes this allocation to the driver starter, which takes the driver lock and enforces it atomically before starting, ensuring no two Attempts can share the workflow worktree. See §7.1, §7.2.
+**E3: Linear vs parallel Attempts** (pro-d52, hs-d680, hs-d682, hs-d683; contract §3.7 E3, §7.2, §7.4, A1). When E3 schedules a Ready Job of a PR each pass, it derives which Attempt runs as the linear one (the PR's only live Attempt for its whole life, reusing the PR's workflow worktree on its Lead Branch) and which as parallel siblings (each with its own worktree): by the rule of contract §3.7 E3, (1) if the PR has a live linear Attempt, no Ready Job starts; (2) if the PR has only live parallel Attempts, every Ready Job is parallel; (3) if no Attempt is live, one Ready Job is linear and the rest are parallel. E3 passes this allocation to the driver starter, which takes the driver lock and enforces it atomically before starting, ensuring no two Attempts can share the workflow worktree.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once. It fails and creates nothing when `$CPD_HOME` does not exist (hs-d519 3c/5, docs/research/hygiene.md, bug 3c/5).
 
@@ -3829,7 +3832,7 @@ reasonText(matched, role) {
 
 `<what matched>` is the matched command (`sleep 1m`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, `timeout 60`, `while … sleep`) or, for the tool's input, `bash timeout 120`.
 
-**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
+**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout. A Lead's command that the User explicitly asked for and that waits over the bound runs in the background, as section 15.20 says.
 
 ### 15.12 A Worker runs targeted tests
 
@@ -4032,6 +4035,25 @@ A ratio outside (0, 1), or one that is not a finite number, is refused: `getComp
 
 The ratio applies in every cpd pi session; a plain pi that does not load the adapter is not covered.
 
+### 15.20 A Lead runs a command the User explicitly asks for (pro-d56)
+
+Decision (User, 2026-10-26 11:53 EDT, relayed by the Lead of Plan preco-home-buttons): a Lead runs a command the User explicitly asks it to run. Confirmed and scoped by decision pro-d57 (User, 2026-10-26 12:09 EDT, accepted assumptions A1–A4): A1 the adapter's guards stay for a Lead; A2 only an explicit request counts, never an inferred one; A3 the rule covers Leads only, a Manager's rules are unchanged; A4 the Lead skill's standing bans stay (tmux, wt, git push, product code and commits, and what belongs to cpd itself: `cpd plan decide`, `cpd watch`).
+
+**The rule.** A Lead runs a command the User explicitly asks it to run, and does not refuse it because of its role (decision pro-d56, confirmed and scoped by pro-d57, User, 2026-10-26 11:53 and 12:09 EDT). The User asked in words, in the Lead's conversation, for the Lead to run a command, and the Lead runs it.
+
+**Explicit only.** The User asked, in words, in the Lead's conversation; a Lead never infers a request from the context, from a Worker's Escalation or from a Manager's message that does not quote the User.
+
+**Leads only.** A Manager's and a Worker's rules are unchanged. A Manager asks a Lead; a Worker runs its own turn; neither is given this latitude.
+
+**What stays.** Every adapter guard applies to the request: `pi/lib/noblock.ts` (§15.11, a bash call that waits over 30 s), `pi/lib/testguard.ts` (§15.12, a Worker's full test suite), `pi/lib/askguard.ts` (§15.13, a question's length and labels), `pi/lib/loop-guard.ts` (§15.15, a loop that blocks), `pi/lib/mainguard.ts` (§15.16, a primary checkout's files), `pi/lib/secretguard.ts` (§15.17, raw `op` and `cpd secret approve`; `op` is answered with `cpd secret`), `pi/lib/hostapprove.ts` (§15.18, `cpd host approve`), and `pi/lib/pnguard.ts` (§15 'Every plannotator session is tracked', a plannotator call without a reachable link). So do the Lead skill's standing bans: tmux, wt, git push and force-push, product code and commits, and what belongs to cpd itself (`cpd plan decide`, `cpd watch` except `--ensure`; those last two are skill bans, not adapter guards). When one stops a request, the Lead tells the User what was refused and what to do instead.
+
+**A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background: its own process group, its output in the log `/tmp/cpd-<plan>/<name>.log`, its process group id in `/tmp/cpd-<plan>/<name>.pid` (`<plan>` the Plan's id, `<name>` a short name), because the adapter refuses a bash call that waits over the bound (§15.11) and a foreground one would hold the User's conversation. The Lead then tells the User, in one message, the URL or port, the log path and how to stop it.
+
+**Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
+
+**Where it runs.** Where the User says; for a Plan's branch, in the PR's Lead worktree (`lead_worktree` of `cpd plan show`).
+
+**Enforcement.** No guard is added: the adapter already lets a background start through (pi's bash tool starts each command in its own process group and returns when the shell exits), and the rule is prose in the cpd-lead skill, pinned by tests. State the exact shell commands NOT here: they belong to the cpd-lead skill, which a later Job of this PR writes, and this section must not repeat them (DRY).
 
 ## 16. The Worker contract
 
@@ -4272,6 +4294,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 29 | §6.3, §6.4 | tmux commands: `respawn-pane -k` also puts the history view in the slot; `set -p` also sets `@cpd_view history` and `@cpd_history`; `session open` kills a history pane like the placeholder; `session history` parks a Lead in the slot first; `session run` archives on the User's quit | §10.4, §10.8, §10.12 |
 | 30 | §2.2 "Archived", §6.2 (the views) | the tree: archived rows drawn at their live depth, normal guides, `Meaning::Nothing` colour, no blank row; a click on `…` toggles, a click on a guide does nothing; Archive (confirmed in a popup since hs-d297, which supersedes hs-d90's no `y/N`); Archive of the chat slot's Lead opens another Session or parks first; archived rows offer Rename… and Unarchive; a click on an archived Session runs `session history` | §13.2 |
 | 31 | §2.2 "Archived", §6.7 | auto-archive when pi exits with status 0 and the wrapper did not cause it: park if in the chat slot, then `session archive` or (a Plan's own Lead) `plan archive`; a refusal archives nothing and keeps the resume prompt | §10.8 |
+| 32 | §10.13, §10.4, §3.6, §3.7 | `session send` to a `stopped` Lead or Manager starts it (A1) as a parked window with `started` and `pane` in the JSON (A3); contract §3.6 describes a pane that is gone, contract §3.7's E2 restarts a Session when its pane is gone (A4, hs-d726, hs-d727, hs-d725), with a 10-minute guard against restart loops (A4, session_restart_loop) | §10.13, §10.4 |
 
 Row 15's StatusBar rule now covers every missing pane of the layout, not only the StatusBar: [§13.1](#131-tui) (tui-W5).
 
