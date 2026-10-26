@@ -7,9 +7,8 @@ use ratatui::buffer::Buffer;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::fixture::sample;
-use super::inbox::item;
-use super::view::View;
+use super::inbox::{Shape, draw, item};
+use ratatui::layout::Rect;
 use crate::palette;
 use cpd_core::inbox::model::{Kind, Urgency};
 
@@ -19,10 +18,9 @@ fn now() -> OffsetDateTime {
 
 /// The rows of a view with one open item (age `5m` at [`now`]) drawn at 43 columns, as text.
 fn rows_with(label: &str) -> Vec<String> {
-    let mut view = View::new(sample(), true);
-    view.tree.inbox = vec![item(1, Kind::PrFailing, Urgency::Red, label, "2026-01-02T23:55:00.000Z")];
+    let items = [item(1, Kind::PrFailing, Urgency::Red, label, "2026-01-02T23:55:00.000Z")];
     let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
-    terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
+    terminal.draw(|f| draw(f, Rect::new(0, 0, 43, 16), &items, Shape::new(1, false), None, now(), &|_| None)).unwrap();
     text_rows(terminal.backend().buffer())
 }
 

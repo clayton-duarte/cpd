@@ -174,7 +174,7 @@ fn the_failed_counter_is_red_whether_or_not_the_plan_has_a_job_stuck_item() {
     let plans = || vec![context("cc", vec![lone("aa", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
     let calm = tree(plans());
     let mut stuck = tree(plans());
-    stuck.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse("aa").unwrap()), ..super::inbox::item(1, Kind::JobStuck, Urgency::Red, "x", WHEN) }];
+    stuck.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse("aa").unwrap()), ..crate::widgets::inbox::item(1, Kind::JobStuck, Urgency::Red, "x", WHEN) }];
     for (label, t) in [("no item", &calm), ("job-stuck for aa", &stuck)] {
         let buf = render(t, 3);
         for y in [1, 2] {

@@ -441,13 +441,7 @@ impl Failure {
     }
 }
 
-/// Runs the command of `action`: its reply, or why it failed.
-#[cfg(test)]
-pub fn call(action: &Action) -> Result<Value, Failure> {
-    call_with(&*Ports::current().runner, action)
-}
-
-/// [`call`] on `runner`.
+/// Runs the command of `action` on `runner`: its reply, or why it failed.
 pub fn call_with(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, Failure> {
     call_argv(runner, action.argv())
 }

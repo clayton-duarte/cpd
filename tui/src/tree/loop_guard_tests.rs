@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 
 use super::prepared_tests::{Env, draw, text_rows};
 use crate::palette::numbered::C9;
-use crate::palette::{self, NEEDS_YOU};
+use crate::palette::NEEDS_YOU;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 
@@ -45,17 +45,6 @@ fn tripped(kind: Kind) -> Env {
 /// The tree in a 60 x 14 pane.
 fn screen_of(env: &mut Env) -> Buffer {
     draw(&mut env.view(), 60, 14)
-}
-
-#[test]
-fn a_loop_guard_item_is_drawn_red_with_its_label() {
-    let mut env = tripped(Kind::LoopGuard);
-    let buf = screen_of(&mut env);
-    let row = format!("│ {} sketch: loop guard tripped", palette::TIER_RED);
-    let rows = text_rows(&buf);
-    let y = rows.iter().position(|l| l.contains(&row)).unwrap_or_else(|| panic!("{row:?} on {rows:?}")) as u16;
-    let x = (0..buf.area.width).find(|&x| buf[(x, y)].symbol() == palette::TIER_RED).expect("the tier glyph");
-    assert_eq!(Some(buf[(x, y)].fg), palette::tier_span(Urgency::Red).style.fg, "the tier glyph is red: {row:?}");
 }
 
 #[test]

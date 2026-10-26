@@ -11,8 +11,6 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::style::Color;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::folds::FoldsFile;
 use super::fixture::{archived, sample};
@@ -31,13 +29,9 @@ fn muted() -> Color {
     palette::color(Meaning::Nothing)
 }
 
-fn now() -> OffsetDateTime {
-    OffsetDateTime::parse("2026-01-03T00:00:00.000Z", &Rfc3339).unwrap()
-}
-
 fn draw(view: &mut View, width: u16, height: u16) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| view.draw_at(f, 0, now())).unwrap();
+    terminal.draw(|f| view.draw(f, 0)).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -92,9 +86,8 @@ fn archived_contexts_render_under_the_archive_row_and_none_at_the_root() {
     // folded: no zeta block anywhere, and the archive row is the last tree block
     assert!(!screen.iter().any(|r| r.contains("zeta") || r.contains("zp") || r.contains("f-zp")), "the folder starts folded: {screen:#?}");
     let archive = find(&screen, " archive");
-    let inbox = find(&screen, "Inbox");
-    assert!(find(&screen, "gamma") < archive && archive < inbox, "{screen:#?}");
-    assert!(screen[archive + 1..inbox - 1].iter().all(String::is_empty), "the archive row is the last tree block: {screen:#?}");
+    assert!(find(&screen, "gamma") < archive, "{screen:#?}");
+    assert!(screen[archive + 1..].iter().all(String::is_empty), "the archive row is the last tree block: {screen:#?}");
     // a click shows zeta's block, folded as today, and the live Contexts above are unchanged
     assert_eq!(click(&mut view, 3, archive as u16), Effect::None);
     let buf = draw(&mut view, 44, 24);

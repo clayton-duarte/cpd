@@ -20,6 +20,12 @@ pub(crate) mod column;
 #[cfg(test)]
 mod draw_tests;
 #[cfg(test)]
+mod inbox_indent;
+#[cfg(test)]
+mod inbox_margin_tests;
+#[cfg(test)]
+mod inbox_width_tests;
+#[cfg(test)]
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;

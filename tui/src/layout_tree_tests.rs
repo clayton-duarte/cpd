@@ -9,7 +9,7 @@ fn layout_inbox() {
     let cases = [(TreeCase::InboxNone, 12), (TreeCase::Inbox3, 12), (TreeCase::Inbox5Folded, 12), (TreeCase::Inbox5Expanded, 12), (TreeCase::InboxCues, 8)];
     for width in WIDTHS {
         for (case, height) in cases {
-            let drawn = crate::tree::layout_inbox_sample(width, height, case);
+            let drawn = crate::widgets::inbox::layout_sample(width, height, case);
             check(&format!("inbox, {case:?}, {width}x{height}"), width, &drawn);
         }
     }

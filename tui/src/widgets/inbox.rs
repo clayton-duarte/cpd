@@ -530,7 +530,7 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
 
 /// An open item for the tests: `kind` and `urgency`, its `label`, opened at `opened_at`; the rest is none.
 #[cfg(test)]
-pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
+pub(crate) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency, label: &str, opened_at: &str) -> Item {
     Item {
         id,
         kind,

@@ -64,6 +64,8 @@ pub(crate) use view::layout_sample;
 #[cfg(test)]
 pub(crate) mod fixture;
 #[cfg(test)]
+mod margin_tests;
+#[cfg(test)]
 mod needs_tests;
 
 /// The clocks the tree's screen needs: `frame` is `view.animated()`, `second` is false (no row shows a time), `at` is `None`
