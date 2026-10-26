@@ -38,13 +38,12 @@ fn draw(ui: &mut Ui, centre: &Centre, height: u16) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
-/// The first cell whose symbol holds `#` of the title of pull request `number` (a cell may hold more than the `#`, today's
-/// OSC 8 pieces do): the title's first cell. A title is found by the digit after its `#` being `number`'s first.
+/// The title's first cell: the cell `#` whose next cell starts with the first digit of `number`.
 fn title_x(buf: &Buffer, number: i64) -> Option<(u16, u16)> {
-    let needle = format!("#{}", number.to_string().chars().next().unwrap());
+    let digit = number.to_string().chars().next().unwrap().to_string();
     for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            if buf[(x, y)].symbol().contains(&needle) {
+        for x in 0..buf.area.width.saturating_sub(1) {
+            if buf[(x, y)].symbol() == "#" && buf[(x + 1, y)].symbol().starts_with(&digit) {
                 return Some((x, y));
             }
         }
