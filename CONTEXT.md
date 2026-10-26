@@ -186,6 +186,10 @@ _Avoid_: daemon, scheduler, watcher per workflow
 The engine's poll, every 5 s, of every open pull request of the User on GitHub, by one search through `gh`. It stores them (table `pull_requests`), feeds the Dispatch column, and sends `pr-feedback` only to the Lead whose PR owns the pull request that needs attention (contract §7.6). A pull request a search misses is read directly and is never dropped on the search's absence (hs-d565). A Lead may run it by hand (`cpd pr poll`), and reads the detail with `cpd pr view`.
 _Avoid_: PR watcher, PR sync
 
+**Feedback item** (new, pro-d68):
+One open thing a person said on a pull request a Plan owns: a review thread, an issue comment or a review with a body, not yet answered with a `cpd pr reply` (whose last line is the marker `<!-- cpd:reply -->`). The PR poll stores them and wakes the Lead (`pr-feedback`, reason `comments`); the Lead fixes or declines each and answers it; cpd never resolves a thread, and an open item blocks nothing. Defined once in `docs/contract.md` §2.2 "Feedback item".
+_Avoid_: review comment (the word for what a reviewer wrote, not for the open thing cpd tracks), notification
+
 ## Roles
 
 **User**:
