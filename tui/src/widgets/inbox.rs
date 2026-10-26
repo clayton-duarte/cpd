@@ -210,6 +210,26 @@ pub enum Jump {
     Merge(Pull),
     /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
     Curate(Kind, cpd_core::ids::ContextId),
+    /// The read-only `text` dialog of the announced ids of a `models-changed` item: its provider and `changes.at`.
+    Models(String, String),
+}
+
+/// The body of the `models-changed` dialog (commands.md §13.2): the announced ids of the change `at` of `provider`, the new
+/// ones under `New (<N>)` and the gone ones under `Gone (<M>)`, one id per line, a part with no ids omitted; when the file
+/// no longer has that change, it says so.
+pub fn models_body(home: &cpd_core::home::CpdHome, provider: &str, at: &str) -> Result<String, cpd_core::error::CpdError> {
+    use cpd_core::inbox::models::announced;
+    use cpd_core::models::Read;
+    let file = cpd_core::models::read_all(home)?.into_iter().find_map(|r| match r {
+        Read::Good(f) if f.provider == provider => Some(f),
+        _ => None,
+    });
+    let Some(changes) = file.and_then(|f| f.changes).filter(|c| c.at == at) else {
+        return Ok("changed again; the item closes at the next tick".to_owned());
+    };
+    let (new, gone) = announced(provider, &changes);
+    let part = |name: &str, ids: &[String]| (!ids.is_empty()).then(|| format!("{name} ({})\n{}", ids.len(), ids.join("\n")));
+    Ok([part("New", &new), part("Gone", &gone)].into_iter().flatten().collect::<Vec<_>>().join("\n\n"))
 }
 
 /// One row of a curation checklist: the record, its full text and the detail after the dash.
@@ -316,7 +336,9 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
         // one background `session resume`: the pane does not open; a refusal is the failure dialog
         Kind::LoopGuard => item.session.as_ref().map(|s| Jump::Run(Action::SessionResume(s.clone()))),
-        Kind::ModelsChanged => None,
+        Kind::ModelsChanged => {
+            cpd_core::inbox::models::parse_subject(&item.subject).map(|(p, at)| Jump::Models(p.to_owned(), at.to_owned()))
+        }
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))

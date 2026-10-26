@@ -256,6 +256,18 @@ impl Opener<'_> {
                     dialog::report(self.tmux, self.log, "Merge Pull Request", &e);
                 }
             }
+            Some(Jump::Models(provider, at)) => {
+                let shown = inbox::models_body(self.home, &provider, &at).map_err(|e| format!("{}: {}", e.code(), e.message()));
+                match shown {
+                    Ok(body) => {
+                        // a dialog that cannot open is logged: another dialog would fail the same way
+                        if let Err(e) = dialog::text(self.tmux, &format!("Models: {provider}"), &body) {
+                            let _ = self.log.append(&format!("failed: Models: dialog: {}", e.message()));
+                        }
+                    }
+                    Err(why) => dialog::report_why(self.tmux, self.log, "Models", why),
+                }
+            }
             // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
             Some(Jump::Curate(kind, context)) => {
                 if let Err(why) = self.runner.curate(kind, &context) {

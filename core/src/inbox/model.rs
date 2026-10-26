@@ -40,7 +40,7 @@ pub enum Kind {
     CurateDocs,
     /// A Lead or Manager blocked by the loop guard (hs-d552, hs-d571); always red.
     LoopGuard,
-    /// A provider's model list changed (pro-d13, pro-d16); stub: nothing opens it yet.
+    /// A provider's model list changed (pro-d13, pro-d16); always cyan, about the machine: no Context, Plan, Job or Session.
     ModelsChanged,
 }
 

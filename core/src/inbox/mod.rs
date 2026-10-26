@@ -3,6 +3,7 @@
 
 pub mod cmd;
 pub mod model;
+pub mod models;
 pub mod rules;
 pub mod team;
 
