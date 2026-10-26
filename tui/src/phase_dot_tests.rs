@@ -69,7 +69,7 @@ fn a_working_lead_is_drawn_in_its_plans_status_colour() {
 fn the_rule_gives_a_working_lead_the_dot_of_its_plans_phase() {
     for phase in Phase::ALL {
         assert_eq!(Dot::of(State::Working, None, false, Some(phase)), Dot::Working(Some(phase)), "{phase:?}");
-        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
+        for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
             assert_eq!(
                 Dot::of(State::Working, Some(urgency), false, Some(phase)),
                 Dot::Working(Some(phase)),
@@ -81,7 +81,7 @@ fn the_rule_gives_a_working_lead_the_dot_of_its_plans_phase() {
     for phase in Phase::ALL {
         assert_eq!(Dot::working(true, Some(phase)), Dot::Fixing, "{phase:?}");
         assert_eq!(Dot::of(State::Working, None, true, Some(phase)), Dot::Fixing, "{phase:?}");
-        for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Blue, Urgency::White] {
+        for urgency in [Urgency::Yellow, Urgency::Magenta, Urgency::Cyan, Urgency::White] {
             assert_eq!(Dot::of(State::Working, Some(urgency), true, Some(phase)), Dot::Fixing, "{phase:?} {urgency:?}");
         }
         assert_eq!(Dot::of(State::Working, Some(Urgency::Red), true, Some(phase)), Dot::Red, "the Lead's own red item (hs-d581): {phase:?}");

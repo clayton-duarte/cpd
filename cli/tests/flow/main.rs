@@ -24,6 +24,7 @@ mod driver_idle;
 mod driver_open;
 mod driver_reload;
 mod driver;
+mod context_inbox_cyan;
 mod host_repair;
 mod job;
 mod metrics;

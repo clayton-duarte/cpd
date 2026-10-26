@@ -669,7 +669,7 @@ fn a_click_on_an_archived_fork_unarchives_and_opens_it() {
     assert_eq!(drive::calls(&fx)[2], words(&["session", "open", "f-idle"]));
 }
 
-/// hs-d686: at both levels the drawn rows come by dot-urgency tier (red 0 > yellow 1 > magenta 2 > blue 3 > shiro 4,
+/// hs-d686: at both levels the drawn rows come by dot-urgency tier (red 0 > yellow 1 > magenta 2 > cyan 3 > shiro 4,
 /// the white dot and every row with no Inbox item, the red loader among them), then by last activity most recent
 /// first; archived rows stay last, whatever their dot.
 #[test]
