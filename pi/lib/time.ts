@@ -19,25 +19,38 @@ export function localTime(at: string): string {
   return localParts(at).time;
 }
 
-/** `YYYY-MM-DD HH:MM`, the local date and time, in the process's local time. */
-export function localDateTime(at: string): string {
-  const { date, time } = localParts(at);
-  return `${date} ${time}`;
+const FIELDS: Intl.DateTimeFormatOptions = { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+
+function parts(at: string | Date, timeZone: string | undefined, timeZoneName: "short" | "longOffset"): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of new Intl.DateTimeFormat("en-CA", { ...FIELDS, timeZone, timeZoneName }).formatToParts(new Date(at))) out[p.type] = p.value;
+  return out;
 }
 
-/** Stub: the PROSE FORMAT `YYYY-MM-DD HH:MM ZZZ`. */
-export function proseTime(at: string, _timeZone?: string): string {
-  return localDateTime(at);
+/** ZZZ: the zone abbreviation when it is letters only, otherwise the numeric offset `+05:30`. */
+function zoneLabel(at: string | Date, timeZone: string | undefined): string {
+  const short = parts(at, timeZone, "short").timeZoneName ?? "";
+  if (/^[A-Za-z]+$/.test(short)) return short;
+  const off = (parts(at, timeZone, "longOffset").timeZoneName ?? "").replace(/^GMT/, "");
+  return off === "" ? "+00:00" : off;
 }
 
-/** Stub: `HH:MM ZZZ`. */
-export function zoneTime(at: string, _timeZone?: string): string {
-  return localTime(at);
+/** The PROSE FORMAT `YYYY-MM-DD HH:MM ZZZ`, in the system zone (or `timeZone`). */
+export function proseTime(at: string | Date, timeZone?: string): string {
+  const p = parts(at, timeZone, "short");
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${zoneLabel(at, timeZone)}`;
 }
 
-/** Stub: the system prompt line naming the zone. */
-export function zoneLine(_now: Date, _timeZone?: string): string {
-  return "";
+/** `HH:MM ZZZ`. */
+export function zoneTime(at: string | Date, timeZone?: string): string {
+  const p = parts(at, timeZone, "short");
+  return `${p.hour}:${p.minute} ${zoneLabel(at, timeZone)}`;
+}
+
+/** The system prompt line naming the zone, built from `now`. */
+export function zoneLine(now: Date, timeZone?: string): string {
+  const iana = timeZone ?? new Intl.DateTimeFormat().resolvedOptions().timeZone; // Node canonicalises a given name (Asia/Kolkata -> Asia/Calcutta), so a given one is kept
+  return `Time zone: ${iana} (${zoneLabel(now, timeZone)}). State every time to a person in this zone with the zone named, as ${proseTime(now, timeZone)}, never in UTC.`;
 }
 
 export const TIME_ZONE_SECTION = "cpd-time-zone";

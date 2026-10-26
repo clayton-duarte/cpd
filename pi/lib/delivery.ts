@@ -1,6 +1,6 @@
 import type { CpdEvent, EventOf, Kind } from "./event.ts";
 import type { Message, SendOptions } from "./pi.ts";
-import { localTime } from "./time.ts";
+import { zoneTime } from "./time.ts";
 
 /**
  * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
@@ -37,8 +37,8 @@ export function errorMessage(what: string, code: string, message: string, extra:
   };
 }
 
-/** §15.3 `session-message`: `Message from <name> (<id>) (HH:MM): <text>`, or `Message from the User (<HH:MM>): <text>` when nobody sent it. The time is the sender's machine-local `at` (pi/lib/time.ts). */
+/** §15.3 `session-message`: `Message from <name> (<id>) (HH:MM ZZZ): <text>`, or `Message from the User (<HH:MM>): <text>` when nobody sent it. The time is the sender's machine-local `at` (pi/lib/time.ts). */
 export function sessionMessage(event: EventOf<"session-message">, sessionId: string, sender: { id: string; name: string | null } | null): Message {
   const from = sender === null ? "the User" : sender.name === null ? sender.id : `${sender.name} (${sender.id})`;
-  return eventMessage(event, sessionId, `Message from ${from} (${localTime(event.at)}): ${event.data.text}`);
+  return eventMessage(event, sessionId, `Message from ${from} (${zoneTime(event.at)}): ${event.data.text}`);
 }
