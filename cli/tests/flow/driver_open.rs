@@ -98,7 +98,7 @@ impl Live {
         (*self.fx.fakes.runner).clone()
     }
 
-    fn fixture(&self, sql: &str) {
+    pub(super) fn fixture(&self, sql: &str) {
         fixture(&self.fx.env, sql);
     }
 
@@ -197,7 +197,7 @@ impl Live {
     }
 
     /// The Events of `kind` of Plan `pay`: `(txn, data)`, in order.
-    fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
+    pub(super) fn plan_events(&self, kind: &str) -> Vec<(i64, Value)> {
         store(&self.fx.env)
             .read(|c| {
                 let mut stmt = c.prepare("SELECT txn, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
@@ -309,14 +309,14 @@ impl Live {
 }
 
 /// What `attempt submit` answered the Worker.
-fn submit(live: &Live, id: &str) -> Value {
+pub(super) fn submit(live: &Live, id: &str) -> Value {
     // The environment of the Worker's window: its Plan and its Attempt.
     let r = live.fx.cpd_with(&live.worktree(id), &["attempt", "submit", id], &[("CPD_PLAN", PLAN), ("CPD_ATTEMPT", id)]).json();
     r
 }
 
 /// A Worker that did nothing: it submits the Lead Branch as it is.
-fn submit_only(live: &Live, id: &str) -> Value {
+pub(super) fn submit_only(live: &Live, id: &str) -> Value {
     submit(live, id)
 }
 
@@ -345,7 +345,7 @@ fn open_live() -> Live {
 }
 
 /// The same with the pull request already open (812, as `pr open` leaves it), the Plan in `deploy`, and no `open` Job.
-fn open_pr_live() -> Live {
+pub(super) fn open_pr_live() -> Live {
     let live = open_live();
     live.fixture(&format!(
         "UPDATE jobs SET status = 'cancelled', cancel_reason = 'opened', cancel_requested_at = 't' WHERE key = 'open-repo';

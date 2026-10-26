@@ -14,6 +14,7 @@ mod pr_adopt_rebase;
 mod pr_cleanup;
 mod pr_cleanup_cancel;
 mod pr_comments;
+mod pr_view_feedback;
 mod pr_crud;
 mod pr_local_needs;
 mod pr_merge;

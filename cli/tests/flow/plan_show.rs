@@ -11,7 +11,7 @@ use cpd_core::home::CpdHome;
 use serde_json::{Value, json};
 
 /// The env with its config and Plan `pay-1` in `phase` (the Lead's session beside it), no PR.
-fn fx(phase: &str) -> Fx {
+pub(super) fn fx(phase: &str) -> Fx {
     let fx = Fx::new();
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
@@ -27,7 +27,7 @@ fn fx(phase: &str) -> Fx {
 }
 
 /// The fixtures of Plan `pay-1` on an [`Fx`].
-trait Pay {
+pub(super) trait Pay {
     fn pr(&self, key: &str, status: &str, needs: &[&str]);
     fn job(&self, key: &str, pr: &str, status: &str, needs: &[&str]);
     fn show(&self) -> Value;
