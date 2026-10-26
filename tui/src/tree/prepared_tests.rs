@@ -617,7 +617,11 @@ fn an_empty_live_context_draws_the_clickable_new_row() {
     assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
     // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
     env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
-    let buf = draw(&mut env.view(), 46, 20);
+    let mut view = env.view();
+    let closed = draw(&mut view, 46, 30);
+    let archive = text_rows(&closed).iter().position(|r| r.contains("archive")).expect("the archive row") as u16;
+    click(&mut view, 3, archive);
+    let buf = draw(&mut view, 46, 30);
     let rows = text_rows(&buf);
     let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
     assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));

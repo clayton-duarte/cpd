@@ -156,8 +156,11 @@ fn the_down_arrow_row_is_muted_and_only_it_toggles() {
 }
 
 #[test]
+#[test]
 fn an_archived_context_is_all_archived_rows_folded_it_shows_its_title_and_the_down_arrow() {
     let mut view = View::new(archived(), true);
+    let got = rows(&draw(&mut view, 44, 24));
+    click(&mut view, 3, find(&got, " archive") as u16);
     let got = rows(&draw(&mut view, 44, 24));
     let zeta = find(&got, "zeta");
     assert_eq!(got[zeta + 1], format!(" ╰{DOWN} expand"), "{got:#?}");
@@ -462,10 +465,13 @@ fn the_terminator_of_a_block_that_cannot_fold_is_colour_8_corner_and_glyph_with_
     // an ARCHIVED empty Context keeps the plain terminator (`plan new` is refused there; hs-d688)
     let mut gamma = super::fixture::context("gamma", vec![]);
     gamma.archived_at = Some(super::fixture::WHEN.into());
-    let empty = View::new(super::fixture::tree(vec![gamma]), true);
+    let mut empty = View::new(super::fixture::tree(vec![gamma]), true);
+    let closed = rows(&draw(&mut empty, 44, 10));
+    click(&mut empty, 3, find(&closed, " archive") as u16);
     let mut with_three = with_inbox(inbox_items(3));
-    let mut empty = empty;
-    for (name, buf, y) in [("an archived Context with no row", draw(&mut empty, 44, 10), 2u16), ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16)] {
+    let archived_empty = ("an archived Context with no row", draw(&mut empty, 44, 10), 3u16);
+    let inbox = ("the Inbox with 3 items", draw(&mut with_three, 43, 22), 20u16);
+    for (name, buf, y) in [archived_empty, inbox] {
         let width = buf.area.width;
         let cells: Vec<(u16, &str)> = (0..width).map(|x| (x, buf[(x, y)].symbol())).filter(|(_, s)| *s != " ").collect();
         assert_eq!(cells, [(1, "╰"), (2, TERMINATOR)], "{name}: only the corner and the glyph, no word, no `─`: {:#?}", rows(&buf));
