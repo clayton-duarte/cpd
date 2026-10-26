@@ -21,7 +21,9 @@ fn drawn(item: &cpd_core::inbox::model::Item, width: u16, height: u16) -> ratatu
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let pane = Rect::new(0, 0, width, height);
     terminal
-        .draw(|f| inbox::draw(f, pane, std::slice::from_ref(item), Shape::new(1, false), None, now(), &|_| None))
+        .draw(|f| {
+            inbox::draw(f, pane, std::slice::from_ref(item), Shape::new(1, false), None, now(), &|_| None);
+        })
         .unwrap();
     terminal.backend().buffer().clone()
 }

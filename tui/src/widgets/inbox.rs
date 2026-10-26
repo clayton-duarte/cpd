@@ -8,8 +8,8 @@
 //! (`dialog::scroll::cue`, [`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
-//! its pull request, or the copy of its `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
-//! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
+//! its pull request, or the copy of its `url`. The label of a link kind with a `url` is a `Link` widget (`crate::link`): a click on it opens the page
+//! instead. Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -23,7 +23,6 @@ use crate::tree::actions::Action;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
 use crate::cells::{self, truncate};
 use crate::fold;
-use crate::link::link;
 use crate::merge::Pull;
 use crate::palette;
 use crate::phi;
@@ -34,6 +33,7 @@ use crate::dialog::scroll::WHEEL_ROWS;
 use super::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
+use crate::link::{Link, Links};
 
 /// How many item rows the section shows before the `╰󰬦 expand` row.
 pub const SHOWN: usize = 3;
@@ -199,7 +199,7 @@ fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
     OffsetDateTime::parse(opened_at, &Rfc3339).map_or_else(|_| "?".to_owned(), |t| age_text((now - t).whole_seconds()))
 }
 
-/// What a click on an item does besides the OSC 8 link.
+/// What a click on an item does besides the link's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Jump {
     /// Run this command and focus the chat slot (a click on a Session row).
@@ -288,8 +288,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰬪` (hs-d574). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
-/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
-/// terminal's modifier-click). `None` only for an item without what its jump needs.
+/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (a click on the label of a link kind opens its page instead, see [`Link`]). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
@@ -385,7 +384,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
     Some(open_or_history(tree, &plan.head.lead_session))
 }
 
-/// The kinds whose label is an OSC 8 link to the item's `url`.
+/// The kinds whose label is a `Link` to the item's `url`.
 fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
@@ -393,10 +392,13 @@ fn is_link(kind: Kind) -> bool {
 /// An item's row, in the box's body: the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age (`width` cells: the body's). Returns the line and the number of cells of the label.
 /// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
+/// The label of a link kind with a url is no text of the line: its cells are blank, for the [`Link`] drawn over them, which is as
+/// wide as the label and the cue (cut to the room before the age); the number of cells is that width.
 fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + cells::width(age));
-    let label = truncate(&item.label, room);
-    let label_width = cells::width(&label);
+    let linked = link_url(item).is_some();
+    let label = if linked { String::new() } else { truncate(&item.label, room) };
+    let label_width = if linked { (cells::width(&item.label) + 2).min(room) } else { cells::width(&label) };
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + cells::width(age));
     let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
@@ -404,28 +406,40 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
     }
     let mut spans = vec![glyph, " ".into()];
-    spans.extend(phi::spans(&label, palette::clickable_text()));
+    if linked {
+        spans.push(" ".repeat(label_width).into());
+    } else {
+        spans.extend(phi::spans(&label, palette::clickable_text()));
+    }
     spans.push(" ".repeat(gap).into());
     spans.push(Span::styled(age.to_owned(), palette::muted_text()));
     let line = Line::from(spans);
     (line, label_width)
 }
 
-/// The box's body: the rows of the list (items and cues), each a line, and the links of the labels of the link kinds.
-struct Body {
-    rows: Vec<Line<'static>>,
-    /// (row, label's width, url)
-    links: Vec<(u16, u16, String)>,
+/// The url of the link of `item`: its `url`, for a link kind.
+fn link_url(item: &Item) -> Option<&str> {
+    item.url.as_deref().filter(|_| is_link(item.kind))
 }
 
-impl Widget for Body {
+/// The box's body: the rows of the list (items and cues), each a line, and the links of the labels of the link kinds.
+struct Body<'a> {
+    rows: Vec<Line<'static>>,
+    /// (row, width of the label and the cue, the item)
+    links: Vec<(u16, u16, &'a Item)>,
+    drawn: &'a mut Links,
+}
+
+impl Widget for Body<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         for (y, line) in (area.y..area.bottom()).zip(self.rows) {
             line.render(Rect::new(area.x, y, area.width, 1), buf);
         }
-        for (row, width, url) in self.links {
+        for (row, width, item) in self.links {
+            let Some(url) = link_url(item) else { continue };
             if row < area.height {
-                link(buf, Rect::new(area.x + LEAD_WIDTH as u16, area.y + row, width, 1), &url);
+                let text = Line::from(phi::spans(&item.label, palette::clickable_text()));
+                self.drawn.draw(Link::new(url).text(text), Rect::new(area.x + LEAD_WIDTH as u16, area.y + row, width, 1), buf);
             }
         }
     }
@@ -436,7 +450,7 @@ impl Widget for Body {
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
 /// is on (its row is the blue block across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
 /// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) -> Links {
     // the section is drawn whole; rows below the area are cut
     let wall = Rect { height: shape.height(), ..spacing::contain(area) };
     let closing = if items.is_empty() {
@@ -455,6 +469,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
     let mut rows = Vec::new();
     let mut links = Vec::new();
     let mut highlight = None;
+    let mut drawn = Links::default();
     for at in 0..list {
         let row = at as u16;
         match shape.hit(row + TOP as u16) {
@@ -465,8 +480,8 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
                 if cursor == Some(i) {
                     highlight = Some(row..row + 1);
                 }
-                if let (true, Some(url)) = (is_link(item.kind), &item.url) {
-                    links.push((row, label_width as u16, url.clone()));
+                if link_url(item).is_some() {
+                    links.push((row, label_width as u16, item));
                 }
             }
             _ if win.cue_above && at == 0 => rows.push(cue(Cue::Above, win.first, width)),
@@ -475,14 +490,14 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
         }
     }
     let title = section::rail_title("Inbox", Some(items.len()), usize::from(wall.width).saturating_sub(1));
-    let mut widget = BoxWidget::new(walls, palette::muted_text(), Body { rows, links }).title(title);
+    let mut widget = BoxWidget::new(walls, palette::muted_text(), Body { rows, links, drawn: &mut drawn }).title(title);
     if let Some(rows) = highlight {
         widget = widget.highlight(rows);
     }
     let shown = area.height.min(wall.height);
     if shown == wall.height {
         f.render_widget(widget, wall);
-        return;
+        return drawn;
     }
     let mut whole = Buffer::empty(wall);
     widget.render(wall, &mut whole);
@@ -492,6 +507,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             buf[(x, y)] = whole[(x, y)].clone();
         }
     }
+    drawn
 }
 
 /// The layout test's sample (`layout_tests`): the Inbox section drawn by [`draw`] at the top of a `width` x `height` pane
@@ -521,7 +537,9 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     let pane = Rect::new(0, 0, width, height);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
-        .draw(|f| draw(f, Rect { height: shape.height().min(height), ..pane }, &items, shape, None, now, &|_| None))
+        .draw(|f| {
+            draw(f, Rect { height: shape.height().min(height), ..pane }, &items, shape, None, now, &|_| None);
+        })
         .unwrap();
     let wall = Rect { height: shape.height().min(height), ..spacing::contain(pane) };
     let boxes = vec![Placed { name: "inbox", kind: Walls::Rail, rect: wall, exempt: Vec::new() }];
@@ -755,7 +773,9 @@ mod tests {
     fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
         use ratatui::backend::TestBackend;
         let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"), &|_| None)).unwrap();
+        terminal.draw(|f| {
+            draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"), &|_| None);
+        }).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
         let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
