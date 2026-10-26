@@ -136,9 +136,10 @@ impl Pane {
     }
 }
 
-/// A pill: its label between the caps U+E0B6 and U+E0B4, no padding.
+/// A pill: its label between the spec's caps, no padding.
 pub(super) fn pill(label: &str) -> String {
-    format!("\u{E0B6}{label}\u{E0B4}")
+    let caps = &cpd_core::pill::spec().caps;
+    format!("{}{label}{}", caps.left, caps.right)
 }
 
 /// The top border of a popup `w` wide: `╭─`, the title pill, `─` up to `╮`.

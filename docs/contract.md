@@ -1375,8 +1375,10 @@ CREATE TABLE attempts (
   outcome          TEXT CHECK (outcome IN ('merged', 'failed', 'cancelled')),
   cause            TEXT CHECK (cause IN ('merged', 'cancel_requested', 'setup_failed', 'timed_out',
                                          'crashed', 'no_submit', 'merge_conflict',
-                                         'cas_lost', 'dirty_target', 'tampered')),
-  branch           TEXT NOT NULL CHECK (branch = 'cpd/' || plan || '--' || id),
+                                         'cas_lost', 'dirty_target', 'tampered',
+                                         'gate_failed', 'gate_error')),
+  branch           TEXT NOT NULL CHECK (branch = 'cpd/' || plan || '--' || id
+                                        OR substr(branch, 1, length('cpd/' || plan || '/')) = 'cpd/' || plan || '/'),
   worktree         TEXT NOT NULL,
   base_sha         TEXT,
   driver_pid       INTEGER,

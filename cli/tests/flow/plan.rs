@@ -272,11 +272,12 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!(record["repos"], json!([real, web]), "each repo once, in PR key order, no cancelled PR");
     assert!(shown["markdown"].as_str().unwrap().contains(&format!("pay (on m1, repos {real}, {web}, PAY-1): Retry payouts")), "{shown}");
 
-    // The first message: the header, the brief, then every record (a fresh Lead).
+    // The first message: the header, the brief, then the pointer line; no record is listed (#418, docs/commands.md §4.1 step 3).
     let message = fs::read_to_string(home(&fx.env).lead_message(&pid("pay"))).unwrap();
     let header = "You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n";
     assert!(message.starts_with(header), "{message}");
-    assert!(message.contains("One engine per machine."), "{message}");
+    assert!(message.contains("Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>"), "{message}");
+    assert!(!message.contains("One engine per machine."), "no record is listed: {message}");
 }
 
 /// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
@@ -346,16 +347,17 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
     assert!(full["records"][0].get("short").is_none());
     assert!(full["markdown"].as_str().unwrap().contains("second paragraph"));
 
-    // The Lead's first message: header, the full brief, then the records; its own brief not listed twice.
+    // The Lead's first message: header, the full brief, then the pointer line; its own brief not listed twice.
     let message = fs::read_to_string(home(&fx.env).lead_message(&pid("pay"))).unwrap();
     let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n";
     assert!(message.starts_with(header), "{message}");
     assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "{message}");
 
-    // Another Plan's Lead sees this brief short.
+    // Another Plan's Lead is pointed at the Context and is not given this brief, short or full (#418).
     new_with_brief(&fx, "web", "Build the web page.\nSecond line.\n").ok();
     let message = fs::read_to_string(home(&fx.env).lead_message(&pid("web"))).unwrap();
-    assert!(message.contains("[m1-b1] brief") && message.contains("Retry the failed payouts."), "{message}");
+    assert!(message.contains("Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>"), "{message}");
+    assert!(!message.contains("[m1-b1] brief") && !message.contains("Retry the failed payouts."), "{message}");
     assert!(!message.contains("second paragraph"), "{message}");
     assert_eq!(message.matches("Build the web page.").count(), 1, "{message}");
     assert_eq!(briefs(&fx).len(), 2);
@@ -586,7 +588,7 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     assert_eq!(inproc::events(&fx, "plan-phase").len(), 1);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events_before + 1);
 
-    // A later Plan of the Context is a fresh Lead, never a fork: its first message holds every record.
+    // A later Plan of the Context is a fresh Lead, never a fork: its first message points at the records, it lists none.
     fx.cpd(&["context", "note", "Recorded after the first Plan.", "--context", "ctx"]).ok();
     let second = inproc::new_plan(&fx, "refund", &repo);
     assert_eq!(second["lead"]["forked_from"], Value::Null);
@@ -596,8 +598,9 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     assert_eq!(inproc::events(&fx, "plan-created").last().unwrap()["data"]["forked_from"], Value::Null);
     assert_eq!(inproc::events(&fx, "session-registered").last().unwrap()["data"]["forked_from"], Value::Null);
     let message = fs::read_to_string(home(&fx.env).lead_message(&pid("refund"))).unwrap();
-    assert!(message.contains("Recorded after the first Plan."), "{message}");
-    assert!(message.contains("m1-n1"), "the record uncurated, listed raw: {message}");
+    assert!(message.starts_with("You are the Lead of Plan refund \"Plan refund\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\n"), "{message}");
+    assert!(message.contains("Context on demand: cpd context search <query> · cpd context show --since <seq> · cpd context show --record <id>"), "{message}");
+    assert!(!message.contains("Recorded after the first Plan.") && !message.contains("m1-n1"), "no record is listed: {message}");
 }
 
 #[test]
@@ -658,7 +661,24 @@ fn plans_moving_to_phase_plan_at_once_all_move() {
     }
     let sessions = fx.env.query::<i64>("SELECT count(*) FROM sessions");
     let barrier = std::sync::Barrier::new(plans.len());
-    let ports = &fx.fakes.ports;
+    // The store's setup lock is a real `flock` the six threads take in turn; a waiter naps on the clock, and on the
+    // `ManualClock` each nap is a virtual 20 ms, so a few real milliseconds of contention would read as the
+    // 5 s `store_busy_ms`. These threads yield instead: no time passes, none is slept, and the wait ends with the holder.
+    struct Yield;
+    impl cpd_core::clock::Clock for Yield {
+        fn now(&self) -> std::time::Instant {
+            std::time::Instant::now()
+        }
+        fn sleep(&self, _: std::time::Duration) {
+            std::thread::yield_now();
+        }
+        fn utc(&self) -> time::OffsetDateTime {
+            time::OffsetDateTime::now_utc()
+        }
+    }
+    let mut yielding = fx.fakes.ports.clone();
+    yielding.clock = std::sync::Arc::new(Yield);
+    let ports = &yielding;
     std::thread::scope(|scope| {
         let handles: Vec<_> = plans
             .iter()

@@ -1,5 +1,5 @@
 //! The one status row (contract §6.1, commands.md §13.2): `status on`, the line in `status-format[0]`, and a 20-row
-//! client's window is 19 rows, so the panes reach row 19 and row 20 is the `─` line. The history view leaves the last
+//! client's window is 19 rows, so the panes reach row 19 and row 20 is the `━` line. The history view leaves the last
 //! row of its pane empty (the chat slot's padding).
 
 use crate::common;
@@ -33,7 +33,7 @@ fn the_status_line_is_one_row_and_the_panes_reach_the_row_above_it() {
 
     // The options: one status row, the line in row 0, no row 1.
     assert_eq!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status"]).trim(), "on");
-    assert!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]).contains("\u{2500}"));
+    assert!(tmux_out(&fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]).contains("\u{2501}"));
     // The fake server refuses to show an option that was never set, so row 1 is read off the session's own options.
     let set = tmux_out(&fx, &["show", "-t", "=cpd:"]);
     assert!(!set.lines().any(|l| l.starts_with("status-format[1]")), "no status-format row sits between the panes and the line: {set}");

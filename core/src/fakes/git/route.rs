@@ -191,6 +191,7 @@ impl GitRoute {
             "ls-tree" => ls_tree(&mut ctx, rest),
             "log" => log(&mut ctx, rest),
             "status" => status(&mut ctx, rest),
+            "ls-files" => ls_files(&mut ctx, rest),
             "diff" => diff(&mut ctx, rest),
             "ls-remote" => ls_remote(&mut ctx, rest),
             "fetch" => fetch(&mut ctx, rest),
@@ -662,6 +663,46 @@ fn unmerged(index: &[(String, Oid, u8)]) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
+/// What `status` and `ls-files --others` show of the files no index entry tracks: a directory with nothing tracked
+/// in it once, as `dir/`, and every other file by its path; `.gitignore` rules (see `fixture::Ignore`) apply.
+fn untracked_entries(wt: &Path, files: &BTreeMap<String, PathBuf>, known: &[&str], sub: &str) -> Result<BTreeSet<String>, String> {
+    let ignore = fixture::ignore_of(wt, files, sub)?;
+    let mut found = BTreeSet::new();
+    for path in files.keys().filter(|p| !known.contains(&p.as_str()) && !ignore.ignores(p, false)) {
+        let parts: Vec<&str> = path.split('/').collect();
+        let shown = (1..parts.len())
+            .map(|k| format!("{}/", parts[..k].join("/")))
+            .find(|dir| !known.iter().any(|t| t.starts_with(dir.as_str())))
+            .unwrap_or_else(|| path.clone());
+        found.insert(shown);
+    }
+    Ok(found)
+}
+
+/// `ls-files --others --exclude-standard --directory [-z]`: the untracked entries `status` shows, one per line or
+/// NUL-terminated, unquoted. Any other form is unsupported.
+fn ls_files(c: &mut Ctx, args: &[String]) -> Run {
+    let toks = scan("ls-files", args, &["--others", "--exclude-standard", "--directory", "-z"], &[])?;
+    let flags = flags(&toks);
+    for required in ["--others", "--exclude-standard", "--directory"] {
+        if !flags.contains(&required) {
+            return Err(format!("ls-files (without {required})"));
+        }
+    }
+    if !positionals(&toks).is_empty() {
+        return Err("ls-files (arguments)".to_owned());
+    }
+    let wt = match c.worktree() {
+        Ok(wt) => wt,
+        Err(out) => return Ok(out),
+    };
+    let index = c.u.effective_index(&wt);
+    let known: Vec<&str> = index.iter().map(|(p, _, _)| p.as_str()).collect();
+    let end = if flags.contains(&"-z") { '\0' } else { '\n' };
+    let files = work_files(&wt);
+    Ok(Out::ok(untracked_entries(&wt, &files, &known, "ls-files")?.into_iter().map(|e| format!("{e}{end}")).collect::<String>()))
+}
+
 fn status(c: &mut Ctx, args: &[String]) -> Run {
     let toks = scan("status", args, &["--porcelain", "-z"], &["--untracked-files="])?;
     let flags = flags(&toks);
@@ -721,17 +762,7 @@ fn status(c: &mut Ctx, args: &[String]) -> Run {
     }
     if untracked {
         let known: Vec<&str> = merged.keys().copied().chain(conflicts.keys().map(String::as_str)).collect();
-        let ignore = fixture::ignore_of(&wt, &files, "status")?;
-        let mut found = BTreeSet::new();
-        for path in files.keys().filter(|p| !known.contains(&p.as_str()) && !ignore.ignores(p, false)) {
-            let parts: Vec<&str> = path.split('/').collect();
-            let shown = (1..parts.len())
-                .map(|k| format!("{}/", parts[..k].join("/")))
-                .find(|dir| !known.iter().any(|t| t.starts_with(dir.as_str())))
-                .unwrap_or_else(|| path.clone());
-            found.insert(shown);
-        }
-        lines.extend(found.into_iter().map(|l| ("??".to_owned(), l)));
+        lines.extend(untracked_entries(&wt, &files, &known, "status")?.into_iter().map(|l| ("??".to_owned(), l)));
     }
     let z = flags.contains(&"-z");
     Ok(Out::ok(

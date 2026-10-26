@@ -4,7 +4,7 @@ import { HStack, Spacer, TuiAltScreen, truncateToWidth, VStack, visibleWidth } f
 import { hookMethod } from "../compact-tools/extensions/compact-tools-hook.ts";
 
 /**
- * The uniform 1-cell chat-slot pad (decision hs-d684 item 3, docs/research/chat-padding.md): the pi pane's fullscreen
+ * The uniform 1-cell chat-slot pad (docs/research/chat-padding.md): the pi pane's fullscreen
  * layout root is wrapped so it renders with one blank row above, one blank row below, one blank column left and one
  * right, and the real root grows in the middle. pi 1.3.0 has no padding option on the fullscreen root, so the
  * fullscreen renderer's own `setLayoutRoot` is wrapped (as `compact-tools-viewport.ts` wraps `doRender`) and reaches

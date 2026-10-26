@@ -157,6 +157,12 @@ impl Fx {
     /// The pi release the catalog is of is the installed one (`install/current-version` and the release's entry points, which
     /// E2's ladder looks for and nothing runs).
     pub fn engine_plan_at(&self, repo: &Path, lead: &Path) {
+        self.engine_plan_on(repo, lead, &format!("cpd/{PLAN}/repo"));
+    }
+
+    /// [`Fx::engine_plan_at`] with the Lead Branch `lead_branch` the Lead worktree `lead` really has (a worktree made by
+    /// `create_lead_worktree` is on `cpd/<plan>`): E2's merge recovery tests the Attempt against the stored name.
+    pub fn engine_plan_on(&self, repo: &Path, lead: &Path, lead_branch: &str) {
         let install = self.env.root().join("install");
         std::fs::create_dir_all(&install).expect("create install/");
         std::fs::write(install.join("current-version"), "1.0.0\n").expect("write current-version");
@@ -178,7 +184,7 @@ impl Fx {
              INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                VALUES ('{PLAN}', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
-               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', 'cpd/{PLAN}', '{}', 'Charge the card at checkout', 'config', cpd_txn(), 't', 't');",
+               VALUES ('{PLAN}', 'repo', '{}', 'main', 'dispatch', '{lead_branch}', '{}', 'Charge the card at checkout', 'config', cpd_txn(), 't', 't');",
             repo.display(),
             lead.display()
         ));
