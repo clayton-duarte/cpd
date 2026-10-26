@@ -802,7 +802,7 @@ fn stacked_on_a1(fx: &Fx, repo: &Repo) -> String {
     fx.start("a1").ok();
     let a1 = fx.lead_path(&repo.path, "a1");
     fx.git(&a1, &["commit", "-q", "--allow-empty", "-m", "a1 work"]);
-    fx.add_with("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.add_with("b1", &repo.path, &["--base", "pay/a1", "--no-needs"]);
     head(fx, &a1, "HEAD")
 }
 
@@ -885,7 +885,7 @@ fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
     fx.add("a0", &repo.path, &[]);
     fx.add("a1", &repo.path, &["a0"]);
     fx.dispatch();
-    fx.add_with("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.add_with("b1", &repo.path, &["--base", "pay/a1", "--no-needs"]);
 
     let error = refused(&fx.start("b1"), "pr_not_ready", 3);
 
@@ -948,7 +948,7 @@ fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before()
     fx.add("a1", &repo.path, &["a0"]);
     fx.dispatch();
     fx.env.sql(&Fx::dispatch_sql("a0"));
-    fx.add_with("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.add_with("b1", &repo.path, &["--base", "pay/a1", "--no-needs"]);
     fx.engine_routes();
 
     // a1 waits for a0, and b1 for a1 to start: nothing starts.
