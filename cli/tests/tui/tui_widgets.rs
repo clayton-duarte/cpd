@@ -454,19 +454,14 @@ fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
 
 // ---------- the 󱆭 links and the owned rows ----------
 
-/// The cell of a linked `󱆭`: its symbol is wrapped in the OSC 8 escapes of its link.
-fn linked_arrow(url: &str) -> String {
-    format!("\x1b]8;;{url}\x07{CUE}\x1b]8;;\x07")
-}
-
 #[test]
 fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
     let fx = Fx::new();
     let w = read::widgets(&mut prs_store(&fx.env), 3, 0).unwrap();
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
-        assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
-        assert_eq!(plain(buf[(45, y)].symbol()), CUE, "row {y}");
+        let _ = (number, repo);
+        assert_eq!(buf[(45, y)].symbol(), CUE, "row {y}");
         assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
         assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
     }
@@ -742,8 +737,10 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
         let line = row(&buf, y);
         assert_eq!(line.chars().count(), usize::from(width), "the arrow ends {name}'s line at the right edge: {line:?}");
         assert!(line.ends_with(CUE), "{line:?}");
-        // the cell at the right edge is the link to the pull request, in the OSC 8 escapes the terminal gets
-        assert_eq!(buf[(width - 1, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "{name}");
+        // the cell at the right edge is the plain cue: no escape in any cell of the row
+        let _ = (number, repo);
+        assert_eq!(buf[(width - 1, y)].symbol(), CUE, "{name}");
+        assert!((0..width).all(|x| !buf[(x, y)].symbol().contains('\x1b')), "{name}");
     }
 }
 
@@ -812,6 +809,7 @@ fn a_follow_that_fails_is_shown_and_the_column_stays() {
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
     let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
     let mut store = prs_store(&fx.env);
     sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
     drop(store);
@@ -825,7 +823,7 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     };
     let steps = Steps::new()
         .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
-        // The unowned rows, and the owned row's arrow (the terminal's): nothing runs.
+        // The unowned rows, and the owned row's cue (it opens the page, never the Lead): no `session open` runs.
         .next("the click on an unowned row", quiet("an unowned row"))
         .next("the click on another unowned row", quiet("another unowned row"))
         .next("the click on the arrow", quiet("the arrow"));
@@ -834,6 +832,8 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     let mut expected = before;
     expected.push(("l-mine".to_owned(), "chat".to_owned()));
     assert_eq!(seen.moved_events(), expected, "one `session open`, for the owned PR's Lead");
+    let opened: Vec<_> = fx.calls("open").into_iter().map(|c| c.args).collect();
+    assert_eq!(opened, [["https://github.com/acme/repo/pull/20"]], "the cue click ran `open` once, with its row's url");
     assert!(seen.focused_session().contains("|l-mine|"), "{}", seen.focused_session());
     let chat = seen.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}|#{pane_id}"]);
     assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
@@ -887,6 +887,7 @@ fn widgets_log(home: &Path) -> String {
 #[test]
 fn a_refused_session_open_is_logged_and_draws_no_note() {
     let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
     prs_store(&fx.env);
     let home = fx.env.cpd_home();
     let log = move || widgets_log(&home);
@@ -894,9 +895,9 @@ fn a_refused_session_open_is_logged_and_draws_no_note() {
     let (nothing, then, refused) = (log.clone(), log.clone(), log.clone());
     let steps = Steps::new()
         .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
-        // The unowned rows and the arrow run nothing, so nothing is logged: not after the first click, not after the second.
+        // The unowned rows run nothing and the cue opens the page without a failure, so nothing is logged: not after the first click, not after the second.
         .next("the click on an unowned row", move |_| assert_eq!(nothing(), "", "nothing was refused"))
-        .next("the click on the arrow", move |_| assert_eq!(then(), "", "nothing was refused"))
+        .next("the click on the cue", move |_| assert_eq!(then(), "", "nothing was refused"))
         // the owned row: refused, logged, and the view has drawn again since; no tmux client is attached, so no dialog opened either
         .next("the click on the owned row", move |screen| {
             assert!(refused().contains("failed: Go to Lead: no_cockpit: "), "{}", refused());
@@ -1270,4 +1271,21 @@ fn the_deploy_columns_menu_keeps_one_blank_column_on_each_side_of_the_pane() {
         });
     let signals = vec![input(common::screen::right_click(width - 1, blocked)), input(common::screen::key(KeyCode::Esc)), input(common::screen::right_click(0, blocked)), gone()];
     show(&fx, signals, &steps);
+}
+
+#[test]
+fn a_click_on_a_pr_rows_cue_runs_open_with_that_rows_url_and_nothing_else() {
+    let fx = view_fx();
+    fx.fake("open", Reply::ok(""));
+    prs_store(&fx.env);
+    let home = fx.env.cpd_home();
+    let steps = Steps::new()
+        .at("the PRs", |s| s.contains("acme/repo#20"), |_| {})
+        .next("the click on the cue", move |s| {
+            assert_eq!(widgets_log(&home), "", "no failure logged");
+            assert!(s.shown_rows().iter().any(|r| r.contains("acme/repo#20")), "the column is as before");
+        });
+    show(&fx, vec![input(left_click(119, 6)), gone()], &steps);
+    let opened: Vec<_> = fx.calls("open").into_iter().map(|c| c.args).collect();
+    assert_eq!(opened, [["https://github.com/acme/web/pull/4"]]);
 }

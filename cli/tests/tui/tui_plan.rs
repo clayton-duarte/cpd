@@ -467,14 +467,6 @@ fn plan_under_review(number: u32, status: &str) -> String {
         )
 }
 
-/// The visible text the OSC 8 links to `url` cover in `buf`: a linked piece is one cell whose symbol is `ESC ] 8 ; ; <url> BEL`, its text and
-/// the closing escape (`cpd_tui::link`).
-fn linked_text(buf: &Buffer, url: &str) -> String {
-    let open = format!("\x1b]8;;{url}\x07");
-    let cells = (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y)));
-    cells.filter_map(|at| buf[at].symbol().strip_prefix(&open).map(|rest| plain(rest.trim_end_matches("\x1b]8;;\x07")))).collect()
-}
-
 #[test]
 fn a_pull_request_box_title_ends_in_a_link_to_it() {
     let fx = fx();
@@ -482,8 +474,9 @@ fn a_pull_request_box_title_ends_in_a_link_to_it() {
     let buf = draw(&fx);
     let screen = rows(&buf);
     assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮")), "{}", screen.join("\n"));
-    // the link wraps its whole text, from `#` through `󱆭`, and nothing else
-    assert_eq!(linked_text(&buf, "https://github.com/acme/repo/pull/7"), format!("#7 open {CUE}"), "{}", screen.join("\n"));
+    // plain cells: the `Link` widget writes no escape
+    let cells = (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y)));
+    assert!(cells.into_iter().all(|at| !buf[at].symbol().contains('\x1b')), "{}", screen.join("\n"));
 }
 
 #[test]
