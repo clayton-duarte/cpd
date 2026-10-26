@@ -128,7 +128,7 @@ fn the_distiller_has_no_mcp_flag_and_is_unchanged() {
     assert_eq!(
         argv,
         strs(&[
-            "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools",
+            "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-tools",
             "--model", "p/sonnet:medium", "--", "@prompt.md", "@records.md",
         ])
     );
@@ -138,7 +138,7 @@ fn the_distiller_has_no_mcp_flag_and_is_unchanged() {
 #[test]
 fn the_title_writer_has_no_mcp_flag_and_keeps_no_extensions() {
     let source = include_str!("../../session/retitle.rs");
-    let args = source.lines().find(|l| l.contains("command.args([")).expect("the title writer's argv line");
+    let args = source.lines().find(|l| l.contains("args: [\"--print\"")).expect("the title writer's argv line");
     assert!(args.contains("\"--no-extensions\""), "{args}");
     assert!(!args.contains(NO_MCP), "{args}");
 }
