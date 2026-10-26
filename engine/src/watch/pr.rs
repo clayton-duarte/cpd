@@ -277,7 +277,7 @@ pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<
 }
 
 /// What a child printed: its success value (`ok` true, exit 0), or the failure it printed (`ok` false, with an
-/// `error` code), or a `spawn_failed` failure when it printed no result. Shared with E11's helper.
+/// `error` code), or a `spawn_failed` failure when it printed no result (named apart when it exited 0 with no output). Shared with E11's helper.
 pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
@@ -291,13 +291,20 @@ pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
                 details: error["details"].clone(),
             })
         }
-        _ => Err(Failure::from(
-            &CpdError::new(ErrorCode::SpawnFailed, format!("{} printed no result.", argv.join(" ")))
-                .with("argv", json!(argv))
-                .with("exit", out.status.code())
-                .with("stdout", tail(&stdout, TAIL_LINES))
-                .with("stderr", tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES)),
-        )),
+        _ => {
+            let message = if out.status.success() && stdout.trim().is_empty() {
+                format!("{} exited 0 but printed no result.", argv.join(" "))
+            } else {
+                format!("{} printed no result.", argv.join(" "))
+            };
+            Err(Failure::from(
+                &CpdError::new(ErrorCode::SpawnFailed, message)
+                    .with("argv", json!(argv))
+                    .with("exit", out.status.code())
+                    .with("stdout", tail(&stdout, TAIL_LINES))
+                    .with("stderr", tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES)),
+            ))
+        }
     }
 }
 
