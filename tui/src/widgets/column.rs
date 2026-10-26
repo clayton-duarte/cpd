@@ -15,7 +15,7 @@ use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette::{self, Meaning};
 use crate::box_widget::SectionTitle;
-use crate::tree::inbox::{self, Shape, inbox_share};
+use super::inbox::{self, Shape, inbox_share};
 use cpd_core::inbox::model::Item;
 use time::OffsetDateTime;
 use crate::read::{Dot, OpenPr, PrFacts, PrState, ReviewDecision, pr_look};

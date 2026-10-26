@@ -509,7 +509,11 @@ pub(crate) fn show_error_on(tmux: &Tmux, client: &str, title: &str, text: &str) 
 /// failed and `err` says why. A log that cannot be written is said in the dialog; a dialog that cannot open is
 /// logged: there is nothing else to show it with.
 pub(crate) fn report(tmux: &Tmux, log: &ViewLog, what: &str, err: &CpdError) {
-    let mut why = format!("{}: {}", err.code(), err.message());
+    report_why(tmux, log, what, format!("{}: {}", err.code(), err.message()));
+}
+
+/// [`report`] of a failure already said in words (`<code>: <message>`).
+pub(crate) fn report_why(tmux: &Tmux, log: &ViewLog, what: &str, mut why: String) {
     if let Err(unwritten) = log.append(&format!("failed: {what}: {why}")) {
         why = format!("{why}\n{unwritten}");
     }

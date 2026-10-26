@@ -5,12 +5,10 @@
 //!
 //! Keys (commands.md §13.2): ↑↓ and j/k move the cursor, Enter opens the cursor's Session, `n` starts a new Plan,
 //! `x` closes a Session's pane (both ask in a dialog popup, as the menu's `…`, Close and Archive do; the view has no
-//! inline prompt), `?` opens the legend. After the last Session the cursor goes on into the Inbox
-//! section's item rows (and back up); there Enter jumps to the item's cause, `s` opens the snooze choices and `d`
-//! dismisses. No other key does anything. A right click opens the menu
+//! inline prompt), `?` opens the legend. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -18,19 +16,15 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::widgets::{Paragraph, Wrap};
-use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
-use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject, Until};
+use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject};
 use super::cursor::{self, Input};
 use super::folds::{Folds, FoldsFile};
-use super::inbox::{self, Hit, Jump, Shape, inbox_share};
-use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
 use super::rows::{self, Hits, Id, Row};
 use cpd_core::home::CpdHome;
-use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::ids::SessionId;
 use cpd_core::ports::Ports;
 use cpd_core::session::State;
@@ -111,13 +105,6 @@ pub enum Effect {
     Ask(Question),
     /// Open the legend popup (`?`); a failure is logged.
     Legend,
-    /// Run these actions in order, then call [`View::finished`] with the result: a click on a `plan-review` item.
-    Steps(Vec<Action>),
-    /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is logged.
-    Merge(Pull),
-    /// The checklist dialog of a curate item of this Context, then the command its answer makes: a click on a
-    /// `curate-retire` or `curate-docs` item. A failure is a `text` dialog.
-    Curate(cpd_core::inbox::model::Kind, cpd_core::ids::ContextId),
     /// Open a `text` dialog popup ([`crate::dialog::show_error`]): a failure or refusal the User must see (commands.md
     /// §17 "No notes"). `title` says what failed, `text` why (`<code>: <message>`).
     Text { title: String, text: String },
@@ -144,26 +131,10 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (title, items, `╰󰬬 collapse`) are shown, not only the first three, in the rows the column's
-    /// split gives it ([`View::inbox_cap`]). View state only.
-    inbox_expanded: bool,
-    /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
-    /// View state only.
-    inbox_scroll: usize,
-    /// The most rows the expanded section may take, as the last frame had it: what the split of the column gives it
-    /// (commands.md §13.2, hs-d307).
-    inbox_cap: u16,
     /// The tree's scroll: the wheel and the cursor move it.
     tree_scroll: rows::Scroll,
     /// Where the last frame drew the tree and its cue rows (the gap below them is not it): the wheel there scrolls it.
     tree_area: Rect,
-    /// The cursor moved (or the list changed): the next frame scrolls the section to show the cursor's item.
-    follow_inbox_cursor: bool,
-    /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
-    inbox_area: Rect,
-    /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
-    /// the tree's cursor then rests on its last Session. Hidden like the tree's cursor ([`cursor::shown`]).
-    inbox_cursor: Option<usize>,
     /// The last failed snapshot's error (one row), until a snapshot succeeds: a lasting state of the view, drawn as its
     /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
@@ -172,9 +143,6 @@ pub struct View {
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
-    /// The pull requests (`<owner>/<repo>#<n>`) whose merge runs, as of the last snapshot of the merge markers
-    /// ([`View::set_merging`], hs-d495): view state only, no Event tells it.
-    merging: BTreeSet<String>,
 }
 
 /// One downtime of the engine (see [`View::down`]).
@@ -197,72 +165,29 @@ impl View {
             last_input: Input::Click,
             menu: None,
             pane: Rect::default(),
-            inbox_expanded: false,
-            inbox_scroll: 0,
-            inbox_cap: u16::MAX,
             tree_scroll: rows::Scroll::default(),
             tree_area: Rect::default(),
-            follow_inbox_cursor: false,
-            inbox_area: Rect::default(),
-            inbox_cursor: None,
             error: None,
             policy_dir: CpdHome::from_env().ok().map(|h| cpd_core::policy::policy_dir(&h)),
             down: None,
-            merging: BTreeSet::new(),
         };
         view.refresh(tree);
         view
     }
 
-    /// The pull requests (`<owner>/<repo>#<n>`) whose merge is running, from the live merge markers
-    /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
-    /// cell and a click on them does nothing.
-    /// Whether the set changed (the pane is then redrawn).
-    pub fn merging(&self) -> &BTreeSet<String> {
-        &self.merging
-    }
-
-    pub fn set_merging(&mut self, pulls: BTreeSet<String>) -> bool {
-        std::mem::replace(&mut self.merging, pulls) != self.merging
-    }
-
-    /// An Inbox item's `pr-ready` pull request has a merge running.
-    fn merges(&self, item: &cpd_core::inbox::model::Item) -> bool {
-        inbox::merges(&self.merging, item)
-    }
-
-    /// A working dot or a merging item is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
+    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
     /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
+        sessions.any(|s| matches!(s.dot, Dot::Working(_) | Dot::Fixing) && !s.is_archived())
     }
 
-    /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
-    /// it is gone).
+    /// A new snapshot: keep the cursor on its Session.
     pub fn refresh(&mut self, tree: Tree) {
         let before = rows::selected_index(&self.state, &self.tree);
-        let item = self.inbox_cursor.and_then(|i| self.tree.inbox.get(i)).map(|item| item.id);
         self.tree = tree;
         rows::open_new(&mut self.state, &mut self.known, &self.tree);
         rows::reselect(&mut self.state, &self.tree, before);
-        if let Some(i) = self.inbox_cursor {
-            let moved = item.and_then(|id| self.tree.inbox.iter().position(|it| it.id == id));
-            self.inbox_cursor = Some(moved.unwrap_or(i));
-            self.clamp_inbox_cursor();
-            self.follow_inbox_cursor = true;
-        }
-    }
-
-    /// The Inbox section as the last frame had it.
-    fn shape(&self) -> Shape {
-        Shape::new(self.tree.inbox.len(), self.inbox_expanded).capped(self.inbox_cap).scrolled(self.inbox_scroll)
-    }
-
-    /// The Inbox cursor stays on a shown item row; with none, it goes.
-    fn clamp_inbox_cursor(&mut self) {
-        let shown = self.shape().shown();
-        self.inbox_cursor = self.inbox_cursor.and_then(|i| shown.checked_sub(1).map(|last| i.min(last)));
     }
 
     /// Starts from the folds in `file` and keeps them there from now on (commands.md §13.2, hs-d260). A file that cannot
@@ -293,12 +218,7 @@ impl View {
     }
 
     fn cursor_shown(&self) -> bool {
-        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty() || self.inbox_cursor.is_some())
-    }
-
-    /// The Inbox item under the keyboard cursor, while it shows.
-    fn cursor_item(&self) -> Option<&cpd_core::inbox::model::Item> {
-        self.inbox_cursor.filter(|_| self.cursor_shown()).and_then(|i| self.tree.inbox.get(i))
+        cursor::shown(self.focused, self.last_input, !self.state.selected().is_empty())
     }
 
     pub fn focus(&mut self, gained: bool) {
@@ -356,7 +276,7 @@ impl View {
 
     /// The cursor's row, while the cursor shows: Enter, `n` and `x` act on it.
     fn cursor_row(&self) -> Option<Row<'_>> {
-        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && self.inbox_cursor.is_none() && !r.archived())
+        rows::row(&self.tree, self.state.selected()).filter(|r| self.cursor_shown() && !r.archived())
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Effect {
@@ -385,30 +305,14 @@ impl View {
                 let asked = self.cursor_row().and_then(close_of);
                 return self.ask(asked);
             }
-            KeyCode::Char('s') => {
-                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
-                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
-                    self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
-                }
-            }
-            KeyCode::Char('d') => {
-                if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    return Effect::Run(Action::Dismiss(item.id));
-                }
-            }
             KeyCode::Char('?') => return Effect::Legend,
             // the first arrow after a click only shows the cursor again where it was (the first Session when there is none)
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
                 self.arrow(delta);
-                self.follow_inbox_cursor = true;
                 self.last_input = Input::Arrow;
             }
             KeyCode::Enter => {
-                if let Some(i) = self.inbox_cursor.filter(|_| self.cursor_shown()) {
-                    return self.jump(i);
-                }
                 if let Some(session) = self.cursor_row().and_then(|r| r.session()) {
                     return Effect::Run(Action::Open(session.id.clone()));
                 }
@@ -418,47 +322,18 @@ impl View {
         Effect::None
     }
 
-    /// An arrow key (`delta` 1 down, -1 up) while the cursor shows: it moves through the Sessions, on from the last
-    /// into the Inbox's shown items and back up from the first to the last Session; when it does not show, the key
-    /// only shows it again where it was (on the first Session when it has none).
+    /// An arrow key (`delta` 1 down, -1 up) while the cursor shows: it moves through the Sessions; when it does not show, the
+    /// key only shows it again where it was (on the first Session when it has none).
     fn arrow(&mut self, delta: isize) {
-        let shown = self.shape().shown();
-        if let Some(i) = self.inbox_cursor {
-            if self.cursor_shown() {
-                self.inbox_cursor = match (delta, i) {
-                    (d, 0) if d < 0 => None,
-                    (d, i) if d < 0 => Some(i - 1),
-                    (_, i) => Some((i + 1).min(shown.saturating_sub(1))),
-                };
-            }
-        } else if self.cursor_shown() {
-            let before = rows::selected_index(&self.state, &self.tree);
+        if self.cursor_shown() {
             rows::move_cursor(&mut self.state, &self.tree, delta);
-            // it did not move: the last Session, so down goes into the Inbox
-            if delta > 0 && shown > 0 && rows::selected_index(&self.state, &self.tree) == before {
-                self.inbox_cursor = Some(0);
-            }
         } else if self.state.selected().is_empty() {
             rows::move_cursor(&mut self.state, &self.tree, 1);
-            // no Session at all: the Inbox is all there is to reach
-            if delta > 0 && shown > 0 && self.state.selected().is_empty() {
-                self.inbox_cursor = Some(0);
-            }
         }
     }
 
     pub fn mouse(&mut self, m: MouseEvent) -> Effect {
         let at = Position::new(m.column, m.row);
-        // a right click on the Inbox section: the menu of an item row; the header and the toggle row have none
-        if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
-            if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
-                let item = &self.tree.inbox[i];
-                if item.kind != InboxKind::EngineDown {
-                    self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
-                }
-            }
-            return Effect::None;
-        }
         if let Some(menu) = self.menu.as_mut() {
             // an open menu takes every click: a left click picks, any button outside closes
             return match menu.mouse(self.pane, m) {
@@ -471,13 +346,9 @@ impl View {
             };
         }
         match m.kind {
-            // the wheel over the tree scrolls its rows, over the Inbox section its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            // the wheel over the tree scrolls its rows, three rows a notch, as the Plan view; elsewhere it does nothing
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.tree_area.contains(at) => {
                 self.tree_scroll.wheel(m.kind == MouseEventKind::ScrollDown, WHEEL_ROWS);
-                Effect::None
-            }
-            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
-                self.inbox_scroll = self.shape().wheeled(m.kind == MouseEventKind::ScrollDown);
                 Effect::None
             }
             MouseEventKind::Down(MouseButton::Left) => self.click(m),
@@ -500,15 +371,6 @@ impl View {
     /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the refusal.
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
-        if let Some(id) = menu.inbox {
-            return match item {
-                Item::Snooze15 => Effect::Run(Action::Snooze { item: id, until: Until::Minutes15 }),
-                Item::Snooze1h => Effect::Run(Action::Snooze { item: id, until: Until::Hour1 }),
-                Item::SnoozeTomorrow => Effect::Run(Action::Snooze { item: id, until: Until::Tomorrow }),
-                Item::Dismiss => Effect::Run(Action::Dismiss(id)),
-                _ => Effect::None,
-            };
-        }
         if item == Item::NewContext {
             let owners: Vec<String> =
                 self.policy_dir.as_deref().map(cpd_core::policy::known_owners).unwrap_or_default().iter().map(|o| o.as_str().to_owned()).collect();
@@ -548,8 +410,7 @@ impl View {
                 self.ask(asked)
             }
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
-            // an Inbox item's entries are the menu's `inbox` branch above
-            Item::NewContext | Item::Snooze15 | Item::Snooze1h | Item::SnoozeTomorrow | Item::Dismiss => Effect::None,
+            Item::NewContext => Effect::None,
         }
     }
 
@@ -602,9 +463,6 @@ impl View {
     fn click(&mut self, m: MouseEvent) -> Effect {
         self.last_input = Input::Click;
         let at = Position::new(m.column, m.row);
-        if self.inbox_area.contains(at) {
-            return self.click_inbox(at.y - self.inbox_area.y);
-        }
         let Some(path) = self.row_at(at) else { return Effect::None };
         // only a closing row (`╰󰬦 expand`, `╰󰬬 collapse`) shows or hides a Context's archived rows; the title row keeps its own action:
         // a live Context's row opens its Manager (B3-A6), a live Session row opens it and an archived one shows its
@@ -630,46 +488,6 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its first (the empty one): `╰󰬦 expand` and `╰󰬬 collapse` toggle the inline
-    /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
-    fn click_inbox(&mut self, row: u16) -> Effect {
-        match self.shape().hit(row) {
-            Some(Hit::Toggle) => {
-                self.inbox_expanded = !self.inbox_expanded;
-                self.inbox_scroll = 0;
-                self.clamp_inbox_cursor();
-                self.follow_inbox_cursor = true;
-                Effect::None
-            }
-            Some(Hit::Item(i)) => self.jump(i),
-            Some(Hit::Header) | None => Effect::None,
-        }
-    }
-
-    /// Whether `action` opens the Session that is already in the chat slot: it does nothing, and says nothing.
-    fn in_focus(&self, action: &Action) -> bool {
-        let Action::Open(id) = action else { return false };
-        self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
-    }
-
-    /// The jump of the Inbox item `i` ([`inbox::jump`]): a click on its row, or Enter on it. An item whose Session is
-    /// already in focus does nothing.
-    fn jump(&self, i: usize) -> Effect {
-        match inbox::jump(&self.tree, &self.tree.inbox[i]) {
-            Some(Jump::Run(action)) if self.in_focus(&action) => Effect::None,
-            Some(Jump::Run(action)) => Effect::Run(action),
-            Some(Jump::Steps(steps)) => {
-                let steps: Vec<Action> = steps.into_iter().filter(|a| !self.in_focus(a)).collect();
-                if steps.is_empty() { Effect::None } else { Effect::Steps(steps) }
-            }
-            // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
-            Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
-            Some(Jump::Merge(pull)) => Effect::Merge(pull),
-            Some(Jump::Curate(kind, context)) => Effect::Curate(kind, context),
-            None => Effect::None,
-        }
-    }
-
     /// The row drawn at `at`, none outside the rows the last frame drew.
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
         let Hits { rows, paths } = self.tree_scroll.hits();
@@ -684,53 +502,22 @@ impl View {
         self.error.clone().unwrap_or_default()
     }
 
-    /// [`View::draw_at`] now.
-    #[cfg(test)]
+    /// Draw a blank row, the tree below it and (when the snapshot cannot be read) its error in the rows at the bottom: the
+    /// reference's layout. One blank column is left on each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`).
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
-        self.draw_at(f, frame, OffsetDateTime::now_utc());
-    }
-
-    /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when the snapshot cannot be
-    /// read) its error in the rows at the bottom: the reference's layout. One blank column is left on
-    /// each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`); the Inbox items'
-    /// ages are taken at `now`, from their `opened_at`, so they need no read.
-    pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
         let inner = f.area().inner(Margin::new(1, 0));
         let footer = self.footer();
         let width = inner.width.max(1) as usize;
         let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
-        // the tree and the section share the rows between the blank one and the footer (hs-d307)
-        let column = inner.height.saturating_sub(1 + footer_height);
-        // the section leaves the tree at least one row, when there is one to leave
-        let room = column.saturating_sub(1);
-        self.inbox_cap = inbox_share(rows::row_count(&self.state, &self.tree), self.tree.inbox.len(), self.inbox_expanded, column);
-        self.inbox_scroll = self.inbox_scroll.min(self.shape().max_scroll());
-        if std::mem::take(&mut self.follow_inbox_cursor) {
-            if let Some(i) = self.inbox_cursor {
-                self.inbox_scroll = self.shape().scroll_to(i);
-            }
-        }
-        let inbox_height = self.shape().height().min(room);
-        let [_, list, inbox_area, footer_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(inbox_height),
-            Constraint::Length(footer_height),
-        ])
-        .areas(inner);
-        self.inbox_area = inbox_area;
-        let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        // the section's title carries the padding itself, so the section is drawn across the panel (`inbox::draw`)
-        let across = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
-        inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now, &|item| self.merges(item).then_some(frame));
+        let [_, list, footer_area] =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(footer_height)]).areas(inner);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::error()).wrap(Wrap { trim: false }), footer_area);
         }
-        let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
-        // the tree has more or fewer rows when the section was expanded or folded or an item came or went: it scrolls to
-        // keep the cursor's Session in view
+        // the tree scrolls to keep the cursor's Session in view
+        let cursor = self.cursor_shown();
         rows::draw(f, list, &self.tree, &mut self.state, cursor, frame, &mut self.tree_scroll);
         let tree_rows = u16::try_from(rows::row_count(&self.state, &self.tree)).unwrap_or(u16::MAX);
         self.tree_area = Rect { height: list.height.min(tree_rows), ..list };
@@ -752,8 +539,6 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     let mut view = View::new(Tree { contexts: Vec::new(), events_cursor: 0, inbox: Vec::new(), engine_running: true }, true);
     let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|f| view.draw(f, 0)).unwrap();
-    // a right click inside the Inbox opens only an item's menu: an empty Inbox has none, so click just above it
-    let row = if view.inbox_area.contains(Position::new(column, row)) { view.inbox_area.y.saturating_sub(1) } else { row };
     view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column, row, modifiers: ratatui::crossterm::event::KeyModifiers::NONE });
     terminal.draw(|f| view.draw(f, 0)).unwrap();
     let rect = view.menu.as_ref().expect("the right click opens a menu").rect(view.pane);
