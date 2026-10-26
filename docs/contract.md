@@ -3066,7 +3066,7 @@ Forks happen for two reasons only, and neither nests:
 
 Both are **siblings**: a forked Session is drawn in the tree **directly under its Context**, after the Context's Plans, a sibling of the Plans' Leads and of its source, and never under a Plan or under the Session it came from (a fork of a fork is drawn the same way). `forked_from` records the source and `plan` the Plan whose Events and `CPD_PLAN` it uses, but neither moves the row in the tree. (A Context's Manager and a Plan's own Lead are not `session fork` forks and keep their places, §3.1.)
 
-*Decided where B1 is silent:* a forked Session's row in the tree is ordered together with the Context's Plans by tier then last activity (commands.md §13.2 and §17 state it).
+*Decided where B1 is silent:* a forked Session's row in the tree is ordered together with the Context's Plans by tier then creation, newest first (pro-d48; commands.md §13.2 and §17 state it).
 
 ### 6.9 The compact-tools extension of the adapter
 

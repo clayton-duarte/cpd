@@ -35,6 +35,9 @@ pub enum Dot {
     Red,
 }
 
+/// The key [`Dot::order_key`] returns.
+pub type OrderKey = (u8, std::cmp::Reverse<String>);
+
 impl Dot {
     /// The Session needs the User: a `palette::NEEDS_YOU` of any colour.
     pub fn needs_you(self) -> bool {
@@ -52,6 +55,12 @@ impl Dot {
             Dot::Cyan => 3,
             Dot::White | Dot::Working(_) | Dot::Fixing | Dot::Waiting | Dot::Idle | Dot::Stopped => 4,
         }
+    }
+
+    /// The tree's order key (hs-d686, pro-d48): the dot's tier, then creation, newest first (`created_at` is
+    /// fixed-width UTC text, so it compares as text). Sort stably: a tie keeps the read model's order.
+    pub fn order_key(self, created_at: &str) -> OrderKey {
+        (self.tier(), std::cmp::Reverse(created_at.to_owned()))
     }
 
     /// The dot of a working Lead: the red loader when its Plan has a failed Job (hs-d581), else its Plan's phase
