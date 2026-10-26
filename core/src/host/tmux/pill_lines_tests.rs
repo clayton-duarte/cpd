@@ -20,8 +20,8 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
 
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const LEAD_CAP: &str = "#[fg=colour7]━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]";
-    const VIEW_CAP: &str = "#[fg=colour7]━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]";
+    const LEAD_CAP: &str = "━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]";
+    const VIEW_CAP: &str = "━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]";
     let want = format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
          #{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{views}}}}}}}",
@@ -33,6 +33,8 @@ fn border_format_title_pills_follow_the_rule() {
         ),
     );
     assert_eq!(*BORDER_FORMAT, want);
+    assert!(!BORDER_FORMAT.contains("#[fg=colour7]━"));
+    assert_eq!(BORDER_FORMAT.matches('━').count(), 2);
     let colour_zero = format!("colour{}", 0);
     assert_eq!(BORDER_FORMAT.matches("#[reverse]").count(), 2, "one #[reverse] per pill");
     assert_eq!(BORDER_FORMAT.matches("#[noreverse]").count(), 2, "one #[noreverse] per pill");

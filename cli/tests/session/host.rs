@@ -127,13 +127,13 @@ fn starts_the_server_once_with_the_contract_options() {
 /// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
 /// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Deploy midori 2) and
 /// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title`, the Worker's and the pane
-/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` always in colour 7 (the
-/// pane-border line colour, independent of the pill's colour; hs-d684) before the left cap, so the cap is the fourth
+/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` with no colour of its own (it takes the
+/// pane border line's style, blue on the focused pane and colour 7 otherwise, whatever the pill's colour; pro-d61) before the left cap, so the cap is the fourth
 /// cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#[fg=colour7]━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#[fg=colour7]━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
+━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
 #[noreverse]\u{e0b4}}}}";
@@ -453,10 +453,10 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     let border = || s.raw(&["display-message", "-p", "-t", pane_id.as_str(), &format]).trim_end_matches('\n').to_owned();
     t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
     assert_eq!(border(), "");
-    // Title Case, no padding, the pill in blue (this pane is the active one), one border line character in colour 7
-    // (the pane-border line, not the pill's colour) before the left cap (hs-d475, hs-d478, hs-d684)
+    // Title Case, no padding, the pill in blue (this pane is the active one), one `━` first with no colour before it
+    // (it takes the border line's style, pro-d61) before the left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[fg=colour7]━#[fg=colour4]\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
+    assert_eq!(border(), "━#[fg=colour4]\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
 /// Finding 4: a pane made by a newer cpd (a view this binary does not know)
