@@ -9,7 +9,7 @@ type Question = { question: string; header: string; options: Option[]; multiSele
 type Verdict = { block?: boolean; reason?: string } | undefined;
 
 const LIMIT = 1500;
-const G2 = (n: number) => `cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${n} characters (limit ${LIMIT})`;
+const G2 = (n: number) => `φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${n} characters (limit ${LIMIT})`;
 
 const job = (key: string, status: string) => ({ key, pr: "api", title: key, status, tier: "S3", needs: [] });
 const withJobs = (...statuses: string[]) => {
@@ -168,7 +168,7 @@ test("before session_start no call is refused", async (t) => {
 
 // ---- G4 (hs-d553, superseding hs-d548 part 1 and G3): a question states what it asks about ----
 
-const G4 = (labels: string) => `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels} stated nowhere`;
+const G4 = (labels: string) => `φ: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels} stated nowhere`;
 const labelled = (question: string, o: Partial<Option> & { header?: string } = {}): Question => ({
   question,
   header: o.header ?? "h",

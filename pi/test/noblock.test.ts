@@ -83,7 +83,7 @@ test("commands that match nothing run, and a pattern in an argument or in quotes
 
 test("the reason is one line naming the rule and what matched", () => {
   const r = reasonText(blockingReason("sleep 1m")!);
-  assert.equal(r, "cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m");
+  assert.equal(r, "φ: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m");
   assert.equal(r.includes("\n"), false);
   assert.match(reasonText(blockingReason("ls", 120)!), /refused: bash timeout 120$/);
 });
@@ -120,7 +120,7 @@ test("a Manager's refused calls get block and the rule's reason; the others run"
     const r = await call(f, input);
     if (isRefused) {
       assert.equal(r?.block, true, JSON.stringify(input));
-      assert.match(r?.reason ?? "", /^cpd: a Manager never blocks: .* refused: /);
+      assert.match(r?.reason ?? "", /^φ: a Manager never blocks: .* refused: /);
     } else assert.equal(r, undefined, JSON.stringify(input));
   }
 });

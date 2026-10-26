@@ -7,7 +7,7 @@ export const BOUND_SECONDS = 30;
 
 /** The rule's reason, one line naming it (§15.11). */
 export const reasonText = (matched: string): string =>
-  `cpd: a Manager never blocks: a wait over ${BOUND_SECONDS} s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
+  `φ: a Manager never blocks: a wait over ${BOUND_SECONDS} s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
 
 const LOOPS = new Set(["while", "until"]);
 

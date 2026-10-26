@@ -13,7 +13,7 @@ export function registerPlanReviewCommand(host: Host): void {
   if (registered.has(host)) return;
   registered.add(host);
   host.pi.registerCommand(PLAN_REVIEW_COMMAND, {
-    description: "cpd: reopen the dialog of the Plan review that is waiting in this chat",
+    description: "φ: reopen the dialog of the Plan review that is waiting in this chat",
     async handler(_args: string, ctx: CommandCtx) {
       const r = host.run;
       if (!r || !r.info.planLead) return;

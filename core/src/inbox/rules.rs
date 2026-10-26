@@ -25,7 +25,7 @@ use crate::store::Store;
 
 /// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
-const PLAN_REVIEW: &str = "cpd: plan review";
+const PLAN_REVIEW: &str = "φ: plan review";
 
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
@@ -748,11 +748,11 @@ mod tests {
     #[test]
     fn a_lead_waiting_for_a_worker_and_a_plan_review_label_are_not_dialogs() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "waiting", Some("cpd: Worker question"));
-        f.state("mgr", "blocked", Some("cpd: plan review"));
+        f.state("l-pay", "waiting", Some("φ: Worker question"));
+        f.state("mgr", "blocked", Some("φ: plan review"));
         assert!(f.of(Kind::Dialog).is_empty());
         // `blocked` is the human's whatever its label: the Worker question is `waiting` now (hs-d303).
-        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        f.state("l-pay", "blocked", Some("φ: Worker question"));
         assert_eq!(f.of(Kind::Dialog).len(), 1);
     }
 
@@ -775,7 +775,7 @@ mod tests {
         assert!(f.of(Kind::Dialog).is_empty());
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
-        f.state("wk", "waiting", Some("cpd: question to the Lead"));
+        f.state("wk", "waiting", Some("φ: question to the Lead"));
         assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
@@ -863,7 +863,7 @@ mod tests {
         f.state("mgr", "working", None);
         f.state("mgr", "blocked", Some("Which?"));
         assert!(f.of(Kind::Unread).is_empty(), "blocked is a dialog, not unread");
-        f.state("mgr", "waiting", Some("cpd: Worker question"));
+        f.state("mgr", "waiting", Some("φ: Worker question"));
         assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
         f.state("mgr", "stopped", None);
         assert!(f.of(Kind::Unread).is_empty());

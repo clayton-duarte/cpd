@@ -8,7 +8,7 @@ import { Fixture, shown } from "./fake.ts";
 
 type Result = { block?: boolean; reason?: string } | undefined;
 
-const REASON = /^cpd: approvals are the User's: ask with the tool cpd_host_approve \(commands\.md §15\.[^)]+\); refused: cpd host approve$/;
+const REASON = /^φ: approvals are the User's: ask with the tool cpd_host_approve \(commands\.md §15\.[^)]+\); refused: cpd host approve$/;
 const REFUSED = ["cpd host approve", "cpd host approve --reason dirty", "cd ~/projects/cpd && cpd host approve", "FOO=1 cpd host approve"];
 const PASSING = ["cpd host repair", "cpd host repair --reason dirty", "cpd host", "host approve", "echo cpd host approve", "cpd secret get x --vault cpd --field f", "cpd session show"];
 
