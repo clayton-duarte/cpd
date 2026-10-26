@@ -15,7 +15,10 @@ mod runner_tests;
 
 use serde_json::json;
 
+use crate::env::Env;
 use crate::error::CpdError;
+use crate::policy::model::Models;
+use crate::policy::PolicyKey;
 use crate::home::CpdHome;
 use crate::output::Output;
 
@@ -28,9 +31,12 @@ pub use tier::{Catalog, Letter, Tier, TierModel};
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
 pub struct ConfigArgs {}
 
-/// `cpd tiers` takes no arguments.
-#[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
-pub struct TiersArgs {}
+/// `cpd tiers` selects a policy key like `cpd policy show`; none selects the machine layer.
+#[derive(clap::Args, Debug)]
+pub struct TiersArgs {
+    #[command(flatten)]
+    key: crate::policy::KeyArgs,
+}
 
 /// `cpd config` (§14.2): the effective configuration, each leaf with its source.
 pub fn config(_args: ConfigArgs) -> Result<Output, CpdError> {
@@ -43,12 +49,28 @@ pub fn config(_args: ConfigArgs) -> Result<Output, CpdError> {
     })))
 }
 
-/// `cpd tiers` (§14.3): the configured models and the efforts pi supports for each.
-pub fn tiers(_args: TiersArgs) -> Result<Output, CpdError> {
-    let config = Config::load(&CpdHome::from_env()?)?;
-    let catalog = load_catalog(&config)?;
-    Ok(Output::success(json!({
+/// `cpd tiers` (§14.3): the models of the selected key and the efforts pi supports for each.
+pub fn tiers(args: TiersArgs) -> Result<Output, CpdError> {
+    let mut env = Env::open()?;
+    let (key, resolved) = match args.key.select(&mut env.store)? {
+        Some(key) => {
+            crate::policy::check_file_names(&env.home)?;
+            let resolved = crate::policy::resolve(&env.home, &key)?;
+            (Some(key), resolved)
+        }
+        None => (None, crate::policy::resolve_machine(&env.home)?),
+    };
+    let catalog = catalog::load_models_with(&Models::of(&resolved.policy), &mut env.store)?;
+    let mut out = json!({
         "pi_version": catalog.pi_version,
         "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h, "G": catalog.g},
-    })))
+    });
+    if let Some(key) = key {
+        let (owner, repo) = match &key {
+            PolicyKey::Owner(o) => (o.as_str(), None),
+            PolicyKey::Repo(o, n) => (o.as_str(), Some(n.as_str())),
+        };
+        out["key"] = json!({"owner": owner, "repo": repo});
+    }
+    Ok(Output::success(out))
 }

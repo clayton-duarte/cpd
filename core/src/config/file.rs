@@ -322,10 +322,10 @@ impl Config {
         })?;
 
         let tiers = Tiers {
-            o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| model_ref(text_of(&v)?))?,
-            s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| model_ref(text_of(&v)?))?,
-            h: r.get("tiers.H", "github-copilot/claude-haiku-4.5".into(), |v| model_ref(text_of(&v)?))?,
-            g: r.get("tiers.G", "github-copilot/gemini-3.8-flash".into(), |v| model_ref(text_of(&v)?))?,
+            o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| crate::policy::model::model_ref(text_of(&v)?))?,
+            s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| crate::policy::model::model_ref(text_of(&v)?))?,
+            h: r.get("tiers.H", "github-copilot/claude-haiku-4.5".into(), |v| crate::policy::model::model_ref(text_of(&v)?))?,
+            g: r.get("tiers.G", "github-copilot/gemini-3.8-flash".into(), |v| crate::policy::model::model_ref(text_of(&v)?))?,
         };
         let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
@@ -590,17 +590,6 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
 
 fn non_empty(s: &str) -> Result<String, String> {
     if s.is_empty() { Err("must not contain an empty string".into()) } else { Ok(s.to_owned()) }
-}
-
-/// `^[^/\s]+/\S+$`: `<provider>/<model-id>`.
-fn model_ref(s: &str) -> Result<String, String> {
-    let ok = s.split_once('/').is_some_and(|(provider, id)| {
-        !provider.is_empty()
-            && !provider.chars().any(char::is_whitespace)
-            && !id.is_empty()
-            && !id.chars().any(char::is_whitespace)
-    });
-    if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not <provider>/<model-id>")) }
 }
 
 /// `^[A-Za-z0-9_-]{1,32}$`.

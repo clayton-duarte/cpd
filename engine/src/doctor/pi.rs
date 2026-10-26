@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::deadline;
 use super::check::{Check, Severity};
-use cpd_core::config::catalog::read as read_catalog;
+use cpd_core::config::catalog::{config_models, read as read_catalog};
 use cpd_core::config::{Config, locate_pi};
 use cpd_core::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
 
@@ -21,7 +21,7 @@ pub fn tiers(config: &Config) -> Check {
         Ok(pi) => pi,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    let catalog = match read_catalog(&pi, config, deadline()) {
+    let catalog = match read_catalog(&pi, &config_models(config), deadline()) {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };

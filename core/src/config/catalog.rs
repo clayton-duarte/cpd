@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::cache;
 use super::file::Config;
+use crate::policy::model::Models;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -134,27 +135,38 @@ pub fn load(config: &Config) -> Result<Catalog, CpdError> {
 /// [`load`] through a `store` the caller already holds, so the catalog does not
 /// open a second one (flock, pragmas, schema hash).
 pub fn load_with(config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
-    load_from(&locate_pi()?, config, store)
+    load_models_with(&config_models(config), store)
 }
 
-fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
-    let models = [config.tiers.o.as_str(), config.tiers.s.as_str(), config.tiers.h.as_str()];
-    if let Some(cached) = cache::read(store, &pi.version, models, &config.tiers.g)? {
+/// The models of `config.toml`'s `[tiers]`, until the policies' `[model]` replace them.
+pub fn config_models(config: &Config) -> Models {
+    let t = &config.tiers;
+    Models { o: t.o.clone(), s: t.s.clone(), h: t.h.clone(), g: t.g.clone() }
+}
+
+/// [`load_with`] for the `models` of a policy key.
+pub fn load_models_with(models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+    load_from(&locate_pi()?, models, store)
+}
+
+fn load_from(pi: &PiInstall, models: &Models, store: &mut Store) -> Result<Catalog, CpdError> {
+    let refs = [models.o.as_str(), models.s.as_str(), models.h.as_str()];
+    if let Some(cached) = cache::read(store, &pi.version, refs, &models.g)? {
         return Ok(cached);
     }
-    let catalog = read(pi, config, NODE_DEADLINE)?;
+    let catalog = read(pi, models, NODE_DEADLINE)?;
     cache::write(store, &catalog)?;
     Ok(catalog)
 }
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
-pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    read_with(&*Ports::current().runner, pi, config, deadline)
+pub fn read(pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catalog, CpdError> {
+    read_with(&*Ports::current().runner, pi, models, deadline)
 }
 
 /// [`read`] on `runner`.
-pub fn read_with(runner: &dyn Runner, pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h), (Letter::G, &config.tiers.g)];
+pub fn read_with(runner: &dyn Runner, pi: &PiInstall, models: &Models, deadline: Duration) -> Result<Catalog, CpdError> {
+    let tiers = [(Letter::O, &models.o), (Letter::S, &models.s), (Letter::H, &models.h), (Letter::G, &models.g)];
     let node = node();
     let mut cmd = Command::new(&node);
     cmd.args(["--input-type=module", "-e", MODULE, "--"])
@@ -255,6 +267,6 @@ mod tests {
         cache::write(&mut store, &cached).unwrap();
 
         // pi's entry points do not exist: a cache miss would fail in `read`.
-        assert_eq!(load_from(&pi(), &config, &mut store).unwrap(), cached);
+        assert_eq!(load_from(&pi(), &config_models(&config), &mut store).unwrap(), cached);
     }
 }

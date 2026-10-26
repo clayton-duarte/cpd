@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::catalog::{PiInstall, node, read_with};
+use super::catalog::{PiInstall, config_models, node, read_with};
 use super::file::Config;
 use crate::clock::ManualClock;
 use crate::error::{CpdError, ErrorCode};
@@ -30,7 +30,7 @@ fn config() -> Config {
 /// Runs the node program on the scripted reply; the runner is returned to read the record.
 fn read(reply: Reply) -> (FakeRunner, Result<super::Catalog, CpdError>) {
     let runner = FakeRunner::new(ManualClock::new()).on("node", |_| true, reply);
-    let result = read_with(&runner, &pi(), &config(), DEADLINE);
+    let result = read_with(&runner, &pi(), &config_models(&config()), DEADLINE);
     (runner, result)
 }
 
@@ -160,7 +160,7 @@ fn read_with_maps_a_model_with_no_usable_level_to_catalog_failed() {
 fn read_with_maps_a_scripted_timeout_to_tool_timeout() {
     let clock = ManualClock::new();
     let runner = FakeRunner::new(clock.clone()).on("node", |_| true, Reply::ok(&levels()).takes(Duration::from_secs(31)));
-    let err = read_with(&runner, &pi(), &config(), DEADLINE).unwrap_err();
+    let err = read_with(&runner, &pi(), &config_models(&config()), DEADLINE).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ToolTimeout);
     assert_eq!(err.details()["tool"], "node");
     assert_eq!(err.details()["deadline_seconds"], 30);

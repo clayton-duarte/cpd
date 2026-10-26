@@ -3,20 +3,22 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use super::domain::{merge, Policy, Scope, Source, Sources};
+use super::domain::{merge, Domain, Policy, Scope, Source, Sources};
 use super::exposure::ScopeKind;
+use super::model::check_one_provider;
 use super::load::{load_scope_file, parse_scope, policy_invalid};
 use super::{owner_unconfirmed, PolicyKey, Resolved};
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, RepoName};
 
+const DEFAULT_FILE: &str = "core/src/policy/default.toml";
 const DEFAULT_TOML: &str = include_str!("default.toml");
 
 /// cpd's compiled default, parsed by the same loader as every scope file.
 pub fn default_policy() -> &'static Policy {
     static DEFAULT: OnceLock<Policy> = OnceLock::new();
     DEFAULT.get_or_init(|| {
-        let file = std::path::Path::new("core/src/policy/default.toml");
+        let file = std::path::Path::new(DEFAULT_FILE);
         parse_scope(file, DEFAULT_TOML)
             .ok()
             .and_then(|scope| scope.complete())
@@ -71,9 +73,17 @@ fn layers(
     Ok(Some(layers))
 }
 
-fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
+/// The merge of `layers` over the default; a `[model]` table of two providers is `policy_invalid`,
+/// naming the file that set it.
+fn merge_layers(layers: &[(Source, Scope)]) -> Result<Resolved, crate::error::CpdError> {
     let refs: Vec<(Source, &Scope)> = layers.iter().map(|(s, sc)| (s.clone(), sc)).collect();
-    merge(default_policy(), &refs)
+    let resolved = merge(default_policy(), &refs);
+    let file = match &resolved.sources.get(Domain::Model).source {
+        Source::Machine(p) | Source::Owner(p) | Source::Repo(p) => p.clone(),
+        Source::Default | Source::DefaultNoOwnerFile => PathBuf::from(DEFAULT_FILE),
+    };
+    check_one_provider(&resolved.policy.model, &file)?;
+    Ok(resolved)
 }
 
 /// The policy of `key`: cpd's default, then `host.toml`, the owner file and the repo file,
@@ -82,7 +92,7 @@ fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
 /// (the same as an empty one).
 pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
     match layers(home, key)? {
-        Some(layers) => Ok(merge_layers(&layers)),
+        Some(layers) => merge_layers(&layers),
         None => Err(owner_unconfirmed(home, key.owner())),
     }
 }
@@ -92,7 +102,7 @@ pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error
 /// not `owner_unconfirmed`.
 pub fn resolve_unowned_row(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
     match layers(home, key)? {
-        Some(layers) => Ok(merge_layers(&layers)),
+        Some(layers) => merge_layers(&layers),
         None => Ok(Resolved {
             policy: default_policy().clone(),
             sources: Sources::all(Source::DefaultNoOwnerFile),
@@ -104,8 +114,8 @@ pub fn resolve_unowned_row(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, 
 /// The machine layer over cpd's default alone: `host.toml` when it exists.
 pub fn resolve_machine(home: &CpdHome) -> Result<Resolved, crate::error::CpdError> {
     match load_scope_file(&machine_path(home), ScopeKind::Machine)? {
-        Some((real, scope)) => Ok(merge_layers(&[(Source::Machine(real), scope)])),
-        None => Ok(merge_layers(&[])),
+        Some((real, scope)) => merge_layers(&[(Source::Machine(real), scope)]),
+        None => merge_layers(&[]),
     }
 }
 

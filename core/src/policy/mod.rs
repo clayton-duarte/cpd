@@ -38,6 +38,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
     }
 }
 
+pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use known::known_owners;
