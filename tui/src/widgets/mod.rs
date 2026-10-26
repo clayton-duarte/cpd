@@ -44,8 +44,12 @@ use super::pump::{self, Feed, Schedule, Signal};
 use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
+use super::tree::inbox::{self, Hit as InboxHit};
+use cpd_core::clock;
+use cpd_core::inbox::model::{self, Item};
+use time::OffsetDateTime;
 use super::runner::{ViewError, kept};
-use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, wall_ms};
+use super::view_ports::{Ctx, Input, Tty, frame_now, run_view_with, snooze_over, wall_ms};
 use super::{Capture, RunCommand, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -110,6 +114,12 @@ pub struct Prepared {
     home: CpdHome,
     config: Config,
     prs: Vec<OpenPr>,
+    /// The Inbox's open visible items (`engine-down` first), whether an engine holds the lock, and when the first snooze ends.
+    inbox: Vec<Item>,
+    engine_running: bool,
+    snooze_end: Option<OffsetDateTime>,
+    /// The pull requests whose merge runs, as of the first snapshot of the merge markers.
+    merging: BTreeSet<String>,
     machine: Machine,
     sampler: Sampler,
 }
@@ -121,27 +131,32 @@ pub fn prepare(ports: &Ports, home: CpdHome) -> Result<Prepared, CpdError> {
     let mut sampler = Sampler::default();
     let machine = Machine { name: hostname(ports), usage: sampler.sample_with(ports) };
     let (mut prs, cursor) = read::open_prs(&mut store)?;
+    let now = clock::timestamp(ports.clock.utc());
+    let snooze_end = read::snooze_end_at(&mut store, Some(&now))?;
+    let (inbox, engine_running) = read::inbox_at(&mut store, Some(&now))?;
     // the first read of the merges is the first snapshot's: it runs here, before the terminal is set up
     let open = read::open_pulls(&mut store)?;
-    mark_merging(&mut prs, &crate::merge::marker::live_with(ports, &home, &open));
+    let merging = crate::merge::marker::live_with(ports, &home, &open);
+    mark_merging(&mut prs, &merging);
     let follow = read::Follow::new(&mut store, KINDS, cursor)?;
     // the reads after them run on the reader thread, with a store of its own
     let reader = pace::Owned::new(home.clone(), u64::from(config.timeouts.store_busy_ms), follow);
-    Ok(Prepared { reader, home, config, prs, machine, sampler })
+    Ok(Prepared { reader, home, config, prs, inbox, engine_running, snooze_end, merging, machine, sampler })
 }
 
 /// [`show`] on what [`prepare`] made: the tmux of the config's socket, `run_command` for what a click runs, and `feed`'s pump
 /// for the one wait. A test's `feed` is scripted (signals, the `ManualClock` of `ctx.ports`, reads inline, no watcher) and
 /// `ctx.input` is not read; the end of a script is `Signal::InputFailed`.
 pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, feed: Feed, prepared: Prepared, run_command: RunCommand) -> Result<(), ViewError> {
-    let Prepared { reader, home, config, prs, machine, sampler } = prepared;
+    let Prepared { reader, home, config, prs, inbox, engine_running, snooze_end, merging, machine, sampler } = prepared;
     let tmux = Tmux::new(config.tmux.socket.clone()).with_runner(ctx.ports.runner.clone());
     let log = ViewLog::of(&home, "widgets");
     let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
-    show(ctx, feed, &reader, prs, machine, sampler, &lead, config.events.poll_ms)
+    show(ctx, feed, &reader, (prs, inbox, engine_running, snooze_end, merging), machine, sampler, &lead, config.events.poll_ms)
 }
 
-/// The Events that change what the column draws besides the pull request rows (whose changes have no Event): a pull
+/// The Events that change what the column draws besides the pull request rows (whose changes have no Event): the Inbox's items open,
+/// close, snooze and are dismissed (`inbox-*`), a pull
 /// request gets its PR (`pr-opened`), a Plan its Lead (`plan-created`, `session-registered`), the chat slot moves, a Lead's dot is a fact the column draws (`session-state`).
 /// The update Job's status moves its PR's `conflict` to `updating` and back (hs-d532): a Job is added, started (its
 /// `attempt-started`; there is no `job-started` Event), retried, merged, failed or cancelled.
@@ -157,6 +172,10 @@ const KINDS: &[Kind] = &[
     Kind::JobMerged,
     Kind::JobFailed,
     Kind::JobCancelled,
+    Kind::InboxOpened,
+    Kind::InboxClosed,
+    Kind::InboxSnoozed,
+    Kind::InboxDismissed,
 ];
 
 /// The area the Deploy column's right-click menu is clamped in and hit-tested against: the pane less a blank column on
@@ -221,7 +240,7 @@ fn show<B: Backend>(
     ctx: &mut Ctx<B>,
     feed: Feed,
     reader: &Arc<Mutex<pace::Owned<read::Follow>>>,
-    mut prs: Vec<OpenPr>,
+    (mut prs, mut inbox, mut engine_running, mut snooze_end, mut merging): Seen,
     mut machine: Machine,
     mut sampler: Sampler,
     opener: &Opener,
@@ -248,13 +267,20 @@ fn show<B: Backend>(
     let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
+    // The Inbox section: whether it is unfolded and its offset, in items (memory only, kept by a refresh and clamped by the
+    // drawing), and what the last draw showed of the clock's second (the items' ages).
+    let (mut inbox_expanded, mut inbox_scroll) = (false, 0usize);
+    let mut drawn_second = wall_ms(ports) / 1000;
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
-        let frame = frame_now(ports);
-        if redraw || (spins(&prs) && Some(frame) != drawn_frame) {
+        let (frame, second) = (frame_now(ports), wall_ms(ports) / 1000);
+        let wants = needs(&prs, &inbox, &merging, sampled_at);
+        // the Inbox items' ages are redrawn every second, from `opened_at`
+        if redraw || (wants.frame && Some(frame) != drawn_frame) || (wants.second && second != drawn_second) {
+            drawn_second = second;
             ctx.draw(|f| {
                 pane = f.area();
-                last = Some(draw(f, pane, &prs, &machine, scroll, frame));
+                last = Some(draw(f, pane, &prs, &machine, scroll, frame, &inbox, (inbox_expanded, inbox_scroll), ports.clock.utc(), &merging));
                 if let Some(error) = error.as_ref().or(watch_failure.as_ref()) {
                     draw_error(f, pane, error);
                 }
@@ -266,9 +292,10 @@ fn show<B: Backend>(
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
+        inbox_scroll = inbox_scroll.min(drawn.inbox_shape.max_scroll());
         let now = ports.clock.now();
         let wall_ms = wall_ms(ports);
-        let until = pump::wake(now, wall_ms, &needs(&prs, sampled_at), schedule.deadline(now));
+        let until = pump::wake(now, wall_ms, &needs(&prs, &inbox, &merging, sampled_at), schedule.deadline(now));
         let signal = if pump.is_driven() {
             pump.wait_driven(ports, &mut *ctx.input, until, schedule.is_out())
         } else {
@@ -301,6 +328,13 @@ fn show<B: Backend>(
                         let at = Position::new(m.column, m.row);
                         menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
                     }
+                    // a left click on the Inbox's toggle row folds or unfolds it; nothing else of the section is clicked yet
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) && drawn.inbox.contains(Position::new(m.column, m.row)) => {
+                        if drawn.inbox_shape.hit(m.row - drawn.inbox.y) == Some(InboxHit::Toggle) {
+                            inbox_expanded = !inbox_expanded;
+                            inbox_scroll = 0;
+                        }
+                    }
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                         let at = Position::new(m.column, m.row);
                         let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
@@ -320,6 +354,12 @@ fn show<B: Backend>(
                         MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(1),
                         _ => {}
                     },
+                    Event::Mouse(m) if drawn.inbox.contains(Position::new(m.column, m.row)) => match m.kind {
+                        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                            inbox_scroll = drawn.inbox_shape.wheeled(m.kind == MouseEventKind::ScrollDown);
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -329,7 +369,7 @@ fn show<B: Backend>(
                 while let Some(result) = reads.take() {
                     schedule.done();
                     let shown = error.clone();
-                    if let Some((next, live)) = kept(result, &mut error) {
+                    if let Some((next, fresh, live)) = kept(result, &mut error) {
                         if next.is_some() {
                             ctx.snapshot_read();
                         }
@@ -339,6 +379,17 @@ fn show<B: Backend>(
                         if next != prs {
                             prs = next;
                             redraw = true;
+                        }
+                        if live != merging {
+                            merging = live;
+                            redraw = true;
+                        }
+                        if let Some((items, running, end)) = fresh {
+                            (engine_running, snooze_end) = (running, end);
+                            if items != inbox {
+                                inbox = items;
+                                redraw = true;
+                            }
                         }
                     }
                     redraw |= error != shown;
@@ -358,32 +409,50 @@ fn show<B: Backend>(
             }
         }
         if let Some(kind) = schedule.take(now) {
-            let (shared, home, retry, ports) = (Arc::clone(reader), opener.home.clone(), error.is_some(), ports.clone());
+            // The Inbox changes with no Event when a snooze ends or the engine stops or starts (`engine-down`): the lock and the
+            // snooze's end are read on each poll, and the Inbox again when either moved.
+            let (shared, home, retry, ended, now_text) =
+                (Arc::clone(reader), opener.home.clone(), error.is_some(), snooze_over(ports, snooze_end), clock::timestamp(ports.clock.utc()));
+            let ports = ports.clone();
             reads.request(move || {
                 pace::Owned::read(&shared, |store, follow| {
                     let moved = follow.poll_changes(store)?.any();
                     let prs = if moved || kind.force || retry { Some(read::open_prs(store)?.0) } else { None };
                     let open = read::open_pulls(store)?;
-                    Ok((prs, crate::merge::marker::live_with(&ports, &home, &open)))
+                    let live = crate::merge::marker::live_with(&ports, &home, &open);
+                    let engine = model::engine_running(&home)?;
+                    let fresh = if moved || kind.force || retry || ended || engine != engine_running {
+                        let end = read::snooze_end_at(store, Some(&now_text))?;
+                        let (items, running) = read::inbox_at(store, Some(&now_text))?;
+                        Some((items, running, end))
+                    } else {
+                        None
+                    };
+                    Ok((prs, fresh, live))
                 })
             });
         }
     }
 }
 
-/// What a read of the reader thread returns: the snapshot when it was taken, and the pull requests with a live merge marker.
-type Read = Result<(Option<Vec<OpenPr>>, BTreeSet<String>), CpdError>;
+/// What the view shows besides the machine: the PRs, the Inbox's items, whether an engine holds the lock, when the first snooze
+/// ends and the pull requests whose merge runs.
+type Seen = (Vec<OpenPr>, Vec<Item>, bool, Option<OffsetDateTime>, BTreeSet<String>);
 
-/// A shown PR's Lead is working, or its merge runs (a clean one, which shows the spinner in place of the merge icon): its
-/// spinner turns.
-fn spins(prs: &[OpenPr]) -> bool {
-    prs.iter().any(|p| p.lead_working || (p.merging && p.clean))
+/// What a read of the reader thread returns: the PRs when they were read, the Inbox (its items, the lock and the snooze's end) when it
+/// was read, and the pull requests with a live merge marker.
+type Read = Result<(Option<Vec<OpenPr>>, Option<(Vec<Item>, bool, Option<OffsetDateTime>)>, BTreeSet<String>), CpdError>;
+
+/// A shown PR's Lead is working, or its merge runs (a clean one, which shows the spinner in place of the merge icon), or the
+/// merge of a `pr-ready` item runs: its spinner turns.
+fn spins(prs: &[OpenPr], inbox: &[Item], merging: &BTreeSet<String>) -> bool {
+    prs.iter().any(|p| p.lead_working || (p.merging && p.clean)) || inbox.iter().any(|item| inbox::merges(merging, item))
 }
 
-/// The clocks the Dispatch column's screen needs: `frame` is `spins(prs)` (a shown PR's Lead works, or a clean PR's
-/// merge runs); `second` is false; `at` is always `Some(sampled_at + SAMPLE_EVERY)`.
-fn needs(prs: &[OpenPr], sampled_at: Instant) -> pump::Needs {
-    pump::Needs { frame: spins(prs), second: false, at: Some(sampled_at + SAMPLE_EVERY) }
+/// The clocks the Dispatch column's screen needs: `frame` is `spins(prs, inbox, merging)`; `second` is `!inbox.is_empty()` (an
+/// age text is on screen); `at` is always `Some(sampled_at + SAMPLE_EVERY)`.
+fn needs(prs: &[OpenPr], inbox: &[Item], merging: &BTreeSet<String>, sampled_at: Instant) -> pump::Needs {
+    pump::Needs { frame: spins(prs, inbox, merging), second: !inbox.is_empty(), at: Some(sampled_at + SAMPLE_EVERY) }
 }
 
 /// Sets `merging` of each PR whose merge runs: `live` is the pull requests with a live merge marker (hs-d495).

@@ -163,7 +163,7 @@ fn machine() -> Machine {
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(draw(f, f.area(), &w.prs, &machine(), 0, 0))).unwrap();
+    terminal.draw(|f| drop(draw(f, f.area(), &w.prs, &machine(), 0, 0, &w.inbox, (false, 0), time::OffsetDateTime::UNIX_EPOCH, &Default::default()))).unwrap();
     terminal.backend().buffer().clone()
 }
 

@@ -30,6 +30,7 @@ use crate::phi;
 use crate::read::{Tree, age_text};
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
+use crate::dialog::scroll::WHEEL_ROWS;
 use crate::widgets::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
@@ -45,6 +46,34 @@ const TOP: usize = 2;
 
 /// The rows below the closing row: the empty row (hs-d476).
 const BOTTOM: usize = 1;
+
+/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
+/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
+/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
+/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
+/// the rest to the other.
+pub(crate) fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
+    let column = usize::from(column);
+    let wants = Shape::new(count, expanded).height().into();
+    if tree + wants <= column {
+        return u16::try_from(wants).unwrap_or(u16::MAX);
+    }
+    let share = (column / 3).max(Shape::new(count, false).height().into());
+    let rows = if wants <= share {
+        wants
+    } else if tree + share <= column {
+        column - tree
+    } else {
+        share
+    };
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+/// Whether the merge of the `pr-ready` `item`'s pull request runs: `merging` is the pull requests (`<owner>/<repo>#<n>`) with a live
+/// merge marker (hs-d495).
+pub(crate) fn merges(merging: &std::collections::BTreeSet<String>, item: &Item) -> bool {
+    item.kind == Kind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| merging.contains(&pull.to_string()))
+}
 
 /// What a row of the section is, by its offset from the section's first row (the empty one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +149,13 @@ impl Shape {
     /// The largest scroll offset: the last item reaches the bottom of the list. 0 when collapsed or when all fit.
     pub fn max_scroll(self) -> usize {
         if self.expanded { max_scroll(self.count, self.list_rows(), 1) } else { 0 }
+    }
+
+    /// The scroll offset after a wheel notch down or up over the section: [`WHEEL_ROWS`] items a notch, clamped.
+    pub fn wheeled(self, down: bool) -> usize {
+        let max = self.max_scroll();
+        let scroll = self.scroll.min(max);
+        if down { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) }
     }
 
     /// The row, below the section's first, of the item `i`, when it is drawn.

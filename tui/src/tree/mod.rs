@@ -30,7 +30,7 @@ pub(crate) mod actions;
 mod ask;
 mod cursor;
 pub(crate) mod folds;
-mod inbox;
+pub(crate) mod inbox;
 #[cfg(test)]
 mod archived_folder_tests;
 #[cfg(test)]

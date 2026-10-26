@@ -24,7 +24,7 @@ use tui_tree_widget::TreeState;
 use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::folds::{Folds, FoldsFile};
-use super::inbox::{self, Hit, Jump, Shape};
+use super::inbox::{self, Hit, Jump, Shape, inbox_share};
 use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::ask::{Ask, Question};
@@ -183,28 +183,6 @@ struct Down {
     spoke: bool,
 }
 
-/// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
-/// `tree` rows and `count` items. When both fit, each has its rows. Otherwise the tree is guaranteed two thirds of the
-/// column and the Inbox the third that is left (rounded down, but never below the collapsed section, so that its
-/// header, three items and `+<n> more` show in a column that is not tiny); a section that needs less than its share gives
-/// the rest to the other.
-fn inbox_share(tree: usize, count: usize, expanded: bool, column: u16) -> u16 {
-    let column = usize::from(column);
-    let wants = Shape::new(count, expanded).height().into();
-    if tree + wants <= column {
-        return u16::try_from(wants).unwrap_or(u16::MAX);
-    }
-    let share = (column / 3).max(Shape::new(count, false).height().into());
-    let rows = if wants <= share {
-        wants
-    } else if tree + share <= column {
-        column - tree
-    } else {
-        share
-    };
-    u16::try_from(rows).unwrap_or(u16::MAX)
-}
-
 /// The refusal of New Context… when the instance has no owner policy.
 const NO_OWNER_POLICY: &str = "No owner policy: add $CPD_HOME/policy/<owner>/owner.toml";
 
@@ -250,7 +228,7 @@ impl View {
 
     /// An Inbox item's `pr-ready` pull request has a merge running.
     fn merges(&self, item: &cpd_core::inbox::model::Item) -> bool {
-        item.kind == InboxKind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| self.merging.contains(&pull.to_string()))
+        inbox::merges(&self.merging, item)
     }
 
     /// A working dot or a merging item is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
@@ -499,10 +477,7 @@ impl View {
                 Effect::None
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
-                let max = self.shape().max_scroll();
-                let scroll = self.inbox_scroll.min(max);
-                self.inbox_scroll =
-                    if m.kind == MouseEventKind::ScrollDown { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) };
+                self.inbox_scroll = self.shape().wheeled(m.kind == MouseEventKind::ScrollDown);
                 Effect::None
             }
             MouseEventKind::Down(MouseButton::Left) => self.click(m),
