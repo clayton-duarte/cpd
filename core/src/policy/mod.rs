@@ -11,6 +11,7 @@ mod domain;
 mod exposure;
 mod known;
 mod load;
+pub mod model;
 mod origin;
 mod resolve;
 mod show;

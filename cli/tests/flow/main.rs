@@ -42,6 +42,7 @@ mod review_plannotator;
 mod policy;
 mod policy_fallback;
 mod policy_layout;
+mod policy_model;
 mod policy_scopes;
 mod review_job;
 mod review;
