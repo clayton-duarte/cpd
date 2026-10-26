@@ -252,9 +252,20 @@ struct Ui {
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
+    /// The links of the last drawn frame (pro-d60): what a click on a PR box title reads.
+    links: crate::link::Links,
 }
 
 impl Ui {
+    /// A mouse event on the frame last drawn: a left press (any modifiers) on a drawn link opens its url through
+    /// `ports.runner` and answers `Ok(true)`, changing nothing else; any other event answers `Ok(false)` and changes
+    /// nothing. A failed `open` is the `Err`. STUB: not implemented.
+    #[allow(dead_code)]
+    fn click(&mut self, _ports: &Ports, _m: ratatui::crossterm::event::MouseEvent) -> Result<bool, CpdError> {
+        let _ = &self.links;
+        Ok(false)
+    }
+
     /// A different Lead is in the slot, `from` its Plan before and `to` its Plan now: nothing is selected, the chart
     /// is at the offset `to` was left at, or at its corner. Leads of one Plan share the Plan's offset.
     fn switch(&mut self, from: Option<&PlanId>, to: Option<&PlanId>) {
@@ -846,6 +857,8 @@ pub(crate) fn layout_sample(width: u16, height: u16, case: crate::layout_tests::
     Sample { buf: terminal.backend().buffer().clone(), container: Rect::new(0, 0, width, height), boxes }
 }
 
+#[cfg(test)]
+mod box_link_tests;
 #[cfg(test)]
 mod box_tests;
 
