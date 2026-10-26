@@ -76,7 +76,7 @@ impl Kind {
     pub fn of(row: Option<Row<'_>>) -> Option<Kind> {
         match row {
             None => Some(Kind::Empty),
-            Some(Row::Toggle) => None,
+            Some(Row::Toggle) | Some(Row::NewPlan(_)) => None,
             Some(row) if row.archived() => Some(Kind::Archived),
             Some(Row::Manager(..)) => Some(Kind::Fork),
             Some(Row::Context(_)) => Some(Kind::Context),
