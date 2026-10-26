@@ -408,8 +408,10 @@ fn a_click_on_a_curate_docs_item_and_later_runs_nothing() {
     let fx = rig(vec![curation(Kind::CurateDocs, "alpha: documentation candidates", "curate:alpha:docs")]);
     let _engine = engine(&fx);
     cockpit(&fx);
-    // the first checklist is answered [Later] (closed unapproved), the second with Esc (no outcome at all)
-    let asked = checklists(&fx, &[Some(r#"{"approved":false,"ticked":[],"unticked":["r-3"]}"#), None]);
+    // the first checklist is answered [Later] (closed unapproved), the second with Esc (a cancelled dialog writes the same
+    // not-approved outcome; Lead answer deploy-act-impl-a1-q3)
+    let later = Some(r#"{"approved":false,"ticked":[],"unticked":["r-3"]}"#);
+    let asked = checklists(&fx, &[later, later]);
     says(
         &fx,
         &["context", "curation"],
