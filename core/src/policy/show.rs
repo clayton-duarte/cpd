@@ -6,16 +6,18 @@ use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 
-use super::resolve::{machine_file, owners_dir, repos_dir};
+use super::resolve::{machine_path, owner_path, repo_path};
 use super::domain::{BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName, SessionId};
 use crate::output::Output;
+use crate::store::Store;
 
+/// The flags that select a policy key (`policy show`, `tiers`).
 #[derive(Args, Debug)]
-pub struct ShowArgs {
+pub struct KeyArgs {
     /// The PR of the selected Plan whose repo policy to show
     #[arg(long, value_name = "key", conflicts_with_all = ["context", "owner"])]
     pr: Option<PrKey>,
@@ -31,6 +33,36 @@ pub struct ShowArgs {
     /// With `--owner`: the repo of that owner
     #[arg(long, value_name = "name")]
     repo: Option<RepoName>,
+}
+
+#[derive(Args, Debug)]
+pub struct ShowArgs {
+    #[command(flatten)]
+    key: KeyArgs,
+}
+
+impl KeyArgs {
+    /// The key the flags select: `None` when none is given. `--repo` without `--owner` is `usage`.
+    pub fn select(&self, store: &mut Store) -> Result<Option<PolicyKey>, CpdError> {
+        if self.repo.is_some() && self.owner.is_none() {
+            return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
+        }
+        if let Some(pr) = &self.pr {
+            let plan = self.plan.as_ref().ok_or_else(|| {
+                CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
+            })?;
+            Ok(Some(store.read(|conn| key_of_pr(conn, plan.as_str(), pr.as_str()))?))
+        } else if let Some(context) = &self.context {
+            Ok(Some(store.read(|conn| context_owner(conn, context.as_str()).map(PolicyKey::Owner))?))
+        } else if let Some(owner) = &self.owner {
+            Ok(Some(match &self.repo {
+                Some(name) => PolicyKey::Repo(owner.clone(), name.clone()),
+                None => PolicyKey::Owner(owner.clone()),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 fn not_found(code: ErrorCode, what: &str, field: &str, id: &str) -> CpdError {
@@ -108,34 +140,22 @@ fn session_from_env() -> Result<SessionId, CpdError> {
 }
 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    if args.repo.is_some() && args.owner.is_none() {
-        return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
-    }
-    let Env { home, mut store, config, .. } = Env::open()?;
-    let (role, key) = if let Some(pr) = &args.pr {
-        let plan = args.plan.as_ref().ok_or_else(|| {
-            CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")
-        })?;
-        (None, store.read(|conn| key_of_pr(conn, plan.as_str(), pr.as_str()))?)
-    } else if let Some(context) = &args.context {
-        (None, store.read(|conn| context_owner(conn, context.as_str()).map(PolicyKey::Owner))?)
-    } else if let Some(owner) = args.owner {
-        (None, match args.repo {
-            Some(name) => PolicyKey::Repo(owner, name),
-            None => PolicyKey::Owner(owner),
-        })
-    } else {
-        let session = session_from_env()?;
-        let (role, key) = store.read(|conn| key_of_session(conn, &session))?;
-        (Some(role), key)
+    let Env { home, mut store, .. } = Env::open()?;
+    let (role, key) = match args.key.select(&mut store)? {
+        Some(key) => (None, key),
+        None => {
+            let session = session_from_env()?;
+            let (role, key) = store.read(|conn| key_of_session(conn, &session))?;
+            (Some(role), key)
+        }
     };
     check_file_names(&home)?;
-    let resolved = resolve(&home, &config.host, &key)?;
+    let resolved = resolve(&home, &key)?;
 
-    // The files read, machine first; the owner's exists (resolve refused otherwise).
-    let mut files = vec![machine_file(&home, &config.host), owners_dir(&home).join(format!("{}.toml", key.owner()))];
+    // The files read, machine first (`host.toml`); the owner's exists (resolve refused otherwise).
+    let mut files = vec![machine_path(&home), owner_path(&home, key.owner())];
     if let PolicyKey::Repo(owner, name) = &key {
-        files.push(repos_dir(&home).join(owner.as_str()).join(format!("{name}.toml")));
+        files.push(repo_path(&home, owner, name));
     }
     let files: Vec<PathBuf> = files.iter().filter_map(|f| std::fs::canonicalize(f).ok()).collect();
 
@@ -193,6 +213,10 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
                 (RUN, value(&t.map(|t| &t.run))),
                 (LIST, value(&t.and_then(|t| t.list.as_ref()))),
             ]
+        }
+        Domain::Model => {
+            let m = &resolved.policy.model;
+            vec![("O", value(&m.o)), ("S", value(&m.s)), ("H", value(&m.h)), ("G", value(&m.g))]
         }
         Domain::Protected => vec![(PATHS, value(&resolved.policy.protected.paths))],
         _ => Vec::new(),

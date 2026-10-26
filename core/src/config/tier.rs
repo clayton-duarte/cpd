@@ -11,7 +11,7 @@ use serde::{Serialize, Serializer};
 
 use crate::error::{CpdError, ErrorCode};
 
-/// A model letter: `O`pus, `S`onnet, `H`aiku (the configured `tiers.O/S/H`).
+/// A model letter: `O`pus, `S`onnet, `H`aiku (the `[model]` of a policy key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Letter {
     O,

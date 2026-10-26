@@ -146,6 +146,12 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
 | `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
 | `needs_required` | 3 | `pr add` in phase `dispatch` found neither `--needs` nor `--no-needs` (pro-d46); a PR added after the lock with no needs is started at once and cannot be linked later; `details` `{plan, pr, phase}` |
+| `adopt_not_open` | 3 | `pr add --adopt` (§9.4): the pull request's `state` is not `OPEN`; `details` is `{number, url, state}` |
+| `adopt_fork` | 3 | `pr add --adopt`: the pull request is from a fork (`isCrossRepository`); cpd cannot push to a fork; `details` is `{number, url}` |
+| `adopt_cpd_branch` | 3 | `pr add --adopt`: the head branch starts with `cpd/`, so it is a cpd pull request; `details` is `{number, head_ref}` |
+| `adopt_taken` | 3 | `pr add --adopt`: a PR of any Plan with the same repo and head branch is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` |
+| `adopt_foreign` | 3 | `pr add --adopt`: the pull request's author is not the User and `--confirm-author` is missing or differs (case-insensitively); the message tells the Lead to ask the User first; `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}` |
+| `pr_adopted` | 3 | `pr edit --repo` or `--base` on an adopted PR (§9.5): the repo and the base come from the pull request; `details` is `{pr, flag}` |
 | `kind_reserved` | 3 | `job add --kind open` or `update` (§5.1): cpd adds those Jobs, never the Lead (contract §2.2 "Job kinds"); `details.kind` |
 | `test_job_required` | 3 | an `impl` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no `test` Job of its PR; `details.jobs` lists the `impl` Jobs |
 | `tests_unconfigured` | 3 | `pr add --shape tdd` (§9.4), `job add --kind test` or `impl` (§5.1) or a `test` or `impl` Job's submit (§6.1) found that the PR's repo policy has no `[test-commands]` (no repo file, or a file without the table; contract §7.7); the message names `--shape docs`, `--shape config` and the table |
@@ -235,13 +241,13 @@ cpd context new <id> --title <text> --owner <login> [--jira <key>]
 | `<id>` | Context id (§2.1) |
 | `--title <text>` | required; 1–200 characters, no control characters, else `usage` (§1.5) |
 | `--owner <login>` | required: the GitHub owner (user or organisation) of every repo the Context's Plans work on, its policy key (contract §8.3, hs-d288); a login of contract §2.1, else `usage`; stored lowercased |
-| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
+| `--confirm-fallback` | optional: if the owner is unknown, create `policy/<login>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `policy/clayton-duarte/owner.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 | `--jira <key>` | Jira Epic key, stored only (`^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | no Context row with this id, unless it has the same title, Jira key and owner | `context_exists` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
+| the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml` (contract §8.3; an empty file is the default policy), else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file, read as every resolve reads it, is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 Effects:
@@ -577,7 +583,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | Flag | Meaning |
 |---|---|
 | `<login>` | the owner, a login of contract §2.1, else `usage`; stored lowercased |
-| `--confirm-fallback` | optional: if the owner is unknown, create `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `owners/clayton-duarte.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
+| `--confirm-fallback` | optional: if the owner is unknown, create `policy/<login>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml` and proceed; if the owner is already known, the flag changes nothing (idempotent); if `policy/clayton-duarte/owner.toml` does not exist, fail `fallback_missing`. Without the flag, an unknown owner fails `owner_unconfirmed` |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -585,7 +591,7 @@ Sets a missing owner or changes the owner (contract §8.3, hs-d288): a Context c
 | the Context exists | `context_not_found` | 4 |
 | the same owner again (no write, no Event) | `already` | 0 |
 | the Context has an owner other than this one and a PR row exists; details: `context`, `owner` (the current owner), `prs` (the PR rows as `<plan>/<key>`, sorted) | `owner_in_use` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`, else with `--confirm-fallback` create it as a relative symlink to `clayton-duarte.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
+| the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml`, else with `--confirm-fallback` create it as a relative symlink to `../clayton-duarte/owner.toml`; without the flag, `owner_unconfirmed` if the owner is unknown (details: `owner`, `file`, `fallback`, `flag`); `fallback_missing` if the fallback owner's file does not exist; `details.owner` and `details.file` | `owner_unconfirmed` (1), `fallback_missing` (1) |
 | that file is valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 
 An archived Context is not refused: changing its owner changes no work.
@@ -1128,7 +1134,7 @@ Idempotent: yes; not archived: `"already": true`, nothing written.
 cpd plan cancel [--plan <id>] [--reason <text>]
 ```
 
-Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the Plan's pull requests that are not merged, closes its Lead and its forks, and archives it. Branches and worktrees of cancelled PRs are removed by `pr poll` (the same clean-up as merged PRs, §9.2, hs-d517). `--reason` is kept in the Events' `reason`; default `plan cancelled`. The Plan may be in any phase, `done` included (nothing is left to cancel; it is then archived).
+Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the Plan's pull requests that are not merged, closes its Lead and its forks, and archives it. cpd never closes an adopted pull request (§9.4) and never deletes its branch: step 5 leaves it open and the output lists it under `left_open`. Branches and worktrees of cancelled PRs are removed by `pr poll` (the same clean-up as merged PRs, §9.2, hs-d517). `--reason` is kept in the Events' `reason`; default `plan cancelled`. The Plan may be in any phase, `done` included (nothing is left to cancel; it is then archived).
 
 | Precondition or failure | Code | Exit |
 |---|---|---|
@@ -1144,14 +1150,14 @@ Effects, in this order; each step is idempotent, so a rerun after any failure co
 2. **Plan reviews:** every pending review of the Plan becomes `superseded` with `decided_at` = now and `feedback` null, **Event** `plan-review` `{review, fingerprint, status: "superseded"}` (reason: "Plan review r<k> of Plan P is superseded: the Plan was cancelled.") The User sees the reason in the Event's `text` (contract §5.2) and the dialog closes in the pi adapter (§15.5).
 3. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason, **but no Job is refused `shape_incomplete`**, in particular not the last `test` or `impl` Job of a `tdd` PR (cancelling a Plan is never refused by the shape check, hs-d573; the skip is an internal parameter of the path, never a flag, option or environment variable): `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
 4. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
-5. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched.
+5. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched. A PR with `head_ref` (adopted, §9.4) is never closed: its pull request stays open and is listed under `left_open` (`[{pr, number}]`).
 6. **tmux:** close every live Lead pane as `session close` does (§10.9).
 7. **Rows**, one transaction: `archived_at` = now on the Plan and its Sessions, with **Event** `plan-archived` `{archived: true}` and `session-archived` per object, as `plan archive` (§4.10).
 
 No new Event kind and no schema change. The command's own Events are the existing ones named above.
 
 ```json
-{"ok": true, "cancelled": ["api", "ui"], "closed_prs": [{"pr": "ui", "number": 813}], "closed": ["%41"], "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}]}
+{"ok": true, "cancelled": ["api", "ui"], "closed_prs": [{"pr": "ui", "number": 813}], "left_open": [{"pr": "card", "number": 3748}], "closed": ["%41"], "archived": [{"kind": "plan", "id": "cpd2"}, {"kind": "session", "id": "596d007f-…"}]}
 ```
 
 Idempotent: yes (a rerun continues where it stopped). An archived Plan with nothing left to cancel: `"already": true`, nothing written. A rerun after a failure repeats steps 2 to 6 on what is left; Jobs already `cancelled` and pull requests already closed are skipped.
@@ -1713,6 +1719,8 @@ The Lead worktree's local changes refuse nothing: the Gate does not run there (h
 
 **Ready, never a draft** (hs-d329): the pull request is opened only after the conflict check above and, with `gate.pr` is `local`, the Gate; `gh pr create` never has `--draft` and no cpd command makes a pull request a draft or ready (contract §7.6 "Ready, never a draft"). Under `ci` the conflict check still applies and the pull request opens ready (the Lead's reading of hs-d329: `ci` skips only the Gate).
 
+**An adopted PR** (`head_ref` set, §9.4): the pull request is found by `gh pr list --head <head_ref> --state all`, the Gate runs as above, and rule P pushes to `refs/heads/<head_ref>`, plain, never forced; `gh pr create` is never run, the pull request that exists is adopted (its own title kept). `push_rejected` (§9.9) names `cpd pr rebase` (the catch-up, §9.3) as the next step. Steps 0 and 3 and the merged check name `<head_ref>`, not the Lead Branch.
+
 Effects:
 - **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The PR body's `# <title>` line uses the same title. The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
 - **No lock** (hs-d243, contract §7): merges into the PR go on during the command; no R first (an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses).
@@ -1830,7 +1838,9 @@ Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 s
 {"ok": true, "plan": "pay-4521", "pr": "api", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `gate.pr` is `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
+**An adopted PR** (`head_ref` set, §9.4) takes the **catch-up**: the command never rebases onto the base. It fetches `origin <head_ref>` and rebases the Lead Branch's commits that `origin/<head_ref>` lacks onto `origin/<head_ref>` (the machinery above: gate worktree, guard U, compare-and-swap of the Lead Branch, rule S, the Gate when `gate.pr` is `local`, `--continue` and `--abort`), then pushes with rule P: `git push --porcelain origin <sha>:refs/heads/<head_ref>`, no lease, no force; history stays linear and is never deleted. It is allowed in `open`, and in `dispatch` once every Job of the PR but its `open` and `update` Jobs is `merged` or `cancelled` (`jobs_not_done` otherwise, as `pr open`). When `origin/<head_ref>` is already in the Lead Branch the outcome is `already`. The Lead runs it when an `open` or `update` Job ends `push_failed`, or when `pr open` or `pr push` is refused `push_rejected`; cpd never runs it by itself. A conflict of an adopted PR with its base stays the `update` Job's: its Worker merges the base (a merge commit) and cpd pushes plain.
+
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `gate.pr` `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
 
 **The conflict stop** (contract §7.6). On a conflict nothing is aborted: the Lead worktree holds the rebase, stopped at the first conflicting commit, and the Lead Branch ref is unchanged until the rebase finishes. The error:
 
@@ -1867,10 +1877,11 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `pr add`
 
 ```
-cpd pr add <key> --repo <path> --title <text> [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd pr add <key> --repo <path> --title <text> [--adopt <number> [--confirm-author <login>]] [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none—stated with `--no-needs`—unless it is appended after the lock, when one flag is required, pro-d46). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). With `--adopt` it adopts an existing pull request whose head branch is not `cpd/<plan>/<key>`: cpd works it like a Plan (Jobs that address review comments and failing CI checks) and pushes to the pull request's own head branch, never a second pull request (pro-n8). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
 
 | Flag | Meaning |
 |---|---|
@@ -1881,6 +1892,13 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | `--base <plan>/<key>` | **stack on a PR** (hs-d324, hs-d325): the PR `<key>` of Plan `<plan>` (this Plan's own included) becomes the **base PR**, and the stored `base` is its Lead Branch, so the PR starts from that branch's head and its pull request targets it (contract §3.8 "Stacked PRs"). The value is a PR when it has the form `<plan>/<key>` and a Plan `<plan>` exists, else a branch (contract §2.2 "A PR reference") |
 | `--needs <r1,r2>` | PR references (contract §2.2): keys of other PRs of the Plan (`<plan>/<key>` of the Plan itself is read as the bare key; another Plan's is refused `pr_other_plan`, hs-d522), that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in `grounding` and `plan` none; in `dispatch` none: one flag is required (`needs_required`, pro-d46); in `deploy` or `done` every `merged` PR of the Plan |
 | `--no-needs` | no needs, the way a PR with no needs is stated in `dispatch` when the default does not apply; exclusive with `--needs` (`usage`); in `grounding`, `plan`, `deploy` or `done` it changes the default to explicitly none |
+| `--title <text>` | required (hs-d285): the PR's own title, which names its change and becomes the pull request's title and then the squash commit's subject on `main`. 1–72 characters, one line, no control characters, else `usage` (§1.5). `pr add` is the only place a PR is created. Under `--adopt` it is a local label (it names the stub Jobs): cpd never sends it to GitHub, the pull request keeps its own title |
+| `--adopt <number>` | adopt the existing pull request `<number>` of `--repo`'s `origin` (below). The PR's base is the pull request's `baseRefName` (it must exist as `origin/<base>`: `base_not_found`) and its head is `head_ref`, stored in `prs.head_ref` |
+| `--confirm-author <login>` | the pull request's author, when it is not the User (`adopt_foreign`); accepted and does nothing when the author is the User. Needs `--adopt` |
+| `--base <branch>` | exclusive with `--adopt` (`usage`, exit 2: the base is the pull request's). The branch the pull request targets; default the repo's `origin` HEAD branch, else `main` (cpd 1 §11 `workflow init`, kept) |
+| `--base <plan>/<key>` | exclusive with `--adopt`. **Stack on a PR** (hs-d324, hs-d325): the PR `<key>` of Plan `<plan>` (this Plan's own included) becomes the **base PR**, and the stored `base` is its Lead Branch, so the PR starts from that branch's head and its pull request targets it (contract §3.8 "Stacked PRs"). The value is a PR when it has the form `<plan>/<key>` and a Plan `<plan>` exists, else a branch (contract §2.2 "A PR reference") |
+| `--needs <r1,r2>` | PR references (contract §2.2): keys of other PRs of the Plan (`<plan>/<key>` of the Plan itself is read as the bare key; another Plan's is refused `pr_other_plan`, hs-d522), that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in phase `deploy` or `done` (the reopen, hs-d118), **every `merged` PR of the Plan**; in other phases none |
+| `--no-needs` | no needs, also in phase `deploy` or `done`; exclusive with `--needs` (`usage`) |
 | `--shape <tdd\|docs\|config>` | the template of stub drafts the PR starts with (hs-d341, contract §2.2 "Job kinds"), default `tdd`: `<key>-docs` (kind `docs`), `<key>-tests` (`test`, needs `<key>-docs`), `<key>-impl` (`impl`, needs `<key>-tests`). **`docs`**: only `<key>-docs`; **`config`**: only `<key>-config`, kind `work`: a docs-only or config-only PR says so here and has no test Job. **Stored in `prs.shape` and enforced** (hs-d497; contract §2.2 "Job kinds"): the kinds the PR may have (`shape_violation` at `job add`, `job edit --kind`) and the ones a `tdd` PR must keep (`shape_incomplete` at `plan review`, `plan lock` and `job cancel` typed by the Lead); never changed afterwards. `pr cancel` of the whole PR is the way out and cancels the `test` and `impl` Jobs itself (§9.6, hs-d573) `pr_exists`'s comparison includes it |
 
 | Precondition | Code | Exit |
@@ -1890,7 +1908,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | the Plan's Context has an owner (contract §8.3); the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
 | the repo is keyed from its `origin` (below); `details.url` (null when there is no `origin`) | `repo_unkeyed` | 1 |
 | the repo's owner is the Context's; `details.owner` (the Context's), `details.repo_owner` | `owner_mismatch` | 3 |
-| the owner has a policy file, `$CPD_HOME/policy/owners/<owner>.toml`; `details.owner` | `owner_unconfirmed` | 1 |
+| the owner has a policy file, `$CPD_HOME/policy/<owner>/owner.toml`; `details.owner` | `owner_unconfirmed` | 1 |
 | the owner's and the repo's policy files are valid; `details.file`, `details.key` | `policy_invalid` | 1 |
 | `--base` is a branch: it exists, `refs/remotes/origin/<base>`, or `refs/heads/<base>` when the repo has no `origin` | `base_not_found` | 4 |
 | `--base <plan>/<key>`: the PR exists in that Plan; `details` is `{plan, pr}` | `base_pr_unknown` | 3 |
@@ -1901,6 +1919,12 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | the base PR is not also in `--needs` (a need is merged before this PR starts, a base PR only started) | `usage` | 2 |
 | no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | in phase `dispatch`, one of `--needs` or `--no-needs` is required; an existing PR key is compared first (`already` when the flags match, else `pr_exists`), so a rerun is never refused (idempotence, pro-d46) | `needs_required` | 3 |
+| (`--adopt`) the pull request's state is `OPEN`; `details` is `{number, url, state}` | `adopt_not_open` | 3 |
+| (`--adopt`) it is not from a fork (`isCrossRepository` false); `details` is `{number, url}` | `adopt_fork` | 3 |
+| (`--adopt`) its head branch does not start with `cpd/`; `details` is `{number, head_ref}` | `adopt_cpd_branch` | 3 |
+| (`--adopt`) no PR of any Plan with the same repo and head_ref is `waiting`, `dispatch` or `open`; `details` is `{head_ref, plan, pr}` | `adopt_taken` | 3 |
+| (`--adopt`) its author is the User, or `--confirm-author` equals the author's login (case-insensitively); `details` is `{number, url, author, user, confirm: "--confirm-author <author>"}`; the message tells the Lead to ask the User first (pro-n4) | `adopt_foreign` | 3 |
+| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title, shape, head_ref and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | the graph of PR needs and base PRs stays acyclic across every Plan (a PR stacked on `B` cannot be needed, directly or not, by `B`: it would wait for `B` to start while `B` waits for it to merge); `details.cycle` lists the references | `dependency_cycle` | 3 |
@@ -1908,6 +1932,10 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | (`--shape tdd`) the PR's repo policy has `[test-commands]` (contract §7.7; none when there is no repo file or the file lacks the table); the message names `--shape docs`, `--shape config` and the table | `tests_unconfigured` | 3 |
 | none of the Job keys the shape lays out exists in the Plan; `details.jobs` | `job_key_exists` | 3 |
 | the legacy move's `git push origin --delete cpd/<plan>` succeeds; `details`: `branch`, `repo`, `stderr` | `push_failed` | 1 |
+
+The five `adopt_*` rows are checked in the order above, after every other check of this command, with nothing written. `--confirm-author` without `--adopt` is `usage`.
+
+**What `--adopt` reads** (A2), with the working directory the repo, so `gh` resolves the pull request through its `origin`: `gh pr view <number> --json number,url,state,isCrossRepository,headRefName,baseRefName,author` and `gh api user --jq .login`. The first answers `{"number":7,"url":"https://github.com/acme/pay/pull/7","state":"OPEN","isCrossRepository":false,"headRefName":"feat/x","baseRefName":"main","author":{"login":"alice"}}`. The author is the User when `author.login` equals the login of `gh api user`, compared case-insensitively (pro-n4: the User's own pull request is adopted without asking; another author's needs a warning and the User's confirmation first). A `gh` failure is `gh_failed`. The pull request's number is not stored: `pr open` finds it by head (`gh pr list --head <head_ref> --state all`, §9.1).
 
 Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so no `illegal_phase`. A new PR has no dependents, so it creates no cycle of its own; `dependency_cycle` is possible only through `pr edit` (§9.5).
 
@@ -1922,15 +1950,17 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
 
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `shape`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; the legacy PR's `lead_branch` update (step 3); and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `shape`, `lead_branch = cpd/<plan>/<key>` (with `--adopt`, the local branch of the Lead worktree; and `head_ref`, the pull request's head branch, set here only: the trigger `prs_head_ref_fixed` refuses any later change with `pr_locked`, and the partial unique index `prs_head_ref_live` allows one live PR per repo and head), `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; the legacy PR's `lead_branch` update (step 3); and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended, head_ref, author}` (`head_ref` and `author` null for a cpd PR), `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "head_ref": null, "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
 ```
+
+An adopted pull request (`--adopt 3748`): the same object with `"head_ref": "feat/EEC-3238/review-submit-polish"`, `"base": "main"`, `"lead_branch": "cpd/pay-4521/card"`; `plan show` (§4) carries `head_ref` in its PR objects too.
 
 A PR stacked on a PR of its Plan, needing another (`--base pay-1/api --needs schema`): `"base": "cpd/pay-1/api", "base_pr": "pay-1/api", "needs": ["schema"]`.
 
-Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
+Idempotent: yes, as stated; the same flags again, `--adopt` included, are `already` (the comparison includes head_ref); every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base (a base PR by its Lead Branch) and needs (as references), so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
 
 ### 9.5 `pr edit`
 
@@ -1939,12 +1969,16 @@ cpd pr edit <key> [--repo <path>] [--base <branch> | --base <plan>/<key>] [--nee
 ```
 
 Changes a `waiting` PR before the lock (A13), and, with `--title`, a PR's title in any phase (below). `--needs` replaces the whole list; `--no-needs` removes every need. `--base` and `--needs` take what `pr add` takes (§9.4): a branch or, to stack, a base PR `<plan>/<key>` of the Plan, and PRs of the Plan; `--base <branch>` on a stacked PR unstacks it. A PR that another PR is stacked on keeps its repo: `--repo` is refused `pr_in_use` (`details.prs`), because the stacking is derived from the repo and the base and a change would silently unstack the PR above it (hs-d324). The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo; the new repo's `origin` is parsed as `pr add` parses it (§9.4 "The repo's key") and replaces `name`. After the lock, the link (`--needs` and `--base`) cannot be changed, so it is stated at `pr add` with a required flag (pro-d46, §2.2).
+Changes a `waiting` PR before the lock (A13), and, with `--title`, a PR's title in any phase (below). `--needs` replaces the whole list; `--no-needs` removes every need. `--base` and `--needs` take what `pr add` takes (§9.4): a branch or, to stack, a base PR `<plan>/<key>` of the Plan, and PRs of the Plan; `--base <branch>` on a stacked PR unstacks it. An **adopted** PR (`head_ref` set, §9.4) takes its repo and its base from the pull request: `--repo` or `--base` is refused `pr_adopted` (`details` is `{pr, flag}`), checked first. A PR that another PR is stacked on keeps its repo: `--repo` is refused `pr_in_use` (`details.prs`), because the stacking is derived from the repo and the base and a change would silently unstack the PR above it (hs-d324). The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo; the new repo's `origin` is parsed as `pr add` parses it (§9.4 "The repo's key") and replaces `name`.
+
+Changes a `waiting` PR before the lock (A13), and, with `--title`, a PR's title in any phase (below). `--needs` replaces the whole list; `--no-needs` removes every need. The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo; the new repo's `origin` is parsed as `pr add` parses it (§9.4 "The repo's key") and replaces `name`.
 
 `--title <text>` (hs-d285) works in **every phase and every PR status but `merged` and `cancelled`** (a PR that is over; `cancelled` is the PR status that stands for a closed PR, §3.8): 1–72 characters, one line, no control characters, else `usage` (§1.5). The title is **not a Locked field**: it is outside the plan fingerprint (§2.3) and `prs_locked`'s columns (§4.4), so editing it never invalidates a review or a lock, and the phase and status rules below (`pr_locked`, `illegal_transition`) apply to the other flags only. A `merged` or `cancelled` PR's title is history: `pr_ended`. When the PR has an **open** pull request, the command also retitles it on GitHub, through the seam of §9.1, with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f title=<text>`. It must **not** use `gh pr edit`: on 2026-10-19 that fails on this repo with "Projects (classic) is being deprecated … (repository.pullRequest.projectCards)", while the `gh api` PATCH works (both verified on #99). A failing GitHub update is `gh_failed` and leaves the stored title unchanged.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
+| the PR is not adopted when `--repo` or `--base` is given; `details` is `{pr, flag}` | `pr_adopted` | 3 |
 | with `--title`, the PR is not `merged` or `cancelled` | `pr_ended` | 3 |
 | for the flags other than `--title`: the phase is `grounding` or `plan`; after the lock a PR is Locked (§4.4 `prs_locked`) | `pr_locked` | 3 |
 | for the flags other than `--title`: the PR is `waiting` (a `cancelled` one is terminal) | `illegal_transition` | 3 |
@@ -2017,6 +2051,8 @@ cpd pr start <key> [--plan <id>]
 ```
 
 Starts a `waiting` PR whose needs are all `merged` and whose base PR, if it has one, has started (A9, §3.8, hs-d324): the Lead's retry after engine E7 failed to start it (the `error` Event with code `pr_start_failed`), once the cause is fixed. It does what E7 does.
+
+**An adopted PR** (`head_ref` set, §9.4; the same for E7 and `plan lock`'s start): the Lead worktree path is as always; `git fetch origin <head_ref>` runs (a failure is `pr_start_failed` with `step` `remote`) and the local branch `cpd/<plan>/<key>` is cut from `origin/<head_ref>`. There is no conflict check against the base (a conflict with the base is the `update` Job's), nothing is pushed at the start (no `cpd/...` branch ever appears on `origin`), and the User's own local branch of the head's name is never read or touched.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -2096,6 +2132,8 @@ Publishes an `open` PR's Lead Branch with a plain push, after the Gate when the 
 | the caller is not an agent, OR the incident is off, OR the resolved PR's Plan is not held (hs-d643): `CPD_SESSION` set and non-empty names an agent; a held Plan is in the incident; `details` is `{pr, plan, incident}` | `incident_hold` | 3 |
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
+
+For an **adopted** PR (§9.4) the push is `git push --porcelain origin G:refs/heads/<head_ref>`, plain, never forced; `push_rejected` names `cpd pr rebase` (the catch-up, §9.3) as the next step.
 
 Effects: no lock and no R first (hs-d243, §7.4): `G = rev-parse refs/heads/<lead branch>`, read once; with `gate.pr` is `local`, the Gate in the Lead worktree at G: `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from the PR's policy (output `run/<plan>/logs/pr-<key>.pre-merge.log`) (hs-d679, hs-d680); the PR re-read; then rule P, `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`, never `--force` or a lease). A rejection whose remote tip already contains G (a merge during the Gate pushed a descendant) is a success that pushed nothing. Any other git failure is `git_failed`. **Rows**: none; no Event.
 
@@ -2191,7 +2229,7 @@ cpd session show [<id>]
 
 `<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506), `loop_guard_turns` (the config value, for every Session) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
-`model` is `tiers.<letter>` of the config (`<provider>/<model-id>`, contract §8.2) for the letter of the row's `tier`, and `thinking` is the level of its digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. They are read at each call, so a config edit shows at once.
+`model` is from the policy's `[model]` table for the key of the row's `tier` (contract §8.3, §9) (`<provider>/<model-id>`), and `thinking` is the level of the tier's digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. The models are read at each call, so a policy edit shows at once.
 
 ```json
 {"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "loop_guard_turns": 20, "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
@@ -2514,7 +2552,7 @@ Writes the Session's **dynamic title** (contract §2.2, hs-d257): a glance remin
 **Steps.**
 1. Take `locks/title-<session>.lock` without waiting and hold it for the run's whole life, so a Session never has two runs at once; the kernel frees it when the run dies, so a crashed run leaves no stale lock (contract §1.4).
 2. **The conversation text.** Read the Session's pi session file (`sessions.file`, JSONL) and take **the last 2 turns** (hs-d543): from the **second-to-last** message of role `user` to the end of the file (the whole file when it holds fewer than two `user` messages), the text of the messages of role `user` or `assistant` in it (tool calls, tool results and other entries are not messages here), in order; if their text exceeds **8 000 characters**, cut it so the **newest** characters are kept. With no such message (no `file` yet, or none in it), **skip**: print the JSON below with `"skipped": "no_messages"`, run no pi, append no Event, write nothing and set nothing. A skip is not an error.
-3. **Run pi** once, in `run/titles/` (created when missing): `pi --print --no-session --no-extensions --model <tiers.G>:off -- "<prompt>"`, with the conversation text on **stdin**, where `<tiers.G>` is the model of Tier `G` from the config (`tiers.G`; contract §8.2, §9) and `:off` is pi's level for no thinking: the title writer needs only the model. The prompt asks for a reminder of **what was last happening** in the conversation, answered as **one line `TITLE: <what was last happening, at most N characters>`** (N of the usage above) and nothing else. pi's environment is `PI_SKIP_VERSION_CHECK=1` only, no `CPD_*` (contract §6.5, "Title writer", hs-d562). Its stderr is kept (its last lines are the `tail` below).
+3. **Run pi** once, in `run/titles/` (created when missing): `pi --print --no-session --no-extensions --model <model>:off -- "<prompt>"` where `<model>` is from the policy's `[model]` table's `G` key (contract §8.3, §9) and `:off` is pi's level for no thinking: the title writer needs only the model. The prompt asks for a reminder of **what was last happening** in the conversation, answered as **one line `TITLE: <what was last happening, at most N characters>`** (N of the usage above) and nothing else. pi's environment is `PI_SKIP_VERSION_CHECK=1` only, no `CPD_*` (contract §6.5, "Title writer", hs-d562). Its stderr is kept (its last lines are the `tail` below).
 4. **Parse and check the answer** (hs-d356). The title is taken **only from an explicit, parseable answer**: **the only line that starts with `TITLE:`** (leading spaces allowed), the text after the marker, trimmed and unquoted. Lines without the marker are ignored, so a preamble before the marked line does no harm. The answer is **malformed**, never a title, when: no line has the marker, or two lines do; the marked text is empty; it is over **N characters** (N = cols − 8, at most 200; it is **never cut**: an over-long answer is not a title; there is no word cap); it reads as sentences (a `. ` inside it, or it ends in `.`, `…` or `:`); or it is not a Title (`core/src/args.rs`: 1–200 characters, no control characters). An answer that is empty or only whitespace is `empty`, not `malformed`.
 5. **Write**, in one transaction: `sessions.title` and `sessions.titled_at` (now); **Event** `session-titled` `{title}` (context, plan if any, session). Then **tmux**: sets `@cpd_title` to the title on the Session's live pane, when it has one (a tmux failure does not undo the write: it is reported on stderr, and the header is made right by the next start or move of the pane, which apply contract §6.1's precedence).
 
@@ -3100,7 +3138,7 @@ The lines (`╭`, `│`, `╰`) are colour 8 and the toggle's arrows and words c
   **Archive of the chat slot's Lead** (F3, hs-d90). Archive on a Session row (a Plan row's Lead, or a fork) whose Lead holds the chat slot, or a Context row whose Manager holds the chat slot, cannot go straight to the archive command, which refuses with `in_chat_slot` (§10.10, unchanged). The tree first frees the slot, then archives: it opens the next live Session in tree order, excluding every Session the archive cascade archives (`session open`, then focuses the chat); if none follows, the previous one; if there is none at all, it runs `session park`, so the placeholder holds the slot. Then it runs the archive command. Only the tree does this two-step; the CLI keeps its refusal.
 
   A refusal (`archive_blocked`, `in_chat_slot`, `archived`, …) is a `text` dialog with the failure (§17 "No notes").
-- **New Plan… and New Context…** ask a title in an `input` popup (validation `title`; New Context… also the owner, below); the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title> --by-user` (hs-d542 A1): no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). For a by-user Session, pi starts with no first message and waits for the User's first prompt to deliver it (hs-d540, hs-d542 A2, §15.7a). New Context… also needs the owner (§3.1): after the title, a `select` popup (title `New Context`, prompt `Owner:`, rows the policy files' stems sorted) asks the user to choose from the owner policy files in `$CPD_HOME/policy/owners/` (`<owner>.toml`, the file stem is the login; contract §8.3), with the first row selected at start; the rows are in the order `owners_in` gives (sorted), and the first is always selected at start. Enter or [OK] confirms the row under the cursor and runs `context new <id> --title=<title> --owner=<chosen>`; Esc or [Cancel] cancels and nothing runs. With no policy file the refusal is a `text` dialog `No owner policy: add $CPD_HOME/policy/owners/<owner>.toml`, running nothing. A title no id can be made of is still refused right after the title, before the owner is asked, in a `text` dialog.
+- **New Plan… and New Context…** ask a title in an `input` popup (validation `title`; New Context… also the owner, below); the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title> --by-user` (hs-d542 A1): no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). For a by-user Session, pi starts with no first message and waits for the User's first prompt to deliver it (hs-d540, hs-d542 A2, §15.7a). New Context… also needs the owner (§3.1): after the title, a `select` popup (title `New Context`, prompt `Owner:`, rows the policy files' stems sorted) asks the user to choose from the owner policy files in `/policy/` (the owner directories) (`<owner>.toml`, the file stem is the login; contract §8.3), with the first row selected at start; the rows are in the order the tree derives the owner list (sorted), and the first is always selected at start. Enter or [OK] confirms the row under the cursor and runs `context new <id> --title=<title> --owner=<chosen>`; Esc or [Cancel] cancels and nothing runs. With no policy file the refusal is a `text` dialog `No owner policy: add $CPD_HOME/policy/<owner>/owner.toml`, running nothing. A title no id can be made of is still refused right after the title, before the owner is asked, in a `text` dialog.
 - **Right button.** The view relies on tmux 3.4's default root `MouseDown3Pane` binding: believed to pass the click to a pane whose app captures the mouse (`mouse_any_flag`), and to show tmux's own menu otherwise (**unverified**). cpd adds no binding for it (§6.1, §13.1 unchanged).
 
 **`plan`.**
@@ -3283,7 +3321,7 @@ Checks, in order:
 | `git`, `tmux`, `pi`, `gh` | error | found on `PATH` at or above the minimum above |
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
-| `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H3` or `S0`–`S3`); effort 0–4) |
+| `tiers` | error | each model in the policy's `[model]` table is in pi's catalog (contract §8.3, §9), and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d562, hs-d554 and hs-d506: `context_distill_tier` `GX` only (hs-d562: the auxiliaries' Tier); `open_tier` a Tier a Worker may have (`H3` or `S0`–`S3`); effort 0–4) |
 | `holographic` | error | when `context_engine_enabled = true`, resolve the bridge script and the Python interpreter from the config (or their defaults, §8.2), run `{"cmd":"ping"}` under `context_engine_timeout_ms`, and report the engine version; when `context_engine_enabled = false`, passes with `"disabled": true` (hs-d677); no index read or build |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
@@ -3310,8 +3348,8 @@ Prints the effective configuration: defaults merged with `config.toml` (§8), ea
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
- "config": {"version": 1, "machine": "hs", "host": "homeserver", "concurrency": 3, "retry_cap": 2, "lead_tier": "O2", "tiers": {"O": "github-copilot/claude-opus-5.5", "S": "…", "H": "…"}, "timeouts": {"attempt_minutes": 30, "…": "…"}, "watch": {"tick_seconds": 5, "…": "…"}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
- "sources": {"version": "file", "machine": "file", "host": "default", "concurrency": "default", "tiers.O": "default"}}
+ "config": {"version": 1, "machine": "hs", "concurrency": 3, "retry_cap": 2, "lead_tier": "O2", "timeouts": {"attempt_minutes": 30, "...": "..."}, "watch": {"tick_seconds": 5, "...": "..."}, "events": {"poll_ms": 200}, "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}},
+ "sources": {"version": "file", "machine": "file", "host": "default", "concurrency": "default"}}
 ```
 
 `sources` has one entry per leaf key. Idempotent: read-only.
@@ -4371,33 +4409,33 @@ Prints the resolved policy of one key: every domain with its value and its sourc
 | with no flag, a Session was selected | `session_required` | 2 |
 | the Session, Plan, PR or Context exists | `session_not_found`, `plan_not_found`, `pr_not_found`, `context_not_found` | 4 |
 | the Context (the Session's, the PR's Plan's, or `--context`) has an owner; the message names `cpd context owner <login> --context <c>` | `owner_unset` | 3 |
-| the key's owner has `owners/<owner>.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
+| the key's owner has `policy/<owner>/owner.toml`, also when its repo file exists; `details.owner` | `owner_unconfirmed` | 1 |
 | every file the key reads is valid TOML with known domains, keys, types and values, and a valid file name; `details.file`, `details.key` | `policy_invalid` | 1 |
 
-Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`machines/<host>.toml` when it exists, `owners/<owner>.toml`, `repos/<owner>/<name>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: an entry of `machines/` must be `<host>.toml` where `<host>` is valid (§8.2), else `policy_invalid`.
+Effects: none. One read transaction for the key's rows, then the compiled default and the key's files, read in order (`policy/host.toml` when it exists, `policy/<owner>/owner.toml`, `policy/<owner>/<repo>.toml` for a `Repo` key when it exists: the file is optional), each parsed once. No subprocess. `check_file_names`: the file `host.toml` is the machine scope; a directory whose name is a valid owner login must contain only `owner.toml` and files with valid repo names ending in `.toml`, else `policy_invalid` (§8.3).
 
 Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Session's role (`manager`, `lead` or `worker`) with no flag, else null; `files`, the realpath of each file read in order (machine, owner, repo), only the files that exist (a repo without a file has no repo scope and prints the owner's policy); and `policy`, one entry per domain of contract §8.3, in its table's order, each with `source`, `audience` (the roles its `text` reaches), `keys` (its typed keys, each with its `value` and `source`; `{}` for a domain that has none) and `text`. The three repo-only domains (contract §8.3) print like the others: `audience` `[]`, `text` `""`, `source` `default` or `repo:<path>`; the `keys` of `hooks` are `pre-start`, `pre-commit` and `pre-merge`, each `value` a list of blocks, each block a list of `{"name": <string or null>, "command": <string>}` (`[]` when the hook is not set); of `test-commands`, `build`, `run` and `list` (a string, or null when not set); of `protected`, `paths` (a list of strings, `[]` by default). A domain's `source` is `default`, `machine:<path>`, `owner:<path>` or `repo:<path>`; a typed key left out of a set domain has its domain's source followed by ` (key default)`, and its value is cpd's default (contract §8.3 "Precedence and replace"). The adapter keeps the domains whose `audience` holds `role` and whose `text` is not empty.
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
- "files": ["/home/clayton/.cpd/policy/machines/homeserver.toml", "/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
+ "files": ["/home/clayton/.cpd/policy/host.toml", "/home/clayton/.cpd/policy/clayton-duarte/owner.toml"],
  "policy": {
-   "gate": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-           "keys": {"merge": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
-                    "pr": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+   "gate": {"source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml", "audience": ["lead", "worker"],
+           "keys": {"merge": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"},
+                    "pr": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"}},
            "text": "These repos run no GitHub Actions: …"},
-   "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
+   "pr": {"source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml", "audience": ["lead", "worker"],
+          "keys": {"feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/clayton-duarte/owner.toml"}},
           "text": ""},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "tests": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "monitor": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
    "instructions": {"source": "default", "audience": ["manager", "lead", "worker"], "keys": {}, "text": ""},
-   "hooks": {"source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml", "audience": [],
-             "keys": {"pre-start": {"value": [], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"},
-                      "pre-commit": {"value": [[{"name": null, "command": "npm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"},
-                      "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/repos/clayton-duarte/cpd.toml"}}, "text": ""},
+   "hooks": {"source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml", "audience": [],
+             "keys": {"pre-start": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
+                      "pre-commit": {"value": [[{"name": null, "command": "npm run typecheck || exit 64"}]], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"},
+                      "pre-merge": {"value": [], "source": "repo:/home/clayton/.cpd/policy/clayton-duarte/cpd.toml"}}, "text": ""},
    "test-commands": {"source": "default", "audience": [],
                      "keys": {"build": {"value": null, "source": "default"}, "run": {"value": null, "source": "default"}, "list": {"value": null, "source": "default"}}, "text": ""},
    "protected": {"source": "default", "audience": [], "keys": {"paths": {"value": [], "source": "default"}}, "text": ""}}}

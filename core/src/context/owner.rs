@@ -24,7 +24,7 @@ pub struct OwnerArgs {
 }
 
 pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store, .. } = Env::open()?;
+    let Env { home, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     let login = &args.login;
     let out = |already: bool| {
@@ -39,7 +39,7 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
         return out(true);
     }
     // An unconfirmed owner with the flag is linked inside the write, after the refusals.
-    let link = match resolve(&home, &config.host, &PolicyKey::Owner(login.clone())) {
+    let link = match resolve(&home, &PolicyKey::Owner(login.clone())) {
         Err(e) if e.code() == ErrorCode::OwnerUnconfirmed && args.confirm_fallback => true,
         other => other.map(|_| false)?,
     };

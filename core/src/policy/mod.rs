@@ -9,7 +9,9 @@
 
 mod domain;
 mod exposure;
+mod known;
 mod load;
+pub mod model;
 mod origin;
 mod resolve;
 mod show;
@@ -36,9 +38,11 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
     }
 }
 
+pub use show::KeyArgs;
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
-pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_machine, resolve_unowned_row};
+pub use known::known_owners;
+pub use resolve::{check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve, resolve_machine, resolve_unowned_row};
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -93,9 +97,9 @@ pub const FALLBACK_OWNER: &str = "clayton-duarte";
 /// The flag that confirms the fallback.
 const CONFIRM_FLAG: &str = "--confirm-fallback";
 
-/// `owner_unconfirmed` (exit 1): the key's owner has no `owners/<owner>.toml` (a file or a link that resolves).
+/// `owner_unconfirmed` (exit 1): the key's owner has no `<owner>/owner.toml` (a file or a link that resolves).
 pub fn owner_unconfirmed(home: &crate::home::CpdHome, owner: &OwnerLogin) -> CpdError {
-    let file = resolve::owner_file(home, owner);
+    let file = resolve::owner_path(home, owner);
     CpdError::new(
         ErrorCode::OwnerUnconfirmed,
         format!(
@@ -109,27 +113,30 @@ pub fn owner_unconfirmed(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Cpd
     .with("flag", CONFIRM_FLAG)
 }
 
-/// Confirms the fallback for `owner`: links `owners/<owner>.toml` to `clayton-duarte.toml` (relative,
-/// atomic: made under a temporary name, then renamed over a dangling link). A known owner changes nothing;
-/// a missing `clayton-duarte.toml` is `fallback_missing`.
+/// Confirms the fallback for `owner`: creates `<owner>/` when missing and links `<owner>/owner.toml` to
+/// `../clayton-duarte/owner.toml` (relative, atomic: made under a temporary name, then renamed over a dangling
+/// link). A known owner changes nothing; a missing `clayton-duarte/owner.toml` is `fallback_missing`, and nothing is created.
 pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Result<(), CpdError> {
-    let file = resolve::owner_file(home, owner);
+    let file = resolve::owner_path(home, owner);
     if std::fs::metadata(&file).is_ok() {
         return Ok(());
     }
-    let dir = resolve::owners_dir(home);
-    let target = format!("{FALLBACK_OWNER}.toml");
-    if std::fs::metadata(dir.join(&target)).is_err() {
+    let fallback = OwnerLogin::parse(FALLBACK_OWNER).expect("the fallback owner is a valid login");
+    let source = resolve::owner_path(home, &fallback);
+    if std::fs::metadata(&source).is_err() {
         return Err(CpdError::new(
             ErrorCode::FallbackMissing,
-            format!("The fallback owner's policy file {} does not exist: nothing was created.", dir.join(&target).display()),
+            format!("The fallback owner's policy file {} does not exist: nothing was created.", source.display()),
         )
-        .with("file", dir.join(&target).display().to_string()));
+        .with("file", source.display().to_string()));
     }
-    let tmp = dir.join(format!(".{owner}.toml.tmp"));
+    let dir = file.parent().expect("an owner file has a directory");
+    let target = format!("../{FALLBACK_OWNER}/{}", resolve::OWNER_FILE);
+    let tmp = dir.join(format!(".{}.tmp", resolve::OWNER_FILE));
     let io = |e: std::io::Error| {
         CpdError::new(ErrorCode::FileUnreadable, format!("Cannot link {}: {e}.", file.display())).with("file", file.display().to_string())
     };
+    std::fs::create_dir_all(dir).map_err(io)?;
     let _ = std::fs::remove_file(&tmp);
     std::os::unix::fs::symlink(&target, &tmp).map_err(io)?;
     std::fs::rename(&tmp, &file).map_err(|e| {
@@ -196,10 +203,6 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
-    fn host() -> crate::ids::HostName {
-        crate::ids::HostName::parse("hs").unwrap()
-    }
-
     fn owner(s: &str) -> OwnerLogin {
         OwnerLogin::parse(s).unwrap()
     }
@@ -225,8 +228,8 @@ mod tests {
     #[test]
     fn empty_owner_file_is_default_everywhere() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "");
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        write(&home, "acme/owner.toml", "");
+        let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(&r.policy, default_policy());
         for d in Domain::ALL {
             assert_eq!(r.sources.get(*d), &DomainSource { source: Source::Default, left_out: vec![] });
@@ -236,36 +239,36 @@ mod tests {
     #[test]
     fn precedence_is_repo_over_owner_over_default_per_domain() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[code]\ntext = \"owner code\"\n[tests]\ntext = \"owner tests\"\n");
-        write(&home, "repos/acme/cpd.toml", "[tests]\ntext = \"repo tests\"\n");
-        let r = resolve(&home, &host(), &repo_key("Acme", "CPD")).unwrap();
+        write(&home, "acme/owner.toml", "[code]\ntext = \"owner code\"\n[tests]\ntext = \"owner tests\"\n");
+        write(&home, "acme/cpd.toml", "[tests]\ntext = \"repo tests\"\n");
+        let r = resolve(&home, &repo_key("Acme", "CPD")).unwrap();
         assert_eq!(r.policy.code.text, "owner code");
-        assert_eq!(r.sources.get(Domain::Code).source, Source::Owner(real(&home, "owners/acme.toml")));
+        assert_eq!(r.sources.get(Domain::Code).source, Source::Owner(real(&home, "acme/owner.toml")));
         assert_eq!(r.policy.tests.text, "repo tests");
-        assert_eq!(r.sources.get(Domain::Tests).source, Source::Repo(real(&home, "repos/acme/cpd.toml")));
+        assert_eq!(r.sources.get(Domain::Tests).source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(r.policy.deploy.text, "");
         assert_eq!(r.sources.get(Domain::Deploy).source, Source::Default);
         // The owner key resolves without the repo file.
-        let o = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        let o = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(o.policy.tests.text, "owner tests");
     }
 
     #[test]
     fn a_repo_without_a_file_resolves_from_its_owner() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[code]\ntext = \"c\"\n");
-        write(&home, "repos/acme/other.toml", "");
-        let r = resolve(&home, &host(), &repo_key("acme", "other")).unwrap();
+        write(&home, "acme/owner.toml", "[code]\ntext = \"c\"\n");
+        write(&home, "acme/other.toml", "");
+        let r = resolve(&home, &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.code.text, "c");
     }
 
     #[test]
     fn a_repo_without_a_file_resolves_from_its_owner_and_the_owner_is_still_checked_first() {
         let (_d, home) = home();
-        let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
+        let err = resolve(&home, &repo_key("acme", "other")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
-        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
-        let r = resolve(&home, &host(), &repo_key("acme", "other")).unwrap();
+        write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
+        let r = resolve(&home, &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.gate.pr, Gate::Local);
         assert!(matches!(r.sources.get(Domain::Gates).source, Source::Owner(_)));
     }
@@ -288,19 +291,19 @@ mod tests {
         let (_d, home) = home();
         write(
             &home,
-            "owners/acme.toml",
+            "acme/owner.toml",
             "[pr]\nfeedback.checks = \"none\"\ntext = \"owner pr\"\n",
         );
-        write(&home, "repos/acme/cpd.toml", "[pr]\n");
-        let r = resolve(&home, &host(), &repo_key("acme", "cpd")).unwrap();
+        write(&home, "acme/cpd.toml", "[pr]\n");
+        let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.pr.feedback.checks, Checks::Any, "cpd's default, not the owner's none");
         assert_eq!(r.policy.pr.text, "", "the text is replaced, not inherited");
         let src = r.sources.get(Domain::Pr);
-        assert_eq!(src.source, Source::Repo(real(&home, "repos/acme/cpd.toml")));
+        assert_eq!(src.source, Source::Repo(real(&home, "acme/cpd.toml")));
         assert_eq!(src.left_out, ["feedback.checks"]);
         assert!(src.to_string().ends_with(" (key default)"));
         // The owner file sets the only typed key: no `(key default)`.
-        let o = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        let o = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!(o.policy.pr.feedback.checks, Checks::None);
         assert!(!o.sources.get(Domain::Pr).key_default());
     }
@@ -308,26 +311,26 @@ mod tests {
     #[test]
     fn the_deprecated_pr_gate_alias_sets_both_gates_and_warns() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        write(&home, "acme/owner.toml", "[pr]\ngate = \"local\"\n");
+        let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::Local, Gate::Local));
         assert_eq!(r.warnings.len(), 1);
         assert!(r.warnings[0].contains("[pr] gate"), "{}", r.warnings[0]);
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"ci\"\n");
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        write(&home, "acme/owner.toml", "[pr]\ngate = \"ci\"\n");
+        let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::None, Gate::None));
         // An explicit `[gate]` table wins over the alias.
-        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n");
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n\n[pr]\ngate = \"ci\"\n");
+        let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         assert_eq!((r.policy.gate.merge, r.policy.gate.pr), (Gate::None, Gate::Local));
     }
 
     #[test]
     fn an_empty_table_is_cpds_default_for_the_whole_domain() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "[pr]\nfeedback.checks = \"none\"\ntext = \"t\"\n");
-        write(&home, "repos/acme/cpd.toml", "[pr]\n");
-        let r = resolve(&home, &host(), &repo_key("acme", "cpd")).unwrap();
+        write(&home, "acme/owner.toml", "[pr]\nfeedback.checks = \"none\"\ntext = \"t\"\n");
+        write(&home, "acme/cpd.toml", "[pr]\n");
+        let r = resolve(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.pr, default_policy().pr);
         assert!(matches!(r.sources.get(Domain::Pr).source, Source::Repo(_)));
         assert!(r.sources.get(Domain::Pr).key_default());
@@ -335,11 +338,11 @@ mod tests {
 
     fn invalid(text: &str) -> CpdError {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", text);
-        let err = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap_err();
+        write(&home, "acme/owner.toml", text);
+        let err = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap_err();
         assert_eq!(err.code(), ErrorCode::PolicyInvalid);
         assert_eq!(err.exit().code(), 1);
-        assert!(err.details()["file"].as_str().unwrap().ends_with("owners/acme.toml"));
+        assert!(err.details()["file"].as_str().unwrap().ends_with("acme/owner.toml"));
         err
     }
 
@@ -363,33 +366,33 @@ mod tests {
     #[test]
     fn an_invalid_repo_file_names_its_own_path() {
         let (_d, home) = home();
-        write(&home, "owners/acme.toml", "");
-        write(&home, "repos/acme/cpd.toml", "[pr]\ngate = 1\n");
-        let err = resolve(&home, &host(), &repo_key("acme", "cpd")).unwrap_err();
+        write(&home, "acme/owner.toml", "");
+        write(&home, "acme/cpd.toml", "[pr]\ngate = 1\n");
+        let err = resolve(&home, &repo_key("acme", "cpd")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-        assert!(err.details()["file"].as_str().unwrap().ends_with("repos/acme/cpd.toml"));
+        assert!(err.details()["file"].as_str().unwrap().ends_with("acme/cpd.toml"));
     }
 
     #[test]
     fn a_file_name_that_is_not_a_login_or_name_is_policy_invalid() {
         let (_d, home) = home();
         let p = |rel: &str| home.root().join("policy").join(rel);
-        for bad in ["owners/-bad.toml", "owners/a--b.toml", "repos/acme/a b.toml", "repos/-x/y.toml", "owners/acme.txt", "stray.toml", "owners/Clayton-Duarte.toml", "owners/clayton_duarte.toml", "repos/acme/Cpd.toml"] {
+        for bad in ["-bad/owner.toml", "a--b/owner.toml", "acme/a b.toml", "-x/y.toml", "acme/x.txt", "stray.toml", "Clayton-Duarte/owner.toml", "clayton_duarte/owner.toml", "acme/Cpd.toml"] {
             let err = key_of_scope_file(&home, &p(bad)).unwrap_err();
             assert_eq!(err.code(), ErrorCode::PolicyInvalid, "{bad}");
             assert_eq!(err.details()["key"], serde_json::Value::Null);
             assert!(err.details()["file"].as_str().unwrap().ends_with(bad));
         }
-        assert_eq!(key_of_scope_file(&home, &p("owners/acme.toml")).unwrap(), PolicyKey::Owner(owner("acme")));
-        assert_eq!(key_of_scope_file(&home, &p("repos/acme/cpd.toml")).unwrap(), repo_key("acme", "cpd"));
+        assert_eq!(key_of_scope_file(&home, &p("acme/owner.toml")).unwrap(), PolicyKey::Owner(owner("acme")));
+        assert_eq!(key_of_scope_file(&home, &p("acme/cpd.toml")).unwrap(), repo_key("acme", "cpd"));
     }
 
     #[test]
     fn a_missing_owner_file_is_owner_unconfirmed_even_with_a_repo_file() {
         let (_d, home) = home();
-        write(&home, "repos/acme/cpd.toml", "");
+        write(&home, "acme/cpd.toml", "");
         for key in [PolicyKey::Owner(owner("acme")), repo_key("acme", "cpd")] {
-            let err = resolve(&home, &host(), &key).unwrap_err();
+            let err = resolve(&home, &key).unwrap_err();
             assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
             assert_eq!(err.exit().code(), 1);
             assert_eq!(err.details()["owner"], "acme");
@@ -402,16 +405,16 @@ mod tests {
     #[test]
     fn the_unowned_row_entry_point_takes_cpds_default_without_an_owner_file() {
         let (_d, home) = home();
-        write(&home, "repos/acme/cpd.toml", "[code]\ntext = \"ignored\"\n");
-        let r = resolve_unowned_row(&home, &host(), &repo_key("acme", "cpd")).unwrap();
+        write(&home, "acme/cpd.toml", "[code]\ntext = \"ignored\"\n");
+        let r = resolve_unowned_row(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(&r.policy, default_policy());
         for d in Domain::ALL {
             assert_eq!(r.sources.get(*d).source, Source::DefaultNoOwnerFile);
         }
         assert_eq!(r.sources.get(Domain::Pr).to_string(), "default (no owner file)");
         // With an owner file it resolves as `resolve` does.
-        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
-        let r = resolve_unowned_row(&home, &host(), &repo_key("acme", "cpd")).unwrap();
+        write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
+        let r = resolve_unowned_row(&home, &repo_key("acme", "cpd")).unwrap();
         assert_eq!(r.policy.gate.pr, Gate::Local);
         assert_eq!(r.policy.code.text, "ignored");
     }
@@ -422,10 +425,10 @@ mod tests {
         let target = dir.path().join("dotfiles").join("clayton.toml");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, "[code]\ntext = \"x\"\n").unwrap();
-        let link = home.root().join("policy/owners/clayton-duarte.toml");
+        let link = home.root().join("policy/clayton-duarte/owner.toml");
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("clayton-duarte"))).unwrap();
+        let r = resolve(&home, &PolicyKey::Owner(owner("clayton-duarte"))).unwrap();
         let expected = std::fs::canonicalize(&target).unwrap();
         assert_eq!(r.sources.get(Domain::Code).source, Source::Owner(expected.clone()));
         assert_eq!(r.sources.get(Domain::Code).to_string(), format!("owner:{}", expected.display()));
@@ -434,10 +437,10 @@ mod tests {
     #[test]
     fn a_dangling_symlink_is_a_missing_owner_file() {
         let (_d, home) = home();
-        let link = home.root().join("policy/owners/acme.toml");
+        let link = home.root().join("policy/acme/owner.toml");
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(Path::new("/nonexistent/acme.toml"), &link).unwrap();
-        let err = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap_err();
+        let err = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap_err();
         assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
     }
 
@@ -449,10 +452,10 @@ mod tests {
         let (_d, home) = home();
         write(
             &home,
-            "owners/acme.toml",
+            "acme/owner.toml",
             "[pr]\ntext = \"p\"\n[deploy]\ntext = \"d\"\n[instructions]\ntext = \"i\"\n[code]\ntext = \"\"\n",
         );
-        let r = resolve(&home, &host(), &PolicyKey::Owner(owner("acme"))).unwrap();
+        let r = resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
         let names = |role| r.texts_for(role).iter().map(|(d, _, t)| format!("{}={t}", d.name())).collect::<Vec<_>>();
         assert_eq!(names(Role::Manager), ["instructions=i"]);
         assert_eq!(names(Role::Lead), ["pr=p", "deploy=d", "instructions=i"]);
@@ -556,7 +559,9 @@ mod tests {
         let rows = contract_rows();
         let doc_domains: Vec<&str> = rows.iter().map(|r| r.domain.as_str()).collect();
         let code_domains: Vec<&str> = Domain::ALL.iter().map(|d| d.name()).collect();
-        assert_eq!(doc_domains, code_domains, "the table's domains are Domain::ALL");
+        // `model` is documented in §8.3 "Models", not in the table (its key rows are pinned by policy::model).
+        let table_domains: Vec<&str> = code_domains.iter().copied().filter(|d| *d != "model").collect();
+        assert_eq!(doc_domains, table_domains, "the table's domains are Domain::ALL but model");
 
         let policy_json = serde_json::to_value(default_policy()).unwrap();
         let mut policy_fields: Vec<&str> = policy_json.as_object().unwrap().keys().map(String::as_str).collect();

@@ -171,7 +171,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
         },
         (None, false, None) => End::Failed { cause: Cause::Crashed, detail: format!("Its driver died while it was {}.", target.status) },
     };
-    let catalog = engine.catalog()?;
+    let catalog = engine.catalog_of_job(plan, target.job.as_str())?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
     engine.store.write(SOURCE, |tx| {
@@ -195,7 +195,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
 /// takes the Attempt's driver lock itself; held again meanwhile, it does
 /// nothing and a later tick looks again.
 fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
-    let catalog = engine.catalog()?;
+    let catalog = engine.catalog_of_attempt(&active.plan, &active.id)?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
     let ctx = merge::Ctx { home: &engine.home, config: &engine.config, catalog: &catalog, source: SOURCE, metrics: &metrics };
     let recovered = merge::recover_attempt(&mut engine.store, &ctx, &active.plan, &active.id)?;

@@ -15,7 +15,7 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
-use super::open::{agent, hold_refused};
+use super::open::{agent, hold_refused, require_jobs_done};
 use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, pr_policy, short};
 use crate::config::{self, Catalog};
 use crate::policy::Policy;
@@ -54,20 +54,29 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
 
     let plan = env.plan(&id)?;
-    let pr = require_open(&plan, &args)?.clone();
+    let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
-    let onto = format!("origin/{}", pr.base);
+    let onto = onto_of(&pr);
 
-    // 1. The base, fresh (the ref lock on `origin/<base>` is waited for, §7).
-    git::run::fetch(repo, &["origin", &pr.base])?;
+    // 1. The base, fresh (the ref lock on `origin/<base>` is waited for, §7); for an adopted PR
+    // the remote head, which the catch-up rebases onto (pro-d15).
+    git::run::fetch(repo, &["origin", onto_branch(&pr)])?;
+    // The base is fetched too, for the update Job's merge and the Gate (the object store and `origin/<base>` stay fresh).
+    if pr.head_ref.is_some() {
+        git::run::fetch(repo, &["origin", &pr.base])?;
+    }
     // A rebase stopped by an earlier run: that one is finished or given up first.
     if in_progress(&lead)? {
         return Err(in_progress_error(&id, &key));
+    }
+    // An adopted PR that already holds origin/<head_ref>: nothing to catch up.
+    if pr.head_ref.is_some() && git::run::run(repo, &["merge-base", "--is-ancestor", &onto, &format!("refs/heads/{branch}")])?.code == 0 {
+        return Ok(Output::success(json!({"plan": id, "pr": key, "already": true})));
     }
 
     let mut retries = 0;
@@ -149,7 +158,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
 
     // C0.
     let plan = env.plan(&id)?;
-    let pr = require_open(&plan, &args)?.clone();
+    let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
@@ -228,7 +237,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let lead = pr.lead(id)?;
     let repo = Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
-    let onto = format!("origin/{}", pr.base);
+    let onto = onto_of(pr);
 
     // `git rebase` refuses tracked local changes.
     let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
@@ -275,7 +284,11 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
 
     // The PR is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(id)?;
-    require_open(&plan, args)?;
+    require_open(env, &plan, args)?;
+
+    if pr.head_ref.is_some() {
+        return push_adopted(id, pr, old, new);
+    }
 
     // R' with the lease X0, then the merges that landed during the Gate, by rule P.
     // A rejection whose remote tip already contains R' is a success that pushed nothing:
@@ -307,6 +320,48 @@ fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, 
     }
 
     Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
+}
+
+/// What the rebase goes onto: `origin/<base>`, or `origin/<head_ref>` for an adopted PR (pro-d15).
+fn onto_of(pr: &PrRow) -> String {
+    format!("origin/{}", onto_branch(pr))
+}
+
+fn onto_branch(pr: &PrRow) -> &str {
+    pr.head_ref.as_deref().unwrap_or(&pr.base)
+}
+
+/// The push of an adopted PR (A8): rule P to `<head_ref>`, plain, no lease and no force; the merges that landed
+/// during the Gate go after R' the same way.
+fn push_adopted(id: &PlanId, pr: &PrRow, old: &str, new: &str) -> Result<Output, CpdError> {
+    let lead = pr.lead(id)?;
+    let repo = Path::new(&pr.repo);
+    let remote = pr.remote_branch();
+    let mut pushed = match git::push_commit(lead, remote, new)? {
+        Push::Pushed { new } => new,
+        Push::Contained { .. } => false,
+        Push::Rejected { stderr } => return Err(rejected(id, pr, new, stderr)),
+    };
+    let tip = git::run::rev_parse(repo, &format!("refs/heads/{}", pr.lead_branch))?;
+    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
+        match git::push_commit(lead, remote, &tip)? {
+            Push::Pushed { new } => pushed |= new,
+            Push::Contained { .. } => {}
+            Push::Rejected { stderr } => return Err(rejected(id, pr, &tip, stderr)),
+        }
+    }
+    Ok(Output::success(json!({"plan": id, "pr": pr.key, "rebased": old != new, "old": old, "new": new, "pushed": pushed})))
+}
+
+fn rejected(id: &PlanId, pr: &PrRow, sha: &str, stderr: String) -> CpdError {
+    CpdError::new(
+        ErrorCode::PushRejected,
+        format!("{} was rebased onto origin/{}, but its push was rejected: the remote head moved again, run cpd pr rebase --pr {}.", short(sha), pr.remote_branch(), pr.key),
+    )
+    .with("plan", id.as_str())
+    .with("pr", pr.key.as_str())
+    .with("sha", sha)
+    .with("stderr", stderr)
 }
 
 /// Whether a rebase is in progress in the Lead worktree (rule S step 0): `rebase-merge` or
@@ -509,7 +564,9 @@ pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &Pla
     loop {
         if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
-                *catalog = Some(config::load_catalog(&env.config)?);
+                let home = env.home.clone();
+                let models = env.store.read(|conn| crate::policy::model::models_of_pr(conn, &home, plan, key))?;
+                *catalog = Some(config::load_catalog(&env.config, &models)?);
             }
             let catalog = catalog.as_ref().expect("loaded above");
             let ctx = merge::Ctx { home: &env.home, config: &env.config, catalog, source: COMMAND, metrics: &|_| None };
@@ -553,11 +610,16 @@ fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, what: &s
 
 /// The selected PR must be `open` (`illegal_transition`); a Plan that has not
 /// been locked is `illegal_phase`.
-fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
+/// An adopted PR may also be `dispatch` once its Jobs but the `open` and `update` ones are done (A8).
+fn require_open<'a>(env: &mut Env, plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdError> {
     if matches!(plan.plan.phase, Phase::Grounding | Phase::Plan) {
         return Err(illegal_phase(plan, COMMAND, "deploy"));
     }
     let pr = plan.select(&args.pr)?;
+    if pr.head_ref.is_some() && pr.status == "dispatch" {
+        require_jobs_done(env, plan, &pr.key)?;
+        return Ok(pr);
+    }
     if pr.status != "open" {
         return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
     }

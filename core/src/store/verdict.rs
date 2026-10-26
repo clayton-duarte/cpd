@@ -180,12 +180,6 @@ fn decide(
             return Err(order(named.name, &after, unknown));
         }
     }
-    // Unreachable when the build's order check holds (§4.5 A2 check 2); it fails loudly anyway.
-    if let Some(floor) = floor {
-        if let Some(named) = pending.iter().find(|n| n.name < floor) {
-            return Err(order(named.name, &[floor], unknown));
-        }
-    }
     Ok(Start::Named)
 }
 
@@ -500,30 +494,11 @@ mod tests {
     #[test]
     fn a_store_whose_floor_is_the_restored_queue_failed_name_opens_and_is_not_reapplied() {
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, schema::NAMED).unwrap());
-        // A live store wrote these rows at apply time; a tool that is not cpd reaches them
-        // by dropping the append-only guards first. The live store's guards are intact, so
-        // capture their text and restore them before opening: the schema must stay a fresh
-        // store's (§4.3), or the migrating transaction rolls back.
-        let guards: Vec<String> = {
-            let conn = Connection::open(home.db()).unwrap();
-            let mut stmt = conn
-                .prepare(
-                    "SELECT sql FROM sqlite_schema WHERE type = 'trigger'\
-                     AND name IN ('schema_migrations_no_update', 'schema_migrations_no_delete')",
-                )
-                .unwrap();
-            stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<String>>>().unwrap()
-        };
-        raw(&home, "DROP TRIGGER schema_migrations_no_update; DROP TRIGGER schema_migrations_no_delete");
-        // Every breaking migration that sorts after the restored name and landed after it must
-        // go too; cyan-tier (20261028T0900) sorts after gate-causes, so leaving it applied would
-        // make the still-pending gate-causes a migration-order refusal.
-        raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch','20261028T0900-cyan-tier')");
-        raw(&home, "UPDATE schema_migrations SET name = '20261025T2300-queue-failed' WHERE name = '20261027T1100-queue-failed'");
-        for sql in guards {
-            raw(&home, &sql);
-        }
+        // Build a live store as what it was: applied only the migrations up to the restored name.
+        // The prefix is ordered by name (contract §4.5 O1), so slice to the first migration after the floor.
+        let upto = schema::NAMED.iter().position(|n| n.name > "20261025T2300-queue-failed").unwrap();
+        drop(open_named(&home, &schema::NAMED[..upto]).unwrap());
+        // Every later migration, breaking or not, is still pending whatever lands after it.
         let verdict = judge(&home, schema::NAMED);
         assert!(verdict.opens(), "{verdict:?}");
         assert!(verdict.unknown.is_empty(), "{verdict:?}");
@@ -611,14 +586,17 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_additive_migration_before_the_floor_is_migration_order() {
+    fn a_pending_additive_migration_before_the_floor_opens_and_is_applied() {
         let (_dir, home) = tmp_home();
         let floor = breaking(ADD_B);
         drop(open_named(&home, &[floor]).unwrap());
-        let (code, details) = refusal(&judge(&home, &[ADD_A, floor]));
-        assert_eq!(code, ErrorCode::MigrationOrder);
-        assert_eq!(details["name"], ADD_A.name);
-        assert_eq!(details["applied_after"], json!([ADD_B.name]));
+        let list = [ADD_A, floor];
+        let verdict = judge(&home, &list);
+        assert!(verdict.opens(), "{verdict:?}");
+        assert_eq!(verdict.pending_names(), [ADD_A.name]);
+        let mut store = open_named(&home, &list).unwrap();
+        let names: Vec<String> = applied(&mut store).into_iter().skip(LEGACY.len()).map(|(n, ..)| n).collect();
+        assert_eq!(names, [floor.name, ADD_A.name], "the store applied the floor first, then the pending additive a by O2");
     }
 
     #[test]

@@ -76,7 +76,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("status", target.status));
     }
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
-    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &ctx.config.host, &target)? };
+    let Stepped { end, stale, push, pulled } = if review { review_steps(store, &target)? } else { steps(store, ctx.home, ctx.config, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let pr = crate::ids::PrKey::parse(&target.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", target.job, target.pr)))?;
@@ -135,7 +135,7 @@ fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError
 }
 
 /// Steps 1–9, with step 8's push; for an `open` or `update` Job the steps of §7.4 "An `open` or `update` Job's merge".
-fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::HostName, target: &Attempt) -> Result<Stepped, CpdError> {
+fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -> Result<Stepped, CpdError> {
     let repo = &target.repo;
     let lead = &target.lead_worktree;
     let lead_ref = format!("refs/heads/{}", target.lead_branch);
@@ -206,7 +206,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::
             crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
         })?;
         let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
-        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, host, &target.plan, target.job.as_str()))?;
+        let policy = store.read(|conn| crate::pr::policy_of_job(conn, home, &target.plan, target.job.as_str()))?;
         // A linear Attempt diffs `base_sha...submitted_sha`; every other Attempt `old...branch`.
         let (lead_compare, diff_base, diff_head): (&str, &str, &str) =
             if linear { (base_sha.as_str(), base_sha.as_str(), submitted) } else { (&old, &old, &target.branch) };
@@ -296,7 +296,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, host: &crate::ids::
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
             // Push (R35) by rule P: the merge stands whatever happens here.
-            let push = push(lead, &target.lead_branch, &new);
+            let push = publish(target, &new);
             // 9. Rule S on the Lead worktree; the merge stands whatever happens here.
             let stale = git::sync_lead(lead, &target.lead_branch).err();
             return finish_merge(store, target, new, cpd_kind, push, stale);
@@ -412,13 +412,22 @@ fn pr_of_job(store: &mut Store, target: &Attempt) -> Result<(crate::plan::PrRow,
 /// Whether the newest pull request of the PR's Lead Branch is already merged on GitHub: the `open` Job adopts it (§7.7 submit step 1).
 fn pull_request_is_merged(store: &mut Store, target: &Attempt) -> Result<bool, CpdError> {
     let (pr, _, _) = pr_of_job(store, target)?;
-    crate::pr::is_merged_on_github(&target.lead_worktree, &pr.lead_branch)
+    crate::pr::is_merged_on_github(&target.lead_worktree, pr.remote_branch())
 }
 
 /// Step 8b (§7.4): the pull request of the Lead Branch, created or adopted, as `pr open` steps 0 and 3 do it (never `--draft`).
 fn open_pull_request(store: &mut Store, target: &Attempt) -> Result<crate::pr::Pulled, CpdError> {
     let (pr, title, jobs) = pr_of_job(store, target)?;
     crate::pr::pull_request(&target.lead_worktree, &pr, &title, &jobs)
+}
+
+/// Step 8's and R2's push of `sha`: to the PR's remote branch, and skipped for an adopted PR unless the Job is an `open` or
+/// `update` one, so that a work Job's commit never reaches a live pull request (§7.4).
+pub(super) fn publish(target: &Attempt, sha: &str) -> Option<CpdError> {
+    if target.adopted && !is_cpd_kind(target) {
+        return None;
+    }
+    push(&target.lead_worktree, &target.remote_branch, sha)
 }
 
 /// Rule P (§7.4) for `sha` on the Lead Branch `branch`, from the Lead worktree
