@@ -314,7 +314,6 @@ pub fn prepare(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId
 /// PR's Lead Branch head (§7.2).
 fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, stacked: bool) -> Result<Prepared, Failed> {
     let key = &pr.key;
-    // The PR's policy is strict: a repo without its file is `repo_unconfigured`, and nothing was created.
     let policy = store.read(|conn| super::policy_of_pr(conn, home, &config.host, plan, key)).map_err(Failed::Other)?;
     let path = git::pr_lead_worktree_path(Path::new(&pr.repo), plan, key, &pr.lead_branch).map_err(Failed::Other)?;
     let setup = Setup {
