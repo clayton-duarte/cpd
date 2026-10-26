@@ -130,7 +130,8 @@ fn inbox_list_orders_red_yellow_magenta_cyan_white_and_the_oldest_first_within_a
 fn an_urgency_is_parsed_as_cyan_and_never_as_blue() {
     // The one place an urgency is read from text (the tiers are named by the palette's colours, hs-d534, pro-d16).
     assert_eq!(Urgency::parse("cyan").map(Urgency::as_str), Some("cyan"));
-    assert_eq!(Urgency::parse("blue"), None, "blue is focus and selection only: an unknown value");
+    assert_eq!(Urgency::parse("blue").map(Urgency::as_str), Some("blue"), "blue is a tier now (review-requested)");
+    assert_eq!(Urgency::parse("teal"), None, "an unknown value");
     for tier in ["white", "magenta", "yellow", "red"] {
         assert_eq!(Urgency::parse(tier).map(Urgency::as_str), Some(tier));
     }
