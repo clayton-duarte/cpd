@@ -23,7 +23,11 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod inbox_link_tests;
+#[cfg(test)]
 mod link_widget_tests;
+#[cfg(test)]
+mod osc_8_guard_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]

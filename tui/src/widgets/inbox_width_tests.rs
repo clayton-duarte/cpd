@@ -41,14 +41,4 @@ fn an_inbox_item_with_wide_text_fills_its_row_to_the_width() {
     let row: String = (0..width).map(|x| buf[(x, body_row)].symbol()).collect();
     assert!(row.trim_end().ends_with(age), "the age is on the row, not pushed out of the pane: {row:?}");
 
-    let mut linked = item;
-    linked.kind = Kind::ReviewRequested;
-    linked.url = Some("https://example.com/pull/1".into());
-    let buf = drawn(&linked, width, 5);
-    // The lead is two columns, the label ten wide chars (twenty columns): link writes the OSC at the first cell of
-    // each piece and skips a wide symbol's second cell, so the last linked cell is the first cell of the last wide
-    // character, body column 20 (the pane's column 23).
-    let last_label_column = 2 + 20 - 2;
-    let linked = buf[(3 + last_label_column as u16, body_row)].symbol().contains("\x1b]8;;");
-    assert!(linked, "the OSC 8 link covers the label's display columns, not its char count");
 }

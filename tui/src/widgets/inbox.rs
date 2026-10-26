@@ -554,12 +554,7 @@ pub(crate) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency
 #[cfg(test)]
 mod tests {
     use crate::palette::Meaning;
-    use std::cell::RefCell;
-    use std::io::{self, Write};
-    use std::rc::Rc;
-
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::{Terminal, TerminalOptions, Viewport};
+    use ratatui::Terminal;
 
     use crate::tree::fixture::{archived, sample};
     use super::*;
@@ -688,76 +683,7 @@ mod tests {
         );
     }
 
-    /// A writer the test keeps a handle on.
-    #[derive(Clone, Default)]
-    struct Sink(Rc<RefCell<Vec<u8>>>);
-
-    impl Write for Sink {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.0.borrow_mut().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// `bytes` as text without the CSI sequences (cursor moves and colours): what is left is what is printed, and the
-    /// OSC 8 sequences.
-    fn printed(bytes: &[u8]) -> String {
-        let text = String::from_utf8(bytes.to_vec()).unwrap();
-        let mut out = String::new();
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' && chars.peek() == Some(&'[') {
-                for c in chars.by_ref().skip(1) {
-                    if c.is_ascii_alphabetic() {
-                        break;
-                    }
-                }
-            } else {
-                out.push(c);
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn a_link_kinds_label_is_written_as_an_osc_8_link_and_its_lead_and_age_are_not() {
-        let sink = Sink::default();
-        let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
-        )
-        .unwrap();
-        let url = "https://github.com/acme/api/pull/12";
-        let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
-        linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
-        let bytes = sink.0.borrow().clone();
-        let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
-            .iter()
-            .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
-            .collect();
-        let text = printed(&bytes);
-        assert!(text.contains(&format!("│{}{pieces}3m", palette::TIER_RED)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
-        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead (branch and icon) or the age");
-        // an item with no url, or of a kind that jumps, has no link
-        let sink = Sink::default();
-        let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 6)) },
-        )
-        .unwrap();
-        let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
-        dialog.url = Some(url.into());
-        let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
-        assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
-    }
-
-    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url; the label is an OSC 8 link ----
+    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url ----
 
     #[test]
     fn a_review_waiting_click_opens_its_session_then_copies_its_url() {
@@ -779,22 +705,6 @@ mod tests {
         assert_eq!(jump(&archived(), &archived_session), Some(Jump::Run(Action::History(sid("f-blocked")))), "an archived Session shows its history");
     }
 
-    #[test]
-    fn a_review_waiting_label_is_written_as_an_osc_8_link() {
-        let sink = Sink::default();
-        let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
-        )
-        .unwrap();
-        let url = "http://review.example:20000/";
-        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
-        waiting.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
-        let text = printed(&sink.0.borrow());
-        assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
-    }
-
     // ---- plan-review with an optional url (hs-d502) ----
 
     #[test]
@@ -808,25 +718,6 @@ mod tests {
             jump(&tree, &review),
             Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://review.example:20000/".into())]))
         );
-    }
-
-    #[test]
-    fn a_plan_review_label_is_an_osc_8_link_only_with_a_url_hs_d502() {
-        let drawn = |url: Option<&str>| {
-            let sink = Sink::default();
-            let mut terminal = Terminal::with_options(
-                CrosstermBackend::new(sink.clone()),
-                TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
-            )
-            .unwrap();
-            let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ab", OPENED);
-            review.url = url.map(Into::into);
-            terminal.draw(|f| draw(f, f.area(), &[review], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
-            printed(&sink.0.borrow())
-        };
-        let url = "http://review.example:20000/";
-        assert!(drawn(Some(url)).contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "with a url: a link");
-        assert!(!drawn(None).contains("\x1b]8;;"), "with no url: no link");
     }
 
     // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----
