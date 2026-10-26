@@ -3003,7 +3003,8 @@ impl InstallRig {
         let at = |path: PathBuf, args: &'static [&'static str]| move |c: &Call| Path::new(&c.program) == path && (args.is_empty() || c.args == args);
         let _ = (*fx.fakes.runner)
             .clone()
-            .on("cpd", at(built, &["--version"]), Reply::ok(&version))
+            .on("cpd", at(built.clone(), &["--version"]), Reply::ok(&version))
+            .on("cpd", at(built, &["config", "--migrate"]), Reply::ok(r#"{"ok":true,"migrated":[]}"#))
             .on("cpd", at(installed.clone(), &["config"]), Reply::ok(&config))
             .on("cpd", at(installed, &["watch", "--check"]), Reply::ok(r#"{"ok":true}"#))
             .on("tag-version.sh", at(tag, &[]), Reply::ok(""));
@@ -3063,7 +3064,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let stderr = rig.run_ok();
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(rig.calls(), [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
+    assert_eq!(rig.calls(), [vec!["--version"], vec!["config", "--migrate"], vec!["config"], vec!["watch", "--check"]]);
 }
 
 #[test]
