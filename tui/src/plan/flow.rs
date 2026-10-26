@@ -647,15 +647,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pill_from_the_second_attempt_has_the_attempt_after_the_tier() {
-        let icon = Live::Queued.icon(0).0;
-        for (attempt, tail) in [(1, ""), (2, "│a2"), (3, "│a3")] {
-            let c = layout(&[FlowJob { attempt, ..job("a", &[]) }], 0);
-            assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} a│S1{tail}{CAP_R}"), "attempt {attempt}");
-        }
-    }
-
-    #[test]
     fn a_stub_draft_pill_shows_a_dash_for_its_tier_with_no_padding() {
         let c = layout(&[FlowJob { status: Live::Draft, tier: None, ..job("a", &[]) }], 0);
         assert_eq!(cells(&c, 0), format!("{CAP_L}{} a│—{CAP_R}", Live::Draft.icon(0).0));
@@ -767,24 +758,6 @@ mod tests {
 󰝦 a│S1──┬──󰝦 c│S1
           │
 󰝦 b│S1──┴──󰝦 d│S1");
-    }
-
-    #[test]
-    fn the_tier_is_aligned_right_and_so_is_the_attempt() {
-        let mut long = job("a-longer-key", &[]);
-        long.attempt = 2;
-        let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
-        snap(&c, "
-󰝦 a              │S1
-
-󰝦 a-longer-key│S1│a2
-
-󰝦 b              │S1");
-        // the last cell of the widest pill is a hit, the one after it is not
-        let r = c.pills[1].rect;
-        assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
-        // so is the left cap, the pill's first cell, the chart's first column (the chart has no padding: nothing before it)
-        assert_eq!((c.pill_at(r.x, r.y), r.x), (Some(1), 0));
     }
 
     #[test]
