@@ -647,10 +647,19 @@ fn levels(json: &str) -> Reply {
     Reply::ok(&format!("{json}\n"))
 }
 
+/// `config` written, and its `[tiers]` as the machine policy's `[model]` table: `cpd tiers` reads the policy.
+fn write_tiers_config(env: &TestEnv, config: &str) {
+    env.write_config(config);
+    let tiers = config.split_once("[tiers]\n").map_or("", |(_, rest)| rest.split("\n[").next().unwrap());
+    let path = env.cpd_home().join("policy/host.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, format!("[model]\n{tiers}")).unwrap();
+}
+
 /// An `Fx` on the fake ports with `config` written and pi installed (version `1.2.0`, no module sources: `node` is scripted).
 fn tiers_fx(config: &str) -> Fx {
     let fx = Fx::with_ports();
-    fx.env.write_config(config);
+    write_tiers_config(&fx.env, config);
     install_pi(&fx.env, "1.2.0", "", "");
     fx
 }
@@ -658,7 +667,7 @@ fn tiers_fx(config: &str) -> Fx {
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
     let fx = Fx::with_ports();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     install_pi(&fx.env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
     // What pi's modules report (`FAKE_PI_AI`), as the scripted `node` prints it; the real `node` is the smoke below.
     fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
@@ -681,7 +690,7 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
     let fx = Fx::with_ports();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     let (coding_agent, pi_ai) = install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     let out = fx.cpd(&["tiers"]).ok();
@@ -714,7 +723,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
 }
 
 /// The config of the tests that print G's default model: no `tiers.G`.
-const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n";
+const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"github-copilot/m-opus\"\nS = \"github-copilot/m-sonnet\"\nH = \"github-copilot/m-low\"\n";
 
 #[test]
 fn tiers_prints_g_without_an_effort() {
@@ -726,9 +735,9 @@ fn tiers_prints_g_without_an_effort() {
     // An `Fx` holds the process-wide lock: the first goes before the second.
     drop(fx);
 
-    let fx = tiers_fx(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
+    let fx = tiers_fx(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"github-copilot/gemini\"\n"));
     fx.fake_node(levels(ALL_LEVELS_JSON));
-    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"], json!({"model": "github-copilot/gemini", "efforts": []}));
 }
 
 #[test]
@@ -751,9 +760,9 @@ fn a_cache_written_before_g_still_serves_the_catalog() {
     assert_eq!(
         cached_rows(&fx.env),
         [
-            row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
-            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
-            row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
+            row("1.2.0", "H", "github-copilot/m-low", "[0,1,2,3]"),
+            row("1.2.0", "O", "github-copilot/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "S", "github-copilot/m-sonnet", "[0,1]"),
         ],
         "G is never cached"
     );
@@ -769,7 +778,7 @@ fn a_cache_written_before_g_still_serves_the_catalog() {
 #[test]
 fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
     let mut fx = Fx::with_ports();
-    fx.env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    write_tiers_config(&fx.env, &format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
     install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     fx.hold_store_migration(Duration::from_millis(1500));
@@ -830,7 +839,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
     let fx = Fx::new();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     fx.env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -842,7 +851,7 @@ fn tiers_without_pi_on_path_is_pi_not_found() {
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
     let fx = Fx::new();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     fx.env.fake_pi("exit 0");
     let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -868,7 +877,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
     let fx = Fx::with_ports();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     let env = &fx.env;
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
@@ -938,12 +947,12 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
 #[test]
 fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
     let env = TestEnv::new();
-    env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\nG = \"p/m-g\"\n");
+    write_tiers_config(&env, "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"p/none\"\nG = \"p/m-g\"\n");
     install_pi(&env, "1.2.0", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let err = cpd_isolated(&env, &["tiers"]).error();
     assert_eq!(err["code"], "tier_model_unknown");
-    assert_eq!(err["details"]["missing"], json!([{"letter": "S", "model": "p/other"}, {"letter": "H", "model": "q/m-low"}]));
+    assert_eq!(err["details"]["missing"], json!([{"letter": "S", "model": "p/other"}, {"letter": "H", "model": "p/none"}]));
 }
 
 #[test]
@@ -978,7 +987,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     let fx = Fx::with_ports_empty();
-    fx.env.write_config(TIERS_CONFIG);
+    write_tiers_config(&fx.env, TIERS_CONFIG);
     install_pi(&fx.env, "1.2.0", "", "");
     fx.fake_node(levels(ALL_LEVELS_JSON));
     assert!(!fx.env.cpd_home().join("cpd.db").exists());
@@ -1045,7 +1054,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     fx.fake_node(levels(ALL_LEVELS_JSON));
     fx.cpd(&["tiers"]).ok();
 
-    fx.env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    write_tiers_config(&fx.env, &TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
     let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
     assert_eq!(fx.calls("node").len(), 2);
