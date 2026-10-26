@@ -3699,13 +3699,15 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 
 At `session_start` the adapter runs `cpd policy show` with no flag (§22.1) and, at each run, adds one system prompt section, `cpd-policy`, with the `text` of every domain whose `audience` holds the output's `role`, labelled by domain and `source`. contract §8.3 "Delivery to agents" is the rule, including a failed `policy show` (an error message, no policy text).
 
-### 15.11 A Manager never blocks
+### 15.11 A Manager or a Lead never blocks
 
-Decision (User, 2026-10-19). A Manager never blocks: no sleep, polling loop or long wait in its own turn. Anything that takes time runs in the background and reports back as a message, or is the job of the Lead or Worker that owns it. The adapter enforces it, so it is not left to the skill's prose.
+Decision (User, 2026-10-19). Neither a Manager nor a Lead blocks on a wait: no sleep, polling loop or long wait in its own turn. Anything that takes time runs in the background and reports back as a message, or is the job of the Lead or Worker that owns it. The adapter enforces it, so it is not left to the skill's prose.
 
-**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command` and `event.input.timeout`), of a Session of role `manager` only. The handler is registered once at load (`pi.on` has no unsubscribe) and reads the role of the active run at each call; for a Lead, a Worker, or before `session_start` has read the role, it returns nothing. A call that matches nothing runs as before.
+This rule is extended to a Lead (User, 2026-10-25, pro-d39). Evidence: during incident gatemac (pro-d29) the Lead of Plan tests-mock ran `for i in 1 2; do git fetch ...; sleep 280; done` in its own turn; the 280 s duration trips the 30 s bound and is refused. A Lead's wait holds the User's conversation as a Manager's does. A Worker keeps its own rule (§15.12), unchanged.
 
-**The bound** is **30 seconds**, one constant of the adapter (`pi/lib/noblock.ts`); there is no config key.
+**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command` and `event.input.timeout`), of a Session of role `manager` or `lead`. The handler is registered once at load (`pi.on` has no unsubscribe) and reads the role of the active run at each call; for a Worker, or before `session_start` has read the role, it returns nothing. A call that matches nothing runs as before.
+
+**The bound** is **30 seconds**, one constant of the adapter (`pi/lib/noblock.ts`); there is no config key. The bound and the patterns are the same for both Manager and Lead.
 
 **What is refused.** The call is refused when it waits longer than the bound, that is, when the command (`pi/lib/noblock.ts`, `blockingReason`) contains one of:
 
@@ -3721,15 +3723,20 @@ Decision (User, 2026-10-19). A Manager never blocks: no sleep, polling loop or l
 
 A pattern counts where a command runs: a command word of a simple command (after `;`, `&`, `|`, a newline, a parenthesis, `do`, `then`, and a leading `VAR=value`, `time`, `nohup`, `exec`, `command`, `sudo` or `env`), not an argument or quoted text (`grep watch file` passes). A duration that is not a literal (`sleep $n`) is not judged.
 
-**The refusal** is `{block: true, reason}` (pi's `ToolCallEventResult`), with the reason on one line naming the rule:
+A `for` loop is not a loop of this rule; the `sleep` in its body is judged by its own duration like any `sleep`, so `for i in 1 2; do git fetch origin; sleep 280; done` is refused (`sleep 280`) and `for i in 1 2; do sleep 5; done` passes.
+
+**The refusal** is `{block: true, reason}` (pi's `ToolCallEventResult`), with the reason on one line naming the rule by role:
 
 ```
-cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m
+reasonText(matched, role) {
+  if (role === "manager") return `cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
+  if (role === "lead") return `cpd: a Lead never blocks: a wait over 30 s runs in the background or is left to the engine's Events; refused: ${matched}`;
+}
 ```
 
 `<what matched>` is the matched command (`sleep 1m`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, `timeout 60`, `while … sleep`) or, for the tool's input, `bash timeout 120`.
 
-**Not affected:** a Lead or a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
+**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
 
 ### 15.12 A Worker runs targeted tests
 
