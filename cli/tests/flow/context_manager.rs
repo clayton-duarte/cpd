@@ -110,7 +110,11 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     let first = fs::read_to_string(&path).unwrap();
     assert!(first.starts_with("You are the Manager of Context ctx \"Payments\". Follow the cpd-manager skill.\n\n"), "{first}");
-    assert!(first.contains("Mind the ledger."), "every record: {first}");
+    assert!(
+        first.ends_with("Context on demand: cpd context search <query> --context ctx · cpd context show --context ctx --since <seq> · cpd context show --context ctx --record <id>\n"),
+        "the pointer line, not the records (#418): {first}"
+    );
+    assert!(!first.contains("Mind the ledger."), "no record is listed in the first message: {first}");
 
     // The chat slot did not move (hs-d103).
     assert_eq!(slot(&fx), placeholder);

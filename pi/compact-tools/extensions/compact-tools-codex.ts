@@ -16,8 +16,6 @@ export const CODEX_RESULT_PREFIX = "   └ ";
 export const CODEX_INDENT = "     ";
 /** Where an opened command's wrapped lines continue, four columns past the `$`. */
 export const CODEX_COMMAND_INDENT = "     ";
-/** The left margin every Codex row starts after. */
-export const CODEX_MARGIN = " ";
 export const CODEX_BULLET = "•";
 /** Codex draws a tab as four columns. */
 export const CODEX_TAB = "    ";
@@ -45,7 +43,7 @@ export function formatCodexDuration(milliseconds: number): string {
  * width, at most four columns in, and drops the key hint when the row cannot fit it.
  */
 export function codexDisclosure(width: number, expanded: boolean, hiddenLines?: number): string {
-	const indent = CODEX_MARGIN + " ".repeat(Math.min(Math.floor(width / 4), 4));
+	const indent = " ".repeat(Math.min(Math.floor(width / 4), 4));
 	if (expanded) return `${indent}− Show less`;
 	if (hiddenLines === undefined) return `${indent}+ Show details`;
 	const label = `+ ${hiddenLines} ${hiddenLines === 1 ? "line" : "lines"}`;

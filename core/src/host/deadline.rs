@@ -56,7 +56,9 @@ fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: D
 /// [`output`] with `stdin` written to the child's stdin by a thread, which then closes it (`None`: a null stdin),
 /// and, when `stderr_set` is true, the child's stderr as the caller set it on `cmd` (a file it is appended to)
 /// instead of captured. With `reap_group`, the child's group is killed (`SIGKILL`) when the child has exited: nothing it
-/// left behind outlives the call. A write that fails is `Failed::Io` when the child exited successfully.
+/// left behind outlives the call. A write that fails is `Failed::Io` when the child exited successfully, except a
+/// broken pipe: the child (or its group) closed its stdin without reading it, which is the child's choice, not a
+/// start failure.
 pub(super) fn output_fed(cmd: &mut Command, tool: &str, deadline: Duration, stdin: Option<Vec<u8>>, stderr_set: bool, reap_group: bool) -> Result<Output, Failed> {
     if !stderr_set {
         cmd.stderr(Stdio::piped());
@@ -122,7 +124,7 @@ fn run(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration, stdin
     let read = |rx: Receiver<Vec<u8>>| rx.recv_timeout(left.max(DRAIN)).unwrap_or_default();
     let output = Output { status, stdout: read(stdout), stderr: read(stderr) };
     match written.map(|w| w.join().expect("the writer of the child's stdin does not panic")) {
-        Some(Err(e)) if status.success() => Err(Failed::Io(e)),
+        Some(Err(e)) if status.success() && e.kind() != io::ErrorKind::BrokenPipe => Err(Failed::Io(e)),
         _ => Ok(output),
     }
 }
@@ -203,6 +205,15 @@ mod tests {
         assert_eq!(out.status.code(), Some(3));
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
+    }
+
+    #[test]
+    fn a_child_that_closes_its_stdin_before_reading_it_is_not_an_io_failure() {
+        // More than a pipe buffer, so the writer blocks and then sees the closed read end: the child's choice.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exec 0<&-"]);
+        let out = output_fed(&mut cmd, "hook", Duration::from_secs(10), Some(vec![b'x'; 8 << 20]), false, false).unwrap();
+        assert_eq!(out.status.code(), Some(0));
     }
 
     #[test]

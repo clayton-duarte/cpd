@@ -18,6 +18,8 @@
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
+#[cfg(test)]
+mod poll_tests;
 
 mod add;
 mod cancel;

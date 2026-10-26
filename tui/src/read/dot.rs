@@ -41,6 +41,19 @@ impl Dot {
         self >= Dot::White
     }
 
+    /// The dot-urgency tier the tree orders by (hs-d686): red 0, yellow 1, magenta 2, blue 3, and 4 for every dot
+    /// that needs no attention (white, the red loader `Fixing`, and the state glyphs). The red loader is a row with
+    /// no Inbox item (A1), so it sits below the four coloured dots.
+    pub fn tier(self) -> u8 {
+        match self {
+            Dot::Red => 0,
+            Dot::Yellow => 1,
+            Dot::Magenta => 2,
+            Dot::Blue => 3,
+            Dot::White | Dot::Working(_) | Dot::Fixing | Dot::Waiting | Dot::Idle | Dot::Stopped => 4,
+        }
+    }
+
     /// The dot of a working Lead: the red loader when its Plan has a failed Job (hs-d581), else its Plan's phase
     /// (`None`: no Plan, cyan).
     pub fn working(failed: bool, phase: Option<Phase>) -> Dot {

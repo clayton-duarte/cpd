@@ -323,7 +323,7 @@ fn session_list_and_show_carry_title_and_titled_at() {
 fn the_title_is_set_as_cpd_title_on_the_sessions_live_pane() {
     let fx = Fx::with_ports();
     setup(&fx);
-    let out = fx.tmux(&["new-session", "-d", "-s", "cpd", "-P", "-F", "#{pane_id}", "sleep 1000"]);
+    let out = fx.tmux(&["new-session", "-d", "-s", "cpd", "-P", "-F", "#{pane_id}", "sleep 120"]);
     assert!(out.status.success(), "{out:?}");
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     fx.tmux(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);

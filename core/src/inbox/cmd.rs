@@ -83,7 +83,7 @@ pub struct DismissArgs {
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {
-    run_with(&Ports::real(), command)
+    run_with(&Ports::current(), command)
 }
 
 /// [`run`] on `ports`: the time of every command is `ports.clock.utc()`, and `snooze tomorrow` reads the local offset

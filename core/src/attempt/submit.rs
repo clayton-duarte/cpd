@@ -234,7 +234,7 @@ fn head(worktree: &Path) -> Result<Option<String>, CpdError> {
 
 /// The worktree's real path, when the caller's cwd is inside it and it is on the Attempt branch;
 /// else `wrong_worktree`.
-fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdError> {
+pub(super) fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdError> {
     let wrong = |why: String| {
         CpdError::new(
             ErrorCode::WrongWorktree,

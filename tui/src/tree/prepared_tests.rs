@@ -29,6 +29,7 @@ const WORKING: &str = SPINNER[0];
 const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline).
 const DOWN: &str = "\u{F0B26}";
+const UP: &str = "\u{F0B2C}";
 
 /// The closing row of a block that folds, folded, after the pane's margin.
 fn expand() -> String {
@@ -373,7 +374,7 @@ fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
     view.mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 10, row: 3, modifiers: KeyModifiers::NONE });
     let screen = self::screen(&draw(&mut view, 46, 20));
     assert!(screen.get(1).is_some_and(|r| cue(r, '▲')), "the tree's ▲ cue after a notch: {screen:?}");
-    assert!(!screen[1..].iter().any(|r| r.contains(" alpha")), "the top of the tree scrolled away: {screen:?}");
+    assert!(!screen[1..].iter().any(|r| r.contains(" beta")), "the first Context scrolled away: {screen:?}");
     assert!(screen.iter().any(|r| r.contains("Inbox")), "the Inbox stays: {screen:?}");
 }
 
@@ -384,25 +385,101 @@ fn the_tree_of_a_prepared_store() {
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
     let mut expected = vec![
         String::new(),
+        format!(" ╭{NEEDS_YOU} beta"),
+        row(&format!("├─{NEEDS_YOU} rel"), "1"),
+        format!(" ╰─{STOPPED} old"),
+        String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
         row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2"),
-        format!(" ├─{IDLE} ship·f-id"),
-        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
+        format!(" ╰─{IDLE} ship·f-id"),
+        String::new(),
+        format!(" ╭{STOPPED} gamma"),
+        " ╰\u{F0B2A} new".to_owned(),
+    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a live Context with no row ends with the clickable `╰󰬪 new`), one empty row between two Contexts; the Inbox section is pinned below
+    expected.extend(inbox_section(46));
+    let screen = screen(&draw(&mut env.view(), 46, 20));
+    assert_eq!(
+        screen,
+        expected,
+        "the Contexts by dot tier then last activity (beta's magenta Manager, then alpha's shiro Manager with an Event, then gamma with no Manager); alpha's live Plans and forks as one list by tier then last activity (the red fork `ship·f-bl`, the red loader of `ship` in shiro, then `sketch` and the fork `ship·f-id` tied on shiro and creation order); the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
+    );
+}
+
+/// The tree reorders by dot-urgency tier first and last activity second (hs-d686): a magenta Context still leads a shiro
+/// one, whatever its activity; within one tier the row the newer Event names comes first (`context` for a Context,
+/// `plan` for a Plan row).
+#[test]
+fn the_tree_orders_live_rows_by_dot_tier_then_last_activity() {
+    let mut env = Env::new();
+    populate(&mut env);
+    // a newer Event names the Plan `sketch` (and the Context `alpha`), and a newer one still the Context `gamma`, whose
+    // own Event outranks alpha's Manager's.
+    env.sql(
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-09T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-09T00:00:01.000Z', 'context-created', 'gamma', NULL, NULL, 'fixture', '{}');",
+    );
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "1"),
         format!(" ╰─{STOPPED} old"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰\u{F0B2A}".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰬪`), one empty row between two Contexts; the Inbox section is pinned below
+        " ╰\u{F0B2A} new".to_owned(),
+        String::new(),
+        format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
+        row(&format!("├─{IDLE} sketch"), "2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        format!(" ╰─{IDLE} ship·f-id"),
+    ];
     expected.extend(inbox_section(46));
     let screen = screen(&draw(&mut env.view(), 46, 20));
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰬪` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰬦 expand`"
+        "beta's magenta Context stays first though `gamma`'s newer Event outranks it; within shiro `gamma`'s Event puts it above `alpha`, and within alpha the newer `sketch` Event puts it above `ship` (the red fork `ship·f-bl` keeps tier 0)"
+    );
+}
+
+/// An archived Plan and an archived fork stay after every live row, whatever their dot (hs-d686): `sketch` and the fork
+/// `ship·f-id`, both shiro, follow the live red fork `ship·f-bl` and the live `ship`.
+#[test]
+fn an_archived_row_is_last_after_the_live_rows() {
+    let mut env = Env::new();
+    populate(&mut env);
+    env.sql(
+        "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'sketch';
+         UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-idle';",
+    );
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        format!(" ╭{NEEDS_YOU} beta"),
+        row(&format!("├─{NEEDS_YOU} rel"), "1"),
+        format!(" ╰─{STOPPED} old"),
+        String::new(),
+        format!(" ╭{NEEDS_YOU} alpha"),
+        format!(" ├─{NEEDS_YOU} ship·f-bl"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅1⋅2"),
+        row(&format!("├─{IDLE} sketch"), "2"),
+        format!(" ├─{IDLE} ship·f-id"),
+        format!(" ╰{UP} collapse"),
+        String::new(),
+        format!(" ╭{STOPPED} gamma"),
+        " ╰\u{F0B2A} new".to_owned(),
+    ];
+    expected.extend(inbox_section(46));
+    let screen = screen(&draw(&mut env.view(), 46, 21));
+    assert_eq!(
+        screen,
+        expected,
+        "the archived Plan `sketch` and the archived fork `ship·f-id` are after the live rows though shiro; the Context's toggle is expanded, so it closes with `╰󰬬 collapse`"
     );
 }
 
@@ -519,4 +596,30 @@ fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot()
     assert!(!rows.iter().any(|r| r.contains(ACTIVE_MARK)), "no marker: {rows:?}");
     assert_eq!(blue_text(&buf), ["alpha"], "the Context's name, and no Plan's: {rows:?}");
     assert_ne!(fg_of(&buf, "╭", NEEDS_YOU), blue(), "its dot keeps the dot's colour");
+}
+
+// ---------- the empty Context's clickable ` ╰󰬪 new` (hs-d688) ----------
+
+/// A live Context with no Plan or fork row ends with the clickable ` ╰\u{F0B2A} new` (hs-d688): the corner and the glyph
+/// muted (colour 8), the word `new` in the clickable colour 15. An ARCHIVED empty Context keeps the plain muted
+/// ` ╰\u{F0B2A}`, since `plan new` is refused there. The row is found by its text: the order PR may have moved `gamma`.
+#[test]
+fn an_empty_live_context_draws_the_clickable_new_row() {
+    let mut env = Env::new();
+    populate(&mut env);
+    let muted = palette::muted_text().fg.unwrap();
+    let buf = draw(&mut env.view(), 46, 20);
+    let rows = text_rows(&buf);
+    let live = rows.iter().find(|r| r.contains('\u{F0B2A}'));
+    assert_eq!(live.map(String::as_str), Some(" ╰\u{F0B2A} new"), "a live empty Context ends with the clickable new row:\n{}", rows.join("\n"));
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "╰"), muted, "the corner is muted (colour 8)");
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "the glyph is muted (colour 8)");
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "n"), C15, "the word `new` is clickable (colour 15)");
+    // `plan new` is refused in an archived Context, so its empty block keeps the plain terminator
+    env.sql("UPDATE contexts SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'gamma';");
+    let buf = draw(&mut env.view(), 46, 20);
+    let rows = text_rows(&buf);
+    let archived = rows.iter().find(|r| r.contains('\u{F0B2A}'));
+    assert_eq!(archived.map(String::as_str), Some(" ╰\u{F0B2A}"), "an archived empty Context keeps the plain terminator:\n{}", rows.join("\n"));
+    assert_eq!(fg_of(&buf, "\u{F0B2A}", "\u{F0B2A}"), muted, "its glyph stays muted (colour 8)");
 }

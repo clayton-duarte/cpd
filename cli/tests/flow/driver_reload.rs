@@ -93,7 +93,7 @@ impl Reload {
     }
 
     fn txns(&self) -> i64 {
-        self.live.query("SELECT count(*) FROM txns")
+        self.live.value("SELECT count(*) FROM txns")
     }
 
     /// A new install: a new file renamed over the executable, which answers `--version` with `reply`.
@@ -165,7 +165,7 @@ impl Reload {
         assert_ne!(self.live.lead_sha(), old_lead);
         assert_eq!(fs::read_to_string(self.live.lead.join("api.txt")).unwrap(), "api\n");
         assert_eq!(self.live.job_status("api"), "merged");
-        assert_eq!(self.live.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
+        assert_eq!(self.live.value::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
     }
 }
 
@@ -336,7 +336,7 @@ fn a_nudged_worker_that_idles_again_after_a_reload_ends_no_submit() {
     let launch = re.dispatch();
     let dir = re.fx().env.home().join(".pi/agent/sessions/w");
     let turn = r#"{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{"role":"assistant","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0}},"stopReason":"stop"}}"#;
-    let session = || re.live.query::<String>("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = 'api-a1'");
+    let session = || re.live.value::<String>("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = 'api-a1'");
     // What pi does in its pane: `cpd session state <to>` with the Session in its environment.
     let state = |to: &str| {
         let id = session();
@@ -344,7 +344,7 @@ fn a_nudged_worker_that_idles_again_after_a_reload_ends_no_submit() {
         re.fx().cpd_with(&re.live.worktree(ATTEMPT), &["session", "state", to], &env).ok();
     };
     let file = || dir.join(format!("2026_{}.jsonl", session()));
-    let nudges = || re.live.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'");
+    let nudges = || re.live.value::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'");
 
     let (exec, _fd3) = run_until_exec(&re, &launch, |_, nap| match nap {
         // pi ends its first turn, idle.

@@ -126,72 +126,72 @@
 	],
 	"codex/closed/120": [
 		"",
-		" • Called codemode",
+		"• Called codemode",
 		"   └ third",
 		"     fourth",
 		"     fifth",
 		"     Done in 1.234s (5 lines) · read 3 · bash 1 · edit 2",
-		"     + Show details"
+		"    + Show details"
 	],
 	"codex/closed/44": [
 		"",
-		" • Called codemode",
+		"• Called codemode",
 		"   └ third",
 		"     fourth",
 		"     fifth",
 		"     Done in 1.234s (5 lines) · read 3 ·",
 		"     bash 1 · edit 2",
-		"     + Show details"
+		"    + Show details"
 	],
 	"codex/open/120": [
 		"",
-		" • Called codemode({\"code\":\"await tools.read({path:'a.ts'})\"})",
+		"• Called codemode({\"code\":\"await tools.read({path:'a.ts'})\"})",
 		"   └ AUTHOR output",
 		"     Done in 1.234s (5 lines) · read 3 · bash 1 · edit 2",
-		"     − Show less"
+		"    − Show less"
 	],
 	"codex/open/44": [
 		"",
-		" • Called",
+		"• Called",
 		"   └ codemode({\"code\":\"await",
 		"     tools.read({path:'a.ts'})\"})",
 		"     AUTHOR output",
 		"     Done in 1.234s (5 lines) · read 3 ·",
 		"     bash 1 · edit 2",
-		"     − Show less"
+		"    − Show less"
 	],
 	"codex/many-closed/120": [
 		"",
-		" • Called codemode",
+		"• Called codemode",
 		"   └ edits done",
 		"     Done in 0.000s (1 line) · edit 4 2",
-		"     + Show details"
+		"    + Show details"
 	],
 	"codex/many-closed/44": [
 		"",
-		" • Called codemode",
+		"• Called codemode",
 		"   └ edits done",
 		"     Done in 0.000s (1 line) · edit 4 2",
-		"     + Show details"
+		"    + Show details"
 	],
 	"codex/many-open/120": [
 		"",
-		" • Called codemode()",
+		"• Called codemode()",
 		"   └ edits done",
 		"     Done in 0.000s (1 line) · edit 4 2",
-		"     − Show less"
+		"    − Show less"
 	],
 	"codex/many-open/44": [
 		"",
-		" • Called codemode()",
+		"• Called codemode()",
 		"   └ edits done",
 		"     Done in 0.000s (1 line) · edit 4 2",
-		"     − Show less"
+		"    − Show less"
 	],
 	"codex/legacy/100": [
 		"",
-		" • Called codemode",
+		"• Called codemode",
 		"   └ legacy output",
-		"     + Show details"
+		"    + Show details"
 	]
 }

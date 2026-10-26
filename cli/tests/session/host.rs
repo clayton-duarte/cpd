@@ -127,12 +127,13 @@ fn starts_the_server_once_with_the_contract_options() {
 /// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478, hs-d671): every title is a pill with no padding;
 /// the three view titles are dango in the cursor cycle order (Context sakura 5, Plan shiro 7, Deploy midori 2) and
 /// keep their colour on the focused pane, while every other title (a Lead's `@cpd_title`, the Worker's and the pane
-/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` in the pill's colour
-/// before the left cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
+/// command) is grey (colour 7) and blue on the focused pane, set in the format itself; one `━` always in colour 7 (the
+/// pane-border line colour, independent of the pill's colour; hs-d684) before the left cap, so the cap is the fourth
+/// cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=colour4],#[fg=colour7]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#[fg=colour7]━#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}━\u{e0b6}#[reverse]\
+#[fg=colour7]━#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}\u{e0b6}#[reverse]\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
 #[noreverse]\u{e0b4}}}}";
@@ -233,7 +234,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     let (_, id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.root())).unwrap().unwrap();
     t.set_pane_view(&id, View::Plan).unwrap();
     let before = pane(&t.list_panes().unwrap(), &id).clone();
-    let script = "echo \"$CPD_HOST_TEST_VAR\" > respawned.txt; sleep 600";
+    let script = "echo \"$CPD_HOST_TEST_VAR\" > respawned.txt; sleep 120";
     t.respawn_pane_killing(&id, &sh(script)).unwrap();
     let after = pane(&t.list_panes().unwrap(), &id).clone();
     assert!(!after.dead);
@@ -260,7 +261,7 @@ fn create_session_returns_the_first_window_and_pane_once() {
     // -e reaches the first pane only, not the session's later windows.
     let session_env = s.raw(&["show-environment", "-t", "=cpd"]);
     assert!(!session_env.contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
-    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 600")).unwrap().1;
+    let later = s.tmux.new_window("cpd", "later", &sh("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep 120")).unwrap().1;
     let env_of = |id: &PaneId| s.state().pane_env(id.as_str()).into_iter().filter(|(k, _)| k == "CPD_HOST_TEST_VAR").collect::<Vec<_>>();
     assert_eq!(env_of(&pane), [("CPD_HOST_TEST_VAR".to_owned(), "pay".to_owned())], "the first pane has it");
     assert_eq!(env_of(&later), [], "the later window's pane has not: it prints `plan=` and nothing");
@@ -362,7 +363,7 @@ fn a_worker_window_gets_its_cwd_environment_and_argv() {
     let attempt = AttemptId::parse("rs-host-a1").unwrap();
     t.ensure_session("cpd-work", layout::WATCH_WINDOW, &sleeper(s.root())).unwrap();
 
-    let mut spawn = sh("printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${TMUX_PANE:+set}\" \"$1\"; sleep 600");
+    let mut spawn = sh("printf '%s|%s|%s|%s|%s' \"$PWD\" \"$CPD_PLAN\" \"$A_B\" \"${TMUX_PANE:+set}\" \"$1\"; sleep 120");
     spawn.argv.extend(["argv0".into(), "two words; $HOME".into()]);
     spawn.cwd = Some(wt.clone());
     spawn.env.insert("CPD_PLAN".into(), "cpd2".into());
@@ -452,10 +453,10 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     let border = || s.raw(&["display-message", "-p", "-t", pane_id.as_str(), &format]).trim_end_matches('\n').to_owned();
     t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
     assert_eq!(border(), "");
-    // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
-    // left cap (hs-d475, hs-d478)
+    // Title Case, no padding, the pill in blue (this pane is the active one), one border line character in colour 7
+    // (the pane-border line, not the pill's colour) before the left cap (hs-d475, hs-d478, hs-d684)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[fg=colour4]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
+    assert_eq!(border(), "#[fg=colour7]━#[fg=colour4]\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
 /// Finding 4: a pane made by a newer cpd (a view this binary does not know)

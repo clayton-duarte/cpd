@@ -130,17 +130,11 @@ function prefixedText(text: string, first: string, rest: string = first): (width
   return (width) => wrapTextWithAnsi(normalized, Math.max(1, width - prefixWidth)).map((line, i) => `${i === 0 ? first : rest}${line}`);
 }
 
-/** `outputPadLines`: with `outputPad` 0 the row's one margin column is reclaimed. */
-function outputPadLines(lines: string[], width: number): string[] {
-  return lines.map((line) => (stripTerminalSequences(line).startsWith(" ") ? sliceByColumn(line, 1, Math.max(0, width), true) : truncateToWidth(line, Math.max(0, width), "…")));
-}
-
 /** `WithinWidth`: a row never draws past the pane's edge. */
 const withinWidth = (lines: string[], width: number): string[] => lines.map((l) => (visibleWidth(l) > width ? truncateToWidth(l, Math.max(1, width), "") : l));
 
 // ---- the fold ----
 
-const MARGIN = " ";
 const GREY8 = (text: string): string => `\x1b[90m${text}\x1b[39m`;
 
 /** The text up to the first `.`, `:` or line end, cut at 60 characters with `…` only when longer. */
@@ -166,11 +160,11 @@ type Rows = { foldable: boolean; terminator: () => string[]; head: (width: numbe
 function rowsOf(summary: string, content: string, theme: Theme, time?: string): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${GREY8(TOP)}`;
+  const lead = GREY8(TOP);
   // contract §6.1.1: the pill is magenta 5 inverted, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
   const pill = drawPill(meaning("planning"), "cpd");
   const sentence = firstSentence(summary);
-  const rail = `${MARGIN}${GREY8(RAIL)}`;
+  const rail = GREY8(RAIL);
   const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
   return {
     head: (width) => {
@@ -178,14 +172,14 @@ function rowsOf(summary: string, content: string, theme: Theme, time?: string): 
       const lines = wrapTextWithAnsi(sentence, room);
       return (lines.length === 0 ? [""] : lines).map((l, i) => {
         const t = l === "" ? "" : `\x1b[37m${l}\x1b[39m`;
-        return i === 0 ? `${lead}${pill}${t === "" ? "" : ` ${t}`}` : `${MARGIN}${GREY8(RAIL)}${t}`;
+        return i === 0 ? `${lead}${pill}${t === "" ? "" : ` ${t}`}` : `${GREY8(RAIL)}${t}`;
       });
     },
     body: text === "" ? () => [] : prefixedText(body, rail),
     foldable: text !== "",
-    terminator: () => [`${MARGIN}${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
+    terminator: () => [`${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
     toggle: (width, expanded) => {
-      const base = `${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`;
+      const base = `${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`;
       const dated = time === undefined ? base : `${base} · ${time}`;
       // A narrow pane drops the time rather than cutting it: the toggle row stays as it was.
       return [`${time !== undefined && visibleWidth(dated) > width ? base : dated}\x1b[39m`];
@@ -207,7 +201,7 @@ export class Rendering {
   }
 
   /** §15.9 `off`: no component, so pi draws its own default box with the full `content`. */
-  readonly render: MessageRenderer = (message, { expanded, outputPad }, theme) => {
+  readonly render: MessageRenderer = (message, { expanded }, theme) => {
     if (this.style === "off") return undefined;
     const content = contentOf(message);
     const summary = summaryOf(message, content);
@@ -228,7 +222,7 @@ export class Rendering {
       return withinWidth(lines, width);
     };
     const inner: Component = {
-      render: (width) => (outputPad === 0 ? outputPadLines(draw(width + 1), width) : draw(width)),
+      render: (width) => draw(width),
       invalidate() {},
     };
     if (closes) return inner;

@@ -69,13 +69,13 @@ const first = (summary: string): string => {
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
-const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
-const TERM = ` <c8>╰\u{F0B2A}</>`;
-const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
+const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
+const TERM = `<c8>╰\u{F0B2A}</>`;
+const rail = (line: string) => `<c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F0B26}";
 const OPEN = "\u{F0B2C}";
-const closing = (word: string) => ` <c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word} · ${TIME}</>`;
+const closing = (word: string) => `<c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word} · ${TIME}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
@@ -95,7 +95,7 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
 
 test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(` ╭─${CAP_L}cpd${CAP_R} `.length);
+  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}cpd${CAP_R} `.length);
   assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
@@ -103,10 +103,10 @@ test("a long summary is cut to 60 characters and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.ok(lines[0]!.startsWith(` ╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
-  assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith(" │ ")), "continuation rows are aligned like a tool row's");
+  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
+  assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith("│ ")), "continuation rows are aligned like a tool row's");
   assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
-  assert.equal(lines.at(-1), ` ╰${FOLDED} expand · ${TIME}`);
+  assert.equal(lines.at(-1), `╰${FOLDED} expand · ${TIME}`);
 });
 
 test("an empty content shows no body", () => {

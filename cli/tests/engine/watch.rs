@@ -1181,9 +1181,9 @@ fn engine_on_git() -> (Ip, PathBuf, PathBuf) {
     fx.engine_routes_on_tmux();
     let repo = fx.git_repo("pay").canonicalize().unwrap();
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap().path;
-    fx.engine_plan_at(&repo, &lead);
-    (fx, repo, lead)
+    let created = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap();
+    fx.engine_plan_on(&repo, &created.path, &created.branch);
+    (fx, repo, created.path)
 }
 
 /// Attempt `api-a1` of Plan `pay` in `merging`, its worktree cut from the Lead Branch with one commit, its driver
@@ -2366,23 +2366,32 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = polling("");
-    // The first poll leaves 50 requests until `reset_at`, a minute from now; the next one, which E5 must not run before that (it
+    // The first poll leaves 50 requests until `reset_at`, a minute from then; the next one, which E5 must not run before that (it
     // polls every tick otherwise), 4987. The engine reads the reset against the wall clock and waits it out on the `ManualClock`.
-    let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+    // `reset_at` is stamped when the first poll answers, so the wait the engine computes is a minute less that handover, and the
+    // test's own setup time never shortens it (a flake under load).
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
-    let (clock, noted, low) = (fx.fakes.clock.clone(), starts.clone(), search_reply(50, &reset_at));
+    let reset = Arc::new(Mutex::new(None::<String>));
+    let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
     fx.route_fn("gh", move |_| {
         let mut noted = noted.lock().unwrap();
         noted.push(clock.elapsed());
-        Reply::ok(&if noted.len() == 1 { low.clone() } else { search_reply(4987, "2099-01-01T00:00:00Z") })
+        if noted.len() == 1 {
+            let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+            *stamped.lock().unwrap() = Some(reset_at.clone());
+            Reply::ok(&search_reply(50, &reset_at))
+        } else {
+            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+        }
     });
 
     let seen = starts.clone();
     fx.watch_steps(move |_| seen.lock().unwrap().len() >= 2).unwrap();
 
-    // The second poll started when the reset came (a minute, less what the test took to get here): the ticks in between ran no poll.
+    // The second poll started when the reset came (a minute, less the handover to the engine): the ticks in between ran no poll.
     let starts = starts.lock().unwrap();
     assert_eq!(starts.len(), 2, "{starts:?}");
+    let reset_at = reset.lock().unwrap().clone().expect("the first poll answered a reset");
     assert!(starts[1] - starts[0] >= Duration::from_secs(55), "polled {:?} after the first, before the reset ({reset_at})", starts[1] - starts[0]);
     // One Event, for the machine, with what the User needs; resuming raised nothing more.
     let errors = fx.events("error");
@@ -2509,7 +2518,7 @@ impl Db {
         conn.query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
-    fn sql(&self, text: &str) {
+    fn write(&self, text: &str) {
         common::sql(&mut Store::open(&self.home, 5000).unwrap(), text);
     }
 
@@ -2767,7 +2776,7 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
                 *seen.lock().unwrap() = Some(db.errors());
                 clock.advance(Duration::from_secs(10 * 60));
                 // The throttled Session's title is as young as it was.
-                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'throttled';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(5))));
+                db.write(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'throttled';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(5))));
                 advanced = Some(nap);
                 false
             }
@@ -2890,7 +2899,7 @@ fn e10_counts_the_failures_in_a_row_from_the_last_success() {
             2 if ended => {
                 works.store(false, Ordering::SeqCst);
                 // Due again: its title is old, its turn newer.
-                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(20))));
+                db.write(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(20))));
                 calls = pi_calls(&runner);
                 phase = 3;
             }

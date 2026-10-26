@@ -7,12 +7,14 @@ import {
 } from "./indicator-harness.ts";
 
 // These expectations come from tests/fixtures/codex-0.160.0.md, captured from the
-// native UI in a 120-column pane. Pi draws every row one column in, so at 121 columns
-// each Pi line is Codex's line after one column of margin, with Pi's own key in the
-// hint. Keep them independent of the generated golden recorder.
+// native UI in a 120-column pane. Pi's tree/code indentation stays one column in
+// (CODEX_INDENT, CODEX_COMMAND_INDENT), so an indented reference line gains that one
+// column; the row-level head, outcome, full output and disclosure lost their own
+// margin to the uniform pad, so they match the reference as written.
 const CODEX_WIDTH = 120;
 const PI_WIDTH = CODEX_WIDTH + 1;
-const asPi = (lines: string[]) => lines.map((line) => ` ${line}`.replace("ctrl+t", "ctrl+o").trimEnd());
+const asPi = (lines: string[]) => lines.map((line) =>
+	(line.startsWith(" ") && !/^    [+−] /u.test(line) ? " " : "") + line.replace("ctrl+t", "ctrl+o").trimEnd());
 /** What a row draws, as text: Pi's spacer above it dropped, tinted rows' padding trimmed. */
 const drawn = (lines: string[]) => {
 	const plain = lines.map((line) => stripTerminalSequences(line).trimEnd());
@@ -65,7 +67,7 @@ test("Codex 0.160.0 commands, collapsed, match the live reference character for 
 		// A header and an output line too wide for the row are cut with "…", and the cut line counts as hidden.
 		const wide = bash(harness, `echo ${LONG}`, LONG);
 		assert.deepEqual(drawn(wide.render(PI_WIDTH)), asPi([
-			"• Ran echo aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh iiiiiiiiii jjjjjjjjj…",
+			"• Ran echo aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh iiiiiiiiii jjjjjjjjjj…",
 			"  └ aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh iiiiiiiiii jjjjjjjjjj kkkkk…",
 			"    + 1 line (ctrl+t to expand)",
 		]));
@@ -94,7 +96,7 @@ test("Codex 0.160.0 commands, opened, read as its transcript", async () => {
 		assert.deepEqual(drawn(failed.render(PI_WIDTH)), asPi(["$ sh -c 'seq 1 5; exit 2'", "1", "2", "3", "4", "5", "✗ (2) • 12ms", "    − Show less"]));
 		const timed = bash(harness, "make", SEQ, false, 75_000);
 		timed.setExpanded(true);
-		assert.ok(drawn(timed.render(PI_WIDTH)).includes(" ✓ • 1m 15s"), "Codex's minutes");
+		assert.ok(drawn(timed.render(PI_WIDTH)).includes("✓ • 1m 15s"), "Codex's minutes");
 		// In the live reference, Enter on `• Ran true` or a short failure changes nothing: Codex opens only a call
 		// whose preview leaves something out. Pi's Ctrl+O opens every row, so these keep their preview.
 		const quiet = [
@@ -108,11 +110,11 @@ test("Codex 0.160.0 commands, opened, read as its transcript", async () => {
 			assert.deepEqual(drawn(row.render(PI_WIDTH)), asPi([...lines]), lines[0]);
 		}
 		// What a narrow pane cuts is left out, so there it opens.
-		assert.equal(drawn(quiet[1][0].render(30))[0], " $ sh -c 'echo fixture failure");
+		assert.equal(drawn(quiet[1][0].render(30))[0], "$ sh -c 'echo fixture failure");
 		for (const [row, label] of [[wide, "wide"], [seq, "seq"], [failed, "failed"], [quiet[2][0], "readme"]] as const) fits(row, label);
 		// A click on the result closes it again, as on any of Pi's rows.
 		wide.setExpanded(false);
-		assert.equal(drawn(wide.render(PI_WIDTH))[0], " • Ran echo aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh iiiiiiiiii jjjjjjjjj…");
+		assert.equal(drawn(wide.render(PI_WIDTH))[0], "• Ran echo aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh iiiiiiiiii jjjjjjjjjj…");
 	} finally { shutdown(harness); }
 });
 
@@ -188,7 +190,7 @@ test("Codex 0.160.0 exploration opens to each call's transcript, closed from one
 		// A call that joins the opened group opens with it, under the one control.
 		harness.chat.children = [...rows, bash(harness, "cat five.txt", "1\n2\n3\n4\n5\n")];
 		assert.deepEqual(drawn(harness.chat.render(PI_WIDTH)), [
-			...opened.slice(0, -1), "", " $ cat five.txt", " 1", " 2", " 3", " 4", " 5", " ✓ • 0ms", opened.at(-1)!,
+			...opened.slice(0, -1), "", "$ cat five.txt", "1", "2", "3", "4", "5", "✓ • 0ms", opened.at(-1)!,
 		]);
 	} finally { shutdown(harness); }
 });
@@ -233,7 +235,7 @@ test("Codex 0.160.0 exploration reads 'Exploring' while a call runs, with the bu
 		assert.ok([...frames][0]!.includes("\x1b[36m•\x1b[39m"), "the bullet is cyan, index 6");
 		harness.handlers.get("tool_execution_end")!({ toolCallId: id, isError: false });
 		row.updateResult({ ...text("src/a.ts:1: TODO"), isError: false } as never, false);
-		assert.equal(drawn(harness.chat.render(PI_WIDTH))[0], " • Explored");
+		assert.equal(drawn(harness.chat.render(PI_WIDTH))[0], "• Explored");
 	} finally { shutdown(harness); }
 });
 
@@ -247,7 +249,7 @@ test("Codex 0.160.0 commands read 'Running' with the tail of their live output, 
 		row.setArgsComplete();
 		harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "bash", args: {} });
 		row.markExecutionStarted();
-		assert.deepEqual(drawn(row.render(PI_WIDTH)), [` • Running ${command}`]);
+		assert.deepEqual(drawn(row.render(PI_WIDTH)), [`• Running ${command}`]);
 		row.updateResult({ ...text("tick 1\ntick 2"), isError: false } as never, true);
 		assert.deepEqual(drawn(row.render(PI_WIDTH)), asPi([`• Running ${command}`, "  └ tick 1", "    tick 2"]));
 		row.updateResult({ ...text("tick 1\ntick 2\ntick 3\ntick 4"), isError: false } as never, true);
@@ -302,15 +304,15 @@ test("Codex 0.160.0 patches in progress and failed name their file", async () =>
 		const id = `codex-editing-${++sequence}`;
 		announce(harness, id, "edit");
 		const editing = makeRow("edit", id, { path: "src/app.ts" }, harness.definitions.get("edit"));
-		assert.deepEqual(drawn(editing.render(PI_WIDTH)), [" • Editing src/app.ts"]);
+		assert.deepEqual(drawn(editing.render(PI_WIDTH)), ["• Editing src/app.ts"]);
 		const failed = finished(harness, "edit", { path: "src/app.ts", edits: [] },
 			text("Could not find the exact text in src/app.ts. The old text must match exactly including all whitespace and newlines."), true);
 		// Codex wraps the reason within the width less its four-column prefix.
 		assert.deepEqual(drawn(failed.render(80)), [
-			" ✘ Failed to edit src/app.ts",
+			"✘ Failed to edit src/app.ts",
 			"   └ Could not find the exact text in src/app.ts. The old text must match",
 			"     exactly including all whitespace and newlines.",
-			"     + Show details",
+			"    + Show details",
 		]);
 		fits(failed, "failed edit");
 	} finally { shutdown(harness); }
@@ -321,16 +323,16 @@ test("custom tools read as Codex's MCP calls: the last lines, then the call with
 	try {
 		const result = Array.from({ length: 6 }, (_, index) => `result ${index + 1}`).join("\n");
 		const called = finished(harness, "web_search", { query: "pi tui", limit: 3 }, text(result));
-		assert.deepEqual(drawn(called.render(100)), [" • Called web_search", "   └ result 4", "     result 5", "     result 6", "     + Show details"]);
+		assert.deepEqual(drawn(called.render(100)), ["• Called web_search", "   └ result 4", "     result 5", "     result 6", "    + Show details"]);
 		called.setExpanded(true);
 		assert.deepEqual(drawn(called.render(100)), [
-			' • Called web_search({"query":"pi tui","limit":3})',
+			'• Called web_search({"query":"pi tui","limit":3})',
 			...Array.from({ length: 6 }, (_, index) => `${index === 0 ? "   └ " : "     "}result ${index + 1}`),
-			"     − Show less",
+			"    − Show less",
 		]);
 		// Too long to sit beside the verb, the call moves beneath it and the result follows four columns in.
 		const narrow = drawn(called.render(30));
-		assert.deepEqual(narrow.slice(0, 2), [" • Called", '   └ web_search({"query":"pi']);
+		assert.deepEqual(narrow.slice(0, 2), ["• Called", '   └ web_search({"query":"pi']);
 		assert.equal(narrow[3], "     result 1");
 		// A tool's own view of its result, once opened, hangs from "└" like any result, without its opening blank lines.
 		const author = { name: "codemode", renderResult: () => ({ render: () => ["", "", "hello from codemode"], invalidate() {} }) };
@@ -338,11 +340,11 @@ test("custom tools read as Codex's MCP calls: the last lines, then the call with
 		announce(harness, id, "codemode");
 		const authored = makeRow("codemode", id, { code: "console.log(1)" }, author);
 		authored.updateResult({ ...text("Output:\n\nhello from codemode"), isError: false } as never, false);
-		assert.deepEqual(drawn(authored.render(100)), [" • Called codemode", "   └ Output:", "", "     hello from codemode", "     + Show details"]);
+		assert.deepEqual(drawn(authored.render(100)), ["• Called codemode", "   └ Output:", "", "     hello from codemode", "    + Show details"]);
 		authored.setExpanded(true);
-		assert.deepEqual(drawn(authored.render(100)), [' • Called codemode({"code":"console.log(1)"})', "   └ hello from codemode", "     − Show less"]);
+		assert.deepEqual(drawn(authored.render(100)), ['• Called codemode({"code":"console.log(1)"})', "   └ hello from codemode", "    − Show less"]);
 		const failed = finished(harness, "web_search", { query: "x" }, text("Search provider unavailable"), true);
-		assert.deepEqual(drawn(failed.render(100)), [" • Failed web_search", "   └ Error: Search provider unavailable", "     + Show details"]);
+		assert.deepEqual(drawn(failed.render(100)), ["• Failed web_search", "   └ Error: Search provider unavailable", "    + Show details"]);
 		for (const [row, label] of [[called, "called"], [failed, "failed"]] as const) fits(row, label);
 	} finally { shutdown(harness); }
 });
@@ -351,15 +353,15 @@ test("lone reads, searches, and listings head their rows with Codex's exploratio
 	const harness = await loadExtension({ style: "codex" }, { tui: true, idle: true });
 	try {
 		const read = finished(harness, "read", { path: "src/app.ts" }, text(Array.from({ length: 5 }, (_, index) => `line ${index + 1}`).join("\n")));
-		assert.deepEqual(drawn(read.render(100)), [" • Read src/app.ts", "   └ line 3", "     line 4", "     line 5", "     + 2 lines (ctrl+o to expand)"]);
+		assert.deepEqual(drawn(read.render(100)), ["• Read src/app.ts", "   └ line 3", "     line 4", "     line 5", "    + 2 lines (ctrl+o to expand)"]);
 		read.setExpanded(true);
-		assert.deepEqual(drawn(read.render(100)).slice(-3), [" line 5", " ✓ • 0ms", "     − Show less"]);
+		assert.deepEqual(drawn(read.render(100)).slice(-3), ["line 5", "✓ • 0ms", "    − Show less"]);
 		const grep = finished(harness, "grep", { pattern: "TODO", path: "src" }, text("src/a.ts:1: TODO"));
-		assert.equal(drawn(grep.render(100))[0], " • Search TODO in src");
+		assert.equal(drawn(grep.render(100))[0], "• Search TODO in src");
 		const ls = finished(harness, "ls", {}, text("a.ts"));
-		assert.equal(drawn(ls.render(100))[0], " • List .");
+		assert.equal(drawn(ls.render(100))[0], "• List .");
 		const missing = finished(harness, "read", { path: "gone.ts" }, text("ENOENT: no such file"), true);
-		assert.deepEqual(drawn(missing.render(100)), [" • Read gone.ts", "   └ ENOENT: no such file"]);
+		assert.deepEqual(drawn(missing.render(100)), ["• Read gone.ts", "   └ ENOENT: no such file"]);
 		for (const [row, label] of [[read, "read"], [grep, "grep"], [missing, "missing"]] as const) fits(row, label);
 	} finally { shutdown(harness); }
 });

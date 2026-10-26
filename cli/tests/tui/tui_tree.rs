@@ -344,12 +344,12 @@ fn a_session_waiting_for_an_agent_shows_the_waiting_dot_and_not_the_idle_one() {
     let fx = fx();
     let _engine = engine(&fx);
     populate_in(&fx);
-    let mut tree = Tree::start(&fx, 46, 14);
+    let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
     fx.cpd(&["session", "state", "waiting", "--label", "cpd: Worker question", "--session", "l-sketch"]).ok();
     fx.cpd(&["session", "state", "working", "--session", "f-idle"]).ok();
-    let screen = tree.until("the waiting Lead", |s| s.iter().any(|r| r.contains(&format!("├─{WAITING} sketch"))));
-    assert!(!screen.iter().any(|r| r.contains(&format!("├─{IDLE} sketch"))), "not the idle glyph");
+    let screen = tree.until("the waiting Lead", |s| s.iter().any(|r| r.contains(&format!("{WAITING} sketch"))));
+    assert!(!screen.iter().any(|r| r.contains(&format!("{IDLE} sketch"))), "not the idle glyph");
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn the_tree_follows_the_events_of_the_store() {
     let fx = fx();
     let _engine = engine(&fx);
     populate_in(&fx);
-    let mut tree = Tree::start(&fx, 46, 14);
+    let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
     // session-state
     fx.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
@@ -375,10 +375,10 @@ fn the_tree_follows_the_events_of_the_store() {
     reconcile(&mut store, &items(), &stamp(&fx, -30)).unwrap();
     let screen = tree.until("the closed item", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} sketch"))));
     // inbox-dismissed, by the command: the red dialog of the fork falls back to its glyph
-    assert!(screen.iter().any(|r| r.contains(&format!("╰─{NEEDS_YOU} ship·f-bl"))));
+    assert!(screen.iter().any(|r| r.contains(&format!("├─{NEEDS_YOU} ship·f-bl"))));
     let id = store_item(&mut store, "session:f-blocked");
     fx.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
-    tree.until("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("╰─{IDLE} ship·f-bl"))));
+    tree.until("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
 }
 
 /// A failed snapshot keeps the tree on screen and shows the error in the footer; the next refresh takes the snapshot
@@ -397,9 +397,9 @@ fn a_failed_snapshot_keeps_the_tree_and_shows_the_error_until_a_snapshot_succeed
     raw("ALTER TABLE sessions RENAME TO sessions_gone;");
     sql(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'session-state', 'fixture', '{}');");
     let screen = tree.until("the error in the footer", |s| s.iter().any(|r| r.contains("no such table")));
-    assert!(screen.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} alpha"))), "the tree stays: {screen:?}");
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} beta"))), "the tree stays: {screen:?}");
     raw("ALTER TABLE sessions_gone RENAME TO sessions;");
-    tree.until("the error to go", |s| !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} alpha"))));
+    tree.until("the error to go", |s| !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} beta"))));
 }
 
 /// The tree follows Events in its own process (commands.md §17): it starts no `cpd events follow` (tui-F4, tui-G4), whose
@@ -409,12 +409,12 @@ fn the_tree_starts_no_subprocess() {
     let fx = fx();
     let _engine = engine(&fx);
     populate_in(&fx);
-    let mut tree = Tree::start(&fx, 46, 14);
+    let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
     // follow an Event and take a new snapshot: the fork's red dialog is dismissed
     let id = store_item(&mut open(&fx.env), "session:f-blocked");
     fx.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
-    tree.until("the new state", |s| s.iter().any(|r| r.contains(&format!("╰─{IDLE} ship·f-bl"))));
+    tree.until("the new state", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
     assert_eq!(fx.fakes.runner.calls(), [], "no program ran");
     assert!(fx.fakes.spawn.launches().is_empty(), "nothing was spawned");
 }
@@ -432,7 +432,7 @@ fn a_follow_that_fails_is_shown_in_the_footer() {
     let raw = |text: &str| rusqlite::Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
     let screen = tree.until("the error in the footer", |s| s.iter().any(|r| r.contains("Event cursor")));
-    assert!(screen.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} alpha"))), "the tree stays: {screen:?}");
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" ╭{NEEDS_YOU} beta"))), "the tree stays: {screen:?}");
 }
 
 #[test]
@@ -499,7 +499,7 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
     drive::fake_cpd(&fx, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     let mut tree = Tree::start(&fx, 46, 14);
     ready(&tree);
-    tree.down(3); // the cursor appears on ship (Context rows are not selectable), then sketch, then f-idle
+    tree.down(6); // the cursor appears on rel, then old, then the fork ship·f-bl, then ship, then sketch, then f-idle
     tree.keys(&["Enter"]);
     assert_eq!(drive::calls(&fx), [words(&["session", "open", "f-idle"])]);
     tree.keys(&["k", "k", "Enter"]);
@@ -514,8 +514,10 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_i
     sql(&mut open(&fx.env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     drive::fake_cpd(&fx, r#"{"ok":true,"manager":{"session":"m-alpha","name":"alpha-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-alpha","displaced":null}"#);
     let mut tree = Tree::start(&fx, 46, 20);
-    ready(&tree);
-    tree.click(8, 1); // the title row of the Context `alpha`
+    let start = ready(&tree);
+    // beta is live before alpha: alpha's block starts below it, not at the top row.
+    let alpha = start.iter().position(|r| r.contains(" alpha")).expect("alpha's title row") as u16;
+    tree.click(8, alpha); // the title row of the Context `alpha`
     assert_eq!(
         drive::calls(&fx),
         [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]
@@ -523,16 +525,20 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_i
     tree.idle();
     assert_eq!(drive::calls(&fx).len(), 2, "no more commands");
     let screen = tree.screen();
-    assert!(screen[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")) && screen.iter().any(|r| r.contains("ship")), "the title click folds nothing: {screen:?}");
-    assert_eq!(screen[6], collapse(), "alpha's closing row");
-    tree.click(1, 1); // the first cell of the title row: its dot
+    assert!(screen[alpha as usize].starts_with(&format!(" ╭{NEEDS_YOU} alpha")) && screen.iter().any(|r| r.contains("ship")), "the title click folds nothing: {screen:?}");
+    assert_eq!(screen[alpha as usize + 5], collapse(), "alpha's closing row");
+    tree.click(1, alpha); // the first cell of the title row: its dot
     assert_eq!(drive::calls(&fx).len(), 4, "the dot is the title row's: it opens the Manager too");
-    tree.click(8, 6); // its `╰󰬬 collapse` row
+    tree.click(8, alpha + 5); // its `╰󰬬 collapse` row
     let folded = tree.until("alpha's archived row hidden", |s| !s.iter().any(|r| r.contains("ship·f-bl")));
-    assert_eq!((folded[1].as_str(), folded[4].as_str(), folded[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), format!(" ├─{IDLE} ship·f-id").as_str(), expand().as_str()), "a folded Context draws its Manager's dot (its unread item), its live rows and a `╰󰬦 expand` row: {folded:?}");
+    assert_eq!(
+        (folded[alpha as usize].as_str(), folded[alpha as usize + 3].as_str(), folded[alpha as usize + 4].as_str()),
+        (format!(" ╭{NEEDS_YOU} alpha").as_str(), format!(" ├─{IDLE} ship·f-id").as_str(), expand().as_str()),
+        "a folded Context draws its Manager's dot (its unread item), its live rows and a `╰󰬦 expand` row: {folded:?}"
+    );
     assert!(folded.iter().any(|r| r.contains("ship")) && folded.iter().any(|r| r.contains("sketch")), "the live rows stay: {folded:?}");
     assert_eq!(drive::calls(&fx).len(), 4, "the closing row runs no command");
-    tree.click(8, 5);
+    tree.click(8, alpha + 4);
     tree.until("alpha's archived row back", |s| s.iter().any(|r| r.contains("ship·f-bl")));
     assert_eq!(drive::calls(&fx).len(), 4);
 }
@@ -545,7 +551,7 @@ fn a_refused_context_manager_logs_its_error_and_opens_nothing() {
     drive::fake_cpd_fails(&fx, r#"{"ok":false,"error":{"code":"archived","message":"The Context is archived."}}"#);
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.click(8, 1);
+    tree.click(8, 5); // the title row of the Context `alpha`
     tree.until_logged("failed: context manager --context=alpha --by-user: archived: The Context is archived.");
     assert!(!tree.shows("archived"), "no note: {:?}", tree.screen());
     assert_eq!(drive::calls(&fx), [words(&["context", "manager", "--context=alpha", "--by-user"])], "no session open");
@@ -579,10 +585,9 @@ fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
     let mut tree = Tree::start(&fx, 80, 14);
     let key = key; // dropped before `tree`: a loop that waits on a command that waits on the gate cannot end
     ready(&tree);
-    tree.down(1);
+    tree.down(4); // l-ship
     tree.eager(true);
     tree.keys(&["Enter"]);
-    assert_eq!(drive::calls(&fx), [words(&["session", "open", "l-ship"])], "the command runs, and waits");
     let before = styled_row(&tree, " sketch");
     tree.keys(&["j"]); // read and drawn while the command runs: the cursor moves to `sketch`
     assert_ne!(styled_row(&tree, " sketch"), before, "the key was read and the frame drawn, not after the command");
@@ -590,6 +595,8 @@ fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
     key.open();
     tree.idle();
     tree.until_logged("failed: session open l-ship: slow: Took a while.");
+    // the command's call is read once it has ended: the loop dispatched it from its own task, so it is not there at once
+    assert_eq!(drive::calls(&fx), [words(&["session", "open", "l-ship"])], "the command ran, and waited");
 }
 
 #[test]
@@ -600,7 +607,7 @@ fn a_refused_command_logs_its_error_and_the_frame_shows_none() {
     drive::fake_cpd_fails(&fx, r#"{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}"#);
     let mut tree = Tree::start(&fx, 46, 14);
     ready(&tree);
-    tree.down(1);
+    tree.down(4); // l-ship
     tree.keys(&["Enter"]);
     tree.until_logged("failed: session open l-ship: no_cockpit: No cockpit.");
     assert_eq!(drive::calls(&fx), [words(&["session", "open", "l-ship"])]);
@@ -616,19 +623,19 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     drive::fake_cpd(&fx, r#"{"ok":true}"#);
     let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
-    tree.right_click(8, 4); // the fork `ship fork`
+    tree.right_click(8, 9); // the fork `ship fork`
     let screen = tree.until("the fork's menu", |s| menu_open(s, "Open"));
     for item in ["Open", "Rename…", "Fork…", "Close", "Archive"] {
         assert!(screen.iter().any(|r| r.contains(&format!("│ {item} "))), "{item} in\n{}", screen.join("\n"));
     }
     tree.keys(&["Escape"]);
     tree.until("the menu closed", the_menu_is_closed);
-    tree.right_click(5, 1); // the Context `alpha`
+    tree.right_click(5, 5); // the Context `alpha`
     let screen = tree.until("the Context's menu", |s| menu_open(s, "New Plan…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")) && screen.iter().any(|r| r.contains("│ Archive ")));
     tree.click(40, 12); // outside it
     tree.until("the menu closed", the_menu_is_closed);
-    tree.right_click(8, 2); // the Plan `ship`
+    tree.right_click(8, 7); // the Plan `ship`
     tree.until("the Plan's menu", |s| menu_open(s, "New session…"));
     tree.right_click(45, 13); // a right click outside closes it too
     tree.until("the menu closed", the_menu_is_closed);
@@ -649,14 +656,79 @@ fn a_click_on_an_archived_fork_unarchives_and_opens_it() {
     populate_in(&fx);
     sql(&mut open(&fx.env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     drive::fake_cpd(&fx, r#"{"ok":true}"#);
-    let mut tree = Tree::start(&fx, 60, 15);
-    ready(&tree);
-    let shown = [format!(" ├─{IDLE} ship·f-bl"), collapse()];
-    assert_eq!(rows_are(&mut tree, 5, &shown)[5..7], shown, "the archived fork is inside alpha's block, after the live rows");
-    tree.click(10, 5);
+    let mut tree = Tree::start(&fx, 60, 22);
+    let screen = ready(&tree);
+    let at = |s: &[String], text: &str| s.iter().position(|r| r.contains(text)).expect(text) as u16;
+    let fbl = at(&screen, "ship·f-bl");
+    let fid = at(&screen, "ship·f-id");
+    assert!(fid < fbl, "the archived fork is inside alpha's block, after the live rows: {screen:?}");
+    assert_eq!(screen[fbl as usize + 1], collapse(), "the archived fork closes alpha's block: {screen:?}");
+    tree.click(10, fbl);
     assert_eq!(drive::calls(&fx), [words(&["session", "unarchive", "f-blocked"]), words(&["session", "open", "f-blocked"])]);
-    tree.click(8, 4); // a live fork still opens
+    tree.click(8, fid); // a live fork still opens
     assert_eq!(drive::calls(&fx)[2], words(&["session", "open", "f-idle"]));
+}
+
+/// hs-d686: at both levels the drawn rows come by dot-urgency tier (red 0 > yellow 1 > magenta 2 > blue 3 > shiro 4,
+/// the white dot and every row with no Inbox item, the red loader among them), then by last activity most recent
+/// first; archived rows stay last, whatever their dot.
+#[test]
+fn the_tree_orders_by_dot_tier_then_last_activity() {
+    let row = |s: &[String], text: &str| s.iter().position(|r| r.contains(text)).unwrap_or_else(|| panic!("{text} on\n{}", s.join("\n")));
+
+    // Level 1: beta's Manager has a magenta dialog (tier 2), then alpha (a white unread, shiro, and Events), then gamma.
+    // Level 2: alpha's live rows as ONE list: the red fork `ship·f-bl`, then the Plan `ship` (the red loader, shiro, and
+    // the newest Event), then `sketch` and the fork `ship·f-id`, whose tie keeps creation order.
+    {
+        let fx = fx();
+        let _engine = engine(&fx);
+        populate_in(&fx);
+        let mut tree = Tree::start(&fx, 46, 30);
+        let screen = ready(&tree);
+        let (beta, alpha, gamma) = (row(&screen, " beta"), row(&screen, " alpha"), row(&screen, " gamma"));
+        assert!(beta < alpha && alpha < gamma, "Contexts by tier then last activity: {screen:#?}");
+        let (fbl, ship, sketch, fid) = (row(&screen, "ship·f-bl"), row(&screen, " ship "), row(&screen, " sketch"), row(&screen, "ship·f-id"));
+        assert!(fbl < ship && ship < sketch && sketch < fid, "alpha's live rows, one list, by tier then last activity: {screen:#?}");
+    }
+
+    // Within a tier last activity wins: a later Event naming `sketch` lifts it above `ship` (both shiro).
+    {
+        let fx = fx();
+        let _engine = engine(&fx);
+        populate_in(&fx);
+        sql(
+            &mut open(&fx.env),
+            "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+             VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');",
+        );
+        let mut tree = Tree::start(&fx, 46, 30);
+        let screen = ready(&tree);
+        let (fbl, sketch, ship, fid) = (row(&screen, "ship·f-bl"), row(&screen, " sketch"), row(&screen, " ship "), row(&screen, "ship·f-id"));
+        assert!(fbl < sketch && sketch < ship && ship < fid, "a later Event wins within a tier: {screen:#?}");
+    }
+
+    // Archived rows are last whatever their dot: the archived Plan `old` comes after its live `rel`, and the archived
+    // red fork `ship·f-bl` after every live row of alpha.
+    {
+        let fx = fx();
+        let _engine = engine(&fx);
+        populate_in(&fx);
+        sql(
+            &mut open(&fx.env),
+            "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'old';
+             UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';",
+        );
+        let mut tree = Tree::start(&fx, 46, 30);
+        let screen = ready(&tree);
+        let blade = row(&screen, "ship·f-bl");
+        assert!(
+            row(&screen, " rel") < row(&screen, " old")
+                && row(&screen, " ship ") < blade
+                && row(&screen, " sketch") < blade
+                && row(&screen, "ship·f-id") < blade,
+            "an archived Plan and an archived fork draw after every live row: {screen:#?}"
+        );
+    }
 }
 
 #[test]
@@ -667,10 +739,11 @@ fn a_click_that_shows_a_history_is_refused_in_the_log() {
     sql(&mut open(&fx.env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     drive::fake_cockpit(&fx);
     fx.fake("cpd", Reply::exit(1, r#"{"ok":false,"error":{"code":"file_unreadable","message":"The session file is missing.","details":{}}}"#, ""));
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.until("the archived fork", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
-    tree.click(10, 5);
+    let screen = tree.until("the archived fork", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
+    let fbl = screen.iter().position(|r| r.contains("ship·f-bl")).expect("the archived fork") as u16;
+    tree.click(10, fbl);
     tree.until_logged("file_unreadable: The session file is missing.");
     assert!(!tree.shows("file_unreadable"), "no note: {:?}", tree.screen());
 }
@@ -685,7 +758,7 @@ fn unarchive_in_the_menu_runs_without_a_popup_and_a_refusal_is_logged() {
     let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
     tree.until("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├─{STOPPED} old"))));
-    tree.right_click(10, 9); // the archived Plan `old`
+    tree.right_click(10, 3); // the archived Plan `old`
     let screen = tree.until("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
     assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename…, Copy id and Unarchive only: {screen:?}");
@@ -982,7 +1055,7 @@ fn n_opens_an_input_popup_for_the_plans_id_and_runs_plan_new_when_it_is_accepted
     dialogs.type_in("pay-4521");
     let mut tree = Tree::start(&fx, 80, 14);
     ready(&tree);
-    tree.down(2); // ship, sketch
+    tree.down(5); // rel, old, ship·f-bl, ship, sketch
     tree.keys(&["n"]);
     assert_eq!(
         dialogs.popups(),
@@ -1008,7 +1081,7 @@ fn n_and_x_run_nothing_when_their_popup_is_cancelled() {
     dialogs.cancel();
     let mut tree = Tree::start(&fx, 80, 14);
     ready(&tree);
-    tree.down(2); // sketch
+    tree.down(5); // sketch
     tree.keys(&["n"]);
     assert_eq!(dialogs.popups().len(), 1);
     tree.keys(&["x"]);
@@ -1033,7 +1106,7 @@ fn x_opens_a_confirm_popup_and_runs_session_close_when_it_is_confirmed() {
     dialogs.confirm();
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(2); // sketch
+    tree.down(5); // sketch
     tree.keys(&["x"]);
     assert_eq!(
         dialogs.popups(),
@@ -1053,7 +1126,7 @@ fn x_warns_in_its_popup_when_the_session_is_working() {
     let dialogs = drive::dialogs(&fx);
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(3); // f-idle
+    tree.down(6); // f-idle
     tree.keys(&["x"]);
     assert!(dialogs.popups()[0].contains("--text='ship fork is working. Close ship fork? pi stops;"), "{:?}", dialogs.popups());
 }
@@ -1067,7 +1140,7 @@ fn x_refuses_the_session_in_the_chat_slot_in_a_text_dialog() {
     let dialogs = drive::dialogs(&fx);
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(1); // ship, whose Lead is in the chat slot
+    tree.down(4); // ship, whose Lead is in the chat slot
     tree.keys(&["x"]);
     let popups = dialogs.popups();
     assert!(
@@ -1089,7 +1162,7 @@ fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_popup_was_open() {
     dialogs.confirm();
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(2); // sketch
+    tree.down(5); // sketch
     tree.keys(&["x"]);
     assert_eq!(drive::calls(&fx), [words(&["session", "close", "l-sketch"])]);
     tree.until_logged("failed: session close l-sketch: switch to another session first");
@@ -1111,7 +1184,7 @@ fn the_dialogs_helper_answers_the_popups_result_file_and_leaves_it_out_of_what_i
     dialogs.cancel();
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(2); // sketch
+    tree.down(5); // sketch
     tree.keys(&["x"]);
     assert!(drive::calls(&fx).is_empty(), "a cancel runs nothing");
     let raw = dialogs.raw();
@@ -1148,7 +1221,7 @@ fn a_failing_session_open_opens_a_text_dialog_and_draws_no_note() {
     let dialogs = drive::dialogs(&fx);
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.down(1);
+    tree.down(4); // l-ship
     tree.keys(&["Enter"]);
     assert_eq!(drive::calls(&fx), [words(&["session", "open", "l-ship"])]);
     let popups = dialogs.popups();
@@ -1187,7 +1260,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let mut tree = Tree::start(&fx, 46, 22);
     ready(&tree);
     tree.until("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├─{STOPPED} old"))));
-    tree.down(5); // ship, sketch, f-idle, f-blocked, rel
+    tree.down(1); // rel, then a second step reaches ship·f-bl
     tree.keys(&["Enter"]);
     assert_eq!(drive::calls(&fx), [words(&["session", "open", "l-rel"])]);
     tree.keys(&["x"]);
@@ -1218,9 +1291,9 @@ fn archive_on_a_fork_confirms_in_a_popup_first_and_runs_session_archive_when_con
     drive::cpd_says(&fx, r#"{"ok":true,"archived":[{"kind":"session","id":"f-idle"}],"closed":[]}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.confirm();
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(8, 4);
+    tree.right_click(8, 9);
     tree.until("the menu", |s| menu_open(s, "Open"));
     tree.keys(&["Down", "Down", "Down", "Down", "Down", "Enter"]); // Archive is the sixth item
     assert_eq!(dialogs.popups(), [ARCHIVE_FORK], "Archive confirms first (hs-d297)");
@@ -1237,9 +1310,10 @@ fn archive_runs_nothing_when_its_popup_is_cancelled() {
     drive::cpd_says(&fx, r#"{"ok":true}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.cancel();
-    let mut tree = Tree::start(&fx, 60, 14);
-    ready(&tree);
-    tree.right_click(8, 4);
+    let mut tree = Tree::start(&fx, 60, 22);
+    let screen = ready(&tree);
+    let fid = screen.iter().position(|r| r.contains("ship·f-id")).expect("the fork") as u16;
+    tree.right_click(8, fid);
     tree.until("the menu", |s| menu_open(s, "Open"));
     tree.keys(&["Down", "Down", "Down", "Down", "Down", "Enter"]);
     assert_eq!(dialogs.popups(), [ARCHIVE_FORK]);
@@ -1256,20 +1330,20 @@ fn archive_on_the_chat_slots_lead_opens_the_next_session_first_then_archives() {
     drive::cpd_says(&fx, r#"{"ok":true}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.confirm();
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(5, 1); // the Context `alpha`, whose Lead `l-ship` holds the chat slot: Archive is its fourth item
+    tree.right_click(5, 5); // the Context `alpha`, whose Lead `l-ship` holds the chat slot: Archive is its fourth item
     tree.until("the menu", |s| menu_open(s, "New Plan…"));
-    tree.click(7, 5);
+    tree.click(7, 9);
     assert_eq!(dialogs.popups(), ["cpd tui view dialog confirm --title='Archive' --text='Archive Title of alpha?' --yes-label='Archive'"]);
     assert_eq!(
         drive::calls(&fx),
-        [words(&["session", "open", "l-rel"]), words(&["context", "archive", "alpha"])],
-        "the first live Session after the Context, then the archive"
+        [words(&["session", "open", "l-old"]), words(&["context", "archive", "alpha"])],
+        "no live Session follows alpha, so the previous one opens, then the archive"
     );
-    tree.right_click(8, 2); // the Plan `ship`: its Lead is the chat slot's, so the Plan below it opens first
+    tree.right_click(8, 7); // the Plan `ship`: its Lead is the chat slot's, so the Plan below it opens first
     tree.until("the menu", |s| menu_open(s, "New session…"));
-    tree.click(10, 6);
+    tree.click(10, 11);
     assert_eq!(
         drive::calls(&fx)[2..],
         [words(&["session", "open", "l-sketch"]), words(&["plan", "archive", "--plan=ship"])]
@@ -1284,11 +1358,11 @@ fn a_refusal_of_a_step_is_a_text_dialog_and_stops_the_archive() {
     drive::cpd_fails(&fx, r#"{"ok":false,"error":{"code":"no_cockpit","message":"There is no cockpit.","details":{}}}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.confirm();
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(8, 2);
+    tree.right_click(8, 7);
     tree.until("the menu", |s| menu_open(s, "New session…"));
-    tree.click(10, 6);
+    tree.click(10, 11);
     // The dialog comes when the whole action is over (the view runs it in its loop), so the archive step is not still to come.
     let popups = dialogs.popups();
     assert_eq!(popups.len(), 2, "{popups:?}");
@@ -1311,11 +1385,11 @@ fn archive_on_the_only_live_lead_in_the_chat_slot_parks_it_first() {
     drive::cpd_says(&fx, r#"{"ok":true}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.confirm();
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(8, 2); // the Plan `ship`
+    tree.right_click(8, 7); // the Plan `ship`
     tree.until("the menu", |s| menu_open(s, "New session…"));
-    tree.click(10, 6);
+    tree.click(10, 11);
     assert_eq!(drive::calls(&fx), [words(&["session", "park"]), words(&["plan", "archive", "--plan=ship"])]);
 }
 
@@ -1329,9 +1403,9 @@ fn a_click_on_an_item_picks_it_and_a_cancelled_popup_runs_nothing() {
     dialogs.cancel();
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.right_click(5, 1); // the Context: New Plan…, Rename…, Archive at rows 1, 2, 3 of the box
+    tree.right_click(5, 5); // the Context: New Plan…, Rename…, Archive below its title row
     tree.until("the menu", |s| menu_open(s, "New Plan…"));
-    tree.click(7, 3); // Rename…
+    tree.click(7, 7); // Rename…
     assert_eq!(
         dialogs.popups(),
         ["cpd tui view dialog input --title='Rename' --prompt='Title:' --initial='Title of alpha' --validate='title'"]
@@ -1352,11 +1426,11 @@ fn open_and_close_in_the_menu_run_session_open_and_after_a_confirmed_popup_sessi
     // 15 rows: the note `running: …` takes a row of the tree's after the first action, and the fork stays in view
     let mut tree = Tree::start(&fx, 60, 15);
     ready(&tree);
-    tree.right_click(8, 5); // the fork `ship review`
+    tree.right_click(8, 6); // the fork `ship review`
     tree.until("the menu", |s| menu_open(s, "Open"));
     tree.keys(&["Enter"]);
     assert_eq!(drive::calls(&fx), [words(&["session", "open", "f-blocked"])]);
-    tree.right_click(8, 5);
+    tree.right_click(8, 6);
     tree.until("the menu", |s| menu_open(s, "Open"));
     tree.keys(&["Down", "Down", "Down", "Down", "Enter"]); // Close
     assert_eq!(
@@ -1378,7 +1452,7 @@ fn rename_on_an_archived_plan_runs_plan_rename() {
     let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
     tree.until("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├─{STOPPED} old"))));
-    tree.right_click(10, 9);
+    tree.right_click(10, 3);
     tree.until("the menu", |s| menu_open(s, "Rename…"));
     tree.keys(&["Enter"]);
     assert_eq!(
@@ -1396,9 +1470,9 @@ fn rename_on_a_plan_row_starts_from_its_title_and_runs_plan_rename() {
     drive::cpd_says(&fx, r#"{"ok":true,"plan":"ship","title":"Plan ship!"}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.type_in("Plan ship!");
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(8, 2); // the Plan `ship`
+    tree.right_click(8, 7); // the Plan `ship`
     tree.until("the menu", |s| menu_open(s, "New session…"));
     tree.keys(&["Down", "Enter"]); // Rename…
     assert_eq!(
@@ -1441,9 +1515,9 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     drive::cpd_says(&fx, r#"{"ok":true,"lead":{"session":"l-new"},"session":{"id":"l-new"}}"#);
     let dialogs = drive::dialogs(&fx);
     dialogs.type_in("Ship");
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    tree.right_click(5, 1); // the Context `alpha`
+    tree.right_click(5, 5); // the Context `alpha`
     tree.until("the menu", |s| menu_open(s, "New Plan…"));
     tree.keys(&["Enter"]);
     assert_eq!(
@@ -1456,7 +1530,7 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
         [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship", "--by-user"]), words(&["session", "open", "l-new"])]
     );
     dialogs.type_in("ship fork (fork)");
-    tree.right_click(8, 4); // the fork `ship fork`
+    tree.right_click(8, 9); // the fork `ship fork`
     tree.until("the menu", |s| menu_open(s, "Open"));
     tree.keys(&["Down", "Down", "Enter"]); // Fork…
     assert_eq!(
@@ -1467,6 +1541,43 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     assert_eq!(calls.len(), 4, "{calls:?}");
     assert_eq!(calls[2], words(&["session", "fork", "f-idle", "--name=ship fork (fork)"]));
     assert_eq!(calls[3], words(&["session", "open", "l-new"]), "the new fork is opened");
+}
+
+/// hs-d688: a live Context with no row ends with the clickable ` ╰󰬪 new`; a click on it opens the same New Plan input
+/// popup the context menu's New Plan… does, and the answer runs `plan new` for that Context and opens the new Lead.
+/// Nothing runs before the popup is answered. `gamma`'s row is found by its text, not a fixed index.
+#[test]
+fn a_click_on_an_empty_contexts_new_row_opens_the_new_plan_popup_and_runs_plan_new() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    drive::cpd_says(&fx, r#"{"ok":true,"plan":{"id":"fresh"},"lead":{"session":"l-new"}}"#);
+    let dialogs = drive::dialogs(&fx);
+    dialogs.cancel();
+    let mut tree = Tree::start(&fx, 60, 22);
+    let screen = ready(&tree);
+    // gamma, the live Context with no row, ends with ` ╰󰬪 new`
+    let found = screen.iter().position(|r| r.contains("\u{F0B2A} new"));
+    assert!(found.is_some(), "gamma's new row is on the screen:\n{}", screen.join("\n"));
+    let row = found.expect("just asserted") as u16;
+    let column = screen[row as usize].find("new").expect("the word `new` on the row") as u16;
+    tree.click(column, row);
+    // the click opens the popup and runs nothing until it is answered (the fake cancels it)
+    assert_eq!(
+        dialogs.popups(),
+        ["cpd tui view dialog input --title='New Plan' --prompt='Title:' --initial='' --validate='title'"],
+        "the context menu's New Plan… popup"
+    );
+    assert!(drive::calls(&fx).is_empty(), "nothing runs before the popup is answered: {:?}", drive::calls(&fx));
+    // answering it runs `plan new` for `gamma` and opens the new Lead
+    dialogs.type_in("Fresh");
+    tree.click(column, row);
+    tree.until_that("the new Plan to run", |_| drive::calls(&fx).len() >= 2);
+    assert_eq!(
+        drive::calls(&fx),
+        [words(&["plan", "new", "fresh", "--context=gamma", "--title=Fresh", "--by-user"]), words(&["session", "open", "l-new"])],
+        "the new Plan's id derived from the title, in `gamma`"
+    );
 }
 
 #[test]
@@ -1485,7 +1596,7 @@ fn a_refused_open_of_the_new_lead_shows_its_message_and_the_plan_stays_created()
     dialogs.type_in("Pay");
     let mut tree = Tree::start(&fx, 60, 14);
     ready(&tree);
-    tree.right_click(5, 1); // the Context `alpha`
+    tree.right_click(5, 5); // the Context `alpha`
     tree.until("the menu", |s| menu_open(s, "New Plan…"));
     tree.keys(&["Enter"]);
     assert_eq!(dialogs.popups().len(), 2, "the input and the refusal: {:?}", dialogs.popups());
@@ -1504,9 +1615,9 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
     drive::cpd_says(&fx, r#"{"ok":true}"#);
     // a fake tmux server with a client: it has the buffer `set-buffer` fills
     let _dialogs = drive::dialogs(&fx);
-    let mut tree = Tree::start(&fx, 60, 14);
+    let mut tree = Tree::start(&fx, 60, 22);
     ready(&tree);
-    for (column, row, id) in [(5, 1, "alpha"), (8, 2, "ship"), (8, 4, "ship·f-id")] {
+    for (column, row, id) in [(5, 5, "alpha"), (8, 7, "ship"), (8, 9, "ship·f-id")] {
         tree.right_click(column, row);
         tree.until("the menu", |s| menu_open(s, if id == "alpha" { "New Plan…" } else if id == "ship" { "New session…" } else { "Open" }));
         let downs = if id == "ship·f-id" { 3 } else { 2 };
@@ -1706,6 +1817,3 @@ fn attempt_row(job: &str, number: u32, ended: Option<&str>) -> String {
 }
 
 // ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
-
-
-

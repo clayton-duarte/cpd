@@ -1,6 +1,7 @@
 //! `pr push` (commands.md §9.9, contract §7.6): `cpd pr push` in-process on `run_with` over the fake ports (the git
 //! route with a bare `origin`, a `sh` handler for the Gate's hooks) and a Plan written straight into the database. It
-//! takes no lock (hs-d243): its Gate runs in a gate worktree of its own, and a Job merges into the PR while it runs.
+//! takes no lock (hs-d243): its Gate and a Job's merge into the PR run at once; the Gate runs `gate.pr` (the repo's
+//! `pre-merge`) in the Lead worktree at G (hs-d679).
 
 use crate::common;
 
@@ -219,13 +220,18 @@ fn head_and_files(ran: &Ran) -> String {
     format!("{}\n{}\n", ran.head, files.join("\n"))
 }
 
+/// The Gate runs in the Lead worktree, which `pr push` brought to G (rule S, hs-d679): its `HEAD` is the Lead Branch, at G.
 fn ran(universe: &Mutex<Universe>, call: &Call) -> Ran {
     let cwd = call.cwd.clone().expect("a hook runs in a directory");
-    let head = match universe.lock().unwrap().head(&cwd) {
-        Head::Detached(oid) => oid.to_string(),
-        Head::Branch(branch) => panic!("the Gate's hook runs on the branch {branch}: it is detached at G"),
+    let universe = universe.lock().unwrap();
+    let head = match universe.head(&cwd) {
+        Head::Detached(oid) => oid,
+        Head::Branch(branch) => {
+            let repo = universe.repo_of(&cwd).expect("a hook runs in a worktree");
+            universe.resolve_ref(repo, &format!("refs/heads/{branch}")).unwrap_or_else(|| panic!("the Gate's branch {branch} has no commit"))
+        }
     };
-    Ran { cwd, head }
+    Ran { cwd, head: head.to_string() }
 }
 
 /// The Gate's `sh`, answering by `script`.
@@ -253,9 +259,11 @@ const PAUSED_GATE: &str = "paused-gate";
 impl Handler for Paused {
     fn handle(&self, call: &Call) -> Reply {
         assert_eq!(call.args[1], PAUSED_GATE, "the only hook of the test");
-        let first = head_and_files(&ran(&self.universe, call));
+        // A failed read still reaches both barriers, so the test's thread is never left waiting for a Gate that died.
+        let first = std::panic::catch_unwind(|| head_and_files(&ran(&self.universe, call)));
         self.started.wait();
         self.go.wait();
+        let first = first.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
         Reply::ok(&format!("{first}{}", head_and_files(&ran(&self.universe, call))))
     }
 }

@@ -34,8 +34,8 @@ export function drawBalloon(rows: string[], side: BalloonSide, width: number, at
 		const bottom = time !== undefined && box >= 9
 			? line(`│╭─${time}${"─".repeat(box - 9)}╯`)
 			: line(`│╭${"─".repeat(box - 3)}╯`);
-		return [top, ...body, bottom, line("╰╯")].map((row) => " " + row);
+		return [top, ...body, bottom, line("╰╯")];
 	}
 	const margin = " ".repeat(width - box - 1);
-	return [top, ...body, line(`╰${"─".repeat(box - 3)}╮│`), " ".repeat(box - 2) + line("╰╯")].map((row) => margin + row + " ");
+	return [top, ...body, line(`╰${"─".repeat(box - 3)}╮│`), " ".repeat(box - 2) + line("╰╯")].map((row) => margin + row);
 }

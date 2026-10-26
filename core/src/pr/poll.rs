@@ -474,26 +474,26 @@ fn cas_lost(id: &PlanId, key: &PrKey) -> CpdError {
 }
 
 /// A merged PR with what its clean-up removes.
-struct Merged {
-    plan: PlanId,
-    pr: PrKey,
-    repo: String,
-    lead_branch: String,
-    lead_worktree: Option<String>,
+pub(super) struct Merged {
+    pub(super) plan: PlanId,
+    pub(super) pr: PrKey,
+    pub(super) repo: String,
+    pub(super) lead_branch: String,
+    pub(super) lead_worktree: Option<String>,
     /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
-    pull_request: Option<(String, i64)>,
-    attempts: Vec<Attempt>,
+    pub(super) pull_request: Option<(String, i64)>,
+    pub(super) attempts: Vec<Attempt>,
     /// Whether this poll reports its failures: it merged in this poll, or it is cancelled and no `cleanup_failed`
     /// Event of it exists yet (the poll that first sees it).
-    fresh: bool,
+    pub(super) fresh: bool,
 }
 
 /// An Attempt of one of the PR's Jobs.
-struct Attempt {
-    id: AttemptId,
-    branch: String,
-    worktree: String,
-    ended: bool,
+pub(super) struct Attempt {
+    pub(super) id: AttemptId,
+    pub(super) branch: String,
+    pub(super) worktree: String,
+    pub(super) ended: bool,
 }
 
 impl Merged {
@@ -625,10 +625,15 @@ fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
 /// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree, first
 /// brought up to date by rule S. Each removal runs in the PR's repo, so the order does not
 /// matter; a failure does not stop the others. What it did not remove.
-fn clean(merged: &Merged) -> Vec<Failure> {
+pub(super) fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
     for attempt in &merged.attempts {
+        // A linear Attempt runs in the workflow worktree on the Lead Branch: `remove_merged_lead` below handles it
+        // (with the dirty/unpushed keep), never `discard_worktree` (hs-d680).
+        if git::worktree::is_linear(&attempt.branch, &merged.lead_branch) {
+            continue;
+        }
         if Path::new(&attempt.worktree).exists()
             && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
         {

@@ -1,7 +1,7 @@
 /**
- * The rail template (docs/contract.md 6.1.1, 6.9): in a pane W wide a rail fold's body row is the margin (col 0),
- * the rail (col 1), a blank (col 2), content in cols 3..W-4 (W-6 cells, a box's content width), three blank columns.
- * So no row is wider than W-3 and text wraps at W-6 cells. The Thinking fold has no blank rail row under its head.
+ * The rail template (docs/contract.md 6.1.1, 6.9): in a pane W wide a rail fold's body row is the rail (col 0), a
+ * blank (col 1), content in cols 2..W-3 (W-4 cells, a box's content width), two blank columns. So no row is wider than
+ * W-2 and text wraps at W-4 cells. The Thinking fold has no blank rail row under its head.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -27,15 +27,15 @@ const WIDTHS = [40, 80];
 // No spaces: a row is filled to the very cell where the component wraps or cuts.
 const long = "abcdefghij".repeat(30);
 
-/** Every body row (a `│` rail row with text) is ` │ ` + text, and its last cell is at column W-4 at most. */
-function checkBody(rows: string[], width: number, where: string): void {
+/** Every body row starts with `prefix` + text, and its last cell is at column W-3 at most. */
+function checkBody(rows: string[], width: number, where: string, prefix = "│ "): void {
 	const body = rows.map(plain).filter((r) => /^ ?│/u.test(r) && r.slice(2).trim() !== "");
 	assert.ok(body.length >= 2, `body rows in ${where}: ${JSON.stringify(rows.map(plain))}`);
 	for (const r of body) {
-		assert.ok(r.startsWith(" │ "), `margin, rail, blank: ${JSON.stringify(r)} in ${where}`);
-		assert.ok(r.trimEnd().length <= width - 3, `ends at column W-4 (${width}): ${JSON.stringify(r)} (${r.trimEnd().length}) in ${where}`);
+		assert.ok(r.startsWith(prefix), `rail, blank: ${JSON.stringify(r)} in ${where}`);
+		assert.ok(r.trimEnd().length <= width - 3, `ends at column W-3 (${width}): ${JSON.stringify(r)} (${r.trimEnd().length}) in ${where}`);
 	}
-	assert.equal(Math.max(...body.map((r) => r.trimEnd().length)), width - 3, `text fills up to column W-4 (${width}) in ${where}: ${JSON.stringify(body)}`);
+	assert.equal(Math.max(...body.map((r) => r.trimEnd().length)), width - 3, `text fills up to column W-3 (${width}) in ${where}: ${JSON.stringify(body)}`);
 }
 
 test("a cpd message fold wraps its body at the content width of a box", () => {
@@ -65,7 +65,7 @@ test("a tool row fold keeps three blank columns after its text", async () => {
 			row.updateResult({ ...text(`${long}\n${long}`), isError: false } as never, false);
 			row.setExpanded(true);
 			const rows = row.render(width).filter((l) => plain(l).trim() !== "");
-			checkBody(rows, width, `bash at ${width}`);
+			checkBody(rows, width, `bash at ${width}`, " │ ");
 		} finally {
 			shutdown(harness);
 		}
@@ -110,6 +110,6 @@ test("the Thinking fold has no blank rail row between its head and its first bod
 test("the Thinking fold wraps its body at the content width of a box", () => {
 	for (const width of WIDTHS) {
 		const rows = expandedThinking(width).filter((l) => plain(l).trim() !== "");
-		checkBody(rows, width, `Thinking at ${width}`);
+		checkBody(rows, width, `Thinking at ${width}`, " │ ");
 	}
 });

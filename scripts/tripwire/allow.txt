@@ -12,8 +12,6 @@ cpd::store store_window::  # m-engine: store commands that may reach a real tmux
 cpd::store store::  # m-engine: store commands that may reach a real tmux
 cpd::session board::  # m-session: session tests on a real tmux server
 cpd::session host::  # m-session: session tests on a real tmux server
-cpd::session pill_lines::  # m-session: session tests on a real tmux server
-cpd::session plannotator_env::  # m-session: session tests on a real tmux server
 cpd::session session_asleep::  # m-session: session tests on a real tmux server
 cpd::session session_first_message::  # m-session: session tests on a real tmux server
 cpd::session session_send::  # m-session: session tests on a real tmux server
@@ -32,15 +30,11 @@ cpd::flow review_plannotator::  # m-flow: flow commands that may reach a real tm
 cpd::flow review::  # m-flow: flow commands that may reach a real tmux
 cpd::flow spec::  # m-flow: flow commands that may reach a real tmux
 cpd::tooling fake_tmux::  # m-tooling: tooling test that may reach a real tmux
-cpd::tooling gate_run::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling harness::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling install_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::tooling tripwire_script::  # m-tooling: tooling test that may reach a real tmux
 cpd::pr git_guard::  # m-pr-b: pr commands that may reach a real tmux
 cpd::pr git::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr merge::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr pr_start::  # m-pr-b: pr commands that may reach a real tmux
-cpd::pr pr::  # m-pr-a: pr commands that may reach a real tmux
 cpd::tui bare::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui inbox_rules::  # m-tui-t: cockpit view driven on a real tmux server
 cpd::tui tui::  # m-tui-t: cockpit view driven on a real tmux server

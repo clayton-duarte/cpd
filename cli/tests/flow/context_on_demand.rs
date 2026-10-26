@@ -1,7 +1,7 @@
 //! On-demand Context retrieval: the first messages (header + brief + pointer), `context show --digest` gone, the
 //! `context_recent_days` config key gone, and `context show --topic` kept (contract §4.6 "Consumers"; commands.md
 //! §3.3, §4.1; design docs/research/context-retrieval-design.md "Digest removal", "First messages"; hs-d655). The
-//! tests that start no pane run in this process (`Fx`), the others as the built binary. Curations are written through
+//! tests run in this process (`Fx`); the first-message tests on the fake tmux (`Fx::with_ports`). Curations are written through
 //! `curation::propose`, as the distiller will.
 
 use crate::common;
@@ -9,20 +9,19 @@ use crate::common;
 use std::fs;
 
 use common::fx::Fx;
-use common::{SLEEP_SECONDS, TestEnv, WATCH_OK, refused};
+use common::{TestEnv, refused};
 use cpd_core::context::curation::{Curation, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 
 pub(crate) const CTX: &str = "ctx";
 
-/// Machine `m1`, Context `ctx` and a fake `cpd` for the panes (`plan new`).
-fn fx() -> TestEnv {
-    let env = TestEnv::new();
-    env.write_tmux_config("");
-    env.fake_cpd_panes(WATCH_OK);
-    env.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
-    env
+/// Machine `m1` and Context `ctx`, on the fake tmux and the fake ports: no pane program runs.
+fn fx() -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
+    fx
 }
 
 /// Machine `m1` and Context `ctx`, the command tree in this process: for the tests that start no pane.
@@ -47,31 +46,10 @@ fn lead_message(env: &TestEnv, plan: &str) -> String {
     fs::read_to_string(home.lead_message(&PlanId::parse(plan).unwrap())).unwrap()
 }
 
-fn new_plan_with_brief(env: &TestEnv, id: &str, brief: &str) {
-    let file = env.root().join(format!("{id}-brief.md"));
+fn new_plan_with_brief(fx: &Fx, id: &str, brief: &str) {
+    let file = fx.env.root().join(format!("{id}-brief.md"));
     fs::write(&file, brief).unwrap();
-    env.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
-}
-
-/// The cockpit `context manager` needs: session `cpd`, window `main` with a tree pane and the placeholder in the
-/// chat slot. Then a fake `pi` that creates its session file and sleeps.
-fn manager_cockpit(env: &TestEnv) {
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
-    env.fake_cpd_views();
-    env.fake_pi(&format!(
-        "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
-         if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
-         printf '{{\"type\":\"session\"}}\\n' > \"$HOME/.pi/agent/sessions/g/2026_$id.jsonl\"; fi\n\
-         exec sleep {SLEEP_SECONDS}"
-    ));
+    fx.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
 }
 
 /// The pointer lines the design gives (docs/research/context-retrieval-design.md "First messages").
@@ -82,12 +60,12 @@ const MANAGER_POINTER: &str =
 /// hs-d655: a Lead's first message is its header, its brief and the pointer line; no digest, no raw records.
 #[test]
 fn a_lead_first_message_is_header_brief_and_pointer() {
-    let env = fx();
-    env.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
-    curate(&env, &[("m1-n1", "ledger", "curated short form")]);
-    new_plan_with_brief(&env, "pay", "Retry the failed payouts.\n");
+    let fx = fx();
+    fx.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
+    curate(&fx.env, &[("m1-n1", "ledger", "curated short form")]);
+    new_plan_with_brief(&fx, "pay", "Retry the failed payouts.\n");
 
-    let message = lead_message(&env, "pay");
+    let message = lead_message(&fx.env, "pay");
     assert_eq!(
         message,
         format!(
@@ -102,10 +80,10 @@ fn a_lead_first_message_is_header_brief_and_pointer() {
 /// hs-d655: without a brief, a Lead's first message is its header and the pointer line alone.
 #[test]
 fn a_lead_without_a_brief_is_header_and_pointer() {
-    let env = fx();
-    env.cpd(&["plan", "new", "pay", "--context", CTX, "--title", "Pay"]).ok();
+    let fx = fx();
+    fx.cpd(&["plan", "new", "pay", "--context", CTX, "--title", "Pay"]).ok();
 
-    let message = lead_message(&env, "pay");
+    let message = lead_message(&fx.env, "pay");
     assert_eq!(
         message,
         format!("You are the Lead of Plan pay \"Pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\n{}\n", LEAD_POINTER)
@@ -115,12 +93,12 @@ fn a_lead_without_a_brief_is_header_and_pointer() {
 /// hs-d655: a Manager's first message is its header and the pointer line, named with the Context; it has no brief.
 #[test]
 fn a_manager_first_message_is_header_and_pointer() {
-    let env = fx();
-    env.cpd(&["context", "note", "Mind the ledger.", "--context", CTX]).ok();
-    manager_cockpit(&env);
-    env.cpd(&["context", "manager", "--context", CTX]).ok();
+    let fx = fx();
+    fx.cpd(&["context", "note", "Mind the ledger.", "--context", CTX]).ok();
+    fx.cockpit();
+    fx.cpd(&["context", "manager", "--context", CTX]).ok();
 
-    let path = env.cpd_home().join("run/ctx/manager-message.md");
+    let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     let message = fs::read_to_string(&path).unwrap();
     assert_eq!(
         message,
