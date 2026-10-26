@@ -170,6 +170,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `install_state_invalid` | 1 | engine E6 (contract §3.7) or a command read the install state file `$CPD_HOME/run/cpd-install.json` (§1.4) and found it invalid (not JSON, unknown fields, missing or type-mismatched fields); `details: {path, reason}` |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
+| `session_restart_loop` | 1 | an `error` Event code of engine E2 (contract §3.6, §3.7; `details`: `session`, `name`, `seconds`), appended when E2 detects a Session's pane gone but E2 itself restarted it less than 10 minutes ago (hs-d725, hs-d727), to guard against restart loops; never a command's refusal |
 
 ### 1.4 Files written by commands
 
@@ -2517,21 +2518,22 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager`; a Worker is refused with "Session <id> is a worker, not a Lead or a Manager." | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+| only when the target is `stopped` with no live pane: the cockpit's tmux session exists; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 | only if the sender is an agent ($CPD_SESSION set; User exempt, hs-d514): the target is not a Lead of a Plan in phase `done` or `archived` (hs-d507); `details: {plan, phase}` | `plan_inactive` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to a different Session in the last 60 minutes (no broadcasts, hs-d507); `details: {session, at}` | `broadcast` | 3 |
 | only if the sender is an agent: the sender has not sent the exact same text (trimmed) to this Session in the last 60 minutes (no duplicates, hs-d507); `details: {at}` | `duplicate` | 3 |
 
-A `stopped` Lead or Manager is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
+A `stopped` Lead or Manager is accepted: this call starts it (hs-d725) as a parked `cpd session run <id>` window (hs-d726, A1), and it gets the message when its adapter starts; the chat slot never moves. A live pane of the Session means it is starting, and nothing is started.
 
 Effects:
 - **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
-- **tmux:** none. No pane is started or typed into.
+- **tmux:** when the target is `stopped` with no live pane, the mechanism of §10.4 (starting a parked window with a pane, §6.4) applies: first `kill-pane` on a dead pane of the Session, if one is still there; then `new-window -d -t =cpd: -n park-<label> | ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <id>`, the pane title and `@cpd_session` set, `tmux_pane` recorded and **Event** `session-moved` `{place: "parked"}` appended, the chat slot never moving. With a live pane, nothing is started. Otherwise no tmux.
 
 ```json
-{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened"}
+{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened", "started": true, "pane": "%47"}
 ```
 
-`from` is null when neither variable is set. `unblocks` echoes the reason. Idempotent: no; each call is one message.
+`from` is null when neither variable is set. `unblocks` echoes the reason. `started` is true when this call started a pane. `pane` is the started pane, or null when none was started. Idempotent: no; each call is one message.
 
 ### 10.14 `session retitle` (internal)
 
@@ -4222,6 +4224,7 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 29 | §6.3, §6.4 | tmux commands: `respawn-pane -k` also puts the history view in the slot; `set -p` also sets `@cpd_view history` and `@cpd_history`; `session open` kills a history pane like the placeholder; `session history` parks a Lead in the slot first; `session run` archives on the User's quit | §10.4, §10.8, §10.12 |
 | 30 | §2.2 "Archived", §6.2 (the views) | the tree: archived rows drawn at their live depth, normal guides, `Meaning::Nothing` colour, no blank row; a click on `…` toggles, a click on a guide does nothing; Archive (confirmed in a popup since hs-d297, which supersedes hs-d90's no `y/N`); Archive of the chat slot's Lead opens another Session or parks first; archived rows offer Rename… and Unarchive; a click on an archived Session runs `session history` | §13.2 |
 | 31 | §2.2 "Archived", §6.7 | auto-archive when pi exits with status 0 and the wrapper did not cause it: park if in the chat slot, then `session archive` or (a Plan's own Lead) `plan archive`; a refusal archives nothing and keeps the resume prompt | §10.8 |
+| 32 | §10.13, §10.4, §3.6, §3.7 | `session send` to a `stopped` Lead or Manager starts it (A1) as a parked window with `started` and `pane` in the JSON (A3); contract §3.6 describes a pane that is gone, contract §3.7's E2 restarts a Session when its pane is gone (A4, hs-d726, hs-d727, hs-d725), with a 10-minute guard against restart loops (A4, session_restart_loop) | §10.13, §10.4 |
 
 Row 15's StatusBar rule now covers every missing pane of the layout, not only the StatusBar: [§13.1](#131-tui) (tui-W5).
 
