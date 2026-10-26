@@ -1,7 +1,10 @@
 //! E3, scheduling (contract §3.7), the cases that end BEFORE `driver::start` starts anything: a Job in its back-off, on a Tier
 //! outside the Worker range, tampered. One `schedule::run` per tick on a prepared store; no Attempt is made, no driver, no tmux.
 //! (`driver::start` refuses the last two in its read-only `decide`, before it takes the driver lock; the first never reaches it.)
+//! The allocation test crosses that line on the fake ports: E3 writes the Attempt rows through a `FakeSpawn`, so no process
+//! starts, and reads back the branch and worktree it recorded.
 
+use cpd_core::ports::Fakes;
 use serde_json::json;
 
 use super::schedule;
@@ -117,4 +120,74 @@ fn e3_does_not_start_a_job_in_its_backoff() {
     assert_eq!(attempts(&mut fx), 9);
     assert_eq!(fx.job_status("api"), "queued");
     assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
+}
+
+/// One tick of E3 whose starter runs on the fake spawn: no process starts.
+fn tick_on_fake_ports(fx: &mut Fx) {
+    let fakes = Fakes::new();
+    fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
+    fx.engine.ports = fakes.ports.clone();
+    tick(fx);
+}
+
+/// The `(branch, worktree)` the starter recorded for Attempt `id` of Plan `pay`.
+fn allocated(fx: &mut Fx, id: &str) -> (String, String) {
+    fx.engine
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT branch, worktree FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?))
+        .unwrap()
+}
+
+/// The `(lead_branch, lead_worktree, repo)` of the Plan's PR `repo`.
+fn lead(fx: &mut Fx) -> (String, String, String) {
+    fx.engine
+        .store
+        .read(|conn| Ok(conn.query_row("SELECT lead_branch, lead_worktree, repo FROM prs WHERE plan = 'pay' AND key = 'repo'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
+        .unwrap()
+}
+
+/// An `Fx` with Plan `pay` and its PR `repo` (Lead Branch `cpd/pay/repo`, workflow worktree `/repos/r.lead`): the forms the
+/// Attempt branch CHECK allows. `add_job` fills the Jobs.
+fn new_plan() -> Fx {
+    let mut fx = Fx::new("");
+    fx.fixture(
+        "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+           VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'repo', '/repos/r', 'main', 'dispatch', 'cpd/pay/repo', '/repos/r.lead', 'Charge the card', 'config', cpd_txn(), 't', 't');",
+    );
+    fx
+}
+
+#[test]
+fn e3_marks_the_first_live_sibling_linear_and_the_rest_parallel() {
+    // Two Ready sibling Jobs of one PR, no live Attempt: the first in READY order is linear, the second parallel.
+    let mut fx = new_plan();
+    fx.add_job("api", &[], "");
+    fx.add_job("web", &[], "");
+    let (lead_branch, lead_worktree, repo) = lead(&mut fx);
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch.clone(), lead_worktree.clone()), "the first live sibling is the linear Attempt");
+    let (branch, worktree) = allocated(&mut fx, "web-a1");
+    let plan = cpd_core::ids::PlanId::parse("pay").unwrap();
+    let attempt = cpd_core::ids::AttemptId::parse("web-a1").unwrap();
+    assert_eq!(branch, cpd_core::git::attempt_branch(&plan, &attempt), "the second is a parallel sibling");
+    assert_eq!(worktree, cpd_core::git::attempt_worktree_path(std::path::Path::new(&repo), &plan, &attempt).unwrap().display().to_string());
+
+    // One live Attempt of the PR already running: a newly started Job of the PR is parallel.
+    let mut fx = new_plan();
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("api", &[], "");
+    tick_on_fake_ports(&mut fx);
+    let attempt = cpd_core::ids::AttemptId::parse("api-a1").unwrap();
+    assert_eq!(allocated(&mut fx, "api-a1").0, cpd_core::git::attempt_branch(&plan, &attempt), "a sibling of a live Attempt is parallel");
+
+    // A Job with no sibling live is linear.
+    let mut fx = new_plan();
+    fx.add_job("api", &[], "");
+    let (lead_branch, lead_worktree, _) = lead(&mut fx);
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "a Job started alone is linear");
 }

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Component } from "@earendil-works/pi-tui";
-import { Fixture, planShow, waitFor } from "./fake.ts";
+import { Fixture, planShow } from "./fake.ts";
 import { paddedRoot } from "../lib/pad.ts";
 
 const KEY = "cpd-pad";
@@ -42,7 +42,7 @@ test("the adapter installs the chat pad widget instead of the cpd-pad status and
 
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.quiet(); // the session_start handler has run
 
   assert.deepEqual(widgets.map((w) => w.key), [KEY], "once, at session_start");
   assert.deepEqual(widgets[0]?.options, { placement: "belowEditor" }, "below the editor, the chat slot's pad");

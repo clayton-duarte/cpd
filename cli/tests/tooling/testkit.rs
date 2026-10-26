@@ -442,8 +442,8 @@ fn run_launch_removes_the_variables_the_launch_removes_for_the_run() {
     };
 
     // The test process has an identity of its own while the launch runs: the launch removes it for the child.
-    // SAFETY: under the `Fx`'s lock, which every `Fx` takes; `Fx`'s drop removes a variable it did not find.
-    unsafe { std::env::set_var("CPD_SESSION", "outer") };
+    // `Fx::export` sets it under the `Fx`'s lock; `Fx`'s drop removes a variable it did not find.
+    fx.export("CPD_SESSION", "outer");
     fx.run_launch(&launch).ok();
 
     assert_eq!(last_txn(&fx).1, None, "the launched cpd saw no CPD_SESSION");

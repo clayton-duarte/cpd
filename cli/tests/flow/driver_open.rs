@@ -77,8 +77,8 @@ pub(super) fn live(config_extra: &str) -> Live {
     fx.local_origin(&repo, &origin);
     // The Lead worktree as `pr start` makes it, and both branches pushed (R35).
     let lead = repo.parent().unwrap().join("pay.pay");
-    fx.git(&repo, &["worktree", "add", "-q", "-b", "cpd/pay", lead.to_str().unwrap(), "main"]);
-    fx.git(&repo, &["push", "-q", "origin", "main", "cpd/pay"]);
+    fx.git(&repo, &["worktree", "add", "-q", "-b", "cpd/pay/repo", lead.to_str().unwrap(), "main"]);
+    fx.git(&repo, &["push", "-q", "origin", "main", "cpd/pay/repo"]);
     seed_home(&fx.env, config_extra);
     // The work session as the engine leaves it: its `watch` window, and remain-on-exit (§6.1).
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "watch", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
@@ -104,29 +104,33 @@ impl Live {
 
     /// One value of the store, read through a store opened and closed here: `env.query` keeps a connection, and with it a
     /// descriptor, open, which could be the fd 3 a driver is handed.
-    pub(super) fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+    pub(super) fn value<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
         store(&self.fx.env).read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
     pub(super) fn job_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.value(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
     fn phase(&self) -> String {
-        self.query("SELECT phase FROM plans WHERE id = 'pay'")
+        self.value("SELECT phase FROM plans WHERE id = 'pay'")
     }
 
+    /// The worktree Attempt `id` runs in, as the starter recorded it: the PR's Lead worktree for a linear Attempt (the only
+    /// live Attempt of its PR, hs-d680), its own `pay.pay--<id>` for a parallel one. Before the Attempt exists, the parallel path.
     pub(super) fn worktree(&self, id: &str) -> PathBuf {
-        self.repo.parent().unwrap().join(format!("pay.pay--{id}"))
+        let stored: Option<String> =
+            store(&self.fx.env).read(|c| Ok(c.query_row("SELECT worktree FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| r.get(0)).ok())).unwrap();
+        stored.map_or_else(|| self.repo.parent().unwrap().join(format!("pay.pay--{id}")), PathBuf::from)
     }
 
     /// [`Live::worktree`] as a hook sees it as its cwd (the hook runner canonicalizes it): the Attempt's worktree is gone once it ends.
     fn canonical_worktree(&self, id: &str) -> PathBuf {
-        self.repo.canonicalize().unwrap().parent().unwrap().join(format!("pay.pay--{id}"))
+        self.worktree(id).canonicalize().unwrap_or_else(|_| self.repo.canonicalize().unwrap().parent().unwrap().join(format!("pay.pay--{id}")))
     }
 
     pub(super) fn lead_sha(&self) -> String {
-        self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
+        self.fx.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay/repo"])
     }
 
     fn remote(&self, branch: &str) -> String {
@@ -243,9 +247,33 @@ impl Live {
 
     /// Dispatches Job `key` and runs its driver on this thread: `hook(self, id, n)` is called after the driver's `n`th nap (from 1),
     /// where the Worker's pi acts. Returns the id of the Attempt and what the driver printed.
-    pub(super) fn drive(&self, key: &str, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+    pub(super) fn drive(&self, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+        self.drive_as(key, false, hook)
+    }
+
+    /// [`Live::drive`] for an Attempt that is PARALLEL (hs-d683: its PR has a live sibling): `job dispatch` always asks for the linear
+    /// one, so the Attempt it records, still `starting`, is given its own `cpd/<plan>--<attempt>` branch and worktree before its
+    /// driver runs, as the starter records a parallel one. The driver then creates the worktree and runs `pre-start` (A2), rebases
+    /// and fast-forwards with the compare-and-swap (§7.4) and removes the worktree at its end (A9).
+    pub(super) fn drive_parallel(&self, key: &str, hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
+        self.drive_as(key, true, hook)
+    }
+
+    /// Gives the `starting` Attempt `id` the branch and worktree the starter records for a parallel one.
+    pub(super) fn make_parallel(&self, id: &str) {
+        let worktree = self.repo.parent().unwrap().join(format!("pay.pay--{id}"));
+        self.fixture(&format!(
+            "UPDATE attempts SET branch = 'cpd/pay--{id}', worktree = '{}' WHERE plan = 'pay' AND id = '{id}' AND status = 'starting';",
+            worktree.display()
+        ));
+    }
+
+    fn drive_as(&self, key: &str, parallel: bool, mut hook: impl FnMut(&Live, &str, usize)) -> (String, common::Run) {
         let out = self.dispatch(key).ok();
         let id = out["attempt"].as_str().unwrap_or_else(|| panic!("no attempt in {out}")).to_owned();
+        if parallel {
+            self.make_parallel(&id);
+        }
         let launch = self.fx.take_launch(self.fx.fakes.spawn.launches().len() - 1);
         let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         let lock = home.attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(&id).unwrap());
@@ -340,7 +368,7 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
     let tip = live.lead_sha();
     // The base moved, without a conflict: that is no reason to merge it.
     let base = live.advance_base("base.txt", "base\n");
-    assert_ne!(live.remote("cpd/pay"), tip, "the Lead's commit is not pushed yet");
+    assert_ne!(live.remote("cpd/pay/repo"), tip, "the Lead's commit is not pushed yet");
 
     // The submit runs no Gate: the Worker's closure ends right after it, before the driver merges.
     let (attempt, submitted) = live.run_job("open-repo", |live, id| {
@@ -367,20 +395,20 @@ fn an_open_job_with_no_conflict_merges_nothing_runs_both_gates_at_its_merge_push
     assert!(!log.contains("slot"), "{log}");
     assert!(logs.join("open-repo-a1.pre-commit.log").exists(), "the gate.merge log is the Attempt's");
     // Pushed, and the pull request created: ready, never a draft.
-    assert_eq!(live.remote("cpd/pay"), tip);
+    assert_eq!(live.remote("cpd/pay/repo"), tip);
     let calls = live.gh_pr_calls();
-    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
+    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay/repo", "--state", "all", "--json", "number,url,state"]);
     let created: Vec<&Vec<String>> = calls.iter().filter(|c| c[1] == "create").collect();
     assert_eq!(created.len(), 1, "{calls:?}");
-    assert_eq!(created[0][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", PR_TITLE]);
+    assert_eq!(created[0][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/repo", "--title", PR_TITLE]);
     assert!(live.fx.calls("gh").iter().all(|c| !c.args.iter().any(|a| a == "--draft" || a == "ready" || a == "convert-to-draft")), "never a draft");
     // `pr open`'s rows and Events, with `job-merged`, in one transaction.
     let (status, number, opened_at) = live.pr_row();
     assert_eq!((status.as_str(), number, opened_at.is_some()), ("open", Some(812), true));
     assert_eq!(live.phase(), "deploy");
-    assert_eq!(live.query::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
-    assert_eq!(live.query::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
-    assert!(live.query::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some());
+    assert_eq!(live.value::<String>("SELECT pr_url FROM prs WHERE plan = 'pay'"), PR_URL);
+    assert_eq!(live.value::<i64>("SELECT count(*) FROM pull_requests WHERE repo = 'acme/pay' AND number = 812 AND state = 'open' AND draft = 0"), 1);
+    assert!(live.value::<Option<i64>>("SELECT pull_request FROM prs WHERE plan = 'pay'").is_some());
     let (merged, opened, phase) = (live.plan_events("job-merged"), live.plan_events("pr-opened"), live.plan_events("plan-phase"));
     let ours: Vec<&(i64, Value)> = merged.iter().filter(|e| e.1["sha"] == tip.as_str() && e.1["kind"] == "open").collect();
     assert_eq!(ours.len(), 1, "{merged:?}");
@@ -399,7 +427,7 @@ fn an_open_jobs_checks_are_one_span_that_ends_in_the_transaction_that_makes_the_
     let span = |edge: &str| json!({"from": "running", "to": "running", "check": edge, "what": "checks"});
     let statuses: Vec<Value> = live.events("open-repo-a1").iter().filter(|e| e["kind"] == "attempt-status").map(|e| e["data"].clone()).collect();
     assert_eq!(statuses[1..4], [span("start"), span("end"), json!({"from": "running", "to": "merging"})], "{statuses:?}");
-    let txns: String = live.query(
+    let txns: String = live.value(
         "SELECT group_concat(txn) FROM (SELECT txn FROM events WHERE kind = 'attempt-status' AND attempt = 'open-repo-a1' ORDER BY rowid)",
     );
     let txns: Vec<&str> = txns.split(',').collect();
@@ -419,7 +447,7 @@ fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_
     live.commit(&live.lead, "README.md", "mine\n", "mine");
     let tip = live.lead_sha();
     let base = live.advance_base("README.md", "theirs\n");
-    let remote = live.remote("cpd/pay");
+    let remote = live.remote("cpd/pay/repo");
 
     // The first Worker does not merge the base: its submit is accepted, and the merge is what finds the conflict.
     let (first, submitted) = live.run_job("open-repo", submit_only);
@@ -435,7 +463,7 @@ fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_
     assert_eq!(live.job_status("open-repo"), "queued", "a ladder cause");
     // Before the Gates: nothing gated, pushed, created or written.
     assert_eq!(live.gate_runs(), Vec::<String>::new(), "no Gate ran on a head the base refuses");
-    assert_eq!((live.lead_sha(), live.remote("cpd/pay")), (tip.clone(), remote));
+    assert_eq!((live.lead_sha(), live.remote("cpd/pay/repo")), (tip.clone(), remote));
     assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"), "{:?}", live.gh_pr_calls());
     assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
 
@@ -452,7 +480,7 @@ fn an_open_job_with_a_conflicting_base_fails_its_merge_merge_conflict_until_the_
     assert_eq!(fs::read_to_string(live.lead.join("README.md")).unwrap(), "mine\n");
     assert_eq!(live.gate_runs(), [format!("make quick head={new}"), format!("make test head={new}")], "both Gates ran once, on the resolved head");
     live.assert_no_slot_and_no_gate_worktree();
-    assert_eq!(live.remote("cpd/pay"), new);
+    assert_eq!(live.remote("cpd/pay/repo"), new);
     assert_eq!(live.gh_pr_calls().iter().filter(|c| c[1] == "create").count(), 1);
     assert_eq!(live.pr_row().0, "open");
     assert_eq!(live.job_status("open-repo"), "merged");
@@ -467,7 +495,7 @@ fn an_open_jobs_gate_failure_ends_its_merge_gate_failed_and_pushes_nothing_creat
     live.gh_creates();
     live.hooks("[pre-merge]\ngate = \"echo the gate says no; exit 1\"\n");
     *live.hooks.reply.lock().unwrap() = Reply::exit(1, "the gate says no\n", "");
-    let before = live.remote("cpd/pay");
+    let before = live.remote("cpd/pay/repo");
 
     let (attempt, submitted) = live.run_job("open-repo", submit_only);
 
@@ -482,7 +510,7 @@ fn an_open_jobs_gate_failure_ends_its_merge_gate_failed_and_pushes_nothing_creat
     assert_eq!(live.job_status("open-repo"), "failed", "gate_failed is no ladder cause: the Lead decides");
     assert_eq!(live.gate_dirs(), [live.canonical_worktree("open-repo-a1")], "the Gate ran once, in the Attempt worktree");
     live.assert_no_slot_and_no_gate_worktree();
-    assert_eq!(live.remote("cpd/pay"), before, "nothing was pushed");
+    assert_eq!(live.remote("cpd/pay/repo"), before, "nothing was pushed");
     assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"), "{:?}", live.gh_pr_calls());
     assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
     assert!(live.plan_events("pr-opened").is_empty());
@@ -502,7 +530,7 @@ fn an_open_jobs_gh_failure_after_the_push_ends_the_attempt_crashed_with_gh_faile
     let retry = live.event("open-repo-a1", "attempt-retry");
     assert!(retry["data"]["feedback"].as_str().unwrap().contains("gh_failed"), "{retry}");
     assert_eq!(live.job_status("open-repo"), "queued", "a ladder cause");
-    assert_eq!(live.remote("cpd/pay"), tip, "the push happened before gh");
+    assert_eq!(live.remote("cpd/pay/repo"), tip, "the push happened before gh");
     assert_eq!((live.pr_row().0.as_str(), live.phase().as_str()), ("dispatch", "dispatch"));
     assert!(live.plan_events("pr-opened").is_empty());
 }
@@ -518,7 +546,7 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     let tip = live.lead_sha();
     let base = live.advance_base("README.md", "theirs\n");
     let row = live.pr_row();
-    let remote = live.remote("cpd/pay");
+    let remote = live.remote("cpd/pay/repo");
 
     let (first, submitted) = live.run_job("up-repo", submit_only);
 
@@ -529,7 +557,7 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     assert!(detail.contains("README.md") && detail.contains(&base[..7]), "{retry}");
     assert_eq!(live.job_status("up-repo"), "queued", "a ladder cause");
     assert_eq!(live.gate_runs(), Vec::<String>::new(), "the base check is before the Gates");
-    assert_eq!((live.lead_sha(), live.remote("cpd/pay")), (tip.clone(), remote), "nothing merged, nothing pushed");
+    assert_eq!((live.lead_sha(), live.remote("cpd/pay/repo")), (tip.clone(), remote), "nothing merged, nothing pushed");
 
     let (attempt, submitted) = live.run_job("up-repo", merge_the_base_and_submit);
 
@@ -537,7 +565,7 @@ fn an_update_job_with_a_conflicting_base_fails_its_merge_until_the_next_attempt_
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     let new = live.lead_sha();
     assert_eq!(live.fx.git(&live.repo, &["rev-parse", &format!("{new}~1")]), tip);
-    assert_eq!(live.remote("cpd/pay"), new, "its merge pushes the resolution");
+    assert_eq!(live.remote("cpd/pay/repo"), new, "its merge pushes the resolution");
     assert_eq!(live.gate_runs(), [format!("make quick head={new}"), format!("make test head={new}")], "both Gates ran, once, on the resolved head");
     live.assert_no_slot_and_no_gate_worktree();
     assert!(live.gh_pr_calls().is_empty(), "the pull request exists: {:?}", live.gh_pr_calls());
@@ -586,7 +614,7 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     }
     let lead = live.lead_sha();
     assert!(live.lead.join("fix.txt").exists() && live.lead.join("fix2.txt").exists());
-    assert_ne!(live.remote("cpd/pay"), lead, "the fixes' own pushes failed: the remote lacks them");
+    assert_ne!(live.remote("cpd/pay/repo"), lead, "the fixes' own pushes failed: the remote lacks them");
     blocked.store(false, std::sync::atomic::Ordering::SeqCst);
     let before = live.gate_runs();
     let before_dirs = live.gate_dirs().len();
@@ -596,7 +624,7 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
     assert_eq!(submitted["ok"], true, "{submitted}");
     assert_eq!(live.lead_sha(), lead, "nothing to merge: the base did not move");
-    assert_eq!(live.remote("cpd/pay"), lead);
+    assert_eq!(live.remote("cpd/pay/repo"), lead);
     assert_eq!(
         live.gate_runs(),
         [before, vec![format!("make quick head={lead}"), format!("make test head={lead}")]].concat(),
@@ -619,7 +647,7 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
     live.runner()
         .on("gh", |c| c.args[..2] == ["pr", "list"], Reply::ok(&format!("[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\"}}]")))
         .on("gh", |c| c.args[..2] == ["api", "graphql"], Reply::ok(&merged));
-    let before = live.remote("cpd/pay");
+    let before = live.remote("cpd/pay/repo");
 
     let tip = live.lead_sha();
 
@@ -633,7 +661,7 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
     assert_eq!(submitted["ok"], true, "{submitted}");
     assert_eq!(live.gate_runs(), [format!("make quick head={tip}"), format!("make test head={tip}")], "both Gates ran at the merge, before the adoption");
     live.assert_no_slot_and_no_gate_worktree();
-    assert_eq!(live.remote("cpd/pay"), before, "no push");
+    assert_eq!(live.remote("cpd/pay/repo"), before, "no push");
     assert!(live.gh_pr_calls().iter().all(|c| c[1] != "create"));
     assert_eq!(live.pr_row().0, "merged");
     assert_eq!(live.phase(), "done");
@@ -643,13 +671,13 @@ fn an_open_job_adopts_a_pull_request_merged_on_github_after_its_gates_with_no_pu
 
 // ---------- the stall rule (§3.4 A4, hs-d195) ----------
 
-/// The pid of the process a tool call of the Worker's pi runs as: `sleep 600`, a child of the pane's process.
-const TOOL: &str = "sleep 600";
+/// The pid of the process a tool call of the Worker's pi runs as: `sleep 120`, a child of the pane's process.
+const TOOL: &str = "sleep 120";
 
 /// A tool call of the Worker's pi whose result is `result` (a JSONL line, or nothing): the session file of the Worker, ending in a
 /// `bash` tool call, quiet for an hour of virtual time, and `TOOL` running under the pane's process. Returns the tool's pid.
 fn start_tool_call(live: &Live, result: &str) -> Pid {
-    let sid: String = live.query("SELECT id FROM sessions WHERE role = 'worker'");
+    let sid: String = live.value("SELECT id FROM sessions WHERE role = 'worker'");
     let dir = live.fx.env.home().join(".pi/agent/sessions/w");
     fs::create_dir_all(&dir).unwrap();
     let file = dir.join(format!("2026_{sid}.jsonl"));
@@ -699,7 +727,7 @@ fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
         2..=5 => {
             let tool = tool.unwrap();
             assert!(!live.fx.fakes.spawn.alive(tool), "the tool call is still alive");
-            let status: String = live.query("SELECT status FROM attempts WHERE id = 'api-a1'");
+            let status: String = live.value("SELECT status FROM attempts WHERE id = 'api-a1'");
             let panes = live.fx.tmux(&["list-panes", "-a", "-F", "#{pane_dead}"]);
             seen.push((status, String::from_utf8(panes.stdout).unwrap()));
             if nap == 5 {

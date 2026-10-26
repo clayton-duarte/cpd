@@ -253,7 +253,7 @@ impl Core {
         let ctx = Ctx { home: &home, config: &config, catalog: &catalog, source: "hooks test", metrics: &|_| None };
         let attempt = AttemptId::parse("api-a1").unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
-        cpd_core::merge::merge(&mut store, &ctx, &plan(), &attempt).unwrap()
+        self.scoped(|| cpd_core::merge::merge(&mut store, &ctx, &plan(), &attempt)).unwrap()
     }
 }
 
@@ -275,22 +275,21 @@ fn pre_start_of_the_repo_file_runs_in_the_lead_worktree_of_a_started_pr() {
 #[test]
 fn the_merge_gate_is_the_pre_commit_of_the_repo_file() {
     let fx = core("dispatch");
-    let marker = fx.env.root().join("merge-gate-ran");
     // The merge gate is the repo's `pre-commit` (the plan's A4/D5, hs-d679); the contract's §7.4 says
     // `pre-merge`. The test pins the merge-time behavior, so it sets both and passes whichever runs.
-    let hook = format!("touch {}", marker.display());
-    fx.env.repo_policy("acme", "pay", &hooks_file(&hook, &hook));
+    let hook = "touch merge-gate-ran";
+    fx.env.repo_policy("acme", "pay", &hooks_file(hook, hook));
     fx.commit_work();
-    fx.fake_once("sh", Reply::exit(7, "", ""));
+    fx.fake("sh", Reply::ok(""));
 
     // Submit runs no quick check any more: the repo file's pre-commit is the merge gate, not the submit check.
     fx.submit().ok();
-    assert!(!marker.exists(), "submit ran the repo file's pre-commit (the quick check)");
+    assert_eq!(commands(&fx), Vec::<String>::new(), "submit ran the repo file's pre-commit (the quick check)");
     assert_eq!(fx.attempt_status(), "merging");
 
     fx.merge();
 
-    assert!(marker.exists(), "the repo file's pre-commit did not run at the Job merge");
+    assert_eq!(commands(&fx), [hook], "the repo file's pre-commit did not run at the Job merge");
 }
 
 #[test]

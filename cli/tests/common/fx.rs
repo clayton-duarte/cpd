@@ -959,7 +959,8 @@ impl Fx {
         }
     }
 
-    /// Prepares a Plan for review: writes the outline of the Plan at `<env-root>/outline-<plan>.json`.
+    /// Prepares a Plan for review: writes the outline of the Plan at `<env-root>/outline-<plan>.json` and records it with
+    /// `cpd plan outline` (a Plan review refuses a Plan without one, hs-d502).
     pub fn outline_for_review(&self, plan: &str) {
         let shown = self.cpd(&["plan", "show", "--plan", plan]).ok();
         let mut done_when = serde_json::Map::new();
@@ -971,6 +972,7 @@ impl Fx {
         let outline = serde_json::json!({"goal": "Goal", "done_when": done_when});
         let path = self.env.root().join(format!("outline-{plan}.json"));
         std::fs::write(&path, outline.to_string()).expect("write the outline");
+        self.cpd(&["plan", "outline", "--file", &path.display().to_string(), "--plan", plan]).ok();
     }
 }
 

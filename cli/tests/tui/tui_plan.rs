@@ -826,7 +826,7 @@ fn cockpit_centre(fx: &Fx) {
     };
     let plan = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "200", "-y", "40", "-P", "-F", "#{pane_id}", "cpd tui view plan"]);
     ok(&["set", "-p", "-t", &plan, "@cpd_view", "plan"]);
-    let chat = ok(&["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep 3600"]);
+    let chat = ok(&["split-window", "-d", "-v", "-t", &plan, "-P", "-F", "#{pane_id}", "sleep 120"]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
 }
 

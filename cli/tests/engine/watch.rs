@@ -1181,9 +1181,9 @@ fn engine_on_git() -> (Ip, PathBuf, PathBuf) {
     fx.engine_routes_on_tmux();
     let repo = fx.git_repo("pay").canonicalize().unwrap();
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("lead.log") };
-    let lead = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap().path;
-    fx.engine_plan_at(&repo, &lead);
-    (fx, repo, lead)
+    let created = fx.scoped(|| create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup)).unwrap();
+    fx.engine_plan_on(&repo, &created.path, &created.branch);
+    (fx, repo, created.path)
 }
 
 /// Attempt `api-a1` of Plan `pay` in `merging`, its worktree cut from the Lead Branch with one commit, its driver
@@ -2509,7 +2509,7 @@ impl Db {
         conn.query_row(sql, [], |r| r.get(0)).unwrap()
     }
 
-    fn sql(&self, text: &str) {
+    fn write(&self, text: &str) {
         common::sql(&mut Store::open(&self.home, 5000).unwrap(), text);
     }
 
@@ -2767,7 +2767,7 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
                 *seen.lock().unwrap() = Some(db.errors());
                 clock.advance(Duration::from_secs(10 * 60));
                 // The throttled Session's title is as young as it was.
-                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'throttled';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(5))));
+                db.write(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'throttled';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(5))));
                 advanced = Some(nap);
                 false
             }
@@ -2890,7 +2890,7 @@ fn e10_counts_the_failures_in_a_row_from_the_last_success() {
             2 if ended => {
                 works.store(false, Ordering::SeqCst);
                 // Due again: its title is old, its turn newer.
-                db.sql(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(20))));
+                db.write(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", cpd_core::clock::timestamp(clock.utc() - time::Duration::minutes(20))));
                 calls = pi_calls(&runner);
                 phase = 3;
             }

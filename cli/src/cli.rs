@@ -177,7 +177,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Tiers(a) => config::tiers(a),
         Command::Secret(c) => secret::run(c),
         Command::Host(c) => host::run(c),
-        Command::Gate(c) => gate_exit(gate::run(&Ports::real(), c)),
+        Command::Gate(c) => gate_exit(gate::run(ports, c)),
         Command::Test(c) => transparent_exit(testsel::exec(ports, c)),
         Command::Prune(a) => prune::command(a),
         Command::Tag => release_exit(tag::tag(ports, &repo_root()?)),

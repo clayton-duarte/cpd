@@ -202,13 +202,13 @@ fn assert_window_title(fx: &Fx) {
     assert_eq!(shown(fx, &["display", "-p", &format]), "cpd · m1");
 }
 
-/// The left group of the status line (hs-d479): the leading `─`, then each button as a pill (its glyph between the two caps),
-/// each in its range, joined by a single `─` outside the ranges.
+/// The left group of the status line (hs-d479): the leading `━`, then each button as a pill (its glyph between the two caps),
+/// each in its range, joined by a single `━` outside the ranges.
 fn buttons() -> String {
     format!(
-        "#[fg=colour8]\u{2500}#[default]#[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{RESET_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2500}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]\u{2500}#[default]#[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{LOGS_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]"
+        "#[fg=colour8]\u{2501}#[default]#[range=user|reset]#[fg=colour13]\u{e0b6}#[reverse]{RESET_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|legend]#[fg=colour15]\u{e0b6}#[reverse]{LEGEND_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]\
+         #[fg=colour8]\u{2501}#[default]#[range=user|logs]#[fg=colour10]\u{e0b6}#[reverse]{LOGS_GLYPH}#[noreverse]\u{e0b4}#[default]#[norange]"
     )
 }
 
@@ -219,10 +219,10 @@ fn assert_status_line(fx: &Fx) {
     let format = shown(fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
     assert_eq!(format, *STATUS_FORMAT);
     assert!(format.starts_with(&buttons()), "{format}");
-    for part in ["#[range=user|incident]", "#[range=user|host]", "#{R:\u{2500},", "#{@cpd_workers},#{@cpd_workers_short}"] {
+    for part in ["#[range=user|incident]", "#[range=user|host]", "#{R:\u{2501},", "#{@cpd_workers},#{@cpd_workers_short}"] {
         assert!(format.contains(part), "{part} in {format}");
     }
-    // The buttons are one `─` apart, outside their ranges: no range starts where the one before it ends.
+    // The buttons are one `━` apart, outside their ranges: no range starts where the one before it ends.
     assert!(!format.contains("#[norange]#[range"), "{format}");
     // Set on the cockpit session only: the server default and cpd-work have no status row.
     assert_eq!(shown(fx, &["show", "-gv", "status"]), "off");
@@ -688,7 +688,7 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     tui(&fx, &[]);
     fx.tmux_route.fake().add_client("/dev/pts/0", 120, 30);
     let client = shown(&fx, &["list-clients", "-F", "#{client_name}"]);
-    // The status line is the client's last row: the three buttons at the left, one `─` apart, each its own range.
+    // The status line is the client's last row: the three buttons at the left, one `━` apart, each its own range.
     let format = shown(&fx, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
     assert!(format.starts_with(&buttons()), "{format}");
     // It takes one row: the session's status is on and tmux gives the other rows to the window.
@@ -754,15 +754,16 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     assert_eq!(border.matches('\u{e0b6}').count(), 2, "{border}");
     assert_eq!(border.matches('\u{e0b4}').count(), 2, "{border}");
     assert!(!border.contains("\u{e0b6}#[reverse] ") && !border.contains(" #[noreverse]"), "{border}");
-    // Every pill starts three columns from its pane's edge (hs-d478): tmux draws two border cells, then one `━` in the pill's
-    // colour, then the left cap.
-    assert_eq!(border.matches("\u{2501}\u{e0b6}").count(), 2, "{border}");
+    // Every pill starts three columns from its pane's edge (hs-d478): tmux draws two border cells, then one `━` always in colour 7
+    // (the border line's colour, whatever the pill's, hs-d684), then the pill's colour, then the left cap.
+    let grey_line = "#[fg=colour7]\u{2501}";
+    assert_eq!(border.matches(grey_line).count(), 2, "{border}");
     // The Lead's, the Worker's and another pane's pill is colour 7 (grey) and, on the focused pane, blue (colour 4): the format
     // itself says it (`pane_active`), whatever the border's colour is. The three views' pills keep their dango colour.
     let plain = "#{?pane_active,#[fg=colour4],#[fg=colour7]}";
-    assert!(border.contains(&format!("{plain}\u{2501}\u{e0b6}#[reverse]#{{@cpd_title}}")), "{border}");
+    assert!(border.contains(&format!("{grey_line}{plain}\u{e0b6}#[reverse]#{{@cpd_title}}")), "{border}");
     let dango = format!(
-        "#{{?#{{==:#{{@cpd_view}},tree}},#[fg=colour5],#{{?#{{==:#{{@cpd_view}},plan}},#[fg=colour7],#{{?#{{==:#{{@cpd_view}},widgets}},#[fg=colour2],{plain}}}}}}}\u{2501}\u{e0b6}#[reverse]"
+        "{grey_line}#{{?#{{==:#{{@cpd_view}},tree}},#[fg=colour5],#{{?#{{==:#{{@cpd_view}},plan}},#[fg=colour7],#{{?#{{==:#{{@cpd_view}},widgets}},#[fg=colour2],{plain}}}}}}}\u{e0b6}#[reverse]"
     );
     assert!(border.contains(&dango), "{border}");
     // The Lead's pane carries the header the pill shows.
@@ -778,7 +779,7 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
             assert!(shown.contains(&format!("\u{e0b6}#[reverse]{title}#[noreverse]\u{e0b4}")), "{title}: {shown}");
             if title == "Retry Payouts" {
                 let colour = if id == focused { "#[fg=colour4]" } else { "#[fg=colour7]" };
-                assert!(shown.starts_with(&format!("{colour}\u{2501}\u{e0b6}")), "{title} (focus on {focused}): {shown}");
+                assert!(shown.starts_with(&format!("#[fg=colour7]\u{2501}{colour}\u{e0b6}")), "{title} (focus on {focused}): {shown}");
             }
         }
     }
@@ -1006,7 +1007,7 @@ fn tui_view_routes_by_name() {
     }
 }
 
-/// The left group (hs-d479): the leading `─`, then each button as a pill (its glyph between the two caps, 3 cells),
+/// The left group (hs-d479): the leading `━`, then each button as a pill (its glyph between the two caps, 3 cells),
 
 #[test]
 fn an_unfaked_gh_is_denied_with_exit_97() {
