@@ -329,7 +329,7 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
     // inbox-snoozed: `m-beta` hides for 8 s
     let two = section(2, &item_rows(&[FOUR[1], FOUR[3]], "5m"), terminator());
     let (snoozed, until) = (home, stamp(&fx, 8));
-    let frames = phase(&fx, three.clone(), move || change(&snoozed, "session:m-beta", &until, true), commits());
+    let frames = phase(&fx, three.clone(), move || change(&snoozed, "session:m-beta", "snoozed_until", &until, true), commits());
     frame_ending_with(&frames, 0, "two items after inbox-snoozed", &two);
 
     // the snooze ends by the clock, with no Event: the item is back, and 9 s older still `5m`
