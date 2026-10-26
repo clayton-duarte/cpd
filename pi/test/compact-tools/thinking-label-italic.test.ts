@@ -166,7 +166,7 @@ test("a working pill with any other label has no italic", () => {
 });
 
 test("the Thinking body draws no italic: emphasis, inline code and highlighted code", () => {
-	const original = theme.fg.bind(theme);
+	const original = theme.fg.bind(theme) as (token: string, text: string) => string;
 	const italicTokens = new Set(["mdCode", "syntaxFunction", "syntaxType", "syntaxKeyword", "mdCodeBlock"]);
 	// As pi's Theme.fg hook will draw them: code and highlighted code come back in SGR 3.
 	(theme as any).fg = (token: string, text: string) => (italicTokens.has(token) ? `${ESC}[3m${original(token, text)}${ESC}[23m` : original(token, text));
