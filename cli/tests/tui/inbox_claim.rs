@@ -14,8 +14,8 @@ const TS_RAW: &str = "1700000000.000100";
 const MANAGER: &str = "mgr-rc";
 const T5: &str = "2026-01-01T05:00:00.000Z";
 
-fn config(context: &str) -> String {
-    format!("version = 1\nmachine = \"m1\"\n[inbox]\nreview_context = \"{context}\"\n")
+fn config(socket: &str, context: &str) -> String {
+    format!("version = 1\nmachine = \"m1\"\n[tmux]\nsocket = \"{socket}\"\n[inbox]\nreview_context = \"{context}\"\n")
 }
 
 /// The five open items `Fixture::new` leaves, as conditions: a reconcile that omits one closes it.
@@ -80,7 +80,7 @@ fn write_cache(fx: &Fixture, number: u64) {
 /// Manager, the post in the cache and the key set. Returns the item's id.
 fn claimable() -> (Fixture, i64) {
     let mut fx = Fixture::new();
-    fx.fx.env.write_config(&config("eec-codereview"));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     review_context(&mut fx, "eec-codereview", "idle");
     write_cache(&fx, 812);
     let mut all = base();
@@ -184,9 +184,9 @@ fn claim_refuses_without_a_review_context_and_writes_nothing() {
 fn claim_refuses_a_review_context_without_a_live_manager_and_writes_nothing() {
     let (fx, id) = claimable();
     // ctx1 exists and has no Manager
-    fx.fx.env.write_config(&config("ctx1"));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "ctx1"));
     assert_eq!(refusal(&fx, &id.to_string()), (3, "no_manager".to_owned()));
-    fx.fx.env.write_config(&config("no-such-context"));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "no-such-context"));
     assert_eq!(refusal(&fx, &id.to_string()), (4, "context_not_found".to_owned()));
     assert_nothing_written(&fx);
 }
@@ -205,7 +205,7 @@ fn claim_refuses_when_the_slack_post_is_not_in_the_cache_and_writes_nothing() {
 #[test]
 fn claim_wakes_a_stopped_manager_as_session_send_does() {
     let mut fx = Fixture::new();
-    fx.fx.env.write_config(&config("eec-codereview"));
+    fx.fx.env.write_config(&config(fx.fx.env.tmux_socket(), "eec-codereview"));
     review_context(&mut fx, "eec-codereview", "stopped");
     write_cache(&fx, 812);
     let mut all = base();
@@ -231,12 +231,12 @@ fn the_review_context_config_defaults_to_empty_and_accepts_only_a_context_id() {
     fx.env.write_config("version = 1\nmachine = \"hs\"\n");
     assert_eq!(fx.cpd(&["config"]).ok()["config"]["inbox"]["review_context"], "");
 
-    fx.env.write_config(&config("eec-codereview"));
+    fx.env.write_config(&config(fx.env.tmux_socket(), "eec-codereview"));
     let shown = fx.cpd(&["config"]).ok();
     assert_eq!(shown["config"]["inbox"]["review_context"], "eec-codereview");
     assert_eq!(shown["sources"]["inbox.review_context"], "file");
 
-    fx.env.write_config(&config("Not A Context"));
+    fx.env.write_config(&config(fx.env.tmux_socket(), "Not A Context"));
     let run = fx.cpd(&["config"]);
     let error = run.error();
     assert_eq!(run.exit, 1);
