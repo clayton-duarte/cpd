@@ -498,7 +498,7 @@ mod tests {
             stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<String>>>().unwrap()
         };
         raw(&home, "DROP TRIGGER schema_migrations_no_update; DROP TRIGGER schema_migrations_no_delete");
-        raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch')");
+        raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch','20261028T0900-cyan-tier')");
         raw(&home, "UPDATE schema_migrations SET name = '20261025T2300-queue-failed' WHERE name = '20261027T1100-queue-failed'");
         for sql in guards {
             raw(&home, &sql);
