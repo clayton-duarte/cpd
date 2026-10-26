@@ -243,10 +243,10 @@ pub fn archived_text() -> Style {
     muted_text()
 }
 
-/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text inverted. A draft is
-/// magenta. `merging` is a running Job whose Attempt is landing (checking or merging); A failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
+/// The pill of a Job (§6.1.1 rule (3)): not clickable, so its status colour's base, text inverted. A draft is magenta.
+/// `merging` is a running Job whose Attempt is landing (checking or merging); a failed Job's pill is always red (hs-d586); `_stuck` no longer matters.
 pub fn job_pill(status: JobStatus, merging: bool, _stuck: bool) -> Style {
-    pill_clickable(job_status(status, merging).1)
+    pill(job_status(status, merging).1)
 }
 
 /// The error line of a view that cannot load or read its data (hs-d534: red, blocking, not clickable).
@@ -262,11 +262,6 @@ pub fn note() -> Style {
 /// A pill: text inverted on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
 pub fn pill(m: Meaning) -> Style {
     block(color(m))
-}
-
-/// A clickable pill: text inverted on the bright pair of a meaning.
-pub fn pill_clickable(m: Meaning) -> Style {
-    block(color_clickable(m))
 }
 
 /// A read-only pill (hs-d534 rule (3)): colour 7 (`Gray`), text inverted; its caps are drawn in its background colour.
@@ -825,7 +820,6 @@ mod tests {
     #[test]
     fn a_pill_is_the_colour_inverted() {
         assert_eq!(pill(Meaning::Review), block(Color::Yellow));
-        assert_eq!(pill_clickable(Meaning::Review), block(Color::LightYellow));
     }
 
     #[test]

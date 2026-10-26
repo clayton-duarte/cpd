@@ -96,7 +96,7 @@ pub struct FlowJob {
     /// None for a stub draft: the pill shows `—`.
     pub tier: Option<Tier>,
     pub needs: Vec<String>,
-    /// How many Attempts the Job has had; the pill shows `aN` from the second on.
+    /// How many Attempts the Job has had; the pill shows `#<n>` before the tier from the second on.
     pub attempt: usize,
 }
 
@@ -148,10 +148,10 @@ fn truncate(s: &str, w: usize) -> String {
     cells::truncate(s, w)
 }
 
-/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` columns) and the right half (`│<tier>[│aN]`).
+/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` columns) and the right half (`[│#<n>]│<tier>`, `#<n>` from the second Attempt).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
-    let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
-    (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{}", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
+    let a = if j.attempt > 1 { format!("│#{}", j.attempt) } else { String::new() };
+    (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("{}│{}", a, j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string())))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -441,7 +441,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, rect_w(i, l), 1);
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
-                // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job's is colour 8
+                // the left, the attempt label and tier to the right, whatever the column's width. A cancelled Job's is colour 8
                 let (left, right) = (parts[i].0.as_str(), parts[i].1.as_str());
                 let gap = body_of(rect).width as usize - Line::from(left).width() - Line::from(right).width();
                 Line::from(pill::pill(format!("{left}{}{right}", " ".repeat(gap)), jobs[i].status.pill())).render(rect, &mut buf);
