@@ -1,28 +1,33 @@
-//! Events (contract §5.1, §5.2, §5.4; commands.md §11): the append API, and
-//! `events list` and `events follow` run as the built binary.
+//! Events (contract §5.1, §5.2, §5.4; commands.md §11): the append API, and `events list` and `events follow` in the
+//! test process (`Fx`, and `common/follower.rs` for `follow`, which a test drives on virtual time): no process starts.
 
 use crate::common;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Stdio};
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
-use common::{CPD, Run, TestEnv, copy_executable, output, spawn, write_executable};
+use crate::home::{HasCpdHome, Home};
+use crate::scripted::ScriptedClock;
+use common::fx::Fx;
+use common::{Run, TestEnv};
+#[path = "../common/follower.rs"]
+mod follower;
+use follower::{Follower, follow_once, follow_once_on};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::{Kind, NewEvent, append};
+use cpd_core::events::{Kind, NewEvent, Selection, append};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-fn home(env: &TestEnv) -> CpdHome {
+fn home(env: &impl HasCpdHome) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-fn open(env: &TestEnv) -> Store {
+fn open(env: &impl HasCpdHome) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
@@ -145,23 +150,35 @@ fn seed(store: &mut Store) {
 }
 
 /// A configured home with the fixture and the eleven Events.
-fn seeded() -> TestEnv {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
-    let mut store = open(&env);
+fn seeded() -> Fx {
+    let fx = Fx::new();
+    fx.env.write_config(CONFIG);
+    seed_store(&fx.env);
+    fx
+}
+
+/// The fixture and the eleven Events, in the store of `env`.
+fn seed_store(env: &impl HasCpdHome) {
+    let mut store = open(env);
     fixture(&mut store);
     seed(&mut store);
-    env
+}
+
+/// What `events list` prints as `events` (`Selection::fetch`, which `list` runs), for the tests that call the library.
+fn fetched(env: &impl HasCpdHome, kinds: Vec<Kind>, since: i64, limit: i64) -> Vec<Value> {
+    let mut store = open(env);
+    let events = store.read(|conn| Selection::resolve(conn, None, None, None, kinds)?.fetch(conn, since, None, limit)).unwrap();
+    events.iter().map(|e| serde_json::to_value(e).unwrap()).collect()
 }
 
 fn ids(events: &Value) -> Vec<i64> {
     events.as_array().unwrap().iter().map(|e| e["id"].as_i64().unwrap()).collect()
 }
 
-fn list(env: &TestEnv, args: &[&str]) -> Value {
+fn list(fx: &Fx, args: &[&str]) -> Value {
     let mut argv = vec!["events", "list"];
     argv.extend_from_slice(args);
-    env.cpd(&argv).ok()
+    fx.cpd(&argv).ok()
 }
 
 /// What `events follow --until-idle` printed: one JSON value per line.
@@ -170,14 +187,22 @@ fn follow_lines(run: &Run) -> Vec<Value> {
     run.stdout.lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
 
-fn follow_until_idle(env: &TestEnv, args: &[&str]) -> Vec<Value> {
-    let mut argv = vec!["events", "follow", "--until-idle"];
-    argv.extend_from_slice(args);
-    follow_lines(&env.cpd(&argv))
+fn follow_until_idle(fx: &Fx, args: &[&str]) -> Vec<Value> {
+    follow_lines(&follow_once(fx, &[&["--until-idle"], args].concat()))
 }
 
-fn refused(env: &TestEnv, args: &[&str], code: &str, exit: i32) -> Value {
-    common::refused(&env.cpd(args), code, exit)
+fn refused(fx: &Fx, args: &[&str], code: &str, exit: i32) -> Value {
+    common::refused(&fx.cpd(args), code, exit)
+}
+
+/// `refused` for `cpd events follow <words>`, run by [`follow_once`].
+fn refused_follow(fx: &Fx, words: &[&str], code: &str, exit: i32) -> Value {
+    common::refused(&follow_once(fx, words), code, exit)
+}
+
+/// `run` of a command on a home with no `config.toml`: the one of `bare`, a second env, with this `fx`'s ports.
+fn in_bare(fx: &Fx, bare: &TestEnv, run: impl FnOnce() -> Run) -> Run {
+    fx.with_vars(&[("CPD_HOME", bare.cpd_home().to_str().unwrap())], run)
 }
 
 // ------------------------------------------------------------------ append
@@ -246,6 +271,9 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("error", "", "cpjas", &["source", "code", "message", "details"], &[]),
     ("review-opened", "cs", "p", &["pn_id", "kind", "subject", "port"], &[]),
     ("review-closed", "cs", "p", &["pn_id", "ended"], &[]),
+    ("incident-started", "", "", &["by", "reason", "started_at", "plans"], &["until_pr"]),
+    ("incident-plans", "", "", &["by", "plans"], &["until_pr"]),
+    ("incident-ended", "", "", &["by", "ended_at", "cause"], &[]),
 ];
 
 fn event(kind: Kind, columns: &str, data: &[&str]) -> NewEvent {
@@ -279,8 +307,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     assert_eq!(names, SPEC.iter().map(|s| s.0).collect::<Vec<_>>());
 
     // The rows of `event_kinds` (§4.5: a kind exists when its row does) are the same kinds.
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
     let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
@@ -292,8 +319,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
 
 #[test]
 fn every_kind_is_appended_with_its_fields() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, optional) in SPEC {
@@ -305,14 +331,13 @@ fn every_kind_is_appended_with_its_fields() {
         let all_data: Vec<&str> = data.iter().chain(optional.iter()).copied().collect();
         append_one(&mut store, event(kind, &all_columns, &all_data)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
-    let events = list(&env, &["--limit", "5000"])["events"].clone();
-    assert_eq!(events.as_array().unwrap().len(), SPEC.len() * 2);
+    let events = fetched(&env, vec![], 0, 5000);
+    assert_eq!(events.len(), SPEC.len() * 2);
 }
 
 #[test]
 fn a_missing_field_is_refused() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -328,8 +353,7 @@ fn a_missing_field_is_refused() {
 
 #[test]
 fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -353,8 +377,7 @@ fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
 
 #[test]
 fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, _) in SPEC {
@@ -397,25 +420,28 @@ fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
 fn an_unknown_kind_is_refused() {
     let err = Kind::from_str("job-exploded").unwrap_err();
     assert_eq!(err.code(), ErrorCode::Usage);
-    let env = seeded();
-    refused(&env, &["events", "list", "--kind", "job-exploded"], "usage", 2);
-    refused(&env, &["events", "follow", "--kind", "job-exploded"], "usage", 2);
+    let fx = seeded();
+    refused(&fx, &["events", "list", "--kind", "job-exploded"], "usage", 2);
+    refused_follow(&fx, &["--kind", "job-exploded"], "usage", 2);
 }
 
 #[test]
 fn the_new_archive_and_rename_kinds_are_accepted_by_list_and_follow() {
-    let env = seeded();
+    let env = Home::new();
+    seed_store(&env);
     for kind in ["context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived"] {
-        let run = env.cpd(&["events", "list", "--kind", kind]);
-        assert_eq!(ids(&run.ok()["events"]), Vec::<i64>::new(), "{kind}: {run:?}");
+        // `--kind` is parsed with `Kind::from_str`; `list` then selects by it.
+        let parsed = Kind::from_str(kind).unwrap_or_else(|e| panic!("{kind}: {e:?}"));
+        assert_eq!(ids(&Value::Array(fetched(&env, vec![parsed], 0, 500))), Vec::<i64>::new(), "{kind}");
     }
 }
 
 #[test]
 fn append_takes_the_context_of_the_plan_else_of_the_session() {
-    let env = seeded();
-    let events = list(&env, &["--since", "0"])["events"].clone();
-    let by_id = |id: i64| events.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
+    let env = Home::new();
+    seed_store(&env);
+    let events = fetched(&env, vec![], 0, 500);
+    let by_id = |id: i64| events.iter().find(|e| e["id"] == id).unwrap().clone();
     assert_eq!(by_id(2)["context"], "ctx"); // plan-created: from the Plan
     assert_eq!(by_id(7)["context"], "ctx"); // session-renamed: from the Session
     assert_eq!(by_id(7)["plan"], Value::Null);
@@ -424,8 +450,7 @@ fn append_takes_the_context_of_the_plan_else_of_the_session() {
 
 #[test]
 fn append_names_a_missing_plan_or_session() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let e = NewEvent::new(Kind::JobRetried, "x", json!({"tier": 1})).plan(plan("nope")).job(job());
@@ -436,8 +461,7 @@ fn append_names_a_missing_plan_or_session() {
 
 #[test]
 fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
+    let env = Home::new();
     let mut store = open(&env);
     fixture(&mut store);
     let (txn, id) = store
@@ -471,8 +495,8 @@ fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
 
 #[test]
 fn list_prints_events_in_the_shape_of_11_1() {
-    let env = seeded();
-    let out = list(&env, &[]);
+    let fx = seeded();
+    let out = list(&fx, &[]);
     assert_eq!(ids(&out["events"]), (1..=11).collect::<Vec<_>>());
     assert_eq!(out["next"], 11);
     let merged = &out["events"][3];
@@ -493,24 +517,24 @@ fn list_prints_events_in_the_shape_of_11_1() {
 
 #[test]
 fn list_since_is_exclusive_limit_caps_and_next_resumes() {
-    let env = seeded();
-    let first = list(&env, &["--limit", "4"]);
+    let fx = seeded();
+    let first = list(&fx, &["--limit", "4"]);
     assert_eq!((ids(&first["events"]), &first["next"]), (vec![1, 2, 3, 4], &json!(4)));
-    let second = list(&env, &["--since", "4", "--limit", "4"]);
+    let second = list(&fx, &["--since", "4", "--limit", "4"]);
     assert_eq!((ids(&second["events"]), &second["next"]), (vec![5, 6, 7, 8], &json!(8)));
-    let rest = list(&env, &["--since", "8"]);
+    let rest = list(&fx, &["--since", "8"]);
     assert_eq!(ids(&rest["events"]), vec![9, 10, 11]);
     // Nothing more: next is --since; a cursor beyond the end is not an error here.
-    let none = list(&env, &["--since", "11"]);
+    let none = list(&fx, &["--since", "11"]);
     assert_eq!((ids(&none["events"]), &none["next"]), (vec![], &json!(11)));
-    let beyond = list(&env, &["--since", "999"]);
+    let beyond = list(&fx, &["--since", "999"]);
     assert_eq!((ids(&beyond["events"]), &beyond["next"]), (vec![], &json!(999)));
 }
 
 #[test]
 fn list_selects_by_plan_context_session_and_kind() {
-    let env = seeded();
-    let sel = |args: &[&str]| ids(&list(&env, args)["events"]);
+    let fx = seeded();
+    let sel = |args: &[&str]| ids(&list(&fx, args)["events"]);
     assert_eq!(sel(&["--plan", "pay"]), vec![2, 3, 4, 5]);
     assert_eq!(sel(&["--context", "ctx"]), vec![1, 2, 3, 4, 5, 6, 7, 8]);
     // The Lead of `pay`: its Plan, its Context's Events about no Plan, itself.
@@ -526,95 +550,96 @@ fn list_selects_by_plan_context_session_and_kind() {
 
 #[test]
 fn list_selection_flags_do_not_fall_back_to_the_environment() {
-    let env = seeded();
-    let out = output(env.command(CPD).args(["events", "list"]).env("CPD_PLAN", "pay").env("CPD_SESSION", "worker1")).unwrap();
-    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let fx = seeded();
+    let json = fx.cpd_with(fx.env.root(), &["events", "list"], &[("CPD_PLAN", "pay"), ("CPD_SESSION", "worker1")]).ok();
     assert_eq!(ids(&json["events"]), (1..=11).collect::<Vec<_>>());
 }
 
 #[test]
 fn list_is_read_only_and_repeatable() {
-    let env = seeded();
-    let a = env.cpd(&["events", "list", "--plan", "pay"]);
-    let b = env.cpd(&["events", "list", "--plan", "pay"]);
+    let fx = seeded();
+    let a = fx.cpd(&["events", "list", "--plan", "pay"]);
+    let b = fx.cpd(&["events", "list", "--plan", "pay"]);
     assert_eq!(a.stdout, b.stdout);
-    let conn = Connection::open(home(&env).db()).unwrap();
+    let conn = Connection::open(home(&fx.env).db()).unwrap();
     let txns: i64 = conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0)).unwrap();
-    env.cpd(&["events", "list"]).ok();
+    fx.cpd(&["events", "list"]).ok();
     assert_eq!(txns, conn.query_row("SELECT count(*) FROM txns", [], |r| r.get::<_, i64>(0)).unwrap());
 }
 
 #[test]
 fn list_refusals() {
-    let env = seeded();
-    refused(&env, &["events", "list", "--plan", "pay", "--context", "ctx"], "usage", 2);
-    refused(&env, &["events", "list", "--plan", "pay", "--session", "lead1"], "usage", 2);
-    refused(&env, &["events", "list", "--context", "ctx", "--session", "lead1"], "usage", 2);
-    refused(&env, &["events", "list", "--limit", "0"], "usage", 2);
-    refused(&env, &["events", "list", "--limit", "5001"], "usage", 2);
-    refused(&env, &["events", "list", "--since", "-1"], "usage", 2);
-    refused(&env, &["events", "list", "--since", "x"], "usage", 2);
-    refused(&env, &["events", "list", "--bogus"], "usage", 2);
-    refused(&env, &["events", "list", "--plan", "Bad_Id"], "invalid_plan_id", 2);
-    refused(&env, &["events", "list", "--context", "Bad_Id"], "invalid_context_id", 2);
-    refused(&env, &["events", "list", "--session", "a b"], "invalid_session_id", 2);
-    refused(&env, &["events", "list", "--plan", "nope"], "plan_not_found", 4);
-    refused(&env, &["events", "list", "--context", "nope"], "context_not_found", 4);
-    refused(&env, &["events", "list", "--session", "nope"], "session_not_found", 4);
-    let bare = TestEnv::new();
-    refused(&bare, &["events", "list"], "config_missing", 1);
+    let fx = seeded();
+    refused(&fx, &["events", "list", "--plan", "pay", "--context", "ctx"], "usage", 2);
+    refused(&fx, &["events", "list", "--plan", "pay", "--session", "lead1"], "usage", 2);
+    refused(&fx, &["events", "list", "--context", "ctx", "--session", "lead1"], "usage", 2);
+    refused(&fx, &["events", "list", "--limit", "0"], "usage", 2);
+    refused(&fx, &["events", "list", "--limit", "5001"], "usage", 2);
+    refused(&fx, &["events", "list", "--since", "-1"], "usage", 2);
+    refused(&fx, &["events", "list", "--since", "x"], "usage", 2);
+    refused(&fx, &["events", "list", "--bogus"], "usage", 2);
+    refused(&fx, &["events", "list", "--plan", "Bad_Id"], "invalid_plan_id", 2);
+    refused(&fx, &["events", "list", "--context", "Bad_Id"], "invalid_context_id", 2);
+    refused(&fx, &["events", "list", "--session", "a b"], "invalid_session_id", 2);
+    refused(&fx, &["events", "list", "--plan", "nope"], "plan_not_found", 4);
+    refused(&fx, &["events", "list", "--context", "nope"], "context_not_found", 4);
+    refused(&fx, &["events", "list", "--session", "nope"], "session_not_found", 4);
+    let bare = fx.another_env();
+    common::refused(&in_bare(&fx, &bare, || fx.cpd(&["events", "list"])), "config_missing", 1);
 }
 
 #[test]
 fn list_limit_5000_is_accepted() {
-    let env = seeded();
-    assert_eq!(ids(&list(&env, &["--limit", "5000"])["events"]).len(), 11);
+    let fx = seeded();
+    assert_eq!(ids(&list(&fx, &["--limit", "5000"])["events"]).len(), 11);
 }
 
 // ----------------------------------------------------------- events follow
 
-/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
-/// marker in the file) and releases it after `hold`. Returns once the lock is held.
-fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+/// hs-n278: `locks/store.lock` held as a process that migrates the store does (contract §1.4: the lock, and its marker in
+/// the file); released by the returned function, as the last step of that process's setup: the marker emptied, then the
+/// lock let go.
+fn migrating(fx: &Fx) -> impl FnOnce() + Send + 'static {
     use nix::fcntl::{Flock, FlockArg};
     use std::io::Write;
-    let locks = env.cpd_home().join("locks");
+    let locks = fx.env.cpd_home().join("locks");
     fs::create_dir_all(&locks).unwrap();
     let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
     let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    // The wall clock, not the fake one: the store reads a marker's age from it (`store/lock.rs` `unix_ms`).
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
     let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
     lock.write_all(marker.to_string().as_bytes()).unwrap();
-    std::thread::spawn(move || {
-        std::thread::sleep(hold);
+    move || {
         let _ = lock.set_len(0);
         drop(lock);
-    })
+    }
 }
 
 /// hs-n278: a follower that opens the store while another cpd migrates it waits (stderr says so once), and
 /// does not fail `lock_timeout` after `store_busy_ms`.
 #[test]
 fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
-    let env = seeded();
-    env.write_config(&format!("{CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
-    let release = migrating_for(&env, Duration::from_millis(1500));
-    let start = Instant::now();
-    let run = env.cpd(&["events", "follow", "--until-idle", "--since", "0"]);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    let fx = seeded();
+    fx.env.write_config(&format!("{CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    let release = migrating(&fx);
+    // The migration ends 1500 ms of the open's virtual time after it began: the open outlasts store_busy_ms (300 ms)
+    // while a migration holds the lock.
+    let clock = Arc::new(ScriptedClock::new().at(Duration::from_millis(1500), release));
+    let ports = cpd_core::ports::Ports { clock: clock.clone(), runner: fx.fakes.runner.clone(), spawn: fx.fakes.spawn.clone() };
+    let run = follow_once_on(&ports, &["--until-idle", "--since", "0"]);
     assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
-    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert!(clock.elapsed() >= Duration::from_millis(1000), "did not wait: {:?}", clock.elapsed());
     assert_eq!(run.stderr.matches("waiting for cpd pid").count(), 1, "{run:?}");
     assert!(run.stderr.contains("3 -> 20"), "{run:?}");
 }
 
 #[test]
 fn follow_until_idle_replays_since_zero_one_event_per_line() {
-    let env = seeded();
-    let lines = follow_until_idle(&env, &["--since", "0"]);
-    assert_eq!(lines, list(&env, &["--since", "0"])["events"].as_array().unwrap().clone());
-    let run = env.cpd(&["events", "follow", "--until-idle", "--since", "0"]);
+    let fx = seeded();
+    let lines = follow_until_idle(&fx, &["--since", "0"]);
+    assert_eq!(lines, list(&fx, &["--since", "0"])["events"].as_array().unwrap().clone());
+    let run = follow_once(&fx, &["--until-idle", "--since", "0"]);
     assert_eq!(run.stdout.lines().count(), 11);
     assert!(run.stdout.ends_with('\n'));
     assert_eq!(run.stderr, "");
@@ -622,23 +647,23 @@ fn follow_until_idle_replays_since_zero_one_event_per_line() {
 
 #[test]
 fn follow_without_since_starts_after_the_highest_id() {
-    let env = seeded();
-    assert!(follow_until_idle(&env, &[]).is_empty());
+    let fx = seeded();
+    assert!(follow_until_idle(&fx, &[]).is_empty());
 }
 
 #[test]
 fn follow_since_is_exclusive_and_the_same_since_replays_the_same_lines() {
-    let env = seeded();
-    let a = follow_until_idle(&env, &["--since", "8"]);
+    let fx = seeded();
+    let a = follow_until_idle(&fx, &["--since", "8"]);
     assert_eq!(ids(&Value::Array(a.clone())), vec![9, 10, 11]);
-    assert_eq!(a, follow_until_idle(&env, &["--since", "8"]));
-    assert!(follow_until_idle(&env, &["--since", "11"]).is_empty());
+    assert_eq!(a, follow_until_idle(&fx, &["--since", "8"]));
+    assert!(follow_until_idle(&fx, &["--since", "11"]).is_empty());
 }
 
 #[test]
 fn follow_selects_like_list() {
-    let env = seeded();
-    let sel = |args: &[&str]| ids(&Value::Array(follow_until_idle(&env, &[&["--since", "0"], args].concat())));
+    let fx = seeded();
+    let sel = |args: &[&str]| ids(&Value::Array(follow_until_idle(&fx, &[&["--since", "0"], args].concat())));
     assert_eq!(sel(&["--plan", "pay"]), vec![2, 3, 4, 5]);
     assert_eq!(sel(&["--context", "ctx"]), vec![1, 2, 3, 4, 5, 6, 7, 8]);
     assert_eq!(sel(&["--session", "lead1"]), vec![1, 2, 3, 4, 5, 6, 7]);
@@ -648,33 +673,33 @@ fn follow_selects_like_list() {
 
 #[test]
 fn follow_refusals() {
-    let env = seeded();
-    refused(&env, &["events", "follow", "--plan", "pay", "--context", "ctx"], "usage", 2);
-    refused(&env, &["events", "follow", "--session", "lead1", "--plan", "pay"], "usage", 2);
-    refused(&env, &["events", "follow", "--plan", "nope"], "plan_not_found", 4);
-    refused(&env, &["events", "follow", "--context", "nope"], "context_not_found", 4);
-    refused(&env, &["events", "follow", "--session", "nope"], "session_not_found", 4);
-    refused(&env, &["events", "follow", "--plan", "Bad_Id"], "invalid_plan_id", 2);
-    let err = refused(&env, &["events", "follow", "--since", "12", "--until-idle"], "cursor_ahead", 3);
+    let fx = seeded();
+    refused_follow(&fx, &["--plan", "pay", "--context", "ctx"], "usage", 2);
+    refused_follow(&fx, &["--session", "lead1", "--plan", "pay"], "usage", 2);
+    refused_follow(&fx, &["--plan", "nope"], "plan_not_found", 4);
+    refused_follow(&fx, &["--context", "nope"], "context_not_found", 4);
+    refused_follow(&fx, &["--session", "nope"], "session_not_found", 4);
+    refused_follow(&fx, &["--plan", "Bad_Id"], "invalid_plan_id", 2);
+    let err = refused_follow(&fx, &["--since", "12", "--until-idle"], "cursor_ahead", 3);
     assert_eq!(err["details"]["highest"], 11);
-    refused(&env, &["events", "follow", "--since", "-3"], "usage", 2);
-    let bare = TestEnv::new();
-    refused(&bare, &["events", "follow"], "config_missing", 1);
+    refused_follow(&fx, &["--since", "-3"], "usage", 2);
+    let bare = fx.another_env();
+    common::refused(&in_bare(&fx, &bare, || follow_once(&fx, &[])), "config_missing", 1);
 }
 
 #[test]
 fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
-    assert!(follow_until_idle(&env, &["--since", "0"]).is_empty());
-    refused(&env, &["events", "follow", "--since", "1", "--until-idle"], "cursor_ahead", 3);
+    let fx = Fx::new();
+    fx.env.write_config(CONFIG);
+    assert!(follow_until_idle(&fx, &["--since", "0"]).is_empty());
+    refused_follow(&fx, &["--since", "1", "--until-idle"], "cursor_ahead", 3);
 }
 
 #[test]
 fn follow_reads_full_batches_until_it_has_everything() {
-    let env = TestEnv::new();
-    env.write_config(CONFIG);
-    let mut store = open(&env);
+    let fx = Fx::new();
+    fx.env.write_config(CONFIG);
+    let mut store = open(&fx.env);
     store
         .write("bulk", |tx| {
             for n in 0..1203 {
@@ -683,48 +708,11 @@ fn follow_reads_full_batches_until_it_has_everything() {
             Ok(())
         })
         .unwrap();
-    let lines = follow_until_idle(&env, &["--since", "0"]);
+    let lines = follow_until_idle(&fx, &["--since", "0"]);
     assert_eq!(ids(&Value::Array(lines)), (1..=1203).collect::<Vec<_>>());
-    let listed = list(&env, &["--limit", "5000"]);
+    let listed = list(&fx, &["--limit", "5000"]);
     assert_eq!(ids(&listed["events"]).len(), 1203);
-    assert_eq!(list(&env, &[])["events"].as_array().unwrap().len(), 500);
-}
-
-struct Follower {
-    child: Child,
-    lines: Option<BufReader<std::process::ChildStdout>>,
-}
-
-impl Follower {
-    fn start(env: &TestEnv, args: &[&str]) -> Follower {
-        let mut child =
-            spawn(env.command(CPD).args(["events", "follow"]).args(args).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap();
-        let lines = Some(BufReader::new(child.stdout.take().unwrap()));
-        Follower { child, lines }
-    }
-
-    /// The next line, or `None` at end of output.
-    fn next(&mut self) -> Option<Value> {
-        let mut line = String::new();
-        let n = self.lines.as_mut().unwrap().read_line(&mut line).unwrap();
-        (n > 0).then(|| serde_json::from_str(&line).unwrap())
-    }
-
-    fn close_stdout(&mut self) {
-        self.lines = None;
-    }
-
-    fn exit(&mut self) -> i32 {
-        let status = common::poll(Duration::from_secs(20), || self.child.try_wait().unwrap()).expect("the follower did not exit");
-        status.code().expect("not killed")
-    }
-}
-
-impl Drop for Follower {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
+    assert_eq!(list(&fx, &[])["events"].as_array().unwrap().len(), 500);
 }
 
 fn append_watch(store: &mut Store, n: i64) -> i64 {
@@ -738,9 +726,9 @@ fn append_edit(store: &mut Store, field: &str) -> i64 {
 
 #[test]
 fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes() {
-    let env = seeded();
-    let mut store = open(&env);
-    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    let mut follower = Follower::start(&fx, &["--plan", "pay", "--since", "11"]);
     let a = append_edit(&mut store, "goal");
     append_watch(&mut store, 1); // not selected
     let b = append_edit(&mut store, "tier");
@@ -761,9 +749,9 @@ fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes()
 
 #[test]
 fn follow_exits_zero_when_stdout_closes_with_no_event_to_write() {
-    let env = seeded();
-    let mut store = open(&env);
-    let mut follower = Follower::start(&env, &["--session", "lead1", "--since", "11"]);
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    let mut follower = Follower::start(&fx, &["--session", "lead1", "--since", "11"]);
     // It is in its poll loop once it prints an Event committed after it started; then close its stdout and append nothing.
     append_one(&mut store, NewEvent::new(Kind::SessionRenamed, "Session lead1 renamed.", json!({"name": "L"})).session(session("lead1"))).unwrap();
     assert_eq!(follower.next().unwrap()["kind"], "session-renamed");
@@ -773,34 +761,21 @@ fn follow_exits_zero_when_stdout_closes_with_no_event_to_write() {
 
 #[test]
 fn follow_without_since_prints_only_events_committed_after_it_started() {
-    let env = seeded();
-    let mut store = open(&env);
-    let mut follower = Follower::start(&env, &[]);
-    let stdout = follower.lines.take().unwrap();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let mut stdout = stdout;
-        stdout.read_line(&mut line).unwrap();
-        let _ = tx.send(line);
-    });
-    // The follower's start is asynchronous: write probes until its first line arrives.
-    let line = common::poll(Duration::from_secs(20), || {
-        let probe = append_watch(&mut store, 7);
-        rx.recv_timeout(Duration::from_millis(100)).ok().map(|line| (probe, line))
-    })
-    .expect("the follower printed nothing");
-    let first: Value = serde_json::from_str(&line.1).unwrap();
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    let mut follower = Follower::start(&fx, &[]);
+    let probe = append_watch(&mut store, 7);
+    let first = follower.next().unwrap();
     // Nothing of the eleven seeded Events, which were committed before it started.
     assert!(first["id"].as_i64().unwrap() > 11, "{first}");
-    assert_eq!(first["kind"], "watch-started");
+    assert_eq!((first["id"].as_i64().unwrap(), &first["kind"]), (probe, &json!("watch-started")));
 }
 
 #[test]
 fn follow_since_prints_the_backlog_then_the_new_events() {
-    let env = seeded();
-    let mut store = open(&env);
-    let mut follower = Follower::start(&env, &["--since", "9"]);
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    let mut follower = Follower::start(&fx, &["--since", "9"]);
     assert_eq!(follower.next().unwrap()["id"], 10);
     assert_eq!(follower.next().unwrap()["id"], 11);
     let n = append_watch(&mut store, 2);
@@ -828,11 +803,11 @@ fn newer_cpd_migrates(env: &TestEnv, compat: &str) {
 
 #[test]
 fn follow_a_failure_after_the_first_line_is_the_last_line() {
-    let env = seeded();
-    let mut follower = Follower::start(&env, &["--since", "10"]);
+    let fx = seeded();
+    let mut follower = Follower::start(&fx, &["--since", "10"]);
     assert_eq!(follower.next().unwrap()["id"], 11);
     // An upgrade by a newer cpd while the follower runs.
-    newer_cpd_migrates(&env, "breaking");
+    newer_cpd_migrates(&fx.env, "breaking");
     let last = follower.next().unwrap();
     assert_eq!(last["ok"], false);
     assert_eq!(last["error"]["code"], "store_too_new");
@@ -842,9 +817,9 @@ fn follow_a_failure_after_the_first_line_is_the_last_line() {
 
 #[test]
 fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
-    let env = seeded();
-    newer_cpd_migrates(&env, "breaking");
-    let mut follower = Follower::start(&env, &["--since", "11"]);
+    let fx = seeded();
+    newer_cpd_migrates(&fx.env, "breaking");
+    let mut follower = Follower::start(&fx, &["--since", "11"]);
     let last = follower.next().unwrap();
     assert_eq!(last["ok"], false);
     assert_eq!(last["error"]["code"], "store_too_new");
@@ -854,13 +829,13 @@ fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
 
 #[test]
 fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
-    let env = seeded();
-    let mut store = open(&env);
-    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    let mut follower = Follower::start(&fx, &["--plan", "pay", "--since", "11"]);
     // It is idle, in its poll loop, once it has printed an Event committed after it started.
     append_edit(&mut store, "goal");
     assert_eq!(follower.next().unwrap()["kind"], "job-edited");
-    newer_cpd_migrates(&env, "breaking");
+    newer_cpd_migrates(&fx.env, "breaking");
     let last = follower.next().unwrap();
     assert_eq!(last["error"]["code"], "store_too_new");
     assert_eq!(follower.exit(), 1);
@@ -868,12 +843,12 @@ fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
 
 #[test]
 fn follow_goes_on_when_the_store_gains_only_an_additive_migration_this_binary_lacks() {
-    let env = seeded();
-    let mut follower = Follower::start(&env, &["--since", "10"]);
+    let fx = seeded();
+    let mut follower = Follower::start(&fx, &["--since", "10"]);
     assert_eq!(follower.next().unwrap()["id"], 11);
     // Inside the window (contract §4.5): the verdict is recomputed, still opens, nothing ends.
-    newer_cpd_migrates(&env, "additive");
-    let mut store = open(&env);
+    newer_cpd_migrates(&fx.env, "additive");
+    let mut store = open(&fx.env);
     // The Event committed after the migration is printed by a poll that has read the migration; the next one shows
     // that the follower went on past that poll.
     for i in 1..=2 {
@@ -886,13 +861,13 @@ fn follow_goes_on_when_the_store_gains_only_an_additive_migration_this_binary_la
 fn follow_ends_when_a_migration_leaves_the_verdict_refusing_even_if_user_version_never_moves() {
     // `migration_order`-like and `store_too_new` refusals come from the verdict, not from a number:
     // the schema changes (so `schema_version` moves) and `user_version` stays what it was.
-    let env = seeded();
-    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    let fx = seeded();
+    let mut follower = Follower::start(&fx, &["--plan", "pay", "--since", "11"]);
     // It is idle, in its poll loop, once it has printed an Event committed after it started.
-    let n = append_edit(&mut open(&env), "goal");
+    let n = append_edit(&mut open(&fx.env), "goal");
     assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
-    newer_cpd_migrates(&env, "breaking");
-    let user_version: i64 = Connection::open(home(&env).db()).unwrap().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    newer_cpd_migrates(&fx.env, "breaking");
+    let user_version: i64 = Connection::open(home(&fx.env).db()).unwrap().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(user_version, cpd_core::store::VERSION);
     let last = follower.next().unwrap();
     assert_eq!(last["error"]["code"], "store_too_new");
@@ -902,31 +877,31 @@ fn follow_ends_when_a_migration_leaves_the_verdict_refusing_even_if_user_version
 
 #[test]
 fn follow_re_execs_when_its_binary_is_replaced_and_loses_and_repeats_no_event() {
-    let env = seeded();
-    let mut store = open(&env);
-    // The follower runs a copy of cpd, which the test then replaces by a wrapper that records its
-    // arguments and runs the real cpd.
-    let copy = env.root().join("cpd-copy");
-    copy_executable(CPD, &copy);
-    let mut child = spawn(
-        env.command(copy.to_str().unwrap())
-            .args(["events", "follow", "--plan", "pay", "--since", "11"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
-    )
-    .unwrap();
-    let mut follower = Follower { lines: Some(BufReader::new(child.stdout.take().unwrap())), child };
+    let fx = seeded();
+    let mut store = open(&fx.env);
+    // The follower's own executable is a file the test then replaces by a rename, so its path holds another inode: the
+    // `FakeSpawn` says it is cpd's, records the `exec` and returns, as an `exec` that failed does.
+    let bin = tempfile::tempdir().unwrap();
+    let exe = bin.path().join("cpd");
+    fs::write(&exe, "v1").unwrap();
+    fx.fakes.spawn.set_self_exe(&exe);
+    let mut follower = Follower::start(&fx, &["--plan", "pay", "--since", "11"]);
     let a = append_edit(&mut store, "goal");
     assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), a);
 
-    let recorded = env.root().join("argv");
-    let wrapper = env.root().join("cpd-wrapper");
-    write_executable(&wrapper, &format!("#!/bin/sh\necho \"$@\" > '{}'\nexec '{CPD}' \"$@\"\n", recorded.display()));
-    fs::rename(&wrapper, &copy).unwrap();
-    common::wait_until_for("the follower to re-exec", Duration::from_secs(20), || recorded.exists());
+    fs::write(bin.path().join("cpd.new"), "v2").unwrap();
+    fs::rename(bin.path().join("cpd.new"), &exe).unwrap();
+    assert_eq!(follower.exit(), 1, "the fake exec returns: the follower ends with its error, spawn_failed");
+    assert_eq!(follower.next().unwrap()["error"]["code"], "spawn_failed");
+    let launch = fx.take_launch(0);
+    assert_eq!(fx.fakes.spawn.launches().len(), 1);
+    assert_eq!(std::path::Path::new(&launch.program), exe);
+    // The same follower again, after the last Event it printed.
+    assert_eq!(launch.args.join(" "), format!("events follow --plan pay --since {a}"));
+
     let b = append_edit(&mut store, "tier");
     let c = append_edit(&mut store, "touches");
-    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), b);
-    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), c);
-    assert_eq!(fs::read_to_string(&recorded).unwrap().trim(), format!("events follow --plan pay --since {a}"));
+    let mut restarted = Follower::start_launch(&fx, &launch);
+    assert_eq!(restarted.next().unwrap()["id"].as_i64().unwrap(), b);
+    assert_eq!(restarted.next().unwrap()["id"].as_i64().unwrap(), c);
 }

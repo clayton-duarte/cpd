@@ -7,11 +7,11 @@
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
-use super::{Action, Pull, draw, on_mouse, popup_args};
+use super::{Action, Pull, draw, on_key, on_mouse, popup_args};
 use crate::palette;
 
 fn render(width: u16, height: u16, title: Option<&str>) -> Buffer {
@@ -140,4 +140,63 @@ fn a_dialog_in_a_tiny_area_draws_without_panicking() {
     let buf = render(60, 8, Some("Fix the thing"));
     assert_eq!(row(&buf, 7), format!("╰{}╯", "─".repeat(58)));
     assert!(row(&buf, 6).contains("\u{E0B6}Merge\u{E0B4}"), "{}", row(&buf, 6));
+}
+
+// ---------- the view's pane tests of `cli/tests/tui/tui_merge.rs`, as units (the pane only forwards keys and clicks to
+// `on_key` and `on_mouse` and draws with `draw`; what a real tmux made of it is tmux's) ----------
+
+const REF: &str = "o/r#7";
+/// The client the view was opened on, for the tests that have none attached.
+const CLIENT: &str = "/dev/pts/9";
+
+/// A pill: its label between the caps U+E0B6 and U+E0B4.
+fn pill(label: &str) -> String {
+    format!("\u{E0B6}{label}\u{E0B4}")
+}
+
+/// The dialog of `reference` as the pane shows it, 60 x 8 (the dialog draws its own frame): the rows, without their trailing blanks.
+fn screen(reference: &str, title: Option<&str>) -> Vec<String> {
+    let pull = Pull::parse(reference).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).unwrap();
+    terminal.draw(|f| draw(f, Rect::new(0, 0, 60, 8), &pull, title)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    (0..8).map(|y| row(&buf, y).trim_end().to_owned()).collect()
+}
+
+#[test]
+fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
+    // `draw` takes no way to run anything, so the old pane test's "opening the dialog runs nothing" (no `gh` call) holds by its signature
+    let rows = screen(REF, Some("Add the thing"));
+    assert_eq!(rows[2..5], [inside(" o/r#7", 58), inside(" Add the thing", 58), inside(" method: squash", 58)]);
+    assert!(rows[6].starts_with(&format!("│ {}", pill("Merge"))) && rows[6].ends_with(&format!("{} │", pill("Cancel"))), "{rows:?}");
+}
+
+#[test]
+fn n_q_and_esc_close_it_and_start_nothing() {
+    // the view starts `run-shell` only on `Action::Merge` (`run`), so a key that gives `Cancel` closes it and starts nothing
+    for code in [KeyCode::Char('n'), KeyCode::Char('q'), KeyCode::Esc] {
+        assert_eq!(on_key(KeyEvent::new(code, KeyModifiers::NONE)), Some(Action::Cancel), "{code:?}");
+    }
+}
+
+#[test]
+fn a_click_on_cancel_closes_it_and_starts_nothing() {
+    // the Cancel pill is at 0-based columns 50 to 57, row 6: the pane's 1-based (54, 7)
+    let at = |column, row| on_mouse(Rect::new(0, 0, 60, 8), click(MouseEventKind::Down(MouseButton::Left), column, row));
+    assert_eq!(at(53, 6), Some(Action::Cancel));
+    assert_ne!(at(53, 6), Some(Action::Merge), "a click on Cancel starts nothing");
+}
+
+#[test]
+fn the_popup_opens_on_the_named_client_and_its_command_reaches_cpd_unchanged() {
+    // commands.md §13.2: `display-popup -E -B -c <name> -w <width> -h <height> -- cpd tui view merge <ref> --client <name>`
+    let args = popup_args(CLIENT, (200, 60), REF);
+    let (command, flags) = args.split_last().unwrap();
+    assert_eq!(flags, ["display-popup", "-E", "-B", "-c", CLIENT, "-w", "60", "-h", "8", "--"]);
+    // the string the popup's shell splits into `cpd`, `tui`, `view`, `merge`, `o/r#7`, `--client`, `/dev/pts/9`: each argument in single quotes
+    assert_eq!(command, "cpd tui view merge 'o/r#7' --client '/dev/pts/9'");
+    // at most the client's size
+    let small = popup_args(CLIENT, (50, 6), REF);
+    let after = |flag: &str| small.iter().position(|a| a == flag).map(|i| small[i + 1].as_str());
+    assert_eq!((after("-w"), after("-h")), (Some("48"), Some("6")), "{small:?}");
 }

@@ -17,7 +17,9 @@ use super::file::Config;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::deadline::{self, Failed};
+use crate::host::deadline::Failed;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
@@ -124,7 +126,8 @@ fn tail(bytes: &[u8]) -> String {
 /// models under the installed pi's version; otherwise computed from pi and
 /// written in one transaction, replacing what was cached.
 pub fn load(config: &Config) -> Result<Catalog, CpdError> {
-    let mut store = Store::open(&CpdHome::from_env()?, config.timeouts.store_busy_ms.into())?;
+    // The open waits out a migration on the ambient clock, so a test passes a `ManualClock`.
+    let mut store = Store::open_with(&*Ports::current().clock, &CpdHome::from_env()?, config.timeouts.store_busy_ms.into(), None)?;
     load_with(config, &mut store)
 }
 
@@ -146,6 +149,11 @@ fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catal
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
 pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
+    read_with(&*Ports::current().runner, pi, config, deadline)
+}
+
+/// [`read`] on `runner`.
+pub fn read_with(runner: &dyn Runner, pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h), (Letter::G, &config.tiers.g)];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -156,7 +164,7 @@ pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catal
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, "node", deadline).map_err(|e| match e {
+    let out = runner.output(&mut cmd, "node", deadline).map_err(|e| match e {
         Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
         Failed::Timeout(e) => e,
     })?;

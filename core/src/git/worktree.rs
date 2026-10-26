@@ -6,10 +6,13 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, Pipeline, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
+use super::run::{branch_exists, fetch, has_origin, ok, ok_with, rev_parse, run, run_with, worktree_add, worktree_list_with};
 use super::{TAIL_LINES, tail};
+use crate::clock::Clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 use crate::ids::{AttemptId, PlanId, PrKey};
 
 /// The Lead Branch of a Plan: `cpd/<plan>`.
@@ -20,6 +23,13 @@ pub fn lead_branch(plan: &PlanId) -> String {
 /// The branch of an Attempt: `cpd/<plan>--<attempt>`.
 pub fn attempt_branch(plan: &PlanId, attempt: &AttemptId) -> String {
     format!("cpd/{plan}--{attempt}")
+}
+
+/// Whether an Attempt is **linear** (hs-d680, hs-d682): it runs in its PR's one workflow worktree, on the Lead
+/// Branch, so its branch is the Lead Branch. The first of concurrent siblings is linear; a parallel sibling has
+/// its own `cpd/<plan>--<attempt>` worktree and branch.
+pub fn is_linear(attempt_branch: &str, lead_branch: &str) -> bool {
+    attempt_branch == lead_branch
 }
 
 /// `<repo-parent>/<repo-name>.<suffix>`: a sibling of the repo's main checkout.
@@ -57,6 +67,11 @@ pub fn attempt_worktree_path(repo: &Path, plan: &PlanId, attempt: &AttemptId) ->
     sibling(repo, &format!("{plan}--{attempt}"))
 }
 
+/// The Gate worktree for a PR's process: `<repo-parent>/<repo-name>.<plan>--<key>-gate-<pid>`.
+pub fn gate_worktree_path(repo: &Path, plan: &PlanId, key: &PrKey, pid: u32) -> Result<PathBuf, CpdError> {
+    sibling(repo, &format!("{plan}--{key}-gate-{pid}"))
+}
+
 /// One entry of `git worktree list --porcelain`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
@@ -67,7 +82,13 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    let text = worktree_list(dir)?;
+    let ports = Ports::current();
+    list_with(&*ports.runner, &*ports.clock, dir)
+}
+
+/// [`list`] on `runner`, the naps of its re-reads on `clock`.
+pub fn list_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path) -> Result<Vec<Worktree>, CpdError> {
+    let text = worktree_list_with(runner, clock, dir)?;
     let mut found = Vec::new();
     for block in text.split("\n\n") {
         let mut path = None;
@@ -88,7 +109,13 @@ pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
 
 /// The worktree that has `branch` checked out, if any.
 pub fn worktree_of_branch(dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
-    Ok(list(dir)?.into_iter().find(|w| w.branch.as_deref() == Some(branch)).map(|w| w.path))
+    let ports = Ports::current();
+    worktree_of_branch_with(&*ports.runner, &*ports.clock, dir, branch)
+}
+
+/// [`worktree_of_branch`] on `runner`, its naps on `clock`.
+pub fn worktree_of_branch_with(runner: &dyn Runner, clock: &dyn Clock, dir: &Path, branch: &str) -> Result<Option<PathBuf>, CpdError> {
+    Ok(list_with(runner, clock, dir)?.into_iter().find(|w| w.branch.as_deref() == Some(branch)).map(|w| w.path))
 }
 
 /// `path` with symlinks resolved, also when the last component does not exist yet.
@@ -218,6 +245,12 @@ pub enum Push {
 /// when `X` is in the local object store and contains `sha`, the push is
 /// [`Push::Contained`]. Any other failure (no `origin` included) is `git_failed`.
 pub fn push_commit(lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    push_commit_with(&*Ports::current().runner, lead_worktree, branch, sha)
+}
+
+/// [`push_commit`] on `runner` (a test passes a `FakeRunner`).
+pub fn push_commit_with(runner: &dyn Runner, lead_worktree: &Path, branch: &str, sha: &str) -> Result<Push, CpdError> {
+    let (run, ok) = (|dir: &Path, args: &[&str]| run_with(runner, dir, args), |dir: &Path, args: &[&str]| ok_with(runner, dir, args));
     let reference = format!("refs/heads/{branch}");
     let refspec = format!("{sha}:{reference}");
     let args = ["push", "--porcelain", "origin", refspec.as_str()];
@@ -276,7 +309,12 @@ fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
 /// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
 /// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
 pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let merge = run(repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
+    merge_conflicts_with(&*Ports::current().runner, repo, onto, sha)
+}
+
+/// [`merge_conflicts`] on `runner` (a test passes a `FakeRunner`).
+pub fn merge_conflicts_with(runner: &dyn Runner, repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let merge = run_with(runner, repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
     match merge.code {
         0 => Ok(None),
         // The tree's id, the conflicted files, a blank line, then git's messages.
@@ -394,6 +432,39 @@ impl Step {
 pub struct StartFailure {
     pub step: Step,
     pub error: CpdError,
+}
+
+/// The temporary worktree `pr rebase` rewrites the Lead Branch in (contract §7.6): detached at the
+/// snapshot it rebases, so the Lead worktree itself is never rewritten and two rebases of one PR do
+/// not race on its index. It belongs to one rebase run: no test slot, no clean-up sweep, and the
+/// run that adds it removes it.
+#[derive(Debug)]
+pub struct RebaseWorktree {
+    repo: PathBuf,
+    path: PathBuf,
+}
+
+impl RebaseWorktree {
+    /// `git -C <repo> worktree add --detach --lock --reason "cpd rebase <pid>" W <sha>`, `W` the
+    /// rebase worktree of this process's pid.
+    pub fn add(repo: &Path, plan: &PlanId, key: &PrKey, sha: &str) -> Result<RebaseWorktree, CpdError> {
+        let pid = std::process::id();
+        let path = sibling(repo, &format!("{plan}.{key}.rebase-{pid}"))?;
+        let reason = format!("cpd rebase {pid}");
+        let target = path.to_string_lossy().into_owned();
+        worktree_add(repo, &["--detach", "--lock", "--reason", &reason, &target, sha], &path)?;
+        Ok(RebaseWorktree { repo: repo.to_path_buf(), path })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// `git -C <repo> worktree remove --force --force W`.
+    pub fn remove(self) -> Result<(), CpdError> {
+        let path = self.path.to_string_lossy();
+        ok(&self.repo, &["worktree", "remove", "--force", "--force", &path]).map(|_| ())
+    }
 }
 
 /// A Lead worktree that exists on its Lead Branch with `pre-start` passed;

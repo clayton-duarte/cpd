@@ -3,6 +3,7 @@ import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts"
 import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { meaning, pill as drawPill } from "./pill.ts";
 import { isObject } from "./cpd.ts";
+import { localTime } from "./time.ts";
 import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
@@ -49,12 +50,17 @@ function oneLine(text: string): string {
   return line.length > SUMMARY_MAX ? `${line.slice(0, SUMMARY_MAX - 1).trimEnd()}…` : line;
 }
 
-/** `Message from <name> (<id>): …` or `Message from <id>: …` (delivery.ts `sessionMessage`): the sender's name, or its id. */
+/** `HH:MM` in the process's local time for a Unix-ms `timestamp`, or `undefined` when there is none. */
+function timeOf(timestamp: number | undefined): string | undefined {
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? localTime(new Date(timestamp).toISOString()) : undefined;
+}
+
+/** `Message from <name> (<id>) (<time>): …` or `Message from <id> (<time>): …` (delivery.ts `sessionMessage`): the sender's name, or its id. */
 function senderOf(from: string | null, content: string): string {
   if (from === null) return "the User";
   const rest = content.startsWith("Message from ") ? content.slice("Message from ".length) : "";
-  if (rest.startsWith(`${from}: `)) return from;
-  const named = rest.indexOf(` (${from}): `);
+  if (rest.startsWith(`${from} `) || rest.startsWith(`${from}: `)) return from;
+  const named = rest.indexOf(` (${from})`);
   return named > 0 ? rest.slice(0, named) : from;
 }
 
@@ -124,17 +130,11 @@ function prefixedText(text: string, first: string, rest: string = first): (width
   return (width) => wrapTextWithAnsi(normalized, Math.max(1, width - prefixWidth)).map((line, i) => `${i === 0 ? first : rest}${line}`);
 }
 
-/** `outputPadLines`: with `outputPad` 0 the row's one margin column is reclaimed. */
-function outputPadLines(lines: string[], width: number): string[] {
-  return lines.map((line) => (stripTerminalSequences(line).startsWith(" ") ? sliceByColumn(line, 1, Math.max(0, width), true) : truncateToWidth(line, Math.max(0, width), "…")));
-}
-
 /** `WithinWidth`: a row never draws past the pane's edge. */
 const withinWidth = (lines: string[], width: number): string[] => lines.map((l) => (visibleWidth(l) > width ? truncateToWidth(l, Math.max(1, width), "") : l));
 
 // ---- the fold ----
 
-const MARGIN = " ";
 const GREY8 = (text: string): string => `\x1b[90m${text}\x1b[39m`;
 
 /** The text up to the first `.`, `:` or line end, cut at 60 characters with `…` only when longer. */
@@ -157,14 +157,14 @@ const COLLAPSE = "collapse";
 type Rows = { foldable: boolean; terminator: () => string[]; head: (width: number) => string[]; body: (width: number) => string[]; toggle: (width: number, expanded: boolean) => string[] };
 
 /** The fold's rows for one message. `body` is empty when `content` is. */
-function rowsOf(summary: string, content: string, theme: Theme): Rows {
+function rowsOf(summary: string, content: string, theme: Theme, time?: string): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${GREY8(TOP)}`;
+  const lead = GREY8(TOP);
   // contract §6.1.1: the pill is magenta 5 inverted, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
   const pill = drawPill(meaning("planning"), "cpd");
   const sentence = firstSentence(summary);
-  const rail = `${MARGIN}${GREY8(RAIL)}`;
+  const rail = GREY8(RAIL);
   const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
   return {
     head: (width) => {
@@ -172,13 +172,18 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
       const lines = wrapTextWithAnsi(sentence, room);
       return (lines.length === 0 ? [""] : lines).map((l, i) => {
         const t = l === "" ? "" : `\x1b[37m${l}\x1b[39m`;
-        return i === 0 ? `${lead}${pill}${t === "" ? "" : ` ${t}`}` : `${MARGIN}${GREY8(RAIL)}${t}`;
+        return i === 0 ? `${lead}${pill}${t === "" ? "" : ` ${t}`}` : `${GREY8(RAIL)}${t}`;
       });
     },
     body: text === "" ? () => [] : prefixedText(body, rail),
     foldable: text !== "",
-    terminator: () => [`${MARGIN}${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
-    toggle: (_width, expanded) => [`${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
+    terminator: () => [`${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
+    toggle: (width, expanded) => {
+      const base = `${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`;
+      const dated = time === undefined ? base : `${base} · ${time}`;
+      // A narrow pane drops the time rather than cutting it: the toggle row stays as it was.
+      return [`${time !== undefined && visibleWidth(dated) > width ? base : dated}\x1b[39m`];
+    },
   };
 }
 
@@ -196,11 +201,11 @@ export class Rendering {
   }
 
   /** §15.9 `off`: no component, so pi draws its own default box with the full `content`. */
-  readonly render: MessageRenderer = (message, { expanded, outputPad }, theme) => {
+  readonly render: MessageRenderer = (message, { expanded }, theme) => {
     if (this.style === "off") return undefined;
     const content = contentOf(message);
     const summary = summaryOf(message, content);
-    const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
+    const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme, timeOf(message.timestamp));
     // No summary, and always the Plan review's summary, which the User reads to decide: the row is always open, with no closing row and no toggle (§15.9 "No summary").
     const open = summary === undefined || message.customType === SUMMARY_TYPE;
     const closes = open || !rows.foldable;
@@ -217,7 +222,7 @@ export class Rendering {
       return withinWidth(lines, width);
     };
     const inner: Component = {
-      render: (width) => (outputPad === 0 ? outputPadLines(draw(width + 1), width) : draw(width)),
+      render: (width) => draw(width),
       invalidate() {},
     };
     if (closes) return inner;

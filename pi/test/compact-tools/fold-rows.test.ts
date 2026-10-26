@@ -5,7 +5,11 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown, text } from "./indicator-harness.ts";
+import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, setNow, shutdown, text } from "./indicator-harness.ts";
+
+// The machine-local time is the process timezone's: pin it, so `03:11` is the same on every machine.
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
@@ -25,6 +29,7 @@ async function rowLines(phase: Phase, expanded = false, command?: string): Promi
 		announce(harness, id, "bash");
 		const row = makeRow("bash", id, args, harness.definitions.get("bash"));
 		row.setArgsComplete();
+		setNow(TIME_MS);
 		harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "bash", args });
 		row.markExecutionStarted();
 		if (phase === "done") {
@@ -39,6 +44,28 @@ async function rowLines(phase: Phase, expanded = false, command?: string): Promi
 	}
 }
 
+/** The line of a rendered row that carries the closing toggle glyph. */
+const toggleLine = (lines: string[]) => lines.find((line) => /[\u{F0B26}\u{F0B2C}]/u.test(line))!;
+
+/** A tool result message in the session branch, keyed to its call, as pi persists it. */
+const branchEntry = (id: string, timestamp = TIME_MS) => [
+	{ type: "message", timestamp: new Date(timestamp).toISOString(), message: { role: "toolResult", toolName: "bash", toolCallId: id, timestamp } },
+];
+
+/** A row pi restored from a session: made and given its result, but never run in this process. */
+async function restoredRow(id: string, branch: unknown[], width = 100): Promise<string[]> {
+	const harness = await loadExtension({ style: "compact", fold: "toggle" }, { defaults: true, sessionManager: { getBranch: () => branch } });
+	try {
+		const outcome = CASES.bash!;
+		const row = makeRow("bash", id, outcome.args, harness.definitions.get("bash"));
+		row.setArgsComplete();
+		row.updateResult({ ...outcome.success, isError: false } as never, false);
+		return row.render(width).filter((line) => plain(line).trim() !== "");
+	} finally {
+		shutdown(harness);
+	}
+}
+
 const hasDot = (lines: string[]) => lines.some((line) => /\u2981|\u25CF|\u29BF|\u2022/u.test(plain(line)));
 
 test("a tool row's title row is a space, the lead and the pill with no dot", async () => {
@@ -47,6 +74,9 @@ test("a tool row's title row is a space, the lead and the pill with no dot", asy
 	assert.ok(head.startsWith(`${HEAD}${LEFT}`), `head ${JSON.stringify(head)}`);
 	assert.ok(!hasDot(lines), JSON.stringify(lines.map(plain)));
 	assert.ok(!/\u2981/u.test(lines.join("")), "no dot glyph U+2981");
+	// The closing toggle row carries the machine-local time of the live row's start.
+	const close = plain(lines.at(-1)!);
+	assert.match(close, / expand \u00B7 03:11 \u00B7 /u, `live closing row ${JSON.stringify(close)}`);
 });
 
 test("a running tool row has no dot, only the cyan pill", async () => {
@@ -95,6 +125,8 @@ test("lead and rails are 8 and the toggle is 7 on every tool row", async () => {
 		}
 		const close = lines.find((line) => /[\u{F0B26}\u{F0B2C}]/u.test(line))!;
 		assert.match(close, /\x1b\[37m[^\x1b]*(\u{F0B26}|\u{F0B2C})/u, `toggle in 7: ${JSON.stringify(close)}`);
+		// The time sits right after the toggle word, before any metadata.
+		assert.match(plain(close), /(?:expand|collapse) \u00B7 03:11/u, `toggle time: ${JSON.stringify(plain(close))}`);
 	}
 });
 
@@ -119,6 +151,21 @@ test("no pill or toggle uses a colour above 7", async () => {
 			assert.ok(!/\x1b\[(9\d|10\d)m[^\x1b]*[\u{F0B26}\u{F0B2C}]/u.test(close), `toggle above 7: ${JSON.stringify(close)}`);
 		}
 	}
+});
+
+test("a restored row resolves the time from its branch tool-result entry by toolCallId", async () => {
+	const id = `fr-restored-${++sequence}`;
+	const lines = await restoredRow(id, branchEntry(id));
+	const close = plain(toggleLine(lines));
+	assert.match(close, / expand \u00B7 03:11 \u00B7 /u, `restored closing row ${JSON.stringify(close)}`);
+});
+
+test("a row with no live timing and no resolvable branch entry draws no time", async () => {
+	const id = `fr-nosource-${++sequence}`;
+	const lines = await restoredRow(id, []);
+	const close = plain(toggleLine(lines));
+	assert.match(close, / expand \u00B7 Done/u, `closing row ${JSON.stringify(close)}`);
+	assert.doesNotMatch(close, /\d{2}:\d{2}/u, `no time: ${JSON.stringify(close)}`);
 });
 
 test.after(restoreClocks);

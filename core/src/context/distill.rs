@@ -8,16 +8,14 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use clap::Args;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::curation::{Curation, NotCurable, not_curable, Proposal, Reason, propose_rejecting};
 use super::render::Indexed;
@@ -27,10 +25,14 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
+use crate::host::deadline::Failed as RunFailed;
 use crate::host::pi;
+use crate::host::deadline;
+use crate::host::runner::{Call, Runner};
 use crate::ids::{ContextId, RecordId};
 use crate::lock;
 use crate::output::Output;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// The `source` of the `error` Events of a failed run, and its `txns.command`.
@@ -41,9 +43,6 @@ const PROMPT: &str = include_str!("distill_prompt.md");
 
 /// How many lines of pi's stderr a `distill_failed` Event carries.
 const TAIL_LINES: usize = 60;
-
-/// How often a run looks at pi while it waits.
-const POLL: Duration = Duration::from_millis(50);
 
 #[derive(Args, Debug)]
 pub struct DistillArgs {
@@ -106,7 +105,7 @@ pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
 }
 /// `context distill` (§3.12).
 pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, ports } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let floor = config.context_curation_min_records;
@@ -119,7 +118,7 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     }
     let _lock = Lock::take(&home, &context)?;
     let state = store.read(|conn| State::read(conn, &context))?;
-    let run = Run { home: &home, config: &config, store: &mut store, context: &context };
+    let run = Run { home: &home, config: &config, store: &mut store, context: &context, ports: &ports };
     run.run(&state, usize::from(args.batch)).map(Output::success)
 }
 
@@ -179,14 +178,15 @@ struct Run<'a> {
     config: &'a Config,
     store: &'a mut Store,
     context: &'a ContextId,
+    ports: &'a Ports,
 }
 
 /// One problem of an output: `{id?, line?, what}`.
 #[derive(Debug, Clone, PartialEq)]
-struct Problem {
-    id: Option<RecordId>,
-    line: Option<usize>,
-    what: String,
+pub(super) struct Problem {
+    pub(super) id: Option<RecordId>,
+    pub(super) line: Option<usize>,
+    pub(super) what: String,
 }
 
 impl Problem {
@@ -230,26 +230,26 @@ struct RawLine {
 }
 
 /// A checked output (GXD1): what [`propose_rejecting`] takes, and the lines it rejects.
-struct Checked {
-    curations: Vec<Curation>,
-    proposals: Vec<Proposal>,
-    rejected: Vec<Problem>,
+pub(super) struct Checked {
+    pub(super) curations: Vec<Curation>,
+    pub(super) proposals: Vec<Proposal>,
+    pub(super) rejected: Vec<Problem>,
 }
 
 /// The batch of a step with the data the checks need.
-struct Batch<'a> {
-    records: &'a [&'a Indexed],
+pub(super) struct Batch<'a> {
+    pub(super) records: &'a [&'a Indexed],
     /// The ids and `seq`s of every record in force of the Context (the batch and the known ones).
-    in_force: HashMap<RecordId, i64>,
+    pub(super) in_force: HashMap<RecordId, i64>,
     /// `docs.md`'s hits of each batch record.
-    hits: HashMap<RecordId, Vec<String>>,
+    pub(super) hits: HashMap<RecordId, Vec<String>>,
 }
 
 impl Batch<'_> {
     /// Checks `text` (contract §4.6 step 5) line by line (GXD1): a line that passes is accepted, one that fails is
     /// rejected and its record stays uncurated. A record missing from the output stays uncurated without a
     /// rejection; a line whose id is not a record of the batch is ignored; both lines of a repeated id are rejected.
-    fn check(&self, text: &str) -> Checked {
+    pub(super) fn check(&self, text: &str) -> Checked {
         let mut checked = Checked { curations: Vec::new(), proposals: Vec::new(), rejected: Vec::new() };
         let batch: HashMap<&RecordId, i64> = self.records.iter().map(|(seq, r)| (&r.id, *seq)).collect();
         let lines: Vec<(usize, &str)> = text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()).collect();
@@ -427,24 +427,7 @@ impl Run<'_> {
             )?;
             Ok(stmt.query_map([self.context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
         })?;
-        let mut hits = HashMap::new();
-        for (_, record) in batch {
-            let mut found = Vec::new();
-            for repo in &repos {
-                let out = Command::new("git")
-                    .args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"])
-                    .stdin(Stdio::null())
-                    .output()
-                    .map_err(|e| git_failed(repo, &e.to_string()))?;
-                // 1: no match.
-                if !out.status.success() && out.status.code() != Some(1) {
-                    return Err(git_failed(repo, String::from_utf8_lossy(&out.stderr).trim()));
-                }
-                found.extend(String::from_utf8_lossy(&out.stdout).lines().map(|path| format!("{repo}:{path}")));
-            }
-            hits.insert(record.id.clone(), found);
-        }
-        Ok(hits)
+        grep_hits_with(&*Ports::current().runner, &repos, batch)
     }
 
     /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`.
@@ -501,23 +484,15 @@ impl Run<'_> {
         let mut log_file = OpenOptions::new().create(true).append(true).open(&log).map_err(|e| io_failed("open", &log, &e))?;
         // The tail of pi's stderr is what this run appended after this point.
         let offset = log_file.metadata().map_err(|e| io_failed("read", &log, &e))?.len();
-        let mut command = Command::new(&launch.argv[0]);
-        command.args(&launch.argv[1..]);
-        for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CPD_")) {
-            command.env_remove(key);
-        }
-        command
-            .envs(&launch.env)
-            .current_dir(&dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(log_file.try_clone().map_err(|e| io_failed("use", &log, &e))?);
-        let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
-        let started = Instant::now();
-        let waited = wait_limited(&mut command, limit);
+        let environ: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
+        let timed = run_pi_timed_with(self.ports, &launch, &dir, &log, limit, &environ);
+        let (started_at, seconds, waited) = match timed {
+            Ok(Timed { started_at, seconds, waited }) => (started_at, seconds, Ok(waited)),
+            Err(e) => (crate::clock::timestamp(self.ports.clock.utc()), 0.0, Err(e)),
+        };
         let mut ran = Ran {
             started_at,
-            seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
+            seconds,
             model,
             tier,
             usage: None,
@@ -642,6 +617,36 @@ pub fn runs_path(home: &CpdHome, context: &ContextId) -> PathBuf {
 fn rejected_json(rejected: &[Problem]) -> Value {
     Value::Array(rejected.iter().map(|p| json!({"id": p.id.as_ref().map(ToString::to_string), "line": p.line, "what": p.what})).collect())
 }
+
+/// For each record of `batch`, the `<repo>:<path>` hits of `git -C <repo> grep -l -w <id> -- docs '*.md'` on each of
+/// `repos`, in order, through the [`Runner`]. Exit 1 is no hit; any other failure is `git_failed`.
+pub(super) fn grep_hits_with(runner: &dyn Runner, repos: &[String], batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
+    let mut hits = HashMap::new();
+    for (_, record) in batch {
+        let mut found = Vec::new();
+        for repo in repos {
+            let mut cmd = Command::new(GIT);
+            cmd.args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"]).stdin(Stdio::null());
+            let out = runner.output(&mut cmd, "git", GREP_DEADLINE).map_err(|e| match e {
+                RunFailed::Io(e) => git_failed(repo, &e.to_string()),
+                RunFailed::Timeout(e) => e,
+            })?;
+            // 1: no match.
+            if !out.status.success() && out.status.code() != Some(1) {
+                return Err(git_failed(repo, String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            found.extend(String::from_utf8_lossy(&out.stdout).lines().map(|path| format!("{repo}:{path}")));
+        }
+        hits.insert(record.id.clone(), found);
+    }
+    Ok(hits)
+}
+
+/// The program of the grep; the runner picks the real or the fake one.
+const GIT: &str = "git";
+
+/// How long one `git grep` of a repo may take.
+const GREP_DEADLINE: Duration = Duration::from_secs(60);
 
 fn git_failed(repo: &str, why: &str) -> CpdError {
     CpdError::new(ErrorCode::GitFailed, format!("Cannot search {repo} for the record ids: {why}.")).with("repo", repo)
@@ -856,35 +861,64 @@ mod pi_json {
 
 /// What became of a child that was given a time limit.
 #[derive(Debug)]
-enum Waited {
+pub(crate) enum Waited {
     /// It ended; `stdout` is everything it printed (empty when its stdout was not piped).
     Exited { status: ExitStatus, stdout: io::Result<Vec<u8>> },
     TimedOut,
 }
 
-/// Runs `command` and waits at most `limit`, reading its piped stdout meanwhile so a full pipe never stalls
-/// it; a child still alive then is killed and reaped.
-fn wait_limited(command: &mut Command, limit: Duration) -> io::Result<Waited> {
-    let mut child = command.spawn()?;
-    let reader = child.stdout.take().map(|mut out| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            out.read_to_end(&mut bytes).map(|_| bytes)
-        })
-    });
-    let deadline = Instant::now() + limit;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            let stdout = reader.map_or(Ok(Vec::new()), |r| r.join().expect("the reader of pi's output does not panic"));
-            return Ok(Waited::Exited { status, stdout });
-        }
-        if Instant::now() >= deadline {
-            child.kill()?;
-            child.wait()?;
-            return Ok(Waited::TimedOut);
-        }
-        std::thread::sleep(POLL);
+/// [`Runner::run`] of `call` for at most `limit`; a call that runs past it is [`Waited::TimedOut`].
+pub(super) fn wait_limited_with(runner: &dyn Runner, call: &Call, limit: Duration) -> io::Result<Waited> {
+    let call = Call { deadline: limit, ..call.clone() };
+    match runner.run(&call) {
+        Ok(out) => Ok(Waited::Exited { status: out.status, stdout: Ok(out.stdout) }),
+        Err(deadline::Failed::Timeout(_)) => Ok(Waited::TimedOut),
+        Err(deadline::Failed::Io(e)) => Err(e),
     }
+}
+
+/// Step 4's process on `runner`: `launch` in `dir`, its stderr appended to `log`, no stdin, under `limit`. The
+/// variables of `environ` (the names of the process's environment) that start with `CPD_` are removed.
+pub(super) fn run_pi_with(runner: &dyn Runner, launch: &pi::Launch, dir: &Path, log: &Path, limit: Duration, environ: &[String]) -> io::Result<Waited> {
+    let mut envs: Vec<(String, Option<String>)> = environ.iter().filter(|k| k.starts_with("CPD_")).map(|k| (k.clone(), None)).collect();
+    envs.extend(launch.env.iter().map(|(k, v)| (k.clone(), Some(v.clone()))));
+    let call = Call {
+        tool: "pi".to_owned(),
+        program: launch.argv[0].clone(),
+        args: launch.argv[1..].to_vec(),
+        envs,
+        cwd: Some(dir.to_path_buf()),
+        deadline: limit,
+        stdin: None,
+        stderr_to: Some(log.to_path_buf()),
+    };
+    wait_limited_with(runner, &call, limit)
+}
+
+/// How long a pi run took, as `runs.jsonl` writes it (contract §4.6 "The run log").
+#[derive(Debug)]
+pub(crate) struct Timed {
+    /// `ports.clock.utc()` when the run began, RFC 3339 with milliseconds.
+    pub(crate) started_at: String,
+    /// The seconds the run took on `ports.clock`, rounded to the millisecond.
+    pub(crate) seconds: f64,
+    pub(crate) waited: Waited,
+}
+
+/// [`run_pi_with`] on `ports`, timed by `ports.clock` (`started_at` and `seconds` of the run log): what `Run::run_pi` calls.
+pub(crate) fn run_pi_timed_with(
+    ports: &Ports,
+    launch: &pi::Launch,
+    dir: &Path,
+    log: &Path,
+    limit: Duration,
+    environ: &[String],
+) -> io::Result<Timed> {
+    let started_at = crate::clock::timestamp(ports.clock.utc());
+    let started = ports.clock.now();
+    let waited = run_pi_with(&*ports.runner, launch, dir, log, limit, environ)?;
+    let seconds = (ports.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0).round() / 1000.0;
+    Ok(Timed { started_at, seconds, waited })
 }
 
 /// The last [`TAIL_LINES`] lines of `log` after byte `offset`.
@@ -982,23 +1016,6 @@ mod tests {
         assert!(pi_json::parse(b"[1]\n").is_err());
         let no_usage = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}"#;
         assert!(pi_json::parse(no_usage.as_bytes()).unwrap_err().contains("malformed"));
-    }
-
-    #[test]
-    fn a_child_that_outlives_its_limit_is_killed() {
-        let started = Instant::now();
-        let waited = wait_limited(Command::new("sleep").arg("30"), Duration::from_millis(200)).unwrap();
-        assert!(matches!(waited, Waited::TimedOut), "{waited:?}");
-        assert!(started.elapsed() < Duration::from_secs(10));
-    }
-
-    #[test]
-    fn a_child_that_ends_in_time_reports_its_status() {
-        let Waited::Exited { status, .. } = wait_limited(Command::new("sh").args(["-c", "exit 3"]), Duration::from_secs(30)).unwrap() else {
-            panic!("it ended in time")
-        };
-        assert_eq!(status.code(), Some(3));
-        assert!(wait_limited(&mut Command::new("/nonexistent/pi"), Duration::from_secs(1)).is_err());
     }
 
     #[test]

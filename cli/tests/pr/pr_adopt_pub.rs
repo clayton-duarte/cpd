@@ -263,14 +263,15 @@ fn the_open_job_adopts_the_pull_request_of_the_head_and_creates_none() {
 }
 
 #[test]
-fn pr_open_repair_pushes_to_the_head_branch_and_adopts_the_pull_request() {
+fn pr_open_of_an_adopted_pr_queues_its_open_job_and_publishes_nothing() {
     let fx = fx("dispatch");
     let tip = fx.lead_sha();
 
     let out = fx.pr("open").ok();
 
-    assert_eq!(out["pr"]["status"], "open", "{out}");
-    fx.assert_published(&tip);
+    // `pr open` queues the PR's opener (contract §7.6); its merge publishes, as the test above shows.
+    assert_eq!((out["status"].as_str(), out["job"].as_str()), (Some("queued"), Some("open-web")), "{out}");
+    assert_ne!(fx.remote("feat/x").as_deref(), Some(tip.as_str()), "nothing is pushed by the command itself");
 }
 
 #[test]

@@ -467,6 +467,32 @@ impl NewEvent {
     pub fn error(text: impl Into<String>, source: &str, code: &str, message: &str, details: impl Serialize) -> NewEvent {
         make(Kind::Error, text, json!({"source": source, "code": code, "message": message, "details": details}))
     }
+
+    /// `incident-started` (contract §5.2, commands.md §25.1): `plans` is the array of Plan ids in
+    /// the incident; `until_pr` (the `<plan>/<key>` auto-end PR) is in `data` only when set.
+    pub fn incident_started(text: impl Into<String>, by: &str, reason: &str, started_at: &str, plans: impl Serialize, until_pr: Option<&str>) -> NewEvent {
+        let mut data = json!({"by": by, "reason": reason, "started_at": started_at, "plans": plans});
+        if let Some(until_pr) = until_pr {
+            data["until_pr"] = json!(until_pr);
+        }
+        make(Kind::IncidentStarted, text, data)
+    }
+
+    /// `incident-plans` (contract §5.2, hs-d664): a `cpd incident start --plan` on a live incident
+    /// that changed the Plan set or `until_pr`. `plans` is the new set; `until_pr` (the
+    /// `<plan>/<key>` auto-end PR) is in `data` only when set, mirroring `incident-started`.
+    pub fn incident_plans(text: impl Into<String>, by: &str, plans: impl Serialize, until_pr: Option<&str>) -> NewEvent {
+        let mut data = json!({"by": by, "plans": plans});
+        if let Some(until_pr) = until_pr {
+            data["until_pr"] = json!(until_pr);
+        }
+        make(Kind::IncidentPlans, text, data)
+    }
+
+    /// `incident-ended` (contract §5.2, commands.md §25.2): `cause` is `"manual"` or `"until-pr"`.
+    pub fn incident_ended(text: impl Into<String>, by: &str, ended_at: &str, cause: &str) -> NewEvent {
+        make(Kind::IncidentEnded, text, json!({"by": by, "ended_at": ended_at, "cause": cause}))
+    }
 }
 
 #[cfg(test)]
@@ -565,6 +591,15 @@ mod tests {
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
             Kind::ReviewOpened => vec![NewEvent::review_opened(T, s, s, s, 1)],
             Kind::ReviewClosed => vec![NewEvent::review_closed(T, s, s)],
+            Kind::IncidentStarted => vec![
+                NewEvent::incident_started(T, s, s, s, [s], None),
+                NewEvent::incident_started(T, s, s, s, [s], Some(s)),
+            ],
+            Kind::IncidentPlans => vec![
+                NewEvent::incident_plans(T, s, [s], None),
+                NewEvent::incident_plans(T, s, [s], Some(s)),
+            ],
+            Kind::IncidentEnded => vec![NewEvent::incident_ended(T, s, s, s)],
         }
     }
 

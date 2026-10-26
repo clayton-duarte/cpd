@@ -43,6 +43,9 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
+    /// Its archived Manager Sessions, oldest first (commands.md §17, hs-d630, hs-d633): the tree draws them in the
+    /// Context's collapsible archived section, after the archived Plans and forks.
+    pub archived_managers: Vec<SessionNode>,
     /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215):
     /// a `●` only from the Manager's own Inbox items (hs-d217), else the glyph of its state.
     pub dot: Dot,
@@ -50,6 +53,9 @@ pub struct ContextNode {
     pub manager_place: Option<Place>,
     /// Its live Manager is asleep (§2.2 "Asleep"): the Context row is drawn muted.
     pub manager_asleep: bool,
+    /// The id of the newest Event that names the Context, or its live Manager (hs-d686), 0 with none: the tree's
+    /// last-activity tie-break.
+    pub last_activity: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,12 +124,15 @@ pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Ve
 
 /// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
 /// its glyph and takes no item. Every view that draws a Lead's dot (the tree, Pulse) uses this one rule.
-/// `heads` are the Plans: a working Plan Lead of one with a failed Job gets the red loader (hs-d581).
+/// `heads` are the Plans: a working Plan Lead of one with a failed Job gets the red loader (hs-d581), else the bright
+/// colour of its Plan's phase (hs-d622); a Session that leads no Plan works cyan.
 pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [SessionNode]) {
     for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
         let lead_of = s.plan.as_ref().filter(|_| s.plan_lead);
-        let failed = lead_of.is_some_and(|p| heads.iter().any(|h| h.id == *p && h.counts.failed >= 1));
-        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed);
+        let head = lead_of.and_then(|p| heads.iter().find(|h| &h.id == p));
+        let failed = head.is_some_and(|h| h.counts.failed >= 1);
+        let phase = head.map(|h| h.phase);
+        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, lead_of), failed, phase);
     }
 }
 
@@ -131,11 +140,17 @@ pub(super) fn fill_dots(visible: &[Item], heads: &[PlanHead], sessions: &mut [Se
 /// snoozed. A snooze ends by the clock with no Event (§17): a view that shows the Inbox reads it again then. Read
 /// before the view's snapshot, so that a snooze that ends between the two reads is not missed.
 pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError> {
+    snooze_end_at(store, None)
+}
+
+/// [`snooze_end`] at `now` (contract §1.3 text), the database's clock when `None`: a view on a clock of its own passes its time.
+pub fn snooze_end_at(store: &mut Store, now: Option<&str>) -> Result<Option<OffsetDateTime>, CpdError> {
     let end: Option<String> = store.read(|conn| {
+        let now = db_now(conn, now)?;
         Ok(conn.query_row(
             "SELECT min(snoozed_until) FROM inbox_items
-              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
-            [],
+              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > ?1",
+            [now],
             |r| r.get(0),
         )?)
     })?;
@@ -143,7 +158,20 @@ pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError>
         .transpose()
 }
 
+/// `now` as given (contract §1.3 text), or the database's own clock.
+fn db_now(conn: &rusqlite::Connection, now: Option<&str>) -> Result<String, CpdError> {
+    match now {
+        Some(now) => Ok(now.to_owned()),
+        None => Ok(conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?),
+    }
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
+    tree_at(store, None)
+}
+
+/// [`tree`] with the Inbox's snoozes read at `now` (contract §1.3 text), the database's clock when `None`.
+pub fn tree_at(store: &mut Store, now: Option<&str>) -> Result<Tree, CpdError> {
     let home = store_home(store)?;
     let engine_running = model::engine_running(&home)?;
     store.read(|conn| {
@@ -166,24 +194,34 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         }
 
         // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
-        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let now = db_now(conn, now)?;
         let mut inbox = visible_items(conn, &now)?;
 
         let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
         let mut heads = plan_heads(conn, None)?;
         fill_dots(&inbox, &heads, &mut leads);
-        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
-        // the Manager's own items (hs-d215, hs-d217).
-        let managers: BTreeMap<ContextId, (Dot, Place, bool)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
-            .into_iter()
+        // Every Manager Session, live or archived (`core/src/context/manager.rs`). The live one fills the Context
+        // row's dot, a `●` only from the Manager's own items (hs-d215, hs-d217); each archived one goes into the
+        // Context's archived section, oldest first (hs-d630, hs-d633).
+        let all_managers: Vec<SessionNode> = sessions(conn, "s.role = 'manager'", &[])?;
+        let managers: BTreeMap<ContextId, (Dot, Place, bool, i64)> = all_managers
+            .iter()
+            .filter(|s| !s.is_archived())
             .map(|s| {
-                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false);
-                { let asleep = s.is_asleep(); (s.context, (dot, s.place, asleep)) }
+                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None), false, None);
+                (s.context.clone(), (dot, s.place, s.is_asleep(), s.last_activity))
             })
             .collect();
+        let mut archived_managers: BTreeMap<ContextId, Vec<SessionNode>> = BTreeMap::new();
+        for manager in all_managers.into_iter().filter(SessionNode::is_archived) {
+            archived_managers.entry(manager.context.clone()).or_default().push(manager);
+        }
 
-        let mut stmt = conn
-            .prepare("SELECT id, title, jira, archived_at FROM contexts WHERE deleted_at IS NULL ORDER BY id")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, jira, archived_at,
+                    (SELECT coalesce(max(e.id), 0) FROM events e WHERE e.context = contexts.id)
+               FROM contexts WHERE deleted_at IS NULL ORDER BY id",
+        )?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {
@@ -200,16 +238,20 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 })
                 .collect::<Vec<PlanNode>>();
             let archived_at: Option<String> = r.get(3)?;
+            let own_activity: i64 = r.get(4)?;
+            let manager_activity = managers.get(&context).map_or(0, |m| m.3);
             contexts.push(ContextNode {
                 dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
                 manager_place: managers.get(&context).map(|m| m.1),
                 manager_asleep: managers.get(&context).is_some_and(|m| m.2),
+                last_activity: own_activity.max(manager_activity),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
                 archived_at,
                 plans,
+                archived_managers: archived_managers.remove(&context).unwrap_or_default(),
                 id: context,
             });
         }

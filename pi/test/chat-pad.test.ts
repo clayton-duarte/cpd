@@ -1,78 +1,48 @@
 /**
- * The empty last row of the pi pane (docs/contract.md section 6.1, "The blank row", rule Q2a/Q3): at `session_start` the adapter calls
- * `ctx.ui.setStatus("cpd-pad", "")`, which makes pi's real footer draw one more, empty, line.
+ * The chat-slot pad (docs/contract.md section 6.1, decision hs-d684 item 3): the adapter no longer sets the `cpd-pad`
+ * status or a header for the blank rows; the uniform 1-cell pad is installed as the `cpd-pad` widget
+ * (`placement: "belowEditor"`), so pi's own footer and header are left untouched.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FooterComponent, initTheme } from "@earendil-works/pi-coding-agent";
 import { Fixture, planShow, waitFor } from "./fake.ts";
 
 const KEY = "cpd-pad";
-const SGR = /\x1b\[[0-9;]*m/g;
 
-/** The footer-data provider pi hands the footer: the extension statuses are what `ctx.ui.setStatus` recorded. */
-const statuses = new Map<string, string>();
-const footerData = {
-  getGitBranch: () => null,
-  getAvailableProviderCount: () => 1,
-  getExtensionStatuses: () => statuses,
-};
-const session = {
-  state: { model: undefined, thinkingLevel: "off" },
-  routedModel: undefined,
-  model: undefined,
-  modelRuntime: { isUsingSubscription: () => false },
-  getContextUsage: () => undefined,
-  sessionManager: {
-    getEntryCount: () => 0,
-    getSessionId: () => "s",
-    getLeafId: () => null,
-    getEntries: () => [],
-    getCwd: () => "/work/dir",
-    getSessionName: () => undefined,
-  },
-};
-const render = (width: number): string[] => new FooterComponent(session as never, footerData as never).render(width).map((l) => l.replace(SGR, ""));
-
-test("the adapter leaves one empty row at the bottom of the pi screen", async (t) => {
-  initTheme();
+test("the adapter installs the cpd-pad widget and leaves the footer and header alone", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
-  const calls: { key: string; text: string | undefined }[] = [];
+  const widgets: { key: string; options: unknown }[] = [];
+  const statuses: unknown[] = [];
+  const headers: unknown[] = [];
   const base = f.pi.ctx.bind(f.pi);
   f.pi.ctx = () => {
     const ctx = base();
-    // pi's `ctx.ui.setStatus(key, text)`: `undefined` deletes the entry, anything else (even "") sets it.
-    (ctx.ui as unknown as Record<string, unknown>).setStatus = (key: string, text: string | undefined) => {
-      calls.push({ key, text });
-      if (text === undefined) statuses.delete(key);
-      else statuses.set(key, text);
+    const ui = ctx.ui as unknown as Record<string, unknown>;
+    ui.setWidget = (key: string, _factory: unknown, options: unknown) => {
+      widgets.push({ key, options });
+    };
+    ui.setStatus = (...args: unknown[]) => {
+      statuses.push(args);
+    };
+    ui.setHeader = (factory: unknown) => {
+      headers.push(factory);
     };
     return ctx;
   };
-  statuses.clear();
-  statuses.set("other-ext", "KEEP");
-  const before = render(60);
-  assert.equal(before.length, 3, "control: the footer has two lines and the other extension's status line");
 
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
 
-  assert.deepEqual(calls.filter((c) => c.key === KEY), [{ key: KEY, text: "" }], "once, at session_start, with the empty text");
-  assert.deepEqual(calls.filter((c) => c.key !== KEY), [], "no other entry is replaced or deleted");
-  assert.equal(statuses.get("other-ext"), "KEEP");
+  assert.deepEqual(widgets, [{ key: KEY, options: { placement: "belowEditor" } }], "once, at session_start");
+  assert.deepEqual(statuses, [], "the cpd-pad status is not set");
+  assert.deepEqual(headers, [], "no header is installed");
 
-  statuses.delete("other-ext");
-  const lines = render(60);
-  assert.equal(lines.length, 3, "the footer gains exactly one line");
-  assert.equal(lines.at(-1), "", "its last line is empty");
-  assert.deepEqual(lines.slice(0, 2), before.slice(0, 2), "the lines above are unchanged");
-
-  // /reload: a new session_start sets the same entry again; still exactly one entry
+  // /reload: a new session_start installs the widget again; the old status/header stay untouched
   await f.pi.fire("session_start", { reason: "reload" });
-  assert.deepEqual(calls.filter((c) => c.key === KEY).map((c) => c.text), ["", ""]);
-  assert.deepEqual([...statuses.keys()], [KEY], "exactly one such entry after the second start");
-  assert.equal(render(60).length, 3);
+  assert.deepEqual(widgets.map((w) => w.key), [KEY, KEY], "set again at the reload");
+  assert.deepEqual(statuses, []);
+  assert.deepEqual(headers, []);
 });

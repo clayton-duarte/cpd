@@ -1,98 +1,145 @@
 //! The test commands (`[test-commands]`) and the protected paths (`[protected]`) come from the repo's policy file
-//! (contract §7.5, §7.7, §8.3), never from `.config/cpd.toml`: through the built binary against a temporary `$CPD_HOME`.
+//! (contract §7.5, §7.7, §8.3), never from `.config/cpd.toml`: the command tree in this process (`Fx::with_ports`) against
+//! a temporary `$CPD_HOME`, the repos and worktrees repos of the fake git. The repo file's commands are not run through
+//! `sh` (an external): the `sh` hook route of the `FakeRunner` answers each call by the command and the worktree it names.
 
 use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use common::{refused, Run, TestEnv};
+use common::fx::Fx;
+use common::{refused, Run};
 use cpd_core::git::{create_attempt_worktree, create_lead_worktree, Setup};
-use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Handler, Reply};
 use cpd_core::ids::{AttemptId, PlanId};
-use cpd_core::store::Store;
-use rusqlite::params;
+use cpd_core::ports::Ports;
 use serde_json::json;
 
 /// `build` fails while `BROKEN` exists; `run` fails unless `GREEN` exists.
+const BUILD: &str = "test ! -e BROKEN";
+const RUN: &str = "echo running; echo {{ tests }} > ../ran.txt; test -e GREEN";
 const COMMANDS: &str = "[test-commands]\nbuild = \"test ! -e BROKEN\"\nrun = \"echo running; echo {{ tests }} > ../ran.txt; test -e GREEN\"\n";
+
+/// The answer of `sh -c <command>` for the two commands of [`COMMANDS`], read off the worktree the call names (its `cwd`),
+/// as the shell would: `build` is `test ! -e BROKEN`; `run` prints `running` and is `test -e GREEN`. Any other
+/// command is not scripted: it answers exit 99 and the test fails on its call log.
+struct Sh;
+
+impl Handler for Sh {
+    fn handle(&self, call: &Call) -> Reply {
+        let cwd = call.cwd.as_deref().expect("a hook runs in a worktree");
+        let command = match call.args.as_slice() {
+            [flag, command] if flag == "-c" => command.as_str(),
+            other => panic!("sh was not called as `sh -c <command>`: {other:?}"),
+        };
+        if command == BUILD {
+            return Reply::exit(i32::from(cwd.join("BROKEN").exists()), "", "");
+        }
+        if command.starts_with("echo running; echo ") && command.ends_with("> ../ran.txt; test -e GREEN") {
+            return Reply::exit(i32::from(!cwd.join("GREEN").exists()), "running\n", "");
+        }
+        Reply::exit(99, "", &format!("no reply scripted for {command:?}\n"))
+    }
+}
 
 // ---------- pr add ----------
 
-fn pr_env() -> TestEnv {
-    let env = TestEnv::new();
-    env.fake_tmux();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
-    env.write_tmux_config("");
-    env.fake_tmux();
-    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    env.cpd(&["plan", "new", "pl", "--context", "ctx", "--title", "Plan"]).ok();
-    env
+const PLAN: &str = "pay";
+
+/// A repo `shop` of the fake git keyed `acme/shop`, with its commits on `main` and `origin/main`, and Plan `pl`
+/// (`grounding`) of Context `ctx` owned by `acme`, ready for `pr add`.
+fn pr_fx() -> (Fx, PathBuf) {
+    let fx = Fx::with_ports();
+    fx.env.write_config("version = 1\nmachine = \"m1\"\n");
+    let repo = fx.keyed_repo("shop").canonicalize().unwrap();
+    fx.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Payments', 'acme', 't', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead1', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+           VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead1', 't');",
+    );
+    (fx, repo)
 }
 
-fn add_tdd(env: &TestEnv, repo: &Path) -> Run {
-    env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change", "--shape", "tdd", "--plan", "pl"])
+fn add_tdd(fx: &Fx, repo: &Path) -> Run {
+    fx.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--title", "Change", "--shape", "tdd", "--plan", "pl"])
 }
 
 #[test]
 fn pr_add_of_a_tdd_pr_takes_the_test_commands_from_the_repo_file() {
-    let env = pr_env();
-    let repo = env.keyed_repo("shop").canonicalize().unwrap();
+    let (fx, repo) = pr_fx();
     assert!(!repo.join(".config/cpd.toml").exists());
-    env.repo_policy("acme", "shop", "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n");
-    add_tdd(&env, &repo).ok();
+    fx.env.repo_policy("acme", "shop", "[test-commands]\nbuild = \"true\"\nrun = \"true\"\n");
+    add_tdd(&fx, &repo).ok();
 }
 
 #[test]
 fn a_cpd_toml_in_the_repo_tree_does_not_configure_the_test_commands() {
-    let env = pr_env();
-    let repo = env.keyed_repo("shop").canonicalize().unwrap();
-    fs::create_dir_all(repo.join(".config")).unwrap();
-    fs::write(repo.join(".config/cpd.toml"), "[tests]\nbuild = \"true\"\nrun = \"true\"\n").unwrap();
-    env.git(&repo, &["add", "-A"]);
-    env.git(&repo, &["commit", "-q", "-m", "tests table"]);
-    env.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
-    env.repo_policy("acme", "shop", "");
-    let run = add_tdd(&env, &repo);
+    let (fx, repo) = pr_fx();
+    fx.commit_file(&repo, ".config/cpd.toml", "[tests]\nbuild = \"true\"\nrun = \"true\"\n", "tests table");
+    fx.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+    fx.env.repo_policy("acme", "shop", "");
+    let run = add_tdd(&fx, &repo);
     let error = refused(&run, "tests_unconfigured", 3);
     assert!(error["message"].as_str().unwrap().contains("policy/repos/acme/shop.toml"), "{run:?}");
 }
 
 // ---------- attempt submit ----------
 
-const PLAN: &str = "pay";
-
-struct Fx {
-    env: TestEnv,
+/// What the fixture made: the Fx and the Attempt `api-a1`'s worktree.
+struct Sub {
+    fx: Fx,
     work: PathBuf,
+    /// The Attempt's `sh` calls the route answered, in order.
+    sh: Arc<Mutex<Vec<Call>>>,
+}
+
+/// Records the `sh` calls and answers them as [`Sh`].
+struct Recorded(Arc<Mutex<Vec<Call>>>);
+
+impl Handler for Recorded {
+    fn handle(&self, call: &Call) -> Reply {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).push(call.clone());
+        Sh.handle(call)
+    }
 }
 
 /// A repo keyed `acme/pay` with `repo_file` as its policy file and `files` committed on `main`; Job `api` of `kind`
 /// (a `test` Job names `t::one` in `tests/t.rs`; an `impl` Job needs the merged test Job naming `t::one`).
-fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Fx {
-    let env = TestEnv::new();
-    let repo = env.keyed_repo("pay").canonicalize().unwrap();
-    let bare = env.root().join("pay-origin.git");
-    env.git(&repo, &["clone", "-q", "--bare", repo.to_str().unwrap(), bare.to_str().unwrap()]);
-    env.local_origin(&repo, &bare);
-    env.repo_policy("acme", "pay", repo_file);
+fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Sub {
+    let fx = Fx::with_ports();
+    let repo = fx.keyed_repo("pay").canonicalize().unwrap();
+    let bare = fx.env.root().join("pay-origin.git");
+    fx.git(fx.env.root(), &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()]);
+    fx.local_origin(&repo, &bare);
+    fx.git(&repo, &["push", "-q", "origin", "main"]);
+    fx.env.repo_policy("acme", "pay", repo_file);
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
-        env.git(&repo, &["config", key, value]);
+        fx.git(&repo, &["config", key, value]);
     }
     for (path, content) in files {
         let full = repo.join(path);
         fs::create_dir_all(full.parent().unwrap()).unwrap();
         fs::write(full, content).unwrap();
     }
-    env.git(&repo, &["add", "-A"]);
-    env.git(&repo, &["commit", "-q", "-m", "setup", "--allow-empty"]);
+    fx.git(&repo, &["add", "-A"]);
+    fx.git(&repo, &["commit", "-q", "-m", "setup", "--allow-empty"]);
+    fx.env.write_config("version = 1\nmachine = \"t\"\n");
     let plan = PlanId::parse(PLAN).unwrap();
-    let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("setup.log") };
-    let lead = create_lead_worktree(&repo, &plan, "main", &setup).unwrap().path;
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    env.sql(&format!(
+    let attempt = AttemptId::parse("api-a1").unwrap();
+    let setup = |log: &str| Setup { timeout: Duration::from_secs(30), log: fx.env.root().join(log) };
+    // The worktrees are made by the product's own functions, on the ports of the `Fx`: git is the fake git.
+    let (lead, made) = Ports::scope(&fx.fakes.ports, || {
+        let lead = create_lead_worktree(&repo, &plan, "main", &setup("setup.log")).unwrap().path;
+        let made = create_attempt_worktree(&repo, &lead, &plan, &attempt, &setup("attempt.log")).unwrap();
+        (lead, made)
+    });
+    fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -103,69 +150,74 @@ fn fixture(repo_file: &str, files: &[(&str, &str)], kind: &str) -> Fx {
         repo.display(),
         lead.display()
     ));
-    let attempt = AttemptId::parse("api-a1").unwrap();
-    let made = create_attempt_worktree(&repo, &lead, &plan, &attempt, &Setup { timeout: Duration::from_secs(30), log: env.root().join("attempt.log") }).unwrap();
-    let (tests, files) = if kind == "test" { (Some(r#"["t::one"]"#), Some(r#"["tests/t.rs"]"#)) } else { (None, None) };
-    Store::open(&home, 5000)
-        .unwrap()
-        .write("fixture", |tx| {
-            tx.execute(
-                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                   status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
-                 VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't', ?3, ?4, ?5)",
-                params!["f".repeat(64), tx.id(), kind, tests, files],
-            )?;
-            if kind == "impl" {
-                tx.execute(
-                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                                       created_txn, created_at, kind, tests, test_files, merged_sha)
-                       VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
-                               ?1, 't', 'test', '[\"t::one\"]', '[\"tests/\"]', 'c0ffee')",
-                    params![tx.id()],
-                )?;
-                tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 't')", [])?;
-            }
-            tx.execute(
-                "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
-                 VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', ?1, ?2, ?3, 't')",
-                params![made.branch, made.path.to_str().unwrap(), made.base_sha],
-            )?;
-            Ok(())
-        })
-        .unwrap();
-    Fx { env, work: made.path }
+    let (tests, test_files) = if kind == "test" { ("'[\"t::one\"]'", "'[\"tests/t.rs\"]'") } else { ("NULL", "NULL") };
+    let fingerprint = "f".repeat(64);
+    // One transaction, as the Jobs of a locked Plan are written: a Job and its Dependency of another transaction are `job_locked`.
+    let mut jobs = format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                           status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+         VALUES ('pay', 'repo', 'api', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fingerprint}', cpd_txn(), 't', '{kind}', {tests}, {test_files});"
+    );
+    if kind == "impl" {
+        jobs.push_str(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                               created_txn, created_at, kind, tests, test_files, merged_sha)
+               VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                       cpd_txn(), 't', 'test', '[\"t::one\"]', '[\"tests/\"]', 'c0ffee');
+             INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 't');",
+        );
+    }
+    fx.env.sql(&format!(
+        "{jobs}
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+         VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', '{}', '{}', '{}', 't');",
+        made.branch,
+        made.path.display(),
+        made.base_sha
+    ));
+    let sh = Arc::new(Mutex::new(Vec::new()));
+    let _ = (*fx.fakes.runner).clone().route("sh", Arc::new(Recorded(sh.clone())));
+    Sub { fx, work: made.path, sh }
 }
 
-impl Fx {
+impl Sub {
     fn commit(&self, path: &str, content: &str) {
-        let full = self.work.join(path);
-        fs::create_dir_all(full.parent().unwrap()).unwrap();
-        fs::write(&full, content).unwrap();
-        self.env.git(&self.work, &["add", "-A"]);
-        self.env.git(&self.work, &["commit", "-q", "-m", &format!("edit {path}")]);
+        self.fx.commit_file(&self.work, path, content, &format!("edit {path}"));
     }
 
     fn submit(&self) -> Run {
-        self.env.cpd_in(&self.work, &["attempt", "submit", "api-a1", "--plan", PLAN])
+        self.fx.cpd_in(&self.work, &["attempt", "submit", "api-a1", "--plan", PLAN])
     }
 
     fn status(&self) -> String {
-        self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+        self.fx.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+    }
+
+    /// The commands `sh -c` was asked to run, in order, each with its cwd.
+    fn sh_calls(&self) -> Vec<(String, PathBuf)> {
+        let calls = self.sh.lock().unwrap_or_else(PoisonError::into_inner);
+        calls.iter().map(|call| (call.args[1].clone(), call.cwd.clone().unwrap())).collect()
     }
 }
 
 #[test]
 fn a_test_job_submit_builds_and_runs_with_the_test_commands_of_the_repo_file() {
     let fx = fixture(COMMANDS, &[], "test");
+    let work = fx.work.canonicalize().unwrap();
     // A test that passes is not red.
     fx.commit("tests/t.rs", "// passes\n");
     fx.commit("GREEN", "x\n");
     let error = refused(&fx.submit(), "tests_not_red", 3);
     assert_eq!(error["details"]["tests"], json!(["t::one"]));
     assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    // The commands that ran are the repo file's, `build` then `run`, in the Attempt's worktree.
+    assert_eq!(
+        fx.sh_calls().iter().map(|(command, cwd)| (command.as_str(), cwd.canonicalize().unwrap())).collect::<Vec<_>>(),
+        [(BUILD, work.clone()), ("echo running; echo t::one > ../ran.txt; test -e GREEN", work.clone())]
+    );
     // A red one is accepted.
-    fx.env.git(&fx.work, &["rm", "-q", "GREEN"]);
-    fx.env.git(&fx.work, &["commit", "-q", "-m", "red"]);
+    fx.fx.git(&fx.work, &["rm", "-q", "GREEN"]);
+    fx.fx.git(&fx.work, &["commit", "-q", "-m", "red"]);
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
 }
@@ -180,6 +232,10 @@ fn an_impl_job_submit_runs_the_named_tests_with_the_run_command_of_the_repo_file
     fx.commit("GREEN", "x\n");
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
+    // `run` is the repo file's, given the named tests (the `test` Job's), after `build`.
+    let commands: Vec<String> = fx.sh_calls().into_iter().map(|(command, _)| command).collect();
+    assert_eq!(commands.len(), 4, "{commands:?}");
+    assert_eq!(commands[1], "echo running; echo t::one > ../ran.txt; test -e GREEN");
 }
 
 #[test]

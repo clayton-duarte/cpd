@@ -16,6 +16,9 @@ use crate::store::WriteTxn;
 /// `job-added`'s `by` of an `open` Job: engine E4.
 pub const BY_ENGINE: &str = "engine";
 
+/// `job-added`'s `by` of the opener stub `pr add` lays out (commands.md §9.4, hs-d573).
+pub const BY_TEMPLATE: &str = "pr add";
+
 /// The title of a Job cpd adds to a PR: the PR's own title, else its key (a PR that existed before migration `pr-title` has none).
 fn pr_title(pr: &PrRow) -> &str {
     pr.title.as_deref().unwrap_or(pr.key.as_str())
@@ -33,7 +36,7 @@ fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdErr
 }
 
 /// The fixed Spec of an `open` Job of `pr` (§2.2 "Job kinds", §3.4 A3).
-fn spec(pr: &PrRow) -> JobSpec {
+pub(crate) fn spec(pr: &PrRow) -> JobSpec {
     let (base, lead) = (&pr.base, &pr.lead_branch);
     let remote = format!("origin/{base}");
     if let Some(head_ref) = &pr.head_ref {
@@ -121,9 +124,9 @@ fn update_spec(pr: &PrRow) -> JobSpec {
 }
 
 /// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
-/// fingerprint stored at once, with `job-added` (`kind` `open`, `by` `engine`) in the same transaction. Returns its key.
-pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool) -> Result<JobKey, CpdError> {
-    insert(tx, plan, pr, tier, "open", BY_ENGINE, None, draft)
+/// fingerprint stored at once, with `job-added` (`kind` `open`, `by` the caller's) in the same transaction. Returns its key.
+pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool, by: &str) -> Result<JobKey, CpdError> {
+    insert(tx, plan, pr, tier, "open", by, None, draft)
 }
 
 /// Why an `update` Job is queued (`job-added`'s `reason`, §5.2).
@@ -148,6 +151,11 @@ impl Cause {
 /// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
 /// inserted, none when one was live.
 pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+    // A conflict-driven update is the poll's own work: a held Plan queues none (hs-d643, contract
+    // §3.7 E5). A feedback fix Job is the Lead's, and is queued as always.
+    if cause == Cause::Conflict && crate::incident::is_held(tx, plan) {
+        return Ok(None);
+    }
     let live: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'update' AND status IN ('queued', 'running'))",
         [plan.as_str(), pr.key.as_str()],
@@ -218,7 +226,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
     )?;
     let text = if draft {
         format!(
-            "Job {key} added to Plan {plan} by the engine as a draft: PR {pr} has a draft Job, so it is queued with the PR's drafts, or when none remains. \
+            "Job {key} added to Plan {plan} by {by} as a draft: PR {pr} has a draft Job, so it is queued with the PR's drafts, or when none remains. \
              It merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. Next: cpd job show {key} --plan {plan}",
             pr = pr.key
         )
@@ -231,7 +239,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         )
     } else {
         format!(
-            "Job {key} added to Plan {plan} by the engine: it merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. \
+            "Job {key} added to Plan {plan} by {by}: it merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. \
              It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
             pr = pr.key
         )

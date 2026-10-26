@@ -5,15 +5,15 @@
 
 use std::collections::BTreeMap;
 
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use cpd_core::error::CpdError;
 use cpd_core::events::{Event, highest_id};
+use cpd_core::host::spawn::Pid;
 use cpd_core::ids::{AttemptId, ContextId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::plan::Phase;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 
 use super::flow::{OpenEscalation, open_escalation};
@@ -100,6 +100,9 @@ pub struct OpenPr {
     pub lead_working: bool,
     /// The Plan of the owner has a failed Job (the tree's `failed` rule).
     pub plan_failed: bool,
+    /// The phase of the Plan that owns the pull request (`None` when no Plan owns it). Read from the Plan by
+    /// dot-impl-views, by the same subquery that reads `plan_failed`.
+    pub plan_phase: Option<Phase>,
     /// A merge of this pull request is running (a live merge marker, `crate::merge::marker`, hs-d495): the merge
     /// button shows the spinner instead and cannot be clicked. Not in the store: the view sets it from the markers.
     pub merging: bool,
@@ -226,7 +229,9 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 -- the tree's rule (`PlanHead::counts.failed >= 1`, tree.rs): the Plan has a failed Job
                 COALESCE((SELECT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status = 'failed')
                             FROM prs r JOIN plans p ON p.id = r.plan
-                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0)
+                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
+                (SELECT p.phase FROM prs r JOIN plans p ON p.id = r.plan
+                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
@@ -253,6 +258,10 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             lead_working: r.get(11)?,
             plan_failed: r.get(13)?,
+            plan_phase: r
+                .get::<_, Option<String>>(14)?
+                .map(|p| Phase::parse(&p).ok_or_else(|| bad_row(format!("{what} has owning Plan phase {p:?}"))))
+                .transpose()?,
             merging: false,
             repo,
             number,
@@ -325,14 +334,6 @@ fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     Ok(Slots { limit, held })
 }
 
-/// Whether process `pid` exists: `kill(pid, 0)` sends nothing.
-fn alive(pid: u32) -> bool {
-    match i32::try_from(pid).map(Pid::from_raw).map(|p| kill(p, None)) {
-        Ok(Ok(())) | Ok(Err(Errno::EPERM)) => true,
-        _ => false,
-    }
-}
-
 fn engine(conn: &Connection) -> Result<Engine, CpdError> {
     let latest: Option<(String, String, String)> = conn
         .query_row(
@@ -350,7 +351,7 @@ fn engine(conn: &Connection) -> Result<Engine, CpdError> {
         .and_then(|d| d["pid"].as_u64())
         .and_then(|p| u32::try_from(p).ok())
         .ok_or_else(|| bad_row(format!("a watch-started Event has data {data}")))?;
-    Ok(if alive(pid) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
+    Ok(if Ports::current().spawn.alive(Pid(pid)) { Engine::Running { pid, since: at } } else { Engine::Crashed { pid, since: at } })
 }
 
 fn escalations(conn: &Connection) -> Result<Vec<MachineEscalation>, CpdError> {

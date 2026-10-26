@@ -6,8 +6,7 @@ mod common;
 
 mod board;
 mod host;
-mod pill_lines;
-mod plannotator_env;
+mod host_pill;
 mod session_list_archived;
 mod session_asleep;
 mod session_first_message;

@@ -1,39 +1,44 @@
 //! `cpd config` and `cpd tiers` (commands.md §14.2, §14.3; contract §8, §9):
-//! the built binary, a temporary `$CPD_HOME`, and a fake pi install.
+//! a temporary `$CPD_HOME`, and a fake pi install. Every test runs in this process (`Fx`); `node` is a reply of the
+//! `FakeRunner` and a migration in progress waits on the `ManualClock`. One test, `tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown`,
+//! stays on the built binary and the real `node`: it runs pi's own module API (OS behaviour of an external).
 
 use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::io::ErrorKind;
+use std::time::Duration;
 
+use common::fx::Fx;
 use common::{CPD, Run, TestEnv, write_executable};
+use cpd_core::host::runner::Reply;
 use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
 
-fn config_with(env: &TestEnv, text: &str) -> Run {
-    env.write_config(text);
-    env.cpd(&["config"])
+fn config_with(fx: &Fx, text: &str) -> Run {
+    fx.env.write_config(text);
+    fx.cpd(&["config"])
 }
 
 // ---------------------------------------------------------------- config
 
 #[test]
 fn config_missing_file_is_config_missing() {
-    let env = TestEnv::new();
-    let run = env.cpd(&["config"]);
+    let fx = Fx::new();
+    let run = fx.cpd(&["config"]);
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_missing");
-    assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
 }
 
 #[test]
 fn config_defaults_context_distill_tier_to_gx() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
-    assert_eq!(out["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
+    assert_eq!(out["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
     assert_eq!(
         out["config"],
         json!({
@@ -41,17 +46,21 @@ fn config_defaults_context_distill_tier_to_gx() {
             "machine": "hs",
             "host": "hs",
             "concurrency": 3,
-            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
-            "context_recent_days": 1,
             "context_curation_min_records": 25,
             "loop_guard_turns": 20,
-            "open_tier": "S2",
+            "open_tier": "H3",
             "lead_pi_packages": ["npm:@plannotator/pi-extension@0.28.17"],
             "pi_adapter": "",
+            "context_engine_enabled": true,
+            "context_engine_bridge": "",
+            "context_engine_python": "",
+            "context_engine_dir": "",
+            "context_engine_timeout_ms": 30000,
+            "context_engine_reindex_timeout_ms": 600000,
             "plannotator_ports": "19432-19456",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
@@ -69,7 +78,8 @@ fn config_defaults_context_distill_tier_to_gx() {
                 "distill_minutes": 15,
                 "stall_seconds": 1200,
                 "pi_stop_seconds": 10,
-                "sleep_seconds": 3600
+                "sleep_seconds": 3600,
+                "archive_sleep_seconds": 86400
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
@@ -84,26 +94,38 @@ fn config_defaults_context_distill_tier_to_gx() {
     );
 }
 
+/// hs-d679: the test-slot pool is gone, so `test_concurrency` is not a config key: it is refused
+/// like every unknown key, with its key path.
+#[test]
+fn test_concurrency_is_not_a_config_key() {
+    let fx = Fx::new();
+    let run = config_with(&fx, &format!("{MINIMAL}test_concurrency = 2\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "test_concurrency");
+}
+
 /// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
 #[test]
 fn config_defaults_loop_guard_turns_to_20_and_takes_a_positive_integer() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["loop_guard_turns"], 20, "{out}");
     assert_eq!(out["sources"]["loop_guard_turns"], "default", "{out}");
 
-    let out = config_with(&env, &format!("{MINIMAL}loop_guard_turns = 3\n")).ok();
+    let out = config_with(&fx, &format!("{MINIMAL}loop_guard_turns = 3\n")).ok();
     assert_eq!(out["config"]["loop_guard_turns"], 3, "{out}");
     assert_eq!(out["sources"]["loop_guard_turns"], "file", "{out}");
 }
 
 #[test]
 fn config_loop_guard_turns_zero_negative_or_not_an_integer_is_config_invalid() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     // 1 is the floor and is accepted.
-    assert_eq!(config_with(&env, &format!("{MINIMAL}loop_guard_turns = 1\n")).ok()["config"]["loop_guard_turns"], 1);
+    assert_eq!(config_with(&fx, &format!("{MINIMAL}loop_guard_turns = 1\n")).ok()["config"]["loop_guard_turns"], 1);
     for bad in ["0", "-1", "1.5", "\"20\""] {
-        let run = config_with(&env, &format!("{MINIMAL}loop_guard_turns = {bad}\n"));
+        let run = config_with(&fx, &format!("{MINIMAL}loop_guard_turns = {bad}\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
@@ -114,9 +136,9 @@ fn config_loop_guard_turns_zero_negative_or_not_an_integer_is_config_invalid() {
 /// Context decision 'Team review Inbox' (contract §8.2): the channel and the User's Slack id are set together.
 #[test]
 fn config_takes_the_team_review_keys() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let shown = config_with(
-        &env,
+        &fx,
         &format!("{MINIMAL}[watch]\nteam_review_seconds = 900\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"U04DB4MTUMR\"\nbot_reviewers = [\"ci-bot\"]\n"),
     )
     .ok();
@@ -129,8 +151,8 @@ fn config_takes_the_team_review_keys() {
 /// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
 #[test]
 fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
-    let env = TestEnv::new();
-    let shown = |text: &str| config_with(&env, &format!("{MINIMAL}{text}")).ok()["config"].clone();
+    let fx = Fx::new();
+    let shown = |text: &str| config_with(&fx, &format!("{MINIMAL}{text}")).ok()["config"].clone();
     let config = shown("[watch]\ntick_seconds = 0.2\n[timeouts]\npi_stop_seconds = 1\n");
     assert_eq!(config["watch"]["tick_seconds"], 0.2);
     assert_eq!(config["timeouts"]["pi_stop_seconds"], 1);
@@ -142,16 +164,16 @@ fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
 
 #[test]
 fn config_shows_a_custom_plannotator_range() {
-    let env = TestEnv::new();
-    let out = config_with(&env, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nplannotator_ports = \"20000-20000\"\n").ok();
     assert_eq!(out["config"]["plannotator_ports"], "20000-20000");
     assert_eq!(out["sources"]["plannotator_ports"], "file");
 }
 
 #[test]
 fn config_has_one_source_per_leaf_key() {
-    let env = TestEnv::new();
-    let out = config_with(&env, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[tiers]\nO = \"p/opus\"\n[timeouts]\nask_minutes = 10\n").ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, "version = 1\nmachine = \"hs\"\nconcurrency = 5\n[tiers]\nO = \"p/opus\"\n[timeouts]\nask_minutes = 10\n").ok();
 
     // The leaves of `config`, as dotted paths.
     fn leaves(prefix: &str, value: &Value, into: &mut Vec<String>) {
@@ -174,7 +196,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -184,8 +206,8 @@ fn config_has_one_source_per_leaf_key() {
 
 #[test]
 fn config_accepts_every_key_with_a_value_at_its_boundary() {
-    let env = TestEnv::new();
-    let adapter = env.root().join("adapter");
+    let fx = Fx::new();
+    let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     let text = format!(
@@ -194,8 +216,6 @@ version = 1
 machine = "a1234567"
 host = "a-123456789012345678901234567890"
 concurrency = 1
-test_concurrency = 64
-context_recent_days = 3650
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
 retry_cap = 0
@@ -205,6 +225,12 @@ context_distill_tier = "GX"
 open_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
+context_engine_enabled = false
+context_engine_bridge = "/b/bridge.py"
+context_engine_python = "/b/venv/bin/python"
+context_engine_dir = "/b/engine"
+context_engine_timeout_ms = 4294967295
+context_engine_reindex_timeout_ms = 1
 plannotator_ports = "1-65535"
 [tiers]
 O = "a/b/c"
@@ -222,6 +248,7 @@ distill_minutes = 1
 stall_seconds = 0
 pi_stop_seconds = 1
 sleep_seconds = 1
+archive_sleep_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
@@ -243,10 +270,19 @@ work_session = "w"
         adapter = adapter.display(),
         socket = "s".repeat(32),
     );
-    let out = config_with(&env, &text).ok();
+    let defaults = config_with(&fx, MINIMAL).ok();
+    let out = config_with(&fx, &text).ok();
+    let source_keys = |v: &Value| -> Vec<String> { v["sources"].as_object().unwrap().keys().cloned().collect() };
+    // The table names every key of the schema: the defaults list them all, so a new key cannot be missed.
+    assert_eq!(source_keys(&out), source_keys(&defaults));
+    assert_eq!(out["config"]["context_engine_enabled"], false);
+    assert_eq!(out["config"]["context_engine_bridge"], "/b/bridge.py");
+    assert_eq!(out["config"]["context_engine_python"], "/b/venv/bin/python");
+    assert_eq!(out["config"]["context_engine_dir"], "/b/engine");
+    assert_eq!(out["config"]["context_engine_timeout_ms"], 4294967295u32);
+    assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
-    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
@@ -257,8 +293,8 @@ work_session = "w"
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
-    env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
-    assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
+    fx.env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
+    assert_eq!(fx.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
 }
 
 #[test]
@@ -382,23 +418,23 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[tmux]\ncockpit_session = \"cpd-work\"\n", "tmux.work_session"),
     ];
     // One env: `cpd config` reads the file and writes nothing, so each case sees only its own file.
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for (text, key) in bad {
-        let run = config_with(&env, text);
+        let run = config_with(&fx, text);
         let err = run.error();
         assert_eq!(run.exit, 1, "{text}");
         assert_eq!(err["code"], "config_invalid", "{text}: {err}");
         assert_eq!(err["details"]["key"], *key, "{text}: {err}");
-        assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
+        assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
     }
 }
 
 /// hs-d554: `open_tier` is a Worker Tier: H3 or S0-S3.
 #[test]
 fn config_refuses_an_open_tier_outside_the_worker_range() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for tier in ["H0", "H1", "H2", "S4", "S5", "O2"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");
         assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
@@ -409,9 +445,9 @@ fn config_refuses_an_open_tier_outside_the_worker_range() {
 /// hs-d562: an auxiliary run uses only `GX`.
 #[test]
 fn config_refuses_a_context_distill_tier_that_is_not_gx() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for tier in ["H0", "H4", "S1", "O2", "G0", "G5"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{tier}");
         assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
@@ -421,16 +457,16 @@ fn config_refuses_a_context_distill_tier_that_is_not_gx() {
             assert!(message.contains("GX") && message.contains("hs-d562"), "{message}");
         }
     }
-    let ok = config_with(&env, "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n").ok();
+    let ok = config_with(&fx, "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n").ok();
     assert_eq!(ok["config"]["context_distill_tier"], "GX");
 }
 
 /// hs-d562: a Lead or the Manager is never on G; `open_tier` is a Worker's Tier (hs-d554), and GX is not one.
 #[test]
 fn config_refuses_g_for_lead_manager_and_open_tier() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     for key in ["lead_tier", "manager_tier", "open_tier"] {
-        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"));
+        let run = config_with(&fx, &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{key}");
         assert_eq!(err["code"], "config_invalid", "{key}: {err}");
@@ -445,11 +481,11 @@ fn config_refuses_g_for_lead_manager_and_open_tier() {
 /// hs-d562: `tiers.G` has the shape of `tiers.O/S/H`.
 #[test]
 fn config_reads_a_tiers_g_model() {
-    let env = TestEnv::new();
-    let out = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
     assert_eq!(out["config"]["tiers"]["G"], "p/gemini");
     assert_eq!(out["sources"]["tiers.G"], "file");
-    let run = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
+    let run = config_with(&fx, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
@@ -458,9 +494,9 @@ fn config_reads_a_tiers_g_model() {
 
 #[test]
 fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let message = |text: &str| {
-        let run = config_with(&env, text);
+        let run = config_with(&fx, text);
         assert_eq!(run.exit, 1, "{text}");
         run.error()["message"].as_str().unwrap().to_owned()
     };
@@ -480,54 +516,54 @@ fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
 
 #[test]
 fn config_refuses_a_file_that_is_not_toml() {
-    let env = TestEnv::new();
-    let run = config_with(&env, "version = = 1\n");
+    let fx = Fx::new();
+    let run = config_with(&fx, "version = = 1\n");
     let err = run.error();
     assert_eq!(run.exit, 1);
     assert_eq!(err["code"], "config_invalid");
-    assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap());
+    assert_eq!(err["details"]["path"], fx.env.cpd_home().join("config.toml").to_str().unwrap());
 }
 
 #[test]
 fn config_refuses_a_config_toml_it_cannot_read() {
-    let env = TestEnv::new();
-    fs::create_dir(env.cpd_home().join("config.toml")).unwrap();
-    let run = env.cpd(&["config"]);
+    let fx = Fx::new();
+    fs::create_dir(fx.env.cpd_home().join("config.toml")).unwrap();
+    let run = fx.cpd(&["config"]);
     assert_eq!(run.error()["code"], "config_invalid");
     assert_eq!(run.exit, 1);
 }
 
 #[test]
 fn config_leaves_cpd_1s_config_json_alone() {
-    let env = TestEnv::new();
-    fs::write(env.cpd_home().join("config.json"), "{\"machine\": \"cpd1\"}").unwrap();
-    assert_eq!(env.cpd(&["config"]).error()["code"], "config_missing");
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    fs::write(fx.env.cpd_home().join("config.json"), "{\"machine\": \"cpd1\"}").unwrap();
+    assert_eq!(fx.cpd(&["config"]).error()["code"], "config_missing");
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["machine"], "hs");
-    assert_eq!(fs::read_to_string(env.cpd_home().join("config.json")).unwrap(), "{\"machine\": \"cpd1\"}");
+    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.json")).unwrap(), "{\"machine\": \"cpd1\"}");
 }
 
 #[test]
 fn config_is_read_only_and_idempotent() {
-    let env = TestEnv::empty();
-    env.write_config(MINIMAL);
-    let first = env.cpd(&["config"]);
-    let second = env.cpd(&["config"]);
+    let fx = Fx::with(TestEnv::bare());
+    fx.env.write_config(MINIMAL);
+    let first = fx.cpd(&["config"]);
+    let second = fx.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
     first.ok();
     // `policy/` is the test env's own owner file (`TestEnv::new`), not something `cpd config` wrote.
     let names: Vec<_> =
-        fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
+        fs::read_dir(fx.env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
     assert_eq!(names, ["config.toml"]);
-    assert_eq!(fs::read_to_string(env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
+    assert_eq!(fs::read_to_string(fx.env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
 }
 
 #[test]
 fn config_with_a_bad_argument_is_usage() {
-    let env = TestEnv::new();
-    env.write_config(MINIMAL);
+    let fx = Fx::new();
+    fx.env.write_config(MINIMAL);
     for args in [&["config", "--surprise"][..], &["config", "extra"], &["tiers", "--surprise"], &["tiers", "extra"]] {
-        let run = env.cpd(args);
+        let run = fx.cpd(args);
         assert_eq!(run.error()["code"], "usage", "{args:?}");
         assert_eq!(run.exit, 2);
     }
@@ -535,9 +571,9 @@ fn config_with_a_bad_argument_is_usage() {
 
 #[test]
 fn an_empty_cpd_home_variable_is_usage() {
-    let env = TestEnv::new();
-    let out = env.command(CPD).arg("config").env("CPD_HOME", "").output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
+    let fx = Fx::new();
+    let run = fx.cpd_with(fx.env.root(), &["config"], &[("CPD_HOME", "")]);
+    assert_eq!(run.exit, 2);
 }
 
 // ----------------------------------------------------------------- tiers
@@ -552,10 +588,10 @@ fn real_node() -> std::path::PathBuf {
 }
 
 /// A fake pi install with its agent directory at the test root: `bin/pi` (on
-/// `PATH`), `install/current-version` and a release whose two entry points are
-/// the given sources. Returns the release's entry points.
+/// `PATH`; an empty executable file, which `cpd` only locates and never runs), `install/current-version` and a
+/// release whose two entry points are the given sources. Returns the release's entry points.
 fn install_pi(env: &TestEnv, version: &str, coding_agent_js: &str, pi_ai_js: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    env.fake_pi("exit 0");
+    write_executable(&env.bin().join("pi"), "");
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install").join("current-version"), format!("{version}\n")).unwrap();
     let scope = env.root().join("install/releases").join(version).join("node_modules/@earendil-works");
@@ -588,6 +624,11 @@ export function getSupportedThinkingLevels(model) {
 
 const TIERS_CONFIG: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\n";
 
+/// [`cpd_isolated`] in this process: `PATH` is the env's `bin/` alone for the one call.
+fn fx_isolated(fx: &Fx, args: &[&str]) -> Run {
+    fx.cpd_with(fx.env.root(), args, &[("PATH", fx.env.bin().to_str().expect("a UTF-8 path"))])
+}
+
 /// `cpd <args>` with `PATH` = the test's `bin/` only, so nothing real is found.
 fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
     let out = env.command(CPD).args(args).env("PATH", env.bin()).output().expect("run cpd");
@@ -600,13 +641,31 @@ fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
 
 const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","minimal","low"],"H":["off","low","medium","high"],"G":["off","minimal","low","medium","high"]}"#;
 
+/// The levels pi's fake modules ([`FAKE_PI_AI`]) report for the models of [`TIERS_CONFIG`]: `p/m-low` has off, minimal,
+/// low and medium, the others every level.
+const FAKE_MODULES_LEVELS_JSON: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium"],"G":["off","minimal","low","medium","high","xhigh","max"]}"#;
+
+/// The catalog module's answer, as `node` prints it.
+fn levels(json: &str) -> Reply {
+    Reply::ok(&format!("{json}\n"))
+}
+
+/// An `Fx` on the fake ports with `config` written and pi installed (version `1.2.0`, no module sources: `node` is scripted).
+fn tiers_fx(config: &str) -> Fx {
+    let fx = Fx::with_ports();
+    fx.env.write_config(config);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx
+}
+
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
-    symlink(real_node(), env.bin().join("node")).unwrap();
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    install_pi(&fx.env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
+    // What pi's modules report (`FAKE_PI_AI`), as the scripted `node` prints it; the real `node` is the smoke below.
+    fx.fake_node(levels(FAKE_MODULES_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(
         out,
         json!({
@@ -624,11 +683,11 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    let (coding_agent, pi_ai) = install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    let (coding_agent, pi_ai) = install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.2.0");
     // `minimal` is dropped; the levels map to efforts by position.
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
@@ -637,9 +696,9 @@ fn tiers_runs_the_catalog_module_from_argv() {
     assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
 
     // The product reports canonical paths: /var is a symlink into /private on a Mac.
-    let calls = env.calls("node");
+    let calls = fx.calls("node");
     assert_eq!(calls.len(), 1);
-    let argv = &calls[0];
+    let argv = &calls[0].args;
     assert_eq!(argv[0], "--input-type=module");
     assert_eq!(argv[1], "-e");
     assert!(argv[2].contains("ModelRuntime.create({ allowModelNetwork: false })"), "the embedded module");
@@ -660,48 +719,40 @@ fn tiers_runs_the_catalog_module_from_argv() {
 /// The config of the tests that print G's default model: no `tiers.G`.
 const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n";
 
-/// hs-d562: G has no effort levels: the module's levels for G are ignored and `efforts` is empty.
 #[test]
 fn tiers_prints_g_without_an_effort() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG_DEFAULT_G);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
-    assert_eq!(env.calls("node")[0].last().unwrap(), "G=github-copilot/gemini-3.8-flash");
+    assert_eq!(fx.calls("node")[0].args.last().unwrap(), "G=github-copilot/gemini-3.8-flash");
+    // An `Fx` holds the process-wide lock: the first goes before the second.
+    drop(fx);
 
-    let env = TestEnv::new();
-    env.write_config(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
+    let fx = tiers_fx(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert_eq!(fx.cpd(&["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
 }
 
-/// hs-d562: pi not having G's model is `tier_model_unknown`, with G in `details.missing`.
 #[test]
 fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off"],"G":null}'"#);
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":["off"],"H":["off"],"G":null}"#));
+    let run = fx.cpd(&["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "tier_model_unknown");
     assert_eq!(run.exit, 1);
     assert_eq!(err["details"]["missing"], json!([{"letter": "G", "model": "p/m-g"}]));
 }
 
-/// hs-d562: G is never cached (no migration): a cache holding O, S and H rows only still serves, G from the config.
 #[test]
 fn a_cache_written_before_g_still_serves_the_catalog() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG_DEFAULT_G);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG_DEFAULT_G);
+    // Only the cold call has a reply: a second call of node would be unscripted and fail the test.
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -709,45 +760,24 @@ fn a_cache_written_before_g_still_serves_the_catalog() {
         ],
         "G is never cached"
     );
-    env.fake("node", "echo 'node must not run' >&2; exit 1");
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
     assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
-    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
-}
-
-/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
-/// marker in the file) and releases it after `hold`. Returns once the lock is held.
-fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
-    use nix::fcntl::{Flock, FlockArg};
-    use std::io::Write;
-    let locks = env.cpd_home().join("locks");
-    fs::create_dir_all(&locks).unwrap();
-    let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
-    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
-    lock.write_all(marker.to_string().as_bytes()).unwrap();
-    std::thread::spawn(move || {
-        std::thread::sleep(hold);
-        let _ = lock.set_len(0);
-        drop(lock);
-    })
+    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
 }
 
 /// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
-/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end.
+/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end. The migration is held until
+/// 1500 ms of the `ManualClock`'s time have passed, which the waiter's own retries pass.
 #[test]
 fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
-    let env = TestEnv::new();
-    env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let release = migrating_for(&env, Duration::from_millis(1500));
-    let start = Instant::now();
-    let run = cpd_isolated(&env, &["tiers"]);
-    let waited = start.elapsed();
-    release.join().unwrap();
+    let mut fx = Fx::with_ports();
+    fx.env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    fx.hold_store_migration(Duration::from_millis(1500));
+    let run = fx.cpd_capturing_stderr(&["tiers"]);
+    let waited = fx.fakes.clock.elapsed();
     assert_eq!(run.ok()["pi_version"], "1.2.0");
     assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
     assert_eq!(run.stderr.matches("waiting for cpd pid").count(), 1, "{run:?}");
@@ -756,83 +786,83 @@ fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
 /// `cpd config` reads only the config files: a migration in progress does not delay it, and it says nothing.
 #[test]
 fn config_does_not_wait_for_a_migration() {
-    let env = TestEnv::new();
-    env.write_config(MINIMAL);
-    let release = migrating_for(&env, Duration::from_millis(3000));
-    let start = Instant::now();
-    let run = env.cpd(&["config"]);
-    let waited = start.elapsed();
+    let mut fx = Fx::with_ports();
+    fx.env.write_config(MINIMAL);
+    fx.hold_store_migration(Duration::from_millis(3000));
+    let run = fx.cpd_capturing_stderr(&["config"]);
     run.ok();
-    // time-claim: `cpd config` does not wait for a 3 s migration; no per-poll signal from a command that never polls.
+    // `cpd config` does not wait for a 3 s migration: it never naps, so the virtual time has not moved.
+    let waited = fx.fakes.clock.elapsed();
     assert!(waited < Duration::from_millis(2500), "waited {waited:?}");
+    assert_eq!(fx.fakes.clock.naps(), Vec::<Duration>::new());
     assert_eq!(run.stderr, "");
-    release.join().unwrap();
 }
 
 #[test]
 fn tiers_prefers_pis_own_node_over_node_on_path() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", "echo 'the node on PATH must not run' >&2; exit 1");
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
 
-    // ~/.local/share/pi-node/current/bin/node, as pi's launcher looks for it.
-    let pi_node = env.home().join(".local/share/pi-node/current/bin");
-    fs::create_dir_all(&pi_node).unwrap();
-    let script = format!("#!/bin/sh\necho '{ALL_LEVELS_JSON}'\n");
-    write_executable(&pi_node.join("node"), &script);
-    cpd_isolated(&env, &["tiers"]).ok();
-    assert!(env.calls("node").is_empty());
+    // ~/.local/share/pi-node/current/bin/node, as pi's launcher looks for it (the runner is scripted: the file is
+    // only found, never run).
+    let pi_node = fx.env.home().join(".local/share/pi-node/current/bin/node");
+    fs::create_dir_all(pi_node.parent().unwrap()).unwrap();
+    write_executable(&pi_node, "");
+    fx.cpd(&["tiers"]).ok();
+    let calls = fx.calls("node");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].program, pi_node.to_str().unwrap(), "pi's node ran, not `node` on PATH");
     // The catalog is cached now; forget it so the next call reads pi again.
     for suffix in ["", "-wal", "-shm"] {
-        let _ = fs::remove_file(env.cpd_home().join(format!("cpd.db{suffix}")));
+        let _ = fs::remove_file(fx.env.cpd_home().join(format!("cpd.db{suffix}")));
     }
 
     // XDG_DATA_HOME moves it.
-    let xdg = env.root().join("xdg");
-    let xdg_node = xdg.join("pi-node/current/bin");
-    fs::create_dir_all(&xdg_node).unwrap();
-    write_executable(&xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n");
-    let out = env.command(CPD).arg("tiers").env("PATH", env.bin()).env("XDG_DATA_HOME", &xdg).output().unwrap();
-    let run = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() };
+    let xdg = fx.env.root().join("xdg");
+    let xdg_node = xdg.join("pi-node/current/bin/node");
+    fs::create_dir_all(xdg_node.parent().unwrap()).unwrap();
+    write_executable(&xdg_node, "");
+    fx.fake_once("node", Reply::exit(1, "", "xdg node ran\n"));
+    let run = fx.cpd_with(fx.env.root(), &["tiers"], &[("XDG_DATA_HOME", xdg.to_str().unwrap())]);
     let err = run.error();
     assert_eq!(err["code"], "catalog_failed");
     assert!(err["details"]["stderr"].as_str().unwrap().contains("xdg node ran"));
+    assert_eq!(fx.calls("node")[1].program, xdg_node.to_str().unwrap(), "the node under XDG_DATA_HOME ran");
 }
 
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    fx.env.write_config(TIERS_CONFIG);
+    fx.env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
     assert_eq!(run.exit, 1);
-    assert!(env.calls("node").is_empty());
+    assert!(fx.env.calls("node").is_empty());
 }
 
 #[test]
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    env.fake_pi("exit 0");
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    fx.env.write_config(TIERS_CONFIG);
+    fx.env.fake_pi("exit 0");
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
     assert_eq!(run.exit, 1);
 
     // A version that is not a plain name.
-    install_pi(&env, "1.2.0", "", "");
+    install_pi(&fx.env, "1.2.0", "", "");
     for bad in ["", "..", "../x", "1 2"] {
-        fs::write(env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
-        let run = cpd_isolated(&env, &["tiers"]);
+        fs::write(fx.env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
+        let run = fx_isolated(&fx, &["tiers"]);
         assert_eq!(run.error()["code"], "pi_not_found", "{bad:?}");
     }
 
     // A release without its entry points.
-    install_pi(&env, "1.2.0", "", "");
-    fs::remove_file(env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
-    let run = cpd_isolated(&env, &["tiers"]);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fs::remove_file(fx.env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
+    let run = fx_isolated(&fx, &["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "pi_not_found");
     assert!(err["details"]["missing"].as_str().unwrap().ends_with("pi-ai/dist/index.js"));
@@ -840,12 +870,13 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
+    let fx = Fx::with_ports();
+    fx.env.write_config(TIERS_CONFIG);
+    let env = &fx.env;
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
     fs::create_dir_all(agent.join("bin")).unwrap();
-    write_executable(&agent.join("bin/pi"), "#!/bin/sh\nexit 0\n");
+    write_executable(&agent.join("bin/pi"), "");
     fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");
@@ -854,58 +885,53 @@ fn tiers_finds_pi_through_a_symlink() {
         fs::write(release.join(package).join("dist/index.js"), "").unwrap();
     }
     fs::write(agent.join("install/current-version"), "3.0.0\n").unwrap();
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["pi_version"], "3.0.0");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "3.0.0");
 }
 
 #[test]
 fn tiers_catalog_failures_are_catalog_failed() {
-    let cases: &[(&str, &str)] = &[
-        ("node exits non-zero", "echo 'boom: cannot import' >&2; exit 3"),
-        ("node prints nothing", "exit 0"),
-        ("node prints text", "echo 'not json'"),
-        ("node prints a JSON array", "echo '[]'"),
-        ("node omits a Tier", r#"echo '{"O":["off"],"S":["off"],"G":["off"]}'"#),
-        ("a level pi does not have", r#"echo '{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}'"#),
-        ("a model with no usable level", r#"echo '{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}'"#),
-        ("levels that are not text", r#"echo '{"O":[1],"S":["off"],"H":["off"],"G":["off"]}'"#),
+    let cases: Vec<(&str, Reply)> = vec![
+        ("node exits non-zero", Reply::exit(3, "", "boom: cannot import\n")),
+        ("node prints nothing", Reply::ok("")),
+        ("node prints text", Reply::ok("not json\n")),
+        ("node prints a JSON array", levels("[]")),
+        ("node omits a Tier", levels(r#"{"O":["off"],"S":["off"],"G":["off"]}"#)),
+        ("a level pi does not have", levels(r#"{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}"#)),
+        ("a model with no usable level", levels(r#"{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}"#)),
+        ("levels that are not text", levels(r#"{"O":[1],"S":["off"],"H":["off"],"G":["off"]}"#)),
     ];
     // One env: a failure caches nothing, so each case runs node again.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    for (n, (name, body)) in cases.iter().enumerate() {
-        env.fake("node", body);
-        let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    for (n, (name, reply)) in cases.into_iter().enumerate() {
+        fx.fake_once("node", reply);
+        let run = fx.cpd(&["tiers"]);
         assert_eq!(run.error()["code"], "catalog_failed", "{name}");
         assert_eq!(run.exit, 1, "{name}");
-        assert_eq!(env.calls("node").len(), n + 1, "{name}: node ran");
+        assert_eq!(fx.calls("node").len(), n + 1, "{name}: node ran");
     }
 
     // The failing node's exit and stderr are in `details`.
-    env.fake("node", "echo 'boom: cannot import' >&2; exit 3");
-    let err = cpd_isolated(&env, &["tiers"]).error();
+    fx.fake_once("node", Reply::exit(3, "", "boom: cannot import\n"));
+    let err = fx.cpd(&["tiers"]).error();
     assert_eq!(err["details"]["exit"], 3);
     assert!(err["details"]["stderr"].as_str().unwrap().contains("boom: cannot import"));
 }
 
 #[test]
 fn tiers_without_any_node_is_catalog_failed() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(Reply::io(ErrorKind::NotFound));
+    let run = fx.cpd(&["tiers"]);
     assert_eq!(run.error()["code"], "catalog_failed");
     assert_eq!(run.exit, 1);
 }
 
 #[test]
 fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null,"G":["off"]}'"#);
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":null,"G":["off"]}"#));
+    let run = fx.cpd(&["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "tier_model_unknown");
     assert_eq!(run.exit, 1);
@@ -925,11 +951,11 @@ fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
 
 #[test]
 fn tiers_checks_pi_before_the_catalog_and_config_before_both() {
-    let env = TestEnv::new();
-    let run = cpd_isolated(&env, &["tiers"]);
+    let fx = Fx::new();
+    let run = fx_isolated(&fx, &["tiers"]);
     assert_eq!(run.error()["code"], "config_missing");
-    env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
-    assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "config_invalid");
+    fx.env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
+    assert_eq!(fx_isolated(&fx, &["tiers"]).error()["code"], "config_invalid");
 }
 
 /// The `tier_catalog` rows in `$CPD_HOME/cpd.db`: `(pi_version, letter, model, efforts)`.
@@ -954,15 +980,15 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
-    let env = TestEnv::empty();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    assert!(!env.cpd_home().join("cpd.db").exists());
-    cpd_isolated(&env, &["tiers"]).ok();
-    assert_eq!(env.calls("node").len(), 1);
+    let fx = Fx::with_ports_empty();
+    fx.env.write_config(TIERS_CONFIG);
+    install_pi(&fx.env, "1.2.0", "", "");
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    assert!(!fx.env.cpd_home().join("cpd.db").exists());
+    fx.cpd(&["tiers"]).ok();
+    assert_eq!(fx.calls("node").len(), 1);
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -970,42 +996,37 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
         ]
     );
     // One transaction, made through the store's write API, which records it.
-    assert_eq!(txn_commands(&env), ["migrate", "tiers"]);
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers"]);
 }
 
 #[test]
 fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let cold = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    let cold = fx.cpd(&["tiers"]);
     cold.ok();
-    // Nothing runs node now: the cache alone answers, identically.
-    env.fake("node", "echo 'node must not run' >&2; exit 1");
-    let warm = cpd_isolated(&env, &["tiers"]);
+    // Nothing runs node now (a second call would be unscripted): the cache alone answers, identically.
+    let warm = fx.cpd(&["tiers"]);
     assert_eq!(warm.stdout, cold.stdout);
-    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
-    assert_eq!(txn_commands(&env), ["migrate", "tiers"], "the warm call wrote nothing");
+    assert_eq!(fx.calls("node").len(), 1, "only the cold call ran node");
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers"], "the warm call wrote nothing");
 }
 
 #[test]
 fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
 
-    install_pi(&env, "1.3.0", "", "");
-    env.fake("node", r#"echo '{"O":["off","low"],"S":["off","low"],"H":["off"],"G":["off"]}'"#);
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    install_pi(&fx.env, "1.3.0", "", "");
+    fx.fake_once("node", levels(r#"{"O":["off","low"],"S":["off","low"],"H":["off"],"G":["off"]}"#));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0]));
     // The table is append-only (§4.4): the new version's rows join the old ones.
     assert_eq!(
-        cached_rows(&env),
+        cached_rows(&fx.env),
         [
             row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
             row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
@@ -1015,59 +1036,52 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
             row("1.3.0", "S", "p/m-sonnet", "[0,1]"),
         ]
     );
-    assert_eq!(txn_commands(&env), ["migrate", "tiers", "tiers"]);
+    assert_eq!(txn_commands(&fx.env), ["migrate", "tiers", "tiers"]);
 
-    // And the new version is warm.
-    env.fake("node", "exit 1");
-    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["pi_version"], "1.3.0");
+    // And the new version is warm: node has no reply left, a call of it would be unscripted.
+    assert_eq!(fx.cpd(&["tiers"]).ok()["pi_version"], "1.3.0");
 }
 
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    cpd_isolated(&env, &["tiers"]).ok();
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(ALL_LEVELS_JSON));
+    fx.cpd(&["tiers"]).ok();
 
-    env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
-    let out = cpd_isolated(&env, &["tiers"]).ok();
+    fx.env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    let out = fx.cpd(&["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
-    assert_eq!(env.calls("node").len(), 2);
-    assert!(cached_rows(&env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
+    assert_eq!(fx.calls("node").len(), 2);
+    assert!(cached_rows(&fx.env).contains(&row("1.2.0", "S", "p/m-other", "[0,1]")));
     // The unchanged models' rows are kept, not duplicated or rewritten.
-    assert_eq!(cached_rows(&env).len(), 4);
+    assert_eq!(cached_rows(&fx.env).len(), 4);
 }
 
 #[test]
 fn tiers_does_not_cache_a_failed_catalog() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"],"G":["off"]}'"#);
-    assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
-    assert_eq!(cached_rows(&env), []);
-    assert_eq!(txn_commands(&env), ["migrate"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_node(levels(r#"{"O":["off"],"S":null,"H":["off"],"G":["off"]}"#));
+    assert_eq!(fx.cpd(&["tiers"]).error()["code"], "tier_model_unknown");
+    assert_eq!(cached_rows(&fx.env), []);
+    assert_eq!(txn_commands(&fx.env), ["migrate"]);
 }
 
 #[test]
 fn tiers_is_idempotent() {
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
-    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
-    let first = cpd_isolated(&env, &["tiers"]);
-    let second = cpd_isolated(&env, &["tiers"]);
+    let fx = tiers_fx(TIERS_CONFIG);
+    fx.fake_once("node", levels(ALL_LEVELS_JSON));
+    let first = fx.cpd(&["tiers"]);
+    let second = fx.cpd(&["tiers"]);
     first.ok();
     assert_eq!(first.stdout, second.stdout);
-    assert_eq!(env.calls("node").len(), 1);
+    assert_eq!(fx.calls("node").len(), 1);
 }
 
 #[test]
 fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
-    let env = TestEnv::new();
+    let fx = Fx::new();
     let out = config_with(
-        &env,
+        &fx,
         "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nopen_tier = \"H3\"\n",
     )
     .ok();
@@ -1078,41 +1092,20 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     );
 }
 
-/// Contract §8.2 (hs-d549, hs-d551): `context_recent_days`, default 1, an integer >= 1.
-#[test]
-fn context_recent_days_defaults_to_1_and_refuses_0() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
-    assert_eq!(out["config"]["context_recent_days"], 1, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "default", "{out}");
-
-    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 7, "{out}");
-    assert_eq!(out["sources"]["context_recent_days"], "file", "{out}");
-
-    for bad in ["0", "-1", "1.5", "\"2\""] {
-        let run = config_with(&env, &format!("{MINIMAL}context_recent_days = {bad}\n"));
-        let err = run.error();
-        assert_eq!(run.exit, 1, "{bad}");
-        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
-        assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
-    }
-}
-
 /// Contract §8.2 (hs-d592): `context_curation_min_records`, default 25, an integer >= 1.
 #[test]
 fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integers() {
-    let env = TestEnv::new();
-    let out = config_with(&env, MINIMAL).ok();
+    let fx = Fx::new();
+    let out = config_with(&fx, MINIMAL).ok();
     assert_eq!(out["config"]["context_curation_min_records"], 25, "{out}");
     assert_eq!(out["sources"]["context_curation_min_records"], "default", "{out}");
 
-    let out = config_with(&env, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
+    let out = config_with(&fx, &format!("{MINIMAL}context_curation_min_records = 7\n")).ok();
     assert_eq!(out["config"]["context_curation_min_records"], 7, "{out}");
     assert_eq!(out["sources"]["context_curation_min_records"], "file", "{out}");
 
     for bad in ["0", "-3", "2.5", "\"ten\"", "true"] {
-        let run = config_with(&env, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
+        let run = config_with(&fx, &format!("{MINIMAL}context_curation_min_records = {bad}\n"));
         let err = run.error();
         assert_eq!(run.exit, 1, "{bad}");
         assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
@@ -1120,16 +1113,3 @@ fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integ
     }
 }
 
-/// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
-#[test]
-fn context_recent_days_above_3650_is_refused() {
-    let env = TestEnv::new();
-    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
-    assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
-
-    let run = config_with(&env, &format!("{MINIMAL}context_recent_days = 3651\n"));
-    let err = run.error();
-    assert_eq!(run.exit, 1);
-    assert_eq!(err["code"], "config_invalid", "{err}");
-    assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
-}

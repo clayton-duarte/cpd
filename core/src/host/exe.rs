@@ -6,15 +6,15 @@
 
 use std::cell::Cell;
 use std::ffi::OsStr;
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::error::{CpdError, ErrorCode};
+use crate::ports::Ports;
+use super::deadline::Failed;
+use super::runner::Runner;
 
 /// What tells one installed file from another: device, inode and modification time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,30 +66,22 @@ pub enum Refusal {
     Known,
 }
 
-/// The executable path recorded when this process started (hs-d151, fix 3).
-static STARTED_AS: OnceLock<PathBuf> = OnceLock::new();
-
 /// Records the path of this process's executable (`std::env::current_exe`).
 /// Call it first thing in `main`: once an install replaces the file,
 /// `current_exe()` reads `<path> (deleted)` on Linux. The first record wins.
 /// If the path cannot be found nothing is recorded, and starting a driver
 /// fails loud ([`started_as`]); other commands do not need it.
+/// The record is what `ProcessSpawn::self_exe` answers (`host::spawn`).
 pub fn record_start() {
     if let Ok(path) = std::env::current_exe() {
-        record_start_as(path);
+        super::spawn::record_start_as(path);
     }
-}
-
-fn record_start_as(path: PathBuf) {
-    let _ = STARTED_AS.set(path);
 }
 
 /// The path recorded at process start: what a driver is started from, the
 /// installed file there now. An error if nothing was recorded.
 pub fn started_as() -> Result<&'static Path, CpdError> {
-    STARTED_AS.get().map(PathBuf::as_path).ok_or_else(|| {
-        CpdError::new(ErrorCode::SpawnFailed, "The path of cpd's own executable was not recorded at process start (`current_exe` failed).")
-    })
+    super::spawn::recorded()
 }
 
 /// The path of this process's executable and its identity when the process started.
@@ -110,7 +102,7 @@ impl Exe {
         Exe::at(path)
     }
 
-    fn at(path: PathBuf) -> Result<Exe, CpdError> {
+    pub(crate) fn at(path: PathBuf) -> Result<Exe, CpdError> {
         let identity = Identity::of(&path).map_err(|e| {
             CpdError::new(ErrorCode::SpawnFailed, format!("Cannot stat cpd's own executable {}: {e}.", path.display()))
                 .with("path", path.display().to_string())
@@ -142,12 +134,27 @@ impl Exe {
         if self.refused.get() == Some(now) {
             return Err(Refusal::Known);
         }
-        let mut command = Command::new(&self.path);
-        command.arg("--version");
-        asks_to_open_store(command, timeout).map_err(|reason| {
+        asks_to_open_store_with(&*Ports::current().runner, &self.path, timeout).map_err(|reason| {
             self.refused.set(Some(now));
             Refusal::New(reason)
         })
+    }
+
+    /// [`Exe::exec`] through `spawn`: `Spawn::exec` of a `Launch` whose program is the path and whose arguments are `args`.
+    /// Returns only on failure, as `spawn_failed`.
+    pub fn exec_with<I, S>(&self, spawn: &dyn super::spawn::Spawn, args: I) -> CpdError
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let launch = super::spawn::Launch {
+            program: self.path.display().to_string(),
+            args: args.into_iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect(),
+            ..super::spawn::Launch::default()
+        };
+        let e = spawn.exec(&launch);
+        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", self.path.display()))
+            .with("path", self.path.display().to_string())
     }
 
     /// Replaces this process with the executable at the same path, `args` as its
@@ -157,44 +164,26 @@ impl Exe {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let e = Command::new(&self.path).args(args).exec();
-        CpdError::new(ErrorCode::SpawnFailed, format!("Cannot restart cpd from {}: {e}.", self.path.display()))
-            .with("path", self.path.display().to_string())
+        self.exec_with(&*Ports::current().spawn, args)
     }
 }
 
-/// Runs `command` (a cpd's `--version`: stdin null, killed after `timeout`)
+/// Runs `<program> --version` on `runner` (stdin null, killed after `timeout`)
 /// and decides from the `store` verdict in its JSON whether that cpd can open the
 /// store: the database does not exist (`store` null) or `store.opens` is true.
 /// `Err` is the reason it cannot, or why it could not be asked.
-fn asks_to_open_store(mut command: Command, timeout: Duration) -> Result<(), String> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot run --version: {e}"))?;
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("--version did not answer in {}s", timeout.as_secs_f32()));
-            }
-            Err(e) => return Err(format!("cannot wait for --version: {e}")),
-        }
+pub(crate) fn asks_to_open_store_with(runner: &dyn Runner, program: &Path, timeout: Duration) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.arg("--version").stdin(Stdio::null());
+    let out = match runner.output(&mut command, "cpd", timeout) {
+        Ok(out) => out,
+        Err(Failed::Io(e)) => return Err(format!("cannot run --version: {e}")),
+        Err(Failed::Timeout(_)) => return Err(format!("--version did not answer in {}s", timeout.as_secs_f32())),
     };
-    if !status.success() {
-        return Err(format!("--version failed: {status}"));
+    if !out.status.success() {
+        return Err(format!("--version failed: {}", out.status));
     }
-    let mut out = Vec::new();
-    if let Some(stdout) = child.stdout.as_mut() {
-        stdout.read_to_end(&mut out).map_err(|e| format!("cannot read --version: {e}"))?;
-    }
-    let json: serde_json::Value = serde_json::from_slice(&out)
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| format!("--version printed no JSON: {e}"))?;
     // The verdict (contract §4.5; commands.md §1.2): `null` without a database, else `opens`.
     match json.get("store") {
@@ -225,8 +214,8 @@ mod tests {
     #[test]
     fn started_as_is_the_recorded_path_not_current_exe() {
         assert!(started_as().is_err(), "nothing recorded yet");
-        record_start_as(PathBuf::from("/recorded/cpd"));
-        record_start_as(PathBuf::from("/second/cpd"));
+        crate::host::spawn::record_start_as(PathBuf::from("/recorded/cpd"));
+        crate::host::spawn::record_start_as(PathBuf::from("/second/cpd"));
         assert_eq!(started_as().unwrap(), Path::new("/recorded/cpd"));
         assert_ne!(started_as().unwrap(), std::env::current_exe().unwrap());
     }
@@ -308,62 +297,7 @@ mod tests {
         assert!(watched.changed());
     }
 
-    fn sh(script: &str) -> Command {
-        let mut c = Command::new("/bin/sh");
-        c.args(["-c", script]);
-        c
-    }
-
-    fn ask(script: &str) -> Result<(), String> {
-        asks_to_open_store(sh(script), Duration::from_secs(10))
-    }
-
-    const OPENS: &str = r#"{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}}"#;
     const REFUSES: &str = r#"{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"too new"},"unknown":[],"pending":[]}}"#;
-
-    #[test]
-    fn a_missing_database_or_a_store_that_opens_can_be_opened() {
-        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","store":null}'"#), Ok(()));
-        assert_eq!(ask(&format!("echo '{OPENS}'")), Ok(()));
-    }
-
-    #[test]
-    fn a_store_that_does_not_open_is_refused_with_the_verdicts_message() {
-        assert_eq!(ask(&format!("echo '{REFUSES}'")), Err("cannot open the store: too new".to_owned()));
-    }
-
-    #[test]
-    fn malformed_output_is_a_refusal() {
-        for script in [
-            "echo not json",
-            "true",
-            r#"echo '{"ok":true,"version":"x"}'"#,
-            // An integer-era cpd: no verdict.
-            r#"echo '{"ok":true,"version":"x"}'"#,
-            r#"echo '{"store":{}}'"#,
-            r#"echo '{"store":{"opens":"true"}}'"#,
-            r#"echo '{"store":{"opens":false}}'"#,
-            r#"echo '{"store":true}'"#,
-        ] {
-            assert!(ask(script).is_err(), "{script}");
-        }
-    }
-
-    #[test]
-    fn a_failing_command_is_a_refusal() {
-        let reason = ask(&format!("echo '{OPENS}'; exit 3")).unwrap_err();
-        assert!(reason.contains("--version failed"), "{reason}");
-        let reason = asks_to_open_store(Command::new("/nonexistent/cpd"), Duration::from_secs(10)).unwrap_err();
-        assert!(reason.contains("cannot run --version"), "{reason}");
-    }
-
-    #[test]
-    fn a_command_that_does_not_answer_is_killed_and_refused() {
-        let started = Instant::now();
-        let reason = asks_to_open_store(sh("exec sleep 60"), Duration::from_millis(200)).unwrap_err();
-        assert!(reason.contains("did not answer"), "{reason}");
-        assert!(started.elapsed() < Duration::from_secs(20));
-    }
 
     #[test]
     fn a_refused_file_is_asked_once_and_a_new_file_is_asked_again() {

@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 
 use super::check::{Check, Severity};
 use cpd_core::config::catalog::node;
-use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::Runner;
+use cpd_core::ports::Ports;
 
 /// A tool with its minimum, and the first version it is not allowed to be.
 struct Tool {
@@ -28,7 +30,12 @@ const TOOLS: [Tool; 4] = [
 
 /// The checks `git`, `tmux`, `pi`, `gh`, in that order.
 pub fn tools() -> Vec<Check> {
-    TOOLS.iter().map(check).collect()
+    tools_with(&*Ports::current().runner)
+}
+
+/// [`tools`] on `runner`.
+pub fn tools_with(runner: &dyn Runner) -> Vec<Check> {
+    TOOLS.iter().map(|tool| check(runner, tool)).collect()
 }
 
 /// The first dotted number run of `parts` or more numbers in `text`, cut to
@@ -49,13 +56,13 @@ fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
 
 /// stdout then stderr of `program args`, or why it did not run and succeed. A probe
 /// past doctor's deadline ([`super::DEADLINE`]) is killed with its group and fails `tool_timeout` (commands.md §14.1).
-fn run_tool(program: &OsStr, args: &[&str]) -> Result<String, String> {
+fn run_tool(runner: &dyn Runner, program: &OsStr, args: &[&str]) -> Result<String, String> {
     let name = program.to_string_lossy();
     let tool = std::path::Path::new(program).file_name().map_or(name.clone(), |n| n.to_string_lossy());
     // tmux is probed as every cpd call of it is: a UTF-8 client (hs-d463).
     let mut cmd = if tool == "tmux" { cpd_core::host::tmux::client(program) } else { Command::new(program) };
     cmd.args(args).stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, &tool, super::deadline()).map_err(|e| match e {
+    let out = runner.output(&mut cmd, &tool, super::deadline()).map_err(|e| match e {
         Failed::Io(e) if e.kind() == std::io::ErrorKind::NotFound => format!("`{name}` was not found."),
         Failed::Io(e) => format!("cannot run `{name}`: {e}."),
         Failed::Timeout(e) => format!("{}: {}", e.code().as_str(), e.message()),
@@ -68,9 +75,9 @@ fn run_tool(program: &OsStr, args: &[&str]) -> Result<String, String> {
     Ok(text)
 }
 
-fn check(tool: &Tool) -> Check {
+fn check(runner: &dyn Runner, tool: &Tool) -> Check {
     let fail = |message: String| Check::fail(tool.name, Severity::Error, message).expected(tool.expected);
-    let text = match run_tool(OsStr::new(tool.name), tool.args) {
+    let text = match run_tool(runner, OsStr::new(tool.name), tool.args) {
         Ok(text) => text,
         Err(message) => return fail(message),
     };
@@ -91,7 +98,12 @@ fn check(tool: &Tool) -> Check {
 
 /// `gh auth status` exits 0 (warn: only the `pr` commands need it).
 pub fn gh_auth() -> Check {
-    match run_tool(OsStr::new("gh"), &["auth", "status"]) {
+    gh_auth_with(&*Ports::current().runner)
+}
+
+/// [`gh_auth`] on `runner`.
+pub fn gh_auth_with(runner: &dyn Runner) -> Check {
+    match run_tool(runner, OsStr::new("gh"), &["auth", "status"]) {
         Ok(_) => Check::pass("gh_auth", Severity::Warn),
         Err(message) => Check::fail("gh_auth", Severity::Warn, message),
     }
@@ -99,8 +111,13 @@ pub fn gh_auth() -> Check {
 
 /// pi's Node (contract §9) runs `--version`.
 pub fn pi_node() -> Check {
+    pi_node_with(&*Ports::current().runner)
+}
+
+/// [`pi_node`] on `runner`.
+pub fn pi_node_with(runner: &dyn Runner) -> Check {
     let node = node();
-    match run_tool(node.as_os_str(), &["--version"]) {
+    match run_tool(runner, node.as_os_str(), &["--version"]) {
         Ok(text) => Check::pass("pi_node", Severity::Error).found(text.trim()).message(format!("ran {}", node.display())),
         Err(message) => Check::fail("pi_node", Severity::Error, message),
     }

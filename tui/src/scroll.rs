@@ -9,6 +9,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::cells;
 use crate::dialog::scroll::Scroll;
 
 /// The indent of a continuation row made by [`wrap`].
@@ -85,17 +86,39 @@ pub(crate) fn wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> 
     let indent = if width >= 2 * INDENT { INDENT } else { 0 };
     let mut rows = Vec::new();
     for line in lines {
-        let cells: Vec<(char, Style)> =
+        let styled: Vec<(char, Style)> =
             line.spans.iter().flat_map(|s| s.content.chars().map(|c| (c, line.style.patch(s.style)))).collect();
-        if cells.len() <= width {
+        let columns: usize = styled.iter().map(|(c, _)| cells::width(c.encode_utf8(&mut [0; 4]))).sum();
+        if columns <= width {
             rows.push(line.clone());
             continue;
         }
-        let (first, rest) = cells.split_at(width);
-        rows.push(row(0, first));
-        rows.extend(rest.chunks(width - indent).map(|chunk| row(indent, chunk)));
+        let mut start = 0;
+        let mut first = true;
+        while start < styled.len() {
+            let end = chunk_end(&styled, start, if first { width } else { width - indent });
+            rows.push(row(if first { 0 } else { indent }, &styled[start..end]));
+            start = end;
+            first = false;
+        }
     }
     rows
+}
+
+/// The end index of the row of `styled` starting at `start` that fits `columns` display columns, at least one
+/// character: a wide character that does not fit goes to the next row, never split in two.
+fn chunk_end(styled: &[(char, Style)], start: usize, columns: usize) -> usize {
+    let mut used = 0;
+    let mut end = start;
+    while end < styled.len() {
+        let w = cells::width(styled[end].0.encode_utf8(&mut [0; 4]));
+        if used + w > columns {
+            break;
+        }
+        used += w;
+        end += 1;
+    }
+    if end == start { start + 1 } else { end }
 }
 
 /// One row of styled characters after `indent` blanks, neighbours of one style merged into one span.

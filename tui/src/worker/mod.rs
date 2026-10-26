@@ -20,16 +20,19 @@
 pub(crate) mod render;
 mod view;
 
+use std::io::Write;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
-use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
+use ratatui::crossterm::event::Event;
 use ratatui::text::Line;
 
 use super::read::{self, JobStatus, Target, Worker};
 use super::runner::kept;
-use super::{Capture, run_view};
+use super::view_ports::{Ctx, Input, Tty, run_view_with};
+use super::{Capture, run_view_on};
 use cpd_core::args::PlanArg;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
@@ -37,13 +40,14 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::{PaneId, Tmux};
 use cpd_core::ids::{AttemptId, JobKey, PlanId};
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::store::Store;
 use view::View;
 
 /// How often the view looks at the session file and the store (§17).
-const CHECK: Duration = Duration::from_millis(500);
+pub(crate) const CHECK: Duration = Duration::from_millis(500);
 /// How long the loop waits for a key before it looks at the clock again.
-const TICK: Duration = Duration::from_millis(100);
+pub(crate) const TICK: Duration = Duration::from_millis(100);
 
 /// `cpd tui view worker <attempt> --plan <id>` or `cpd tui view worker --job <key> --plan <id>`.
 #[derive(clap::Args, Debug)]
@@ -59,8 +63,19 @@ pub struct Args {
     plan: PlanArg,
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    let plan = args.plan.require()?;
+/// What `cpd tui view worker` reads before it draws: a refusal (`plan_required`, `plan_not_found`, `attempt_not_found`,
+/// `job_not_found`) is returned here, with the screen untouched.
+struct Opened {
+    config: Config,
+    store: Store,
+    plan: PlanId,
+    target: Target,
+    snapshot: Worker,
+    follow: read::Follow,
+}
+
+fn open(args: Args) -> Result<Opened, CpdError> {
+    let plan = args.plan.require()?.clone();
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
@@ -69,14 +84,46 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
         (None, Some(job)) => Target::Job(job),
         _ => unreachable!("clap's group `target` takes exactly one"),
     };
-    // `plan_not_found`, `attempt_not_found` and `job_not_found` refuse before anything is drawn.
-    let snapshot = read::worker(&mut store, plan, &target)?;
+    let snapshot = read::worker(&mut store, &plan, &target)?;
     let follow = read::Follow::new(&mut store, &[], snapshot.events_cursor)?;
-    let output = run_view(
+    Ok(Opened { config, store, plan, target, snapshot, follow })
+}
+
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    let Opened { config, mut store, plan, target, snapshot, follow } = open(args)?;
+    let output = run_view_on(
+        ports,
         "worker",
         Capture::Mouse,
         || Ok(snapshot),
-        |terminal, snapshot| Ok(event_loop(terminal, &mut store, follow, plan, &target, snapshot)?),
+        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, &plan, &target, snapshot)?),
+    )?;
+    close_pane(&config)?;
+    Ok(output)
+}
+
+/// [`run`] on a terminal, its facts and its input that the caller gives (a test's `TestBackend`, scripted input and a
+/// [`Tty`] that says whether there is a terminal): the same refusals before anything is drawn, then the view on
+/// [`run_view_with`].
+pub fn run_on<B: Backend, W: Write>(
+    ports: &Ports,
+    args: Args,
+    tty: &mut dyn Tty,
+    out: &mut W,
+    terminal: Terminal<B>,
+    input: &mut dyn Input,
+) -> Result<Output, CpdError> {
+    let Opened { config, mut store, plan, target, snapshot, follow } = open(args)?;
+    let output = run_view_with(
+        ports,
+        tty,
+        out,
+        terminal,
+        input,
+        "worker",
+        Capture::Mouse,
+        || Ok(snapshot),
+        |ctx, snapshot| Ok(event_loop_with(ctx, &mut store, follow, &plan, &target, snapshot)?),
     )?;
     close_pane(&config)?;
     Ok(output)
@@ -97,8 +144,9 @@ struct Stamp {
     modified: Option<SystemTime>,
 }
 
-fn event_loop(
-    terminal: &mut DefaultTerminal,
+/// The loop of the view: input, the clock and frames are the [`Ctx`]'s.
+pub fn event_loop_with<B: Backend>(
+    ctx: &mut Ctx<B>,
     store: &mut Store,
     mut follow: read::Follow,
     plan: &PlanId,
@@ -108,18 +156,19 @@ fn event_loop(
     let mut view = View::new();
     let mut shown: Option<Stamp> = None;
     let mut snapshot = Some(first);
-    let mut last_check = Instant::now();
+    let mut last_check = ctx.ports.clock.now();
     refresh(&mut view, &mut shown, snapshot.as_ref());
     let mut redraw = true; // the pane is written to only when something changed: the Worker, its file, input, a resize
     loop {
-        if last_check.elapsed() >= CHECK {
+        if ctx.ports.clock.now().saturating_duration_since(last_check) >= CHECK {
             let before = (view.status.clone(), view.header.clone(), view.note.clone(), shown.clone());
-            last_check = Instant::now();
+            last_check = ctx.ports.clock.now();
             // a failed poll or read keeps the snapshot, the error is the note, the next check tries again (runner::kept)
             let mut error = None;
             let retry = !view.note.is_empty();
             if let Some(events) = kept(follow.poll(store), &mut error) {
                 if retry || !events.is_empty() {
+                    ctx.snapshot_read();
                     if let Some(worker) = kept(read::worker(store, plan, target), &mut error) {
                         snapshot = Some(worker);
                     }
@@ -130,14 +179,14 @@ fn event_loop(
             redraw |= before != (view.status.clone(), view.header.clone(), view.note.clone(), shown.clone());
         }
         if redraw {
-            terminal.draw(|f| view.draw(f))?;
+            ctx.draw(|f| view.draw(f))?;
             redraw = false;
         }
-        if !event::poll(TICK)? {
+        if !ctx.input.poll(TICK)? {
             continue;
         }
         redraw = true;
-        match event::read()? {
+        match ctx.input.read()? {
             Event::Key(key) => {
                 if view.key(key) {
                     return Ok(());
@@ -222,6 +271,9 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
 fn placeholder(text: &str) -> Line<'static> {
     Line::styled(format!(" {text}"), crate::palette::muted_text())
 }
+
+#[cfg(test)]
+mod screen_tests;
 
 #[cfg(test)]
 mod tests {

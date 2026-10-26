@@ -16,6 +16,7 @@ mod pr_cleanup_cancel;
 mod pr_crud;
 mod pr_local_needs;
 mod pr_merge;
+mod pr_open;
 mod pr_push;
 mod pr;
 mod pr_start;

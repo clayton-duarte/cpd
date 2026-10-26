@@ -1,7 +1,7 @@
 //! `pr rebase` (commands.md §9.3, contract §7.6): the Lead Branch onto the base
-//! in a gate worktree, guard U, a compare-and-swap of the Lead Branch, rule S,
-//! the Gate on the rebased commit in that gate worktree, and the push with a
-//! lease. No lock (hs-d243): merges into the PR go on meanwhile.
+//! in a temporary rebase worktree, guard U, a compare-and-swap of the Lead Branch,
+//! rule S, the Gate on the rebased commit, and the push with a lease. No lock
+//! (hs-d243): merges into the PR go on meanwhile.
 //!
 //! A conflict is not abandoned (hs-d289): the rebase stays in progress in the Lead
 //! worktree, and `--continue` (the rest of the rebase, the Gate, the push) or
@@ -9,23 +9,25 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
-use super::open::require_jobs_done;
-use super::{Args, Env, RebaseArgs, gate, gate_hooks, illegal_phase, pr_policy, refusal, short};
+use super::open::{agent, hold_refused, require_jobs_done};
+use super::{Args, Env, RebaseArgs, gate, gate_in, illegal_phase, pr_policy, short};
 use crate::config::{self, Catalog};
-use crate::policy::{Gate, Policy};
+use crate::policy::Policy;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
+use crate::git::{self, Push, RebaseWorktree, TAIL_LINES, tail};
+use crate::host::runner::Runner;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, CAS_RETRIES};
 use crate::output::Output;
 use crate::plan::Phase;
+use crate::ports::Ports;
 
 const COMMAND: &str = "pr rebase";
 
@@ -54,6 +56,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
@@ -84,9 +87,8 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         if let Some(files) = git::merge_conflicts(repo, &onto, &old)? {
             return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
         }
-        // 4. A gate worktree at S, rebased there: R'.
-        git::sweep_gate_worktrees(repo, &id, &key)?;
-        let worktree = GateWorktree::add(repo, &id, &key, &old)?;
+        // 4. A temporary rebase worktree at S, rebased there: R'.
+        let worktree = RebaseWorktree::add(repo, &id, &key, &old)?;
         let new = match rebase_onto(worktree.path(), &onto) {
             Ok(None) => match git::run::rev_parse(worktree.path(), "HEAD") {
                 Ok(new) => new,
@@ -140,14 +142,12 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         }
     }
 
-    // 8. The Gate on R', in the gate worktree; it is removed whatever the result.
+    // 8. The Gate on R' in the temporary worktree, `pre-start` then `pre-merge`; it is removed whatever the result.
     let again = format!("pr rebase --pr {key}");
-    // Under a `pr.gate` other than `local` (§8.3) nothing runs: the gate worktree only goes.
-    if policy.pr.gate == Gate::Local {
-        worktree.gate_and_remove(&gate_hooks(&env, &policy, &id, &pr))?.map_err(|r| refusal(&id, &pr, &new, r, &again))?;
-    } else {
-        worktree.remove()?;
-    }
+    let gated = gate_in(&env, &policy, &id, &pr, worktree.path(), &new, true, &again);
+    let removed = worktree.remove();
+    gated?;
+    removed?;
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
@@ -160,6 +160,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&mut env, &plan, &args)?.clone();
     let key = pr.key.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = Path::new(&pr.repo);
@@ -187,7 +188,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     // C4.
     let out = git::run::run(&lead, &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat())?;
     if out.code != 0 {
-        let files = unmerged(&lead)?;
+        let files = unmerged(&*Ports::current().runner, &lead)?;
         if !files.is_empty() {
             return Err(stopped(&id, &key, &lead, branch, files));
         }
@@ -201,7 +202,7 @@ fn resume(args: Args) -> Result<Output, CpdError> {
     }
     let new = git::run::rev_parse(&lead, "HEAD")?;
     // C5 and C6: no rule S, the Lead worktree is the one that was rebased.
-    gate(&env, &policy, &id, &pr, &new, &format!("pr rebase --pr {key}"))?;
+    gate(&env, &policy, &id, &pr, &lead, &new, &format!("pr rebase --pr {key}"))?;
     push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
 }
 
@@ -212,6 +213,7 @@ fn abort(args: Args) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let plan = env.plan(&id)?;
     let pr = plan.select(&args.pr)?.clone();
+    env.store.read(|conn| hold_refused(conn, &id, &pr.key, agent()))?;
     let lead = pr.lead(&id)?.clone();
     let branch = pr.lead_branch.as_str();
 
@@ -253,7 +255,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let old = git::run::rev_parse(lead, "HEAD")?;
     let out = git::run::run(lead, &[NO_EDITOR.as_slice(), &["rebase", &onto]].concat())?;
     if out.code != 0 {
-        let mut files = unmerged(lead)?;
+        let mut files = unmerged(&*Ports::current().runner, lead)?;
         if files.is_empty() && in_progress(lead)? {
             files = listed;
         }
@@ -267,7 +269,7 @@ fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &
     let new = git::run::rev_parse(lead, "HEAD")?;
     guard_u(env, id, &pr.key, repo, &old)?;
     let lease = last_seen(repo, branch)?;
-    gate(env, policy, id, pr, &new, &format!("pr rebase --pr {}", pr.key))?;
+    gate(env, policy, id, pr, lead, &new, &format!("pr rebase --pr {}", pr.key))?;
     push_rebased(env, args, id, pr, &old, &new, &lease)
 }
 
@@ -365,23 +367,28 @@ fn rejected(id: &PlanId, pr: &PrRow, sha: &str, stderr: String) -> CpdError {
 /// Whether a rebase is in progress in the Lead worktree (rule S step 0): `rebase-merge` or
 /// `rebase-apply` in its git dir.
 fn in_progress(lead: &Path) -> Result<bool, CpdError> {
+    in_progress_with(&*Ports::current().runner, lead)
+}
+
+/// [`in_progress`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn in_progress_with(runner: &dyn Runner, lead: &Path) -> Result<bool, CpdError> {
     for name in ["rebase-merge", "rebase-apply"] {
-        if git_path(lead, name)?.exists() {
+        if git_path(runner, lead, name)?.exists() {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn git_path(lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
-    let path = git::run::ok(lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
+fn git_path(runner: &dyn Runner, lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
+    let path = git::run::ok_with(runner, lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
     Ok(std::path::PathBuf::from(path.trim()))
 }
 
 /// The tip the stopped rebase started from, S (`rebase-merge/orig-head`, `rebase-apply/orig-head`).
 fn orig_head(lead: &Path) -> Result<String, CpdError> {
     for name in ["rebase-merge/orig-head", "rebase-apply/orig-head"] {
-        if let Ok(sha) = std::fs::read_to_string(git_path(lead, name)?) {
+        if let Ok(sha) = std::fs::read_to_string(git_path(&*Ports::current().runner, lead, name)?) {
             return Ok(sha.trim().to_owned());
         }
     }
@@ -389,8 +396,8 @@ fn orig_head(lead: &Path) -> Result<String, CpdError> {
 }
 
 /// The paths git has not merged (`git diff --name-only --diff-filter=U`).
-fn unmerged(lead: &Path) -> Result<Vec<String>, CpdError> {
-    let out = git::run::ok(lead, &["diff", "--name-only", "--diff-filter=U"])?;
+fn unmerged(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
+    let out = git::run::ok_with(runner, lead, &["diff", "--name-only", "--diff-filter=U"])?;
     Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect())
 }
 
@@ -398,8 +405,13 @@ fn unmerged(lead: &Path) -> Result<Vec<String>, CpdError> {
 /// (`git diff --name-only HEAD`) with a conflict marker line at column 0. `=======` alone is
 /// not one (a Markdown underline); it counts with a `<<<<<<<` line, which counts by itself.
 fn unresolved(lead: &Path) -> Result<Vec<String>, CpdError> {
-    let mut files: BTreeSet<String> = unmerged(lead)?.into_iter().collect();
-    let changed = git::run::ok(lead, &["diff", "--name-only", "-z", "HEAD"])?;
+    unresolved_with(&*Ports::current().runner, lead)
+}
+
+/// [`unresolved`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn unresolved_with(runner: &dyn Runner, lead: &Path) -> Result<Vec<String>, CpdError> {
+    let mut files: BTreeSet<String> = unmerged(runner, lead)?.into_iter().collect();
+    let changed = git::run::ok_with(runner, lead, &["diff", "--name-only", "-z", "HEAD"])?;
     for name in changed.split('\0').filter(|n| !n.is_empty()) {
         // A deleted file has no markers.
         let Ok(bytes) = std::fs::read(lead.join(name)) else { continue };
@@ -489,17 +501,21 @@ fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
 /// Whether origin's `reference` contains `sha`, as rule P checks (§7.4): its tip `X`
 /// (`git ls-remote`) is in the local object store and `sha` is an ancestor of it, or it.
 fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
-    let listed = git::run::ok(lead, &["ls-remote", "origin", reference])?;
-    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
-    let Some(tip) = tip else { return Ok(false) };
-    let known = git::run::run(lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
-    Ok(known && git::run::run(lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
+    remote_contains_with(&*Ports::current().runner, lead, reference, sha)
 }
 
-/// `error`, after removing the gate worktree; the removal's own failure is
-/// dropped (the leftover is swept once this process has ended), so that the
-/// error the Lead acts on is the one that stopped the command.
-fn removing(worktree: GateWorktree, error: CpdError) -> CpdError {
+/// [`remote_contains`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn remote_contains_with(runner: &dyn Runner, lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdError> {
+    let listed = git::run::ok_with(runner, lead, &["ls-remote", "origin", reference])?;
+    let tip = listed.lines().find(|l| l.split_whitespace().nth(1) == Some(reference)).and_then(|l| l.split_whitespace().next());
+    let Some(tip) = tip else { return Ok(false) };
+    let known = git::run::run_with(runner, lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
+    Ok(known && git::run::run_with(runner, lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
+}
+
+/// `error`, after removing the temporary rebase worktree; the removal's own failure is
+/// dropped, so that the error the Lead acts on is the one that stopped the command.
+fn removing(worktree: RebaseWorktree, error: CpdError) -> CpdError {
     let _ = worktree.remove();
     error
 }
@@ -525,7 +541,7 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
         let tip = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
         let contained = git::run::run(repo, &["merge-base", "--is-ancestor", &tip, snapshot])?;
         match contained.code {
-            0 => settle(env, &mut catalog, plan, key, &attempt)?,
+            0 => settle_in(env, &mut catalog, plan, key, &attempt)?,
             1 => {}
             code => {
                 return Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
@@ -541,8 +557,10 @@ fn guard_u(env: &mut Env, plan: &PlanId, key: &PrKey, repo: &Path, snapshot: &st
 /// store every 200 ms; whenever its driver lock is free (the driver is dead), R
 /// ends it. pi's catalog, which R needs only to pick a crashed Attempt's next
 /// Tier, is loaded the first time R runs.
-fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
-    let deadline = Instant::now() + GUARD_WAIT;
+/// Reads the time and takes the naps on `env.ports.clock`.
+pub(crate) fn settle_in(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrKey, attempt: &AttemptId) -> Result<(), CpdError> {
+    let clock = env.ports.clock.clone();
+    let deadline = clock.now() + GUARD_WAIT;
     loop {
         if crate::driver::lock::probe(&env.home, plan, attempt)?.is_some() {
             if catalog.is_none() {
@@ -556,7 +574,7 @@ fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrK
         if status != "merging" {
             return Ok(());
         }
-        if Instant::now() >= deadline {
+        if clock.now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::CasLost,
                 format!(
@@ -568,7 +586,7 @@ fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrK
             .with("pr", key.as_str())
             .with("attempt", attempt.to_string()));
         }
-        std::thread::sleep(GUARD_POLL);
+        clock.sleep(GUARD_POLL);
     }
 }
 
@@ -609,13 +627,18 @@ fn require_open<'a>(env: &mut Env, plan: &'a PlanPrs, args: &Args) -> Result<&'a
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict, after
 /// `git rebase --abort`; `None` when it rebased.
 fn rebase_onto(worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let out = git::run::run(worktree, &["rebase", onto])?;
+    rebase_onto_with(&*Ports::current().runner, worktree, onto)
+}
+
+/// [`rebase_onto`] on `runner` (a test passes a `FakeRunner`).
+pub(crate) fn rebase_onto_with(runner: &dyn Runner, worktree: &Path, onto: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let out = git::run::run_with(runner, worktree, &["rebase", onto])?;
     if out.code == 0 {
         return Ok(None);
     }
-    let conflicts = git::run::ok(worktree, &["diff", "--name-only", "--diff-filter=U"])?;
+    let conflicts = git::run::ok_with(runner, worktree, &["diff", "--name-only", "--diff-filter=U"])?;
     let files: Vec<String> = conflicts.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
-    let abort = git::run::run(worktree, &["rebase", "--abort"])?;
+    let abort = git::run::run_with(runner, worktree, &["rebase", "--abort"])?;
     if files.is_empty() || abort.code != 0 {
         let (what, failed) = if files.is_empty() {
             ("git rebase failed without a conflict", &out)

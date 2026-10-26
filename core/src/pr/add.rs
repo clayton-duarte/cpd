@@ -12,11 +12,13 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
 use super::{AddArgs, Env, gh, plan_phase};
+use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::job::open;
 use crate::policy::{Policy, PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -39,7 +41,8 @@ struct Stub {
 }
 
 /// The stub drafts a PR of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
-/// implementation (needs the tests); `docs` its docs; `config` one `work` Job.
+/// implementation (needs the tests); `docs` its docs; `config` one `work` Job. Every shape ends with the PR's opener stub
+/// (`open-<pr>`, kind `open`, no needs): its Ready rule is derived (contract §2.2 "Job kinds", §3.2, hs-d573).
 fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
     let stub = |suffix: &str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
         key: format!("{pr}-{suffix}"),
@@ -47,7 +50,7 @@ fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
         title: format!("{prefix}: {title}"),
         needs: needs.map(|n| format!("{pr}-{n}")),
     };
-    match shape {
+    let mut stubs = match shape {
         "tdd" => vec![
             stub("docs", "docs", "Docs", None),
             stub("tests", "test", "Red tests", Some("docs")),
@@ -55,7 +58,9 @@ fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
         ],
         "docs" => vec![stub("docs", "docs", "Docs", None)],
         _ => vec![stub("config", "work", "Config", None)],
-    }
+    };
+    stubs.push(Stub { key: format!("open-{pr}"), kind: "open", title: format!("Open the pull request: {title}"), needs: None });
+    stubs
 }
 
 /// The flags given, resolved.
@@ -378,6 +383,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         Some(needs_refs(&plan, &args.needs)?)
     };
     let mut env = Env::open()?;
+    let open_tier = env.config.open_tier;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
     let (name, policy_file, policy) = key_repo_policy(&mut env, &plan, &repo)?;
@@ -423,7 +429,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         rename_legacy(tx, &plan, legacy)?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
-                    let stubs = insert_stubs(tx, &plan, &wanted, appended)?;
+                    let stubs = insert_stubs(tx, &plan, &wanted, appended, open_tier)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
                         "PR {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
@@ -444,7 +450,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     for stub in &stubs {
                         let text = format!("Job {} added to Plan {plan} as draft (the {} template of PR {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
                         let needs: Vec<&String> = stub.needs.iter().collect();
-                        let event = NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false, false);
+                        let event = if stub.kind == "open" {
+                            NewEvent::job_added_by_cpd(text, key, stub.kind, "draft", &open_tier.to_string(), open::BY_TEMPLATE, None)
+                        } else {
+                            NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false, false)
+                        };
                         append(tx, event.plan(plan.clone()).job(JobKey::parse(&stub.key)?))?;
                     }
                     Ok(("waiting".to_owned(), lead_branch, appended, base, base_pr, needs, false))
@@ -699,10 +709,36 @@ fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[
 }
 
 /// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
-/// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template.
-fn insert_stubs(tx: &Connection, plan: &PlanId, wanted: &Wanted, appended: bool) -> Result<Vec<Stub>, CpdError> {
+/// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template. The opener stub is
+/// the exception: it carries the fixed Spec of [`open::spec`] and the config's `open_tier`, and no Dependency rows.
+fn insert_stubs(tx: &Connection, plan: &PlanId, wanted: &Wanted, appended: bool, open_tier: Tier) -> Result<Vec<Stub>, CpdError> {
     let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
+    let pr = load_prs(tx, plan)?.into_iter().find(|p| p.key == wanted.key).ok_or_else(|| {
+        CpdError::bad_row(format!("PR {} of Plan {plan} vanished while its template was being written", wanted.key))
+    })?;
     for stub in &stubs {
+        if stub.kind == "open" {
+            let spec = open::spec(&pr);
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, kind, created_txn, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'draft', ?11, 'open', cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
+                rusqlite::params![
+                    plan.as_str(),
+                    wanted.key.as_str(),
+                    stub.key,
+                    stub.title,
+                    open_tier.to_string(),
+                    spec.goal,
+                    spec.context,
+                    spec.touches.to_string(),
+                    spec.acceptance.to_string(),
+                    spec.out_of_scope.to_string(),
+                    appended,
+                ],
+            )?;
+            continue;
+        }
         tx.execute(
             "INSERT INTO jobs (plan, pr, key, title, status, appended, kind, created_txn, created_at)
              VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",

@@ -105,7 +105,7 @@ Ranked by value (what the User sees first, then lines deleted, then risk removed
 
 ### F4. The status line's widths: two options the engine computes in Rust, where tmux has `#{w:}`.
 
-- **Where:** `engine/src/watch/workers.rs:21-26,66-76,86-107` (`@cpd_workers_width`, `@cpd_workers_short_width`; `Counts::width`/`short_width`, `chars().count()` of the text,
+- **Where:** `engine/src/watch/workers.rs:21-26,66-76,86-107` (the two width options the engine set beside each text, since removed; `Counts::width`/`short_width`, `chars().count()` of the text,
   `+ CAPS`, set in the same call "so a status line never draws a width that belongs to another text"), `core/src/host/tmux.rs:211-229` (`preview_width!`,
   `version_width!` with `#{n:@cpd_preview}` and `#{n:@cpd_version}`, `long_fits!`, `fill_count!`), and the tests that set the width options by hand:
   `core/src/host/tmux/junctions.rs:15-22`, `tmux/palette.rs`, `cli/tests/session/pill_lines.rs:48-62`, `cli/tests/session/host.rs:509-527`, `cli/tests/tui/tui.rs:138,1045`.
@@ -117,7 +117,7 @@ Ranked by value (what the User sees first, then lines deleted, then risk removed
   `@w = "#[fg=colour8]\ue0b6#[reverse]workers 6/6#[noreverse]\ue0b4#[default]"` gives `#{w:@w}` = **13** (the display width, styles skipped; caps and 11 characters) and
   `#{n:@w}` = **62** (style bytes counted); `@c = "漢字ab"` gives `#{w:@c}` = **6** and `#{n:@c}` = **8**. So `#{w:@cpd_workers}` is the text's width, computed by tmux at
   expansion, always of the text it is about.
-- **Verdict:** `replace` `@cpd_workers_width` and `@cpd_workers_short_width` with `#{w:@cpd_workers}` / `#{w:@cpd_workers_short}` in `long_fits!` and `fill_count!`, and `#{n:…}` with `#{w:…}`
+- **Verdict:** `replace` the engine's two width options with `#{w:@cpd_workers}` / `#{w:@cpd_workers_short}` in `long_fits!` and `fill_count!`, and `#{n:…}` with `#{w:…}`
   for the preview and version text. The constants 12, 14, 3 (the pills' caps and joins) stay: they are cpd's layout. unverified: that `w:` exists in tmux 3.6, the
   oldest `supported_version` (the man read is 3.8's).
 - **Cost:** `engine/src/watch/workers.rs` (-20 lines: two options, the four-value state string becomes two), `tmux.rs` (4 macros), the five test files above (the
@@ -209,7 +209,7 @@ Replace/remove verdicts, in value order (none is applied; each waits for you):
 1. F1 (replace): the input box, the dialog wrap and the popup size count `char`s, so CJK text overflows (run: a 30-column box drew a 50-column row; the wrap gave 40-column rows for 20) - fix with `Line::width`, no dependency.
 2. F2 (replace, optional): the input box's editing -> `ratatui-textarea` 0.9.3 (2026-10-05, 918k downloads, ratatui 0.30; adds one crate to the lock, its other dependencies are already there): word/undo editing, soft wrap by grapheme, about -110 lines.
 3. F3 (replace): the `merge` popup is a second hand-made confirm; use `dialog::confirm` (about -125 lines, one look for every dialog).
-4. F4 (replace): the engine's `@cpd_workers_width`/`_short_width` -> tmux's `#{w:@cpd_workers}` (run on 3.8: display width, styles skipped), -20 lines in the engine and nothing to keep in step.
+4. F4 (replace): the engine's two width options -> tmux's `#{w:@cpd_workers}` (run on 3.8: display width, styles skipped), -20 lines in the engine and nothing to keep in step.
 5. F5 (replace): `dialog::run` and `merge::run` hand-roll `run_view`'s terminal set-up (no `Drop` guard: a panic leaves the mouse on); a choice about the order of two refusals.
 6. F6 (replace): three popup builders, two `sh_quote`s and two newest-client parsers -> one helper (about -60 lines); `display-popup -e` (run) could drop the quoting.
 7. F7 (flag, keep): the tmux-format tests start a real tmux, against the `tests` policy: decide an exception or not.

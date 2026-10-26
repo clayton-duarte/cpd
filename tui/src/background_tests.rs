@@ -47,8 +47,8 @@ fn jobs_run_one_at_a_time_in_order_and_each_posts_one_signal() {
     assert_eq!(background.finished(), Some(1));
     assert!(matches!(pump.wait(None), Signal::Read));
     assert_eq!(background.finished(), Some(2));
-    drop(input);
     assert!(matches!(pump.wait(Some(Instant::now())), Signal::Due));
+    drop(input);
 }
 
 #[test]

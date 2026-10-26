@@ -16,6 +16,7 @@ use super::Outcome;
 use super::scroll::Scroll;
 use super::validate::Validator;
 use crate::box_widget::{BoxWidget, Walls, geometry, spacing};
+use crate::cells;
 use crate::input_box;
 use crate::palette;
 use crate::pill;
@@ -30,7 +31,7 @@ pub(crate) const REFUSAL_ROWS: usize = 2;
 
 /// What kind of dialog this is, with the state that kind has.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
+pub enum Mode {
     /// A question, with the `<yes>` and `Cancel` buttons.
     Confirm { yes: String },
     /// A line of text: the prompt above it, the `OK` and `Cancel` buttons. `refused` is why the last accept was refused.
@@ -47,7 +48,7 @@ pub(crate) enum Mode {
 /// One row of a `checklist`: the `--items` file is a JSON array of these.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Row {
+pub struct Row {
     pub(crate) id: String,
     pub(crate) text: String,
     pub(crate) detail: String,
@@ -79,7 +80,7 @@ pub(crate) const APPROVE: &str = "Approve";
 
 /// The one line of an `input`, with its cursor (a character index).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Field {
+pub struct Field {
     chars: Vec<char>,
     cursor: usize,
 }
@@ -185,16 +186,34 @@ pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut rows = Vec::new();
     for line in text.lines() {
-        let mut rest: Vec<char> = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-        while rest.len() > width {
-            let cut = (0..=width).rev().find(|&i| rest[i] == ' ' && rest[..i].iter().any(|c| *c != ' '));
-            let (take, skip) = cut.map_or((width, 0), |i| (i, 1));
-            rows.push(rest[..take].iter().collect::<String>().trim_end().to_owned());
-            rest.drain(..take + skip);
+        let clean: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        let mut rest = clean.as_str();
+        while cells::width(rest) > width {
+            let fits = fitting(rest, width);
+            let after = &rest[fits.len()..];
+            let split = fits.char_indices().rev().find(|&(i, c)| c == ' ' && fits[..i].chars().any(|c| c != ' '));
+            let (head, tail) = if after.starts_with(' ') && fits.chars().any(|c| c != ' ') {
+                (fits, &after[1..])
+            } else if let Some((i, _)) = split {
+                (&fits[..i], &rest[i + 1..])
+            } else {
+                (fits, after)
+            };
+            rows.push(head.trim_end().to_owned());
+            rest = tail;
         }
-        rows.push(rest.into_iter().collect());
+        rows.push(rest.to_owned());
     }
     rows
+}
+
+/// The longest prefix of `rest` within `width` columns, at least one character, so wrapping always advances.
+fn fitting(rest: &str, width: usize) -> &str {
+    let fits = cells::take(rest, width);
+    if !fits.is_empty() {
+        return fits;
+    }
+    &rest[..rest.chars().next().map_or(0, char::len_utf8)]
 }
 
 /// The label of an input's box: its prompt without trailing whitespace and one trailing `:`.
@@ -205,14 +224,11 @@ pub(super) fn label(prompt: &str) -> String {
 
 /// `text` cut to `width` columns, with `…` at the cut.
 fn cut(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    text.chars().take(width.saturating_sub(1)).chain(std::iter::once('…')).collect()
+    cells::truncate(text, width)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Dialog {
+pub struct Dialog {
     title: String,
     /// The question of `confirm`, the prompt of `input`, the body of `text`.
     text: String,
@@ -223,7 +239,7 @@ pub(crate) struct Dialog {
 }
 
 impl Dialog {
-    pub(crate) fn new(title: String, text: String, mode: Mode) -> Dialog {
+    pub fn new(title: String, text: String, mode: Mode) -> Dialog {
         Dialog { title, text, mode, scroll: Scroll::default(), area: Rect::default() }
     }
 
@@ -297,7 +313,7 @@ impl Dialog {
     /// buttons drawn whole are returned: when the two do not fit with one blank cell between, the accepting one alone (A13).
     pub(crate) fn buttons(&self, area: Rect) -> Vec<Rect> {
         let row = parts_in(area).buttons;
-        let widths: Vec<u16> = self.labels().iter().map(|l| u16::try_from(l.chars().count()).unwrap_or(u16::MAX).saturating_add(pill::CAPS_COLUMNS)).collect();
+        let widths: Vec<u16> = self.labels().iter().map(|l| u16::try_from(cells::width(l)).unwrap_or(u16::MAX).saturating_add(pill::CAPS_COLUMNS)).collect();
         let fits = |n: usize| {
             let need = widths[..n].iter().map(|w| u32::from(*w)).sum::<u32>() + n.saturating_sub(1) as u32;
             u32::from(row.width) >= need
@@ -339,7 +355,7 @@ impl Dialog {
     /// Draws the dialog as a popup of `area`.
     pub(crate) fn draw_in(&mut self, f: &mut Frame, area: Rect) {
         self.fit(area);
-        let text: String = self.title.chars().take(usize::from(area.width).saturating_sub(6)).collect();
+        let text: String = cells::take(&self.title, usize::from(area.width).saturating_sub(6)).to_owned();
         let title = Line::from(pill::pill(text.clone(), palette::pill_static()));
         let frame = BoxWidget::new(Walls::Full, palette::muted_text(), Body { dialog: self });
         f.render_widget(if text.is_empty() { frame } else { frame.title(title) }, area);
@@ -359,8 +375,9 @@ impl Dialog {
                 let box_width = usize::from(parts.body.width);
                 let avail = usize::from(parts.body.height).saturating_sub(2 + REFUSAL_ROWS).max(1);
                 let tw = input_box::text_width(box_width);
-                let start = (cursor / tw + 1).saturating_sub(avail);
-                let shown = avail.min(input_box::text_rows(chars.len(), box_width));
+                let (cursor_row, _) = input_box::cursor_at(chars, cursor, tw);
+                let start = (cursor_row + 1).saturating_sub(avail);
+                let shown = avail.min(input_box::wrapped_rows(chars, cursor, tw));
                 let height = u16::try_from(shown + 2).unwrap_or(u16::MAX);
                 let wall = Rect::new(parts.body.x, parts.body.y, parts.body.width, height).intersection(parts.body);
                 input_box::boxed(&label(&self.text), chars, cursor, true, start, box_width).render(wall, buf);
@@ -408,7 +425,7 @@ impl Dialog {
             // right-aligned: its last character one blank before the right pill's left cap, or at column W-3 with no right pill
             let end = buttons.get(1).map_or(parts.buttons.right(), |r| r.x.saturating_sub(1));
             let left_pill_end = buttons[0].right();
-            let len = u16::try_from(position.chars().count()).unwrap_or(u16::MAX);
+            let len = u16::try_from(cells::width(&position)).unwrap_or(u16::MAX);
             if end >= left_pill_end.saturating_add(len).saturating_add(1) {
                 let rect = Rect::new(end - len, parts.buttons.y, len, 1);
                 Paragraph::new(position).style(palette::muted_text()).render(rect, buf);

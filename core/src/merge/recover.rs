@@ -43,16 +43,32 @@ pub fn recover_attempt(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, id: &Att
 fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Option<End>, CpdError> {
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     let lead_ref = format!("refs/heads/{}", attempt.lead_branch);
-    let check = git::run::rev_parse(&attempt.repo, &format!("refs/heads/{}", attempt.branch)).and_then(|tip| {
-        let out = run(&attempt.repo, &["merge-base", "--is-ancestor", &tip, &lead_ref])?;
+    // A linear Attempt's branch is the Lead Branch (hs-d680, A5): the commit to test is its `submitted_sha`, and
+    // R2 records that as `merged_sha`.
+    let check = if git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) {
+        let submitted = attempt.submitted_sha.clone().ok_or_else(|| {
+            CpdError::new(ErrorCode::StoreFailed, format!("Attempt {} is linear but has no submitted_sha.", attempt.id))
+        })?;
+        let out = run(&attempt.repo, &["merge-base", "--is-ancestor", &submitted, &lead_ref])?;
         match out.code {
-            0 => Ok(Some(tip)),
+            0 => Ok(Some(submitted)),
             1 => Ok(None),
             code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
                 .with("exit", code)
                 .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))),
         }
-    });
+    } else {
+        git::run::rev_parse(&attempt.repo, &format!("refs/heads/{}", attempt.branch)).and_then(|tip| {
+            let out = run(&attempt.repo, &["merge-base", "--is-ancestor", &tip, &lead_ref])?;
+            match out.code {
+                0 => Ok(Some(tip)),
+                1 => Ok(None),
+                code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
+                    .with("exit", code)
+                    .with("stderr", git::tail(&out.stderr, git::TAIL_LINES))),
+            }
+        })
+    };
     match check {
         // R2: the merge happened.
         Ok(Some(tip)) => {
@@ -144,6 +160,10 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
 fn rest_of_a9(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     // Best effort per item: a window that cannot be killed does not keep the worktree.
     let killed = kill_window(ctx, attempt);
+    // A linear Attempt is the workflow worktree and the Lead Branch: keep both (hs-d680).
+    if git::worktree::is_linear(&attempt.branch, &attempt.lead_branch) {
+        return killed;
+    }
     let removed = git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch);
     killed.and(removed)
 }

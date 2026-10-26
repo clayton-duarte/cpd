@@ -462,9 +462,11 @@ pub fn frame(now: SystemTime) -> usize {
 }
 
 /// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
-/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working, red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan with a failed Job); [`WAITING`] in the colour of
-/// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the hollow
-/// ring when working or fixing), in colour 8.
+/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) in the bright pair of [`Meaning::InProgress`]
+/// (cyan 14) for a working Session that leads no Plan and of the Plan's phase for a working Plan Lead (hs-d622:
+/// grounding 15, plan 13, dispatch 14, deploy 11, done 10), red (9) when [`Dot::Fixing`] (a Plan Lead working on a Plan
+/// with a failed Job); [`WAITING`] in the colour of [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row
+/// keeps its glyph, never animated (the hollow ring when working or fixing), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
@@ -472,7 +474,10 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
         Dot::Blue => (NEEDS_YOU, fg_clickable(Meaning::Notice)),
         Dot::White => (NEEDS_YOU, clickable_text()),
-        Dot::Working => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Working(p) => (
+            SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }],
+            fg_clickable(if p.is_none() { Meaning::InProgress } else { phase(p) }),
+        ),
         Dot::Fixing => (SPINNER[if archived { HOLLOW } else { frame % SPINNER.len() }], fg_clickable(Meaning::Failed)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
         Dot::Idle => (IDLE, clickable_text()),
@@ -659,9 +664,9 @@ mod tests {
 
     #[test]
     fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
-        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
+        let glyphs: Vec<_> = (0..=SPINNER.len()).map(|f| dot_span(Dot::Working(None), f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
-        assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
+        assert_eq!(dot_span(Dot::Working(None), 2, false).style, Style::new().fg(Color::LightCyan));
         assert_eq!(SPINNER.len(), 28);
         assert_eq!((SPINNER[0], SPINNER[14]), ("\u{E3E3}", "\u{E3D5}"));
         assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[14], SPINNER[14], SPINNER[0]));
@@ -711,7 +716,7 @@ mod tests {
             assert_eq!(dot_span(dot, 0, true), Span::styled(glyph, grey), "{dot:?}");
         }
         for f in 0..SPINNER.len() {
-            assert_eq!(dot_span(Dot::Working, f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
+            assert_eq!(dot_span(Dot::Working(None), f, true), Span::styled("\u{E3D5}", grey), "frame {f}");
         }
     }
 

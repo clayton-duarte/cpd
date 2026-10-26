@@ -78,6 +78,7 @@ impl Kind {
             None => Some(Kind::Empty),
             Some(Row::Toggle) => None,
             Some(row) if row.archived() => Some(Kind::Archived),
+            Some(Row::Manager(..)) => Some(Kind::Fork),
             Some(Row::Context(_)) => Some(Kind::Context),
             Some(Row::Plan(..)) => Some(Kind::Plan),
             Some(Row::Fork(..)) => Some(Kind::Fork),

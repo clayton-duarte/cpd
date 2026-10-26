@@ -1,7 +1,5 @@
 //! docs/interface.md is generated from the `tree` of `cpd --help` (commands.md §2).
 
-use std::process::Command;
-
 use clap::CommandFactory;
 use cpd::cli::Cli;
 use cpd::interface::TABLE;
@@ -10,8 +8,9 @@ use serde_json::Value;
 const REGENERATE: &str = "CPD_BLESS=1 scripts/cargo.sh test -p cpd --test interface";
 
 fn help_tree() -> Value {
-    let out = Command::new(env!("CARGO_BIN_EXE_cpd")).arg("--help").output().expect("run cpd --help");
-    let json: Value = serde_json::from_slice(&out.stdout).expect("one JSON value");
+    let mut stdout = Vec::new();
+    cpd::main_with(["cpd".into(), "--help".into()], &mut stdout);
+    let json: Value = serde_json::from_slice(&stdout).expect("one JSON value");
     json["tree"].clone()
 }
 

@@ -1,13 +1,17 @@
-//! `cpd inbox list | show | snooze | dismiss` (commands.md §21), run as the
-//! built binary. Fixture items come from `model::reconcile`, as the engine's
-//! E8 writes them.
+//! `cpd inbox list | show | snooze | dismiss` (commands.md §21), run in this
+//! process through `run_with` (`Fx`: a `ManualClock` for the time, a `FakeRunner`
+//! for `date`; the engine's `locks/watch.lock` is a real flock on a temp file).
+//! Fixture items come from `model::reconcile`, as the engine's E8 writes them.
 
 use crate::common;
 
 use std::fs::{self, File};
 
-use common::{Run, TestEnv};
+use common::Run;
+use common::fx::Fx;
+use cpd_core::clock::Clock;
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::Reply;
 use cpd_core::ids::ContextId;
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
@@ -26,7 +30,7 @@ const CLOSED_Y: &str = "2026-01-03T00:00:00.000Z";
 
 /// A temporary `$CPD_HOME` with an item of each rank in Contexts `ctx1` and `ctx2`.
 struct Fixture {
-    env: TestEnv,
+    fx: Fx,
     store: Store,
     /// Item ids by subject.
     ids: Vec<(String, i64)>,
@@ -53,7 +57,8 @@ impl Fixture {
     /// (yellow, T4), `unread` (magenta), `dialog` (white). Closed: `x` at
     /// 2026-01-02, then `y` at 2026-01-03.
     fn new() -> Fixture {
-        let env = TestEnv::new();
+        let fx = Fx::with_ports();
+        let env = &fx.env;
         fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
         let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
         let mut store = Store::open(&home, 5000).unwrap();
@@ -93,7 +98,7 @@ impl Fixture {
                 Ok(rows.collect::<Result<Vec<(String, i64)>, _>>()?)
             })
             .unwrap();
-        Fixture { env, store, ids }
+        Fixture { fx, store, ids }
     }
 
     fn id(&self, subject: &str) -> i64 {
@@ -101,7 +106,7 @@ impl Fixture {
     }
 
     fn cpd(&self, args: &[&str]) -> Run {
-        self.env.cpd(args)
+        self.fx.cpd(args)
     }
 
     /// `cpd inbox <args>`, which must succeed.
@@ -124,7 +129,7 @@ impl Fixture {
 
     /// Holds `locks/watch.lock` as an engine does, until dropped.
     fn engine(&self) -> Flock<File> {
-        let path = self.env.cpd_home().join("locks/watch.lock");
+        let path = self.fx.env.cpd_home().join("locks/watch.lock");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         Flock::lock(File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
     }
@@ -141,6 +146,8 @@ fn time(value: &Value) -> OffsetDateTime {
 #[test]
 fn list_is_in_order_with_engine_down_first_when_no_engine_runs() {
     let fx = Fixture::new();
+    // Two days on: the items opened at T0 are older than a day.
+    fx.fx.advance(std::time::Duration::from_secs(2 * 86_400));
     let list = fx.ok(&["list"]);
     assert_eq!(list["engine"], json!({"running": false}));
     assert_eq!(subjects(&list), ["engine", "stuck", "review", "question", "unread", "dialog"]);
@@ -298,9 +305,9 @@ fn show_prints_an_open_or_a_closed_item() {
 
 /// `snooze <id> <duration>`'s `snoozed_until`, and the time just before and after.
 fn snoozed(fx: &Fixture, id: i64, duration: &str) -> (OffsetDateTime, OffsetDateTime, OffsetDateTime) {
-    let before = OffsetDateTime::now_utc();
+    let before = fx.fx.fakes.clock.utc();
     let out = fx.ok(&["snooze", &id.to_string(), duration]);
-    let after = OffsetDateTime::now_utc();
+    let after = fx.fx.fakes.clock.utc();
     assert_eq!(out["item"]["id"], id);
     let until = time(&out["item"]["snoozed_until"]);
     // The stored value is the printed one.
@@ -334,23 +341,24 @@ fn snooze_tomorrow_is_the_next_0900_at_the_offset_date_prints() {
     let id = fx.id("dialog");
     // 09:00 at +0530 is 03:30 UTC; at -0800 it is 17:00 UTC.
     for (offset, hour, minute) in [("+0530", 3, 30), ("-0800", 17, 0), ("+0000", 9, 0)] {
-        fx.env.fake("date", &format!("echo {offset}"));
+        let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::ok(&format!("{offset}\n")));
         let (before, until, _) = snoozed(&fx, id, "tomorrow");
         assert_eq!((until.hour(), until.minute(), until.second(), until.millisecond()), (hour, minute, 0, 0), "{offset}");
         assert!(until > before && until <= before + Duration::hours(24), "{offset}: {until}");
     }
-    assert_eq!(fx.env.calls("date")[0], ["+%z"]);
+    assert_eq!(fx.fx.calls("date")[0].args, ["+%z"]);
+    assert_eq!(fx.fx.calls("date").len(), 3);
 }
 
 #[test]
 fn snooze_tomorrow_refuses_when_date_fails_and_changes_nothing() {
     let fx = Fixture::new();
     let id = fx.id("dialog");
-    fx.env.fake("date", "echo no zone >&2; exit 1");
+    let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::exit(1, "", "no zone\n"));
     let (exit, error) = fx.fail(&["snooze", &id.to_string(), "tomorrow"]);
     assert_eq!((exit, error["code"].as_str()), (1, Some("spawn_failed")));
     assert_eq!(error["details"]["stderr"], "no zone");
-    fx.env.fake("date", "echo garbage");
+    let _ = (*fx.fx.fakes.runner).clone().once("date", |_| true, Reply::ok("garbage\n"));
     let (exit, error) = fx.fail(&["snooze", &id.to_string(), "tomorrow"]);
     assert_eq!((exit, error["code"].as_str()), (1, Some("spawn_failed")));
     assert_eq!(fx.ok(&["show", &id.to_string()])["item"]["snoozed_until"], Value::Null);
@@ -408,7 +416,7 @@ fn dismiss_refuses_what_it_cannot_hide() {
 impl Fixture {
     /// One integer from a query on a fresh connection.
     fn store_count(&self, sql: &str) -> i64 {
-        let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
+        let home = CpdHome::resolve(Some(self.fx.env.cpd_home().into()), None).unwrap();
         Store::open(&home, 5000).unwrap().read(|c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 }

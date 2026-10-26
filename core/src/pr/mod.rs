@@ -10,9 +10,16 @@
 //! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
-//! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate on one
-//! commit in a gate worktree of its own and pushes by rule P (§7.4, §7.6); each works on
-//! one PR of the Plan, `poll` on every open one.
+//! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate and pushes
+//! by rule P (§7.4, §7.6); each works on one PR of the Plan, `poll` on every open one. A
+//! repair's Gate runs in the PR's Lead worktree at the gated commit (hs-d679).
+
+#[cfg(test)]
+mod gh_runner_tests;
+#[cfg(test)]
+mod incident_tests;
+#[cfg(test)]
+mod poll_tests;
 
 mod add;
 mod cancel;
@@ -21,10 +28,12 @@ mod feedback;
 mod gh;
 mod merge;
 mod open;
-mod poll;
+pub(crate) mod poll;
 pub mod pulls;
 mod push;
-mod rebase;
+pub(crate) mod rebase;
+#[cfg(test)]
+pub(crate) use rebase::remote_contains_with;
 mod row;
 pub mod start;
 mod status;
@@ -36,8 +45,8 @@ use std::time::Duration;
 use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::git::gate::Slots;
-use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
+use crate::git::hooks::{Detached, Log as HookLog};
+use crate::git::{self, HookOutcome, Operation, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{ContextId, HostName, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
@@ -47,7 +56,9 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
-pub use open::{Pulled, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+pub use open::{Pulled, base_check, is_merged_on_github, pull_request, record as record_pull, submit_checks};
+#[cfg(test)]
+pub(crate) use rebase::{in_progress_with, rebase_onto_with, unresolved_with};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -177,18 +188,19 @@ pub struct StartArgs {
     plan: PlanArg,
 }
 
-pub fn run(command: Command) -> Result<Output, CpdError> {
+/// Runs `command`. Only `view`, `merge` and `poll` read `ports` yet; the others open their `Env` on the real ports until their Jobs convert them.
+pub fn run(ports: &crate::ports::Ports, command: Command) -> Result<Output, CpdError> {
     match command {
         Command::Add(args) => add::add(args),
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
         Command::Start(args) => start::run(args),
         Command::Open(args) => open::open(args),
-        Command::Poll(args) => poll::poll(args),
+        Command::Poll(args) => poll::poll(ports, args),
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
-        Command::View(args) => view::view(args),
-        Command::Merge(args) => merge::merge(args),
+        Command::View(args) => view::view(ports, args),
+        Command::Merge(args) => merge::merge(ports, args),
     }
 }
 
@@ -253,7 +265,7 @@ fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
 }
 
 /// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
-/// and `pre-merge` of the gate worktree. The contract's layout (§1.4) names these
+/// and `pre-merge` of a repair's Gate. The contract's layout (§1.4) names these
 /// files; `CpdHome` has no method for them.
 fn pr_log(home: &CpdHome, plan: &PlanId, key: &PrKey, hook: Hook) -> PathBuf {
     home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
@@ -296,8 +308,30 @@ fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow
     })
 }
 
-/// How the Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
-/// `setup_minutes`, `pre-merge` with `gate_minutes`, `branch` the Lead Branch.
+/// How a repair's Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
+/// `setup_minutes` and `pre-merge` with `gate_minutes`, in a worktree the Gate's caller
+/// has brought to the gated commit. No test slot is taken (hs-d679).
+struct GateHooks<'a> {
+    /// The PR's Lead Branch: the template variable `branch`, which a detached worktree cannot read.
+    lead_branch: &'a str,
+    /// The PR's base: `base` of `pre-start` and `target` of `pre-merge`.
+    base: &'a str,
+    pre_start: Setup,
+    pre_merge: Setup,
+    pre_start_commands: &'a git::Pipeline,
+    pre_merge_commands: &'a git::Pipeline,
+}
+
+/// How the Gate ended when it did not pass (contract §7.6 step 3): a `pre-start` that did not pass is
+/// `gate_error`; a `pre-merge` that failed is `gate_failed`, one that erred `gate_error`.
+struct Refused {
+    hook: Hook,
+    outcome: HookOutcome,
+    tail: Option<String>,
+    log: PathBuf,
+}
+
+/// How the Gate runs for PR `pr` (contract §7.3, §7.6): the two hook pipelines and their logs.
 fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
     let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
     GateHooks {
@@ -307,25 +341,138 @@ fn gate_hooks<'a>(env: &Env, policy: &'a Policy, plan: &PlanId, pr: &'a PrRow) -
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
         pre_start_commands: &policy.hooks.pre_start,
         pre_merge_commands: &policy.hooks.pre_merge,
-        slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
 
-/// The Gate on a snapshot (contract §7.6 steps 1–4) on `sha`: the PR's dead gate
-/// worktrees swept, a gate worktree detached at `sha`, `pre-start` and `pre-merge`
-/// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
-/// Nothing runs when the PR's policy says `pr.gate` is not `local` (§8.3).
-fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
-    gate_then(env, policy, plan, pr, sha, &format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged."))
+/// [`gate_in`] with the Lead's usual next step, in `worktree` at `sha`.
+fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, worktree: &std::path::Path, sha: &str, again: &str) -> Result<(), CpdError> {
+    gate_in(env, policy, plan, pr, worktree, sha, false, again)
 }
 
-/// [`gate`] where `then` is what a refused Gate tells the caller to do next: the Lead's (`pr open`, `pr push`, `pr rebase`) or a Worker's
-/// (an `open` or `update` Job's submit, contract §7.7, which fixes what the Gate reports and submits again).
-fn gate_then(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, then: &str) -> Result<(), CpdError> {
-    if policy.pr.gate != Gate::Local {
+/// The Gate on `sha` in `worktree`, which is already at the gated tree (contract §7.6): `pre-start`
+/// when `pre_start` is set (a temporary rebase worktree), then `pre-merge`. `again` is the command
+/// the Lead runs after fixing it. Nothing runs when the PR's policy says `gate.pr` is not `local` (§8.3).
+fn gate_in(
+    env: &Env,
+    policy: &Policy,
+    plan: &PlanId,
+    pr: &PrRow,
+    worktree: &std::path::Path,
+    sha: &str,
+    pre_start: bool,
+    again: &str,
+) -> Result<(), CpdError> {
+    if policy.gate.pr != Gate::Local {
         return Ok(());
     }
-    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, policy, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))
+    let hooks = gate_hooks(env, policy, plan, pr);
+    let then = format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.");
+    let detached = Detached { branch: hooks.lead_branch, env: &[] };
+    let operation = Operation { branch: hooks.base };
+    let mut steps = Vec::new();
+    if pre_start {
+        steps.push((Hook::PreStart, hooks.pre_start_commands, &hooks.pre_start));
+    }
+    steps.push((Hook::PreMerge, hooks.pre_merge_commands, &hooks.pre_merge));
+    for (hook, pipeline, setup) in steps {
+        let result = git::run_hook_as(hook, pipeline, worktree, &detached, Some(&operation), setup.timeout, &setup.log, HookLog::Truncate)?;
+        if result.outcome != HookOutcome::Passed {
+            return Err(refusal(plan, pr, sha, Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }, &then));
+        }
+    }
+    Ok(())
+}
+
+/// `lead_worktree_dirty` (exit 3): the Lead worktree has tracked local changes, which a Gate
+/// run there must not test (hs-d679). Untracked files are hidden for the Gate's run
+/// ([`hide_untracked`]) and put back after it, so they are not refused.
+fn require_clean_lead(lead: &std::path::Path, plan: &PlanId, pr: &PrRow) -> Result<(), CpdError> {
+    let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
+    if dirty.trim().is_empty() {
+        return Ok(());
+    }
+    let files: Vec<&str> = dirty.lines().filter_map(|l| l.get(3..)).collect();
+    Err(CpdError::new(
+        ErrorCode::LeadWorktreeDirty,
+        format!(
+            "The Lead worktree {} has local changes to tracked files, which the Gate must not test: nothing was gated. Commit or discard them.",
+            lead.display()
+        ),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", pr.key.as_str())
+    .with("files", files))
+}
+
+/// Untracked files of the Lead worktree, moved beside it for the Gate's run and put back after.
+struct Hidden {
+    lead: PathBuf,
+    dir: PathBuf,
+    /// `(the name in the worktree, the name in `dir`)`, in the order they were moved.
+    moved: Vec<(PathBuf, PathBuf)>,
+}
+
+/// Moves every untracked entry of `lead` beside the worktree, so the Gate sees the tree of the
+/// gated commit and not these files (hs-d679). They are put back by [`Hidden::restore`].
+fn hide_untracked(lead: &std::path::Path) -> Result<Hidden, CpdError> {
+    let listed = git::run::ok(lead, &["ls-files", "--others", "--exclude-standard", "--directory", "-z"])?;
+    let entries: Vec<PathBuf> = listed.split('\0').filter(|e| !e.is_empty()).map(PathBuf::from).collect();
+    let name = lead.file_name().map_or_else(|| "worktree".into(), |n| n.to_string_lossy().into_owned());
+    let hidden = Hidden { lead: lead.to_path_buf(), dir: lead.with_file_name(format!("{name}.cpd-gate-{}", std::process::id())), moved: Vec::new() };
+    if entries.is_empty() {
+        return Ok(hidden);
+    }
+    let fail = |e: std::io::Error| {
+        CpdError::new(ErrorCode::GateError, format!("Cannot hide {}'s untracked files for the Gate: {e}.", lead.display()))
+            .with("worktree", lead.display().to_string())
+    };
+    std::fs::create_dir_all(&hidden.dir).map_err(fail)?;
+    let mut hidden = hidden;
+    for (i, entry) in entries.iter().enumerate() {
+        let held = hidden.dir.join(i.to_string());
+        if let Err(e) = std::fs::rename(hidden.lead.join(entry), &held) {
+            hidden.restore()?;
+            return Err(fail(e));
+        }
+        hidden.moved.push((entry.clone(), held));
+    }
+    Ok(hidden)
+}
+
+impl Hidden {
+    /// Puts every hidden entry back; an empty list means it was restored already.
+    fn restore(mut self) -> Result<(), CpdError> {
+        let fail = |e: std::io::Error| {
+            CpdError::new(ErrorCode::GateError, format!("Cannot put back {}'s untracked files after the Gate: {e}.", self.lead.display()))
+                .with("worktree", self.lead.display().to_string())
+        };
+        for (entry, held) in std::mem::take(&mut self.moved) {
+            let target = self.lead.join(&entry);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(fail)?;
+            }
+            std::fs::rename(&held, &target).map_err(fail)?;
+        }
+        let _ = std::fs::remove_dir(&self.dir);
+        Ok(())
+    }
+}
+
+impl Drop for Hidden {
+    fn drop(&mut self) {
+        // A path that returns early still puts the Lead worktree back; the explicit restore empties `moved` first.
+        if self.moved.is_empty() {
+            return;
+        }
+        for (entry, held) in std::mem::take(&mut self.moved) {
+            let target = self.lead.join(&entry);
+            if let Some(parent) = target.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::rename(&held, &target);
+        }
+        let _ = std::fs::remove_dir(&self.dir);
+    }
 }
 
 /// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed

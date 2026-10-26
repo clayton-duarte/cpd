@@ -142,17 +142,22 @@ impl JobCounts {
         self.draft + self.queued + self.running + self.merging + self.failed + self.merged + self.cancelled
     }
 
-    /// The first counter's status and count: the drafts when there are any, in any phase, else the queued Jobs. The
-    /// one place the draft-or-queued decision is made.
-    pub fn first(&self) -> (JobStatus, usize) {
-        if self.draft > 0 { (JobStatus::Draft, self.draft) } else { (JobStatus::Queued, self.queued) }
+    /// The tree's four counters (hs-d636, commands.md §13.2): planned (the drafts and the queued), active (the running
+    /// and the merging), failed and done (the merged). Cancelled Jobs are not counted.
+    pub fn counters(&self) -> [usize; 4] {
+        [self.draft + self.queued, self.running + self.merging, self.failed, self.merged]
     }
 
-    /// The tree's five counters (cpd-ui's `context.rs`): queued, or the drafts when there are any, in any phase,
-    /// running, merging, failed, merged. Cancelled Jobs are not counted.
-    pub fn counters(&self) -> [usize; 5] {
-        let (_, first) = self.first();
-        [first, self.running, self.merging, self.failed, self.merged]
+    /// The Job status and the merging flag that colour counter `index` (hs-d636): the planned role is the draft colour
+    /// while the Plan has any draft, else the queued colour; the active role is the review colour while any of its Jobs
+    /// lands (checking or merging). The one place the draft-or-queued decision is made.
+    pub fn counter_role(&self, index: usize) -> (JobStatus, bool) {
+        match index {
+            0 => (if self.draft > 0 { JobStatus::Draft } else { JobStatus::Queued }, false),
+            1 => (JobStatus::Running, self.merging > 0),
+            2 => (JobStatus::Failed, false),
+            _ => (JobStatus::Merged, false),
+        }
     }
 }
 
@@ -237,6 +242,8 @@ pub struct SessionNode {
     pub archived_at: Option<String>,
     /// When engine E13 put it to sleep (contract §2.2 "Asleep"): it keeps its place among the live rows, drawn muted.
     pub asleep_at: Option<String>,
+    /// The id of the newest Event that names the Session (hs-d686), 0 with none: the tree's last-activity tie-break.
+    pub last_activity: i64,
 }
 
 impl SessionNode {
@@ -264,7 +271,8 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
-       s.archived_at, s.asleep_at
+       s.archived_at, s.asleep_at,
+       (SELECT coalesce(max(e.id), 0) FROM events e WHERE e.session = s.id)
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -302,6 +310,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             plan_lead,
             archived_at: r.get(16)?,
             asleep_at: r.get(17)?,
+            last_activity: r.get(18)?,
             id: session,
         });
     }
@@ -329,6 +338,8 @@ pub struct PlanHead {
     pub done_at: Option<String>,
     /// When it was archived (contract §4.5); archived Plans are in the model.
     pub archived_at: Option<String>,
+    /// The id of the newest Event that names the Plan (hs-d686), 0 with none: the tree's last-activity tie-break.
+    pub last_activity: i64,
 }
 
 impl PlanHead {
@@ -384,7 +395,8 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
 
     let mut stmt = conn.prepare(
         "SELECT p.id, p.context, p.title, p.jira, p.phase, p.lead_session, r.pr_number,
-                r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at
+                r.pr_url, r.pr_opened_at, q.state, q.checks, p.created_at, p.locked_at, r.all_merged_at, p.done_at, p.archived_at,
+                (SELECT coalesce(max(e.id), 0) FROM events e WHERE e.plan = p.id)
            FROM plans p LEFT JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
@@ -426,6 +438,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
             all_merged_at: r.get(13)?,
             done_at: r.get(14)?,
             archived_at: r.get(15)?,
+            last_activity: r.get(16)?,
             phase,
             pr,
             id: plan,
