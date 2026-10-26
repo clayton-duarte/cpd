@@ -432,6 +432,8 @@ fn headers_a_left_out_table_stays_out_of_the_json() {
 
 #[test]
 fn headers_refuse_an_empty_table() {
+    // Control: a one-entry table is accepted, so the refusals below are about emptiness, not an unread key.
+    accepted(&headers("A = \"b\""));
     refused(&headers(""), Some("headers"));
     refused(&entry("headers = {}"), Some("headers"));
 }
