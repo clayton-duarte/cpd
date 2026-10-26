@@ -16,7 +16,7 @@ const RESULT: &str = "\u{F060C}";
 use crate::palette::{self, Ui};
 
 /// The text of a session file, as lines. Continuation rows of a long line are made by [`crate::scroll::wrap`].
-pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
+pub(crate) fn render(text: &str, _zone: &cpd_core::clock::TimeZone) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in text.lines() {
         let Ok(entry) = serde_json::from_str::<Value>(raw) else { continue };
@@ -90,7 +90,7 @@ mod tests {
             "{\"type\":\"message\",\"mess".to_owned(),
         ]
         .join("\n");
-        let lines: Vec<String> = render(&file).iter().map(text).collect();
+        let lines: Vec<String> = render(&file, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())).iter().map(text).collect();
         assert_eq!(
             lines,
             [
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn a_user_message_shows_twelve_lines_at_most() {
         let body = (1..=20).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
-        let lines = render(&entry("user", serde_json::json!({"type": "text", "text": body})));
+        let lines = render(&entry("user", serde_json::json!({"type": "text", "text": body})), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new()));
         assert_eq!(lines.len(), 1 + 12);
     }
 
@@ -124,7 +124,7 @@ mod tests {
             entry("assistant", serde_json::json!({"type": "toolCall", "name": "bash", "arguments": {}})),
         ]
         .join("\n");
-        let lines = render(&file);
+        let lines = render(&file, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new()));
         let colour = |line: usize, span: usize| lines[line].spans[span].style.fg;
         assert_eq!(colour(0, 1), Some(palette::ui(Ui::You)), "you");
         assert_eq!(colour(2, 1), Some(palette::ui(Ui::Agent)), "agent");
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn a_fixture_session_file_renders_as_the_reference_does() {
         let file = include_str!("fixtures/session.jsonl");
-        let ours = render(file);
+        let ours = render(file, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new()));
         assert_eq!(ours.len(), 23, "the fixture reaches every branch: {ours:#?}");
         assert_eq!(ours, reference_render_session(file));
     }

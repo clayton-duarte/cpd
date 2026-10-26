@@ -255,7 +255,7 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
             }
             match std::fs::read_to_string(path) {
                 Ok(text) => {
-                    view.set_lines(render::render(&text));
+                    view.set_lines(render::render(&text, &cpd_core::clock::TimeZone::system()));
                     *shown = Some(stamp);
                 }
                 Err(e) => view.note = format!("Cannot read {path}: {e}"),
@@ -271,6 +271,9 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
 fn placeholder(text: &str) -> Line<'static> {
     Line::styled(format!(" {text}"), crate::palette::muted_text())
 }
+
+#[cfg(test)]
+mod local_time_tests;
 
 #[cfg(test)]
 mod screen_tests;

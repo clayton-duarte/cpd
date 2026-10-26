@@ -242,7 +242,7 @@ const RESTART: cpd_tui::Restart =
 
 /// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
 fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe()))
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(&cpd_core::clock::TimeZone::system())))
 }
 
 /// [`cpd_tui::Restart::now`]: the restart, logging nothing.

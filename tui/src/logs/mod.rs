@@ -10,6 +10,8 @@
 //! - [`popup_args`] and [`open_at`]: the popup, which `cpd tui action logs` and the Inbox click open.
 
 #[cfg(test)]
+mod local_time_tests;
+#[cfg(test)]
 mod margin_tests;
 #[cfg(test)]
 mod popup_tests;

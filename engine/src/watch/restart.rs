@@ -76,7 +76,7 @@ pub struct Failed {
 
 impl Pending {
     /// The one line `doctor` and bare `cpd` say about it.
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, _zone: &cpd_core::clock::TimeZone) -> String {
         match &self.failed {
             None => format!(
                 "A tmux restart is pending since {}: the server runs tmux {}, the installed tmux is {}. No Attempt starts until it has run.",

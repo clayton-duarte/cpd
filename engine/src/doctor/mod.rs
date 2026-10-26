@@ -41,8 +41,8 @@ fn tmux_restart(home: &CpdHome) -> Option<Check> {
     let name = "tmux_restart";
     match watch::restart::read(home) {
         Ok(None) => None,
-        Ok(Some(pending)) if pending.failed.is_none() => Some(Check::pass(name, Severity::Warn).message("tmux restart pending").found(pending.describe())),
-        Ok(Some(pending)) => Some(Check::fail(name, Severity::Warn, pending.describe())),
+        Ok(Some(pending)) if pending.failed.is_none() => Some(Check::pass(name, Severity::Warn).message("tmux restart pending").found(pending.describe(&cpd_core::clock::TimeZone::system()))),
+        Ok(Some(pending)) => Some(Check::fail(name, Severity::Warn, pending.describe(&cpd_core::clock::TimeZone::system()))),
         Err(e) => Some(Check::from_error(name, Severity::Warn, &e)),
     }
 }

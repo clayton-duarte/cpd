@@ -86,7 +86,7 @@ fn open(args: Args) -> Result<History, CpdError> {
 /// the end). Tests draw it on a `TestBackend` instead of running the view in a terminal.
 pub fn draw_history(name: &str, archived: bool, text: &str, f: &mut ratatui::Frame) {
     let mut view = View::new(name, archived);
-    view.set_lines(render(text));
+    view.set_lines(render(text, &cpd_core::clock::TimeZone::system()));
     view.draw(f);
 }
 
@@ -117,7 +117,7 @@ const IDLE: Duration = Duration::from_secs(60);
 /// its terminal. Input and frames are the [`Ctx`]'s, so a test runs it on a `TestBackend` and scripted input.
 pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, name: &str, archived: bool, text: &str) -> std::io::Result<()> {
     let mut view = View::new(name, archived);
-    view.set_lines(render(text));
+    view.set_lines(render(text, &cpd_core::clock::TimeZone::system()));
     loop {
         ctx.draw(|f| view.draw(f))?;
         while !ctx.input.poll(IDLE)? {}

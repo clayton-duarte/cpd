@@ -41,7 +41,7 @@ pub const NO_RESTART: Restart = Restart {
 pub const RESTART: Restart = Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
 
 fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
-    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe()))
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe(&cpd_core::clock::TimeZone::system())))
 }
 
 fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<RestartOutcome, CpdError> {

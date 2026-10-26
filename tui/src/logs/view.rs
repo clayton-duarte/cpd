@@ -149,7 +149,7 @@ fn addressed_to_lead(e: &Event) -> bool {
 /// The Event's line, as the Dispatch column showed it: its time of day (muted), then its `text`, or its kind when
 /// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
 /// handles it). Cut to `width` columns with `…`.
-fn line(e: &Event, width: usize) -> Line<'static> {
+pub(crate) fn line(e: &Event, width: usize, _zone: &cpd_core::clock::TimeZone) -> Line<'static> {
     let text = if e.text.is_empty() { &e.kind } else { &e.text };
     let style = match (e.kind.as_str(), addressed_to_lead(e)) {
         ("error", true) => palette::fg(Meaning::Waiting),
@@ -179,7 +179,7 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(muted("none yet"))]
     } else {
-        log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
+        log.visible().iter().map(|e| line(e, usize::from(area.width), &cpd_core::clock::TimeZone::system())).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
     // the Event the view was opened at is the blue block across the popup's whole width, the margins included
@@ -412,7 +412,7 @@ mod error_colour {
 
     /// The colour of the Event's text in its line (the line is ` 10:20:30 something happened`).
     fn colour(e: &Event) -> Option<Color> {
-        line(e, 60).spans.last().unwrap().style.fg
+        line(e, 60, &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new())).spans.last().unwrap().style.fg
     }
 
     #[test]

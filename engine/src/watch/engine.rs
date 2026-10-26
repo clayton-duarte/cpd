@@ -418,7 +418,7 @@ impl Downtime {
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
-    pub(super) fn sentence(&self) -> String {
+    pub(super) fn sentence(&self, _zone: &cpd_core::clock::TimeZone) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
         let at = clock::timestamp(self.since);
         let secs = self.down.as_seconds_f64();
@@ -459,11 +459,11 @@ fn serve(ports: &Ports, home: &CpdHome, until: &AtomicBool, catch: impl FnOnce()
     // What the previous engine left, read before this one's `watch-started` hides it.
     let marker = consume_marker_with(clock, home, &mut log);
     let down = Downtime::since_previous_with(clock, &mut store, &lock, lock_existed, marker)?;
-    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
+    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence(&ports.clock.zone()))).unwrap_or_default();
     watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
     if let Some(down) = down {
-        log.line(&down.sentence());
+        log.line(&down.sentence(&ports.clock.zone()));
     }
 
     let tmux = Tmux::new(config.tmux.socket.as_str()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone());
