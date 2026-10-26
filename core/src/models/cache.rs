@@ -15,6 +15,7 @@ use crate::clock::timestamp;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::lock;
+use crate::ports::Ports;
 
 /// How often a waiter retries `locks/models.lock`.
 const RETRY: Duration = Duration::from_millis(20);
@@ -220,8 +221,13 @@ fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, ap
 /// `locks/models.lock`; a failed or empty one writes nothing, and a provider the answer does not name keeps its file.
 /// Errors: `lock_timeout`, `store_failed`.
 pub fn apply(home: &CpdHome, busy_ms: u32, answer: &Answer) -> Result<Applied, CpdError> {
+    apply_at(home, busy_ms, answer, Ports::current().clock.utc())
+}
+
+/// [`apply`] with `polled_at` the time `at` (the engine's clock, so a test's virtual time is what the files say).
+pub fn apply_at(home: &CpdHome, busy_ms: u32, answer: &Answer, at: OffsetDateTime) -> Result<Applied, CpdError> {
     let _lock = take_lock(home, busy_ms)?;
-    let now = timestamp(OffsetDateTime::now_utc());
+    let now = timestamp(at);
     let mut applied = Applied::default();
     for entry in &answer.entries {
         let outcome = match entry {

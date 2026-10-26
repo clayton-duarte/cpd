@@ -12,7 +12,9 @@ use crate::config::{Config, locate_pi};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::home::CpdHome;
-use crate::host::deadline::{self, Failed};
+use crate::host::deadline::Failed;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// The helper's deadline (contract §3.7 E15): above its 60 s fetch of one provider.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -174,10 +176,17 @@ impl Helper {
         Ok(Helper { cmd, argv })
     }
 
-    /// Runs the helper to its end or its deadline. Errors: `spawn_failed`, `tool_timeout`, the helper's own code for a
-    /// run that failed as a whole, `models_helper_failed`.
-    pub fn run(mut self) -> Result<Answer, CpdError> {
-        let out = match deadline::output(&mut self.cmd, "node", DEADLINE) {
+    /// [`Helper::run_with`] the runner of the ports in scope ([`Ports::current`]).
+    pub fn run(self) -> Result<Answer, CpdError> {
+        let runner = Ports::current().runner;
+        self.run_with(&*runner)
+    }
+
+    /// Runs the helper through `runner` to its end or its deadline (the real runner is `deadline::output`: the helper
+    /// in its own process group, killed past the deadline). Errors: `spawn_failed`, `tool_timeout`, the helper's own
+    /// code for a run that failed as a whole, `models_helper_failed`.
+    pub fn run_with(mut self, runner: &dyn Runner) -> Result<Answer, CpdError> {
+        let out = match runner.output(&mut self.cmd, "node", DEADLINE) {
             Ok(out) => out,
             Err(Failed::Io(e)) => {
                 return Err(CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", self.argv.join(" "))).with("argv", json!(self.argv)));

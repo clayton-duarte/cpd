@@ -11,7 +11,7 @@ mod cache;
 pub mod cmd;
 mod helper;
 
-pub use cache::{Applied, Changes, File, Outcome, Read, Source, Written, apply, newest_polled_at, read_all};
+pub use cache::{Applied, Changes, File, Outcome, Read, Source, Written, apply, apply_at, newest_polled_at, read_all};
 pub use cmd::{Command, run};
 pub use helper::{Answer, Entry, Helper, Listed, ProviderFailure};
 

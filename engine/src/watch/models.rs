@@ -13,12 +13,11 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
-use time::OffsetDateTime;
 
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::models::{Answer, Applied, Helper, Outcome, apply, newest_polled_at};
+use cpd_core::models::{Answer, Applied, Helper, Outcome, apply_at, newest_polled_at};
 
 /// What E15 remembers between ticks.
 #[derive(Default)]
@@ -55,15 +54,16 @@ pub(super) fn run(engine: &mut Engine) {
             }
         };
         engine.models.running = None;
-        engine.models.last_end = Some(Instant::now());
-        match answer.and_then(|answer| apply(&engine.home, engine.config.timeouts.store_busy_ms, &answer)) {
+        engine.models.last_end = Some(engine.ports.clock.now());
+        let at = engine.ports.clock.utc();
+        match answer.and_then(|answer| apply_at(&engine.home, engine.config.timeouts.store_busy_ms, &answer, at)) {
             Ok(applied) => report(engine, &applied),
             Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }
         return;
     }
     let repeat = Duration::from_secs(u64::from(engine.config.watch.error_repeat_seconds));
-    if engine.models.last_end.is_some_and(|end| end.elapsed() < repeat) {
+    if engine.models.last_end.is_some_and(|end| engine.ports.clock.now().saturating_duration_since(end) < repeat) {
         return;
     }
     match due(engine).and_then(|due| if due { start(engine).map(Some) } else { Ok(None) }) {
@@ -71,7 +71,7 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(None) => {}
         Err(e) => {
             // The next try is a period away, as after a run that failed.
-            engine.models.last_end = Some(Instant::now());
+            engine.models.last_end = Some(engine.ports.clock.now());
             engine.fail(Step::E15, About::Machine, Failure::from(&e));
         }
     }
@@ -80,16 +80,18 @@ pub(super) fn run(engine: &mut Engine) {
 /// No file, or the newest `polled_at` is at least `watch.models_discovery_seconds` old.
 fn due(engine: &Engine) -> Result<bool, CpdError> {
     let period = time::Duration::seconds(i64::from(engine.config.watch.models_discovery_seconds));
-    Ok(newest_polled_at(&engine.home)?.is_none_or(|newest| OffsetDateTime::now_utc() - newest >= period))
+    Ok(newest_polled_at(&engine.home)?.is_none_or(|newest| engine.ports.clock.utc() - newest >= period))
 }
 
-/// Starts the helper on its own thread; returns where its answer will arrive.
+/// Starts the helper on its own thread, through the engine's runner (a test's `FakeRunner` sees the call); returns where
+/// its answer will arrive.
 fn start(engine: &Engine) -> Result<Receiver<Result<Answer, CpdError>>, CpdError> {
     let helper = Helper::new(&engine.config, &engine.home)?;
+    let runner = engine.ports.runner.clone();
     let (tx, rx) = channel();
     std::thread::spawn(move || {
         // The engine may have stopped: nobody to tell.
-        let _ = tx.send(helper.run());
+        let _ = tx.send(helper.run_with(&*runner));
     });
     Ok(rx)
 }
