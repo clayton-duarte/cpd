@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, ID, OTHER, planShow, shown, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, shown } from "./fake.ts";
 import { adapterErrors } from "./lead-errors.ts";
 
 // pro-d8, commands.md §15.3 `mcp-attached`, contract §5.3 and §6.11: the Event for the adapter's own Session registers the server with pi (`pi.registerMcpServer(name, server)`),
@@ -29,7 +29,7 @@ async function started(t: { after(fn: () => Promise<void>): void }, role: Role =
   f.respond("session-show", shown(SHOWN[role]));
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
+  await f.followerStarted();
   f.emit(ev(101, "job-added")); // the cursor starts at 100: `drain` needs a higher id
   return f;
 }
@@ -37,7 +37,6 @@ async function started(t: { after(fn: () => Promise<void>): void }, role: Role =
 test("mcp-attached for its own Session registers the server under its name with the Event's config, and shows no message", async (t) => {
   const f = await started(t);
   f.emit(attached(200));
-  await waitFor("registerMcpServer", () => f.pi.registeredMcp.length > 0, 5000);
   await f.drain();
   assert.deepEqual(f.pi.registeredMcp, [{ name: "slack", config: SERVER }]);
   assert.deepEqual(f.pi.sent, [], "no message and no turn");
@@ -51,7 +50,6 @@ test("mcp-attached for another Session registers nothing", async (t) => {
   assert.deepEqual(f.pi.registeredMcp, [], "the other Session's Event registers nothing");
   assert.deepEqual(f.pi.sent, []);
   f.emit(attached(300)); // the control: the same Event for its own Session is the one that registers
-  await waitFor("registerMcpServer", () => f.pi.registeredMcp.length > 0, 5000);
   await f.drain();
   assert.deepEqual(f.pi.registeredMcp, [{ name: "slack", config: SERVER }]);
 });
@@ -59,7 +57,6 @@ test("mcp-attached for another Session registers nothing", async (t) => {
 test("mcp-attached handled twice registers the same name twice with equal config", async (t) => {
   const f = await started(t);
   f.emit(attached(200), attached(201));
-  await waitFor("two registrations", () => f.pi.registeredMcp.length >= 2, 5000);
   await f.drain();
   assert.equal(f.pi.registeredMcp.length, 2);
   assert.equal(f.pi.registeredMcp[0]!.name, "slack");
@@ -72,9 +69,9 @@ test("a registerMcpServer that throws is reported once as mcp_register_failed wi
   const f = await started(t);
   f.pi.mcpThrows = new Error("pi refuses: bad server");
   f.emit(attached(200));
-  const e = await waitFor("a report", () => adapterErrors(f)[0], 5000);
   await f.drain();
   const errors = adapterErrors(f);
+  const e = errors[0]!;
   assert.equal(errors.length, 1, "reported once");
   assert.equal(e.code, "mcp_register_failed");
   assert.ok(e.message.content.includes("pi refuses: bad server"), `pi's message is in the report: ${e.message.content}`);
@@ -91,7 +88,6 @@ test("with no mcp-attached Event the adapter registers no server, whatever else 
   await f.quiet();
   assert.deepEqual(f.pi.registeredMcp, []);
   f.emit(attached(300)); // the control: the adapter registers only when this Event comes
-  await waitFor("registerMcpServer", () => f.pi.registeredMcp.length > 0, 5000);
   await f.drain();
   assert.deepEqual(f.pi.registeredMcp.map((r: { name: string }) => r.name), ["slack"]);
 });
@@ -100,7 +96,6 @@ test("mcp-attached registers the server in a Manager's and a Worker's adapter as
   for (const role of ["manager", "worker"] as const) {
     const f = await started(t, role);
     f.emit(attached(200));
-    await waitFor(`registerMcpServer in a ${role}`, () => f.pi.registeredMcp.length > 0, 5000);
     await f.drain(marker(role));
     assert.deepEqual(f.pi.registeredMcp, [{ name: "slack", config: SERVER }], role);
     assert.deepEqual(f.pi.sent, [], `${role}: no message and no turn`);
