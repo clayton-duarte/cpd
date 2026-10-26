@@ -5,12 +5,13 @@ Attempt rs-hist-a3, 2026-10-26. Machine `pro` (macOS, 14 cores), cargo-nextest 0
 ## Verdict
 
 1. **The LEAK is new on this setup; it is not an old weakness made visible by `result = "fail"`.** Nextest ran on GitHub Actions for 1 day only (2026-10-18 17:25 to 2026-10-19 00:36 EDT, 61 nextest logs, 59 finished, 92,238 test executions) and printed `LEAK` 0 times, a passing leaky test included (default `result = "pass"` still prints `LEAK`). Verified: `gh api .../jobs/<id>/logs` over every run since the nextest commit (Evidence 2).
-2. **D, confirmed (the strongest cause): a different machine and a different load.** CI = one run alone per fresh VM, `ubuntu-24.04` (verified), 1,410-1,727 tests, 282-656 s. The Gate on `pro` = macOS, 14 threads, 3,237 to 5,169 tests, 4-5 Gates at once at load 55-100. The Gate also ran on hs (Linux, 16 cores, 1,307 tests, 0 LEAK in 3 runs, commit ba01e4fc) before the Mac.
+2. **D, confirmed (the strongest cause): a different machine and a different load.** CI = one run alone per fresh VM, `ubuntu-24.04` (verified), 1,410-1,727 tests, 282-656 s. The Gate on `pro` = macOS, 14 threads, 3,237 to 5,169 tests, 4-5 Gates at once at load 55-100. The Gate also ran on hs (Linux: inference; 16 cores, 1,307 tests, 0 LEAK in 3 runs, commit ba01e4fc) before the Mac.
 3. **B, confirmed (contributing): the suite grew 1,307 (10-18) to 5,137 (10-25), 3.9 times, in 7 days.** More processes per run = more chances for the 100 ms timer to fire late.
 4. **C/F, confirmed (contributing, a new finding): test slots capped full runs at 2 from 2026-10-20 (fa7fb29b) to 2026-10-25 18:14 EDT (84c274bf, #425).** Gates now run at the merge and the slots are gone. Gate runs overlapping on pro: max 2 on 10-22..10-24, max 4 on 10-25. Of 8 LEAK runs 6 fell on 10-25; but 4 of the 8 overlapped no other nextest run: other load (builds, scanners) also counts (inference).
 5. **A, killed as the cause, confirmed as a fact:** `result = "fail"` was added 2026-10-20 (739ec1cc) for a real leak (`ms-leak`, a fake engine's `sleep`). It made leaks fail runs; it did not create them. Logs before it do not exist on this machine (earliest 2026-10-20 14:40), so the pass-LEAK count there is 0 of 0 logs (unverified for macOS before 10-22).
 6. **E, killed:** nextest 0.9.148 is pinned from the first nextest commit (CI log `cargo-nextest 0.9.148`, same on `pro`); no upgrade happened. rustc: not pinned, CI used `stable` (unverified which).
-7. For the User: the leak check is stricter than any CI ever was, the machine that runs it is new, and the guard that held Gates down (slots) was removed 10-25. Nothing says GitHub-hosted runners would leak: they never saw one in 92k executions at 2 threads (2 vCPU: unverified, GitHub's documented size for private repos).
+7. **New, F, confirmed: the repo's `period = "100ms"` is half of upstream's default.** The changelog says "default leak timeout increased from 100ms to 200ms" in 0.9.108 (2025-10-21; https://nexte.st/changelog/), and a scratch run of 0.9.148 with no config shows it: a test leaking a `sleep 0.5` is `LEAK` at 0.268 s (test about 0.07 s + a 0.2 s wait), a `sleep 0.15` passes without LEAK (diagnostic, outside the repo; the reference page nexte.st/docs/configuration/reference still says 100ms: stale). So CI and hs ran with 200 ms and pass; since 10-20 the Gate runs 100 ms and fail. That halves the slack nextest's own scheduling delay gets (rs-cpd: nextest is 1-11 s late under load).
+8. For the User: the leak check is stricter than any CI ever was, the machine that runs it is new, and the guard that held Gates down (slots) was removed 10-25. Nothing says GitHub-hosted runners would leak: they never saw one in 92k executions at 2 threads (2 vCPU: unverified, GitHub's documented size for private repos).
 
 ## Evidence
 
@@ -46,9 +47,10 @@ Worker cap (`concurrency`): default 3 since 10-15 (core/src/config/file.rs:277, 
 | 2 | B: the suite grew | **confirmed, contributing** | 1,307 to 5,137 tests in 7 days (above); LEAK-FAIL per Gate rose with count (1 in 3,757; 3 in 5,137). Count alone does not decide: single Gates ended 0 LEAK at 5,100 (Lead's Context) |
 | 3 | C/F: more Gates at once; slots removed | **confirmed, contributing** | slots default 2 from 10-20 to 10-25 18:14 (fa7fb29b, 84c274bf); overlapping nextest runs on `pro` max 2 (10-22..24), max 4 (10-25) (Evidence 4). 3 of the 6 LEAK runs of 10-25 overlapped 2-4 runs; 3 overlapped none, so other load counts (inference) |
 | 4 | A: `result = "fail"` is new | **killed as cause; true as fact** | added 10-20 (739ec1cc) for a real leak. Before it a leak printed `LEAK` and passed (https://nexte.st/docs/features/leaky-tests/ : "By default, leaky tests are considered to be successful"). On CI nextest printed 0 `LEAK`, so there was nothing hidden to see there. No `pro` log before 10-20 exists |
-| 5 | E: nextest/rustc upgrade | **killed** | pinned 0.9.148 (released 2026-10-07) from ba01e4fc; CI log line `cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)`; local `cargo nextest --version` same; 0.9.149 (10-20) is not installed. Changelog (https://nexte.st/changelog/) has no leak entry for 0.9.147-0.9.149 (grep of the page text: 0 hits for "leak" in the 0.9.146-0.9.149 section: shown above the 0.9.145 line; unverified for older sections) |
+| 5 | E: nextest/rustc upgrade | **killed** (but see 8: the default changed in 0.9.108, before the pin) | pinned 0.9.148 (released 2026-10-07) from ba01e4fc; CI log line `cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)`; local `cargo nextest --version` same; 0.9.149 (10-20) is not installed. Changelog (https://nexte.st/changelog/) has no leak entry for 0.9.147-0.9.149 (grep of the page: 0.9.148 "leak timeout no longer restarted each time a handle produces output" #3646, 0.9.145 the pipe-inherit fix #3553, 0.9.108 default 100 to 200 ms; none changes behaviour between 10-18 and now) |
 | 6 | F: the Gate never ran its tests on Actions | **killed** | it did: 61 nextest logs 10-18..19, 54 green, 5 red for real test failures (`cpd::watch ...`), 2 cancelled; and the pre-nextest `cargo test` runs before. Short life: 1 day with nextest, then billing stopped Actions |
-| 7 | F: the nextest CI threads | **inference** | no `test-threads` in ci.yml: default = vCPU count. Hosted private Linux runner = 2 vCPU (GitHub doc, not fetched: unverified): 2 tests at a time, 1,716 tests in 654 s. `pro`: 14 at a time per Gate |
+| 7 | F: leak-timeout 100 ms vs upstream 200 ms | **confirmed, contributing** | 739ec1cc set `period = "100ms"` with `result = "fail"`; upstream default 200 ms since 0.9.108 (changelog); scratch run: `sleep 0.5` leak = `LEAK [0.268s]` with no config; `sleep 0.05` leak = `LEAK-FAIL [0.183s]` with the repo's 100 ms config (diagnostic, scratch project and `--config-file` outside the repo, removed) |
+| 8 | F: the nextest CI threads | **inference** | no `test-threads` in ci.yml: default = vCPU count. Hosted private Linux runner = 2 vCPU (GitHub doc, not fetched: unverified): 2 tests at a time, 1,716 tests in 654 s. `pro`: 14 at a time per Gate |
 
 ### 3. LEAK vs LEAK-FAIL (all logs I could find)
 
@@ -63,7 +65,16 @@ Count of result lines (`LEAK [`) = leaky test that passed; `LEAK-FAIL [` = faile
 | 10-25 | 0 | 30 | 0 | 6 / 81 |
 | 10-26 | 0 | 0 | 0 | 0 / 2 |
 
-(Counts include each failing test twice: once in the run, once in the summary tail; 98 LEAK-FAIL lines in all 3,158 logs, 96 after the `ref/` copies are included.) **A passing leak (`LEAK [`) appears in no log: 0 of 3,158.** On GitHub (61 nextest job logs, 2026-10-18 21:26Z to 10-19 04:37Z): `grep -c LEAK` = 0 in every one. Victims on `pro` 10-24/25 are pure unit tests (`cpd-core policy::tests::a_symlinked_file_has_its_realpath_as_source`, `cpd-tui plan::tests::the_pulse_re_reads_on_its_contexts_events`, ...), as the Lead found.
+(Each failing test is listed twice: in the run and in the summary tail, so halve for tests. Outside `ref/`: 34 LEAK-FAIL lines; with the `ref/` copies 96 LEAK-FAIL result lines.) **A passing leak (`LEAK [`) appears in no log: 0 of 3,158.** On GitHub (61 nextest job logs, 2026-10-18 21:26Z to 10-19 04:37Z): `grep -c LEAK` = 0 in every one. Victims on `pro` 10-24/25 are pure unit tests (`cpd-core policy::tests::a_symlinked_file_has_its_realpath_as_source`, `cpd-tui plan::tests::the_pulse_re_reads_on_its_contexts_events`, ...), as the Lead found.
+
+### 3b. Scratch diagnostic (outside the repo)
+
+```sh
+D=$(mktemp -d); cd $D; cargo init --lib lk; cd lk   # tests spawn `sleep 0.05|0.15|0.5` and return (leak)
+CARGO_TARGET_DIR=$D/t TMPDIR=$D cargo nextest run --test-threads 1                    # default: 0.5 -> LEAK [0.268s], 0.15 -> pass
+printf '[profile.default]\nleak-timeout = { period = "100ms", result = "fail" }\n' > $D/n.toml
+CARGO_TARGET_DIR=$D/t TMPDIR=$D cargo nextest run --test-threads 1 --config-file $D/n.toml  # repo's setting: LEAK-FAIL [0.183s]
+```
 
 ### 4. Gates at once
 
@@ -136,6 +147,7 @@ print(len(iv),'runs; busy seconds by concurrency',dict(sorted(tw.items())))
 
 - **The check itself is the same on CI and on `pro`**; what changed is where and under what load it runs, plus the removal of the slots. So the defect is a load-sensitivity of the 100 ms timer that no CI-like run ever met, not a new regression of nextest.
 - **Cheapest, matches the User's decision pro-d44** (fixed `test-threads` below the core count): restores the effective ceiling the slots gave (max 2 full runs x 14 threads = 28 processes until 10-25; 8 Gates x 4 = 32 now). Cost: slower single Gate (hosted runner: 2 threads, 654 s for 1.7k tests; `pro` alone at 14 threads: 131-302 s for 5.1k, from the logs above). The slot era is evidence that a cap of about 28 concurrent test processes machine-wide ran Gates 10-22..10-24 with 1 LEAK in 46 runs; 4 x 8 = 32 is just above it (inference).
+- **Convention over configuration** points at the line `period = "100ms"`: upstream's default is 200 ms (verified above). Deleting the period (keeping `result = "fail"`) is a return to the default, not a raise above it: the Lead decides whether that counts under the Plan's rule; it only halves the miss rate in principle (unverified: a 1-11 s scheduling delay exceeds both).
 - **Do not** raise `leak-timeout` or set `result` back to pass: A shows the check caught a true leak (ms-leak) on its first day; and on CI it showed 0 in 92k executions, so the check is not noise by design.
 - Not decided here: whether a hosted runner (D) would stay clean for 5,100 tests (the CI evidence is for 1.7k tests, 2 threads, alone): `unverified`; running the 10-25 suite on a GitHub-hosted runner is the one test of it (Actions is off for billing, 10-19).
 - Open (outside this Job): the cause on `pro` is the timer firing while nextest is not scheduled (rs-cpd, H3a); this history only says when and under what conditions it became visible.
