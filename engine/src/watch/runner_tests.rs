@@ -202,6 +202,21 @@ fn start_with_maps_a_helper_that_printed_no_result_to_spawn_failed() {
 }
 
 #[test]
+fn start_with_names_a_helper_that_exited_zero_with_no_output() {
+    let (fx, _adapter) = engine();
+    let runner = fake("node", Reply::exit(0, "", ""));
+    let failure = helper(&runner, &fx).unwrap_err();
+    assert_eq!(failure.code, "spawn_failed");
+    assert!(failure.message.ends_with(" exited 0 but printed no result."), "{}", failure.message);
+    assert_eq!(failure.details["exit"], 0);
+
+    let runner = fake("node", Reply::exit(3, "", "boom"));
+    let failure = helper(&runner, &fx).unwrap_err();
+    assert!(!failure.message.contains("exited 0"), "{}", failure.message);
+    assert!(failure.message.ends_with("printed no result."), "{}", failure.message);
+}
+
+#[test]
 fn start_with_maps_a_node_that_cannot_start_to_spawn_failed_with_the_argv() {
     let (fx, adapter) = engine();
     let runner = fake("node", Reply::io(ErrorKind::NotFound));
