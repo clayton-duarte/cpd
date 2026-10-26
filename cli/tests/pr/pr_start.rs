@@ -75,6 +75,7 @@ fn fx() -> Fx {
         "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 3600\n[tmux]\nsocket = \"{}\"\n",
         kit.env.tmux_socket()
     ));
+    kit.env.quiet_models(cpd_core::clock::Clock::utc(&*kit.fakes.clock));
     let fx = Fx { kit, clones: std::cell::Cell::new(0) };
     fx.env.sql(
         "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');

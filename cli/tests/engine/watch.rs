@@ -145,6 +145,7 @@ fn fx_bare(config_extra: &str) -> Fx {
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup).unwrap().path;
     env.write_models();
+    env.quiet_models(OffsetDateTime::now_utc());
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
@@ -1601,6 +1602,8 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
     let set_clock_to = |at: OffsetDateTime| {
         if let Ok(forward) = Duration::try_from(at - fx.fakes.clock.utc()) {
             fx.advance(forward);
+            // The jump is months of virtual time, past the week E14 waits: the list was polled just now.
+            fx.env.quiet_models(fx.fakes.clock.utc());
         }
     };
 

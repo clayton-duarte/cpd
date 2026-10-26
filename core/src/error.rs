@@ -98,6 +98,17 @@ error_codes! {
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
+    // Model discovery (contract §3.7 E15, commands.md §14.5).
+    ModelsKeyUnset = "models_key_unset" => Failure,
+    ModelsUnauthorized = "models_unauthorized" => Failure,
+    ModelsUnreachable = "models_unreachable" => Failure,
+    ModelsTls = "models_tls" => Failure,
+    ModelsTimeout = "models_timeout" => Failure,
+    ModelsUnparseable = "models_unparseable" => Failure,
+    ModelsEmpty = "models_empty" => Failure,
+    ModelsRefreshFailed = "models_refresh_failed" => Failure,
+    ModelsNoProvider = "models_no_provider" => Failure,
+    ModelsHelperFailed = "models_helper_failed" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
     // The install (commands.md §14.4).
     InstallFailed = "install_failed" => Failure,

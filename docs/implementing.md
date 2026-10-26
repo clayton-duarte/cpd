@@ -15,7 +15,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | Directory | Package (library / binary) | Holds |
 |---|---|---|
 | `core/` | `cpd-core` (library `cpd_core`) | every area of the module map below except `tui`, `watch` and `doctor`, and the shared modules (`args`, `error`, `home`, `ids`, `output`). `core/src/lib.rs` is the crate root: it declares every module, once. |
-| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E11, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
+| `engine/` | `cpd-engine` (library `cpd_engine`) | the engine and the health check: the areas `watch` (`watch`, engine steps E1–E15, commands.md §12) and `doctor` (`doctor`, §14.1), in `engine/src/watch/` and `engine/src/doctor/`. It depends on `cpd-core` and uses its public items (the store, events, config, host, session and the shared modules). `engine/src/lib.rs` is its crate root. |
 | `tui/` | `cpd-tui` (library `cpd_tui`) | the whole cockpit (`tui`, `tui view`, commands.md §13): `tui/src/lib.rs`, the views and the read model (`tui/src/read/`). It uses `cpd_core` for the store, events, host and the shared modules. It does not depend on `cpd-engine`. |
 | `cli/` | `cpd` (binary `cpd`) | `cli/src/main.rs`, which only calls `main_with`, and `cli/src/cli.rs`: the root `Command` enum, `run` and `main_with`. Also `cli/tests/`, the binary-driven integration tests: one test binary per area, `cli/tests/<area>/` (the area table under Tests). |
 
@@ -30,6 +30,7 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 | `store` | rs-store | none | §4.1–§4.5 |
 | `events` | rs-events | `events list`, `events follow` (§11) | §5 |
 | `config` | rs-config | `config`, `tiers` (§14.2, §14.3) | §8, §9 |
+| `models` | rs-models | `models refresh`, `models show` (§14.5) | §1.4, §3.7 E15, §8.2 |
 | `git` | rs-git | none | §7.1–§7.3, §7.5 |
 | `host` | rs-host | none | §6 |
 | `context` | rs-context | `context …` (§3) | §2.2, §4.6 |
@@ -124,7 +125,7 @@ Target contract (ADR 0013): tests are in-process, with fakes behind traits for t
   |---|---|
   | `engine` | `watch*`, `doctor`, `write_executable` |
   | `pr` | `pr*`, `merge`, `git*`, `repo_hooks` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `host_repair`, `gate` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy*`, `config`, `repo_config`, `repo_cmds`, `secret*`, `models*`, `host_repair`, `gate` |
   | `session` | `session*`, `host`, `board`, `host_pill`, `mcp_attach` |
   | `store` | `store*`, `events`, `home`, `scripted` |
   | `tui` | `tui*`, `inbox*`, `bare` |

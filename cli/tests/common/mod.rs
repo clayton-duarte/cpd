@@ -46,6 +46,8 @@ use cpd_core::host::git_guard;
 use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 pub mod causes;
 pub mod cockpit;
@@ -1104,6 +1106,21 @@ impl TestEnv {
         }
         let model = "[model]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\nG = \"p/gemini\"\n";
         fs::write(&path, format!("{held}{model}")).expect("write host.toml");
+    }
+
+    /// One cached model list, `run/models-quiet.json` (contract §1.4), `polled_at` `now`: E14 is not due before the newest
+    /// `polled_at` is a week old (§3.7), so an engine a test starts runs no helper and reports nothing about one. A test of
+    /// E14 itself does not call this.
+    pub fn quiet_models(&self, now: OffsetDateTime) {
+        let polled_at = now.format(&Rfc3339).expect("format polled_at");
+        let file = serde_json::json!({
+            "version": 1, "provider": "quiet", "polled_at": polled_at, "pi_version": "1.0.0",
+            "source": {"kind": "copilot-available", "auth": "oauth", "base": null},
+            "ids": ["quiet-model"]
+        });
+        let run = self.cpd_home().join("run");
+        fs::create_dir_all(&run).expect("create the run directory");
+        fs::write(run.join("models-quiet.json"), file.to_string()).expect("write models-quiet.json");
     }
 
     /// `config.toml` of machine `m1` on this env's private tmux server. `extra` is more TOML

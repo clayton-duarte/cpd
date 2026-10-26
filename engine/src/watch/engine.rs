@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5, E7–E11, E12–E14 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7–E11, E12–E15 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::poll_run::PollRun;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, wake, workers};
+use super::{SOURCE, archive, archive_leads, distill, escalations, host_alert, inbox, liveness, models, open, pr, restart, schedule, sleep, team, titles, wake, workers};
 use cpd_core::clock::{self, Clock};
 use cpd_core::config::{Catalog, Config, load_catalog_with};
 use cpd_core::policy::model::{Models, models_of_attempt, models_of_job};
@@ -76,6 +76,8 @@ pub(super) struct Engine {
     pub titles: titles::Runs,
     /// E11: the helper's run in flight and when the last one ended.
     pub team: team::State,
+    /// E15: the helper's run in flight and when the last one ended.
+    pub models: models::State,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
     /// The detached runs whose pid file the engine removes when it sees them end ([`super::sweep_detached`]).
@@ -118,6 +120,7 @@ impl Engine {
             distill_started: HashMap::new(),
             titles: titles::Runs::default(),
             team: team::State::default(),
+            models: models::State::default(),
             restart_started: None,
             detached: Vec::new(),
         }
@@ -164,10 +167,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E14 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, the `@cpd_host_alert` step, then E1–E5, E7–E11, E12–E15 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalogs.clear();
-        let steps: [fn(&mut Engine); 17] = [
+        let steps: [fn(&mut Engine); 18] = [
             restart::drain,
             workers::run,
             host_alert::run,
@@ -182,6 +185,7 @@ impl Engine {
             distill::run,
             titles::run,
             team::run,
+            models::run,
             archive::run,
             sleep::run,
             archive_leads::run,

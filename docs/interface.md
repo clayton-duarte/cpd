@@ -134,6 +134,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
+| `cpd models` | The model lists pi can offer (commands.md §14.5) | | |
+| `cpd models refresh` | Read the model lists pi can offer now (§14.5) | Manager, Lead | |
+| `cpd models show` | Print the cached model lists (§14.5) | Manager, Lead | |
 | `cpd install` | Install the cpd built from a checkout (commands.md §14.4) | | |
 | `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
 | `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |

@@ -35,6 +35,7 @@ pub mod incident;
 pub mod job;
 pub mod mcp;
 pub mod merge;
+pub mod models;
 pub mod metrics;
 pub mod plan;
 pub mod policy;

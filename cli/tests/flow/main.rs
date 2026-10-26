@@ -28,6 +28,7 @@ mod context_inbox_cyan;
 mod host_repair;
 mod job;
 mod metrics;
+mod models_cmd;
 mod plan_cancel;
 mod plan_delete;
 mod plan_render_cancelled;

@@ -24,7 +24,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 11. [`events`](#11-events)
 12. [`watch`](#12-watch)
 13. [`tui`](#13-tui)
-14. [`doctor`, `config`, `tiers`](#14-doctor-config-tiers)
+14. [`doctor`, `config`, `tiers`, `models`](#14-doctor-config-tiers-models)
 15. [The pi adapter's protocol](#15-the-pi-adapters-protocol)
 16. [The Worker contract](#16-the-worker-contract)
 17. [What the TUI reads](#17-what-the-tui-reads)
@@ -216,6 +216,8 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
+| `cpd models refresh` (§14.5) | Manager, Lead | no | no |
+| `cpd models show` (§14.5) | Manager, Lead | no | no |
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
@@ -3294,7 +3296,7 @@ Rerunning is safe: a restart already pending keeps its time, and a server that i
 - **A3** Each follow-up's failure is printed in one line on stderr, and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
 - **A4** Nothing new in the store: no table, column or Event kind.
 
-## 14. `doctor`, `config`, `tiers`
+## 14. `doctor`, `config`, `tiers`, `models`
 
 ### 14.1 `doctor`
 
@@ -3411,6 +3413,54 @@ Steps, in order (implementing.md "`cpd install`" has each with its message; cont
 Every refusal (steps 1 to 4, nothing replaced), failure (steps 5 and 6) and failed follow-up (step 7) is a message on stderr as above and **exit 1**; the exit is 1 at the end when any follow-up line was printed.
 
 Output: the install's progress and every message above go to stderr as human text, as the script's did (a Lead's commit hooks and dotfiles read the exit code and the text, not JSON); the one JSON value on stdout is `{"ok": true, "binary": "<path>", "adapter": "<path>", "version": "<cpd --version of the built binary>"}` on success, and the error value (§1.2) with exit 1 otherwise (the messages are the script's own; every refusal, failure and failed follow-up is `install_failed`, exit 1). Effects: writes only `~/.local/bin`, `~/.local/share/cpd` and what the follow-ups write (`run/install-restart.json`, the engine's own files); no row, no Event. Idempotent: yes, safe to rerun, also by two installs at once (contract §3.7 "The adapter swap"). The command-tree test `cli/tests/tooling/interface.rs` lists it (callers none, cockpit no, internal no); `docs/interface.md` is regenerated from the tree.
+
+### 14.5 `models`
+
+```
+cpd models refresh
+cpd models show [--provider <provider>]
+```
+
+The model lists of the providers pi can use (contract §3.7 E15, Context decisions pro-d13, pro-d17, pro-d20). **cpd has no provider list and names no key**: the providers come from pi, through the helper `pi/lib/models-list.ts`, and `--provider` only names one of the files already cached. Callers: Manager, Lead, or the User at a shell (§2). Neither command opens the store, writes a row or appends an Event.
+
+**`models refresh`** reads the lists now, whatever their age. It runs the helper exactly as E15 does (no argument, under pi's Node, its own process group, a deadline of 120 s, the engine's environment inherited; contract §3.7 E15 for the answer, its validation, the error codes and the file), then, under `locks/models.lock`, computes each provider's diff and writes `run/models-<provider>.json` whole (`.tmp` and rename), by the same code as the engine, so a refresh and the engine never interleave. A provider whose list is empty or failed writes nothing and keeps its last good file. A first run, or a run after a change of `auth`, reports no change.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| pi is found as §9 says | `pi_not_found` | 1 |
+| the helper starts | `spawn_failed` | 1 |
+| the helper answers within 120 s | `tool_timeout` | 5 |
+| the answer is the JSON of contract §3.7 E15 | `models_helper_failed` | 1 |
+| pi can use a provider the contract lists | `models_no_provider` | 1 |
+| the helper's whole run did not fail | the helper's code (`models_refresh_failed`, …) | 1 |
+| every provider listed has a good, non-empty list | the provider's code (`models_key_unset`, `models_unauthorized`, `models_unreachable`, `models_tls`, `models_timeout`, `models_unparseable`, `models_empty`, `models_refresh_failed`) | 1 |
+| `locks/models.lock` is free within `store_busy_ms` | `lock_timeout` | 5 |
+
+When one provider fails and others do not, **the good ones are written first and the command then fails** with the failing provider's code (the first, in the helper's order) and `details.providers`: the same array as `ok`'s, a failed entry being `{provider, error: {code, message, details}}`. Nothing is hidden and nothing good is lost. No key is ever in an output, a message or `details`.
+
+Effects: `run/models-<provider>.json` written for each provider that has a good list; the helper's own effect on pi (`models-store.json`'s `checkedAt` for `github-copilot`). No row, no Event, no tmux, no git. The engine's next E15 is not due for `watch.models_discovery_seconds` after the newest `polled_at`.
+
+```json
+{"ok": true, "pi_version": "1.3.0", "providers": [
+  {"provider": "bifrost", "polled_at": "2026-11-02T09:00:00Z", "count": 41, "changes": {"at": "2026-11-02T09:00:00Z", "appeared": ["acme/new-model"], "went_away": []}},
+  {"provider": "github-copilot", "polled_at": "2026-11-02T09:00:01Z", "count": 11, "changes": null}]}
+```
+
+`changes` is the diff of this run when it is not empty, else `null` (a list that did not change, a first run and a change of `auth` all print `null`). The ids above are an illustration, not verified values. Idempotent: yes (the same lists write the same ids and move `polled_at`).
+
+**`models show`** prints the cached lists and runs nothing (no helper, no network, no lock). `--provider <provider>` prints only that provider's file. A provider with no file, and a home with no file at all, is an empty `providers` array, not an error. A file it cannot parse is skipped, and named in `warnings` (`{provider, file, code: "models_unparseable"}`); the command still succeeds.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--provider` is a file-name-safe token (`^[A-Za-z0-9._-]+$`) | `usage` | 2 |
+
+```json
+{"ok": true, "providers": [
+  {"provider": "bifrost", "polled_at": "2026-11-02T09:00:00Z", "age_seconds": 3600, "pi_version": "1.3.0", "auth": "custom", "count": 41, "ids": ["…"], "changes": {"at": "2026-11-02T09:00:00Z", "appeared": ["acme/new-model"], "went_away": []}}],
+ "warnings": []}
+```
+
+`ids` is the file's sorted list, `count` its length, `auth` the file's `source.auth`, `changes` the file's last `changes` (`null` when it has none), `age_seconds` the time since `polled_at`, at the call. The providers are in name order. Idempotent: yes, read-only.
 
 ## 15. The pi adapter's protocol
 
