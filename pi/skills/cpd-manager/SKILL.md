@@ -43,6 +43,8 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 
 Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --pr <key>` a PR's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
 
+MCP servers: nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (not saved: attach again after a restart); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). Give a Worker the command in its Spec when its Job needs the server.
+
 ## 1. Records
 
 Your first message is the header and the pointer line:

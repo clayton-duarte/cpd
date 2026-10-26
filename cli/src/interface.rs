@@ -80,6 +80,7 @@ pub const TABLE: &[Entry] = &[
     ("review close", &[Lead, Manager], false),
     ("review list", &[Lead, Manager], false),
     ("policy show", &[Lead, Manager, Worker], false),
+    ("mcp attach", &[Manager, Lead, Worker], false),
     ("session list", &[Lead, Manager], false),
     ("session show", &[Lead, Manager], false),
     ("session fork", &[Lead], true),

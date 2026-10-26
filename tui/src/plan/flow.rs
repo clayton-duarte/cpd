@@ -372,7 +372,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // Needs that do not point left (a cycle) are not drawn.
     let edges: Vec<(usize, usize)> = (0..cards.len()).flat_map(|c| cards[c].needs.iter().map(move |&p| (p, c))).filter(|&(p, c)| col_of[p] < col_of[c]).collect();
     let busy: Vec<HashSet<u16>> = cols.iter().map(|cs| cs.iter().flat_map(|&c| top[c]..top[c] + height_of(c)).collect()).collect();
-    let right = |c: usize| xs[col_of[c]] + col_w[col_of[c]]; // the right bracket's column
+    let right = |c: usize| xs[col_of[c]] + cards[c].jobs.iter().map(|&i| rect_w(i, col_of[c])).max().unwrap_or(0); // the right bracket's column: the cell after the card's own widest pill
     let bus = |l: usize| xs[l] + col_w[l] + 2;
     let mut segs: Vec<Seg> = Vec::new();
     let mut bus_rows: Vec<Vec<u16>> = vec![Vec::new(); ncols];

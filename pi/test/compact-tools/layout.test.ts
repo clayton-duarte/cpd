@@ -29,7 +29,7 @@ const SOURCES = [
 
 test("pi/package.json lists the adapter and the compact-tools extension, each a file, and the skills as before", () => {
 	const manifest = json(join(PI, "package.json"));
-	assert.deepEqual(manifest.pi.extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"]);
+	assert.deepEqual(manifest.pi.extensions, ["./extension.ts", "./mcp-extension.ts", "./compact-tools/extensions/compact-tools.ts", "./ask-user-question/index.ts"]);
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
 	assert.deepEqual(manifest.pi.themes, ["./themes"]);
 	// An entry whose file is missing makes pi fail to load the adapter: the entry and the files come in one change.

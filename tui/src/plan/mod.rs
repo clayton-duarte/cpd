@@ -888,6 +888,10 @@ mod box_tests;
 #[cfg(test)]
 mod margin_tests;
 #[cfg(test)]
+mod lines_tests;
+#[cfg(test)]
+mod box_lines_tests;
+#[cfg(test)]
 mod needs_tests;
 
 #[cfg(test)]

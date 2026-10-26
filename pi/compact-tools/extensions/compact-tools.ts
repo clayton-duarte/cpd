@@ -861,10 +861,10 @@ export default function compactTools(pi: ExtensionAPI): void {
 			catch (error) { console.warn(message, "UI notification also failed:", error); }
 		}
 	};
-	const enableUI = (ctx: ExtensionContext, reload: boolean, resume: boolean, failures: UIFailure[]) => {
+	const enableUI = (ctx: ExtensionContext, reload: boolean, resume: boolean, failures: UIFailure[], startup = false) => {
 		// Observe relayout keys before the thinking controller consumes them.
 		// Before the thinking controller: its terminal input handler is the one the tests (and the key relayout) look for last.
-		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx, reload));
+		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx, startup));
 		attemptUI(failures, "cursor bind", () => cursor.bind());
 		attemptUI(failures, "viewport bind", () => viewport.bind(ctx));
 		attemptUI(failures, "progress bind", () => progress.bind(ctx, resume));
@@ -929,7 +929,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 		configure(pi, ctx.cwd, trusted, failures);
 		sessionReady = true;
 		if (ctx.mode === "tui" && runtime.config.style !== "off") {
-			enableUI(ctx, event.reason === "reload", false, failures);
+			enableUI(ctx, event.reason === "reload", false, failures, event.reason === "startup");
 			if ((runtime.config.custom_tools.enabled || runtime.config.tools.length > 0) && !customRowsAvailable && !customRowsWarned) {
 				customRowsWarned = true;
 				ctx.ui.notify("Compact tool rendering is unavailable in this version of Pi", "warning");

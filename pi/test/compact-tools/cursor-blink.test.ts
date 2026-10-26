@@ -225,3 +225,19 @@ test("the blink resumes 500 ms after the last keystroke", async () => {
 		cursorRow(s.editor.render(40));
 	} finally { s.dispose(); clock.uninstall(); }
 });
+
+test("the cursor is drawn at once when focus comes back in its off phase", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session({ text: "hi" });
+	try {
+		s.focus(true);
+		s.editor.render(40);
+		clock.tick(500);
+		s.editor.render(40);
+		s.focus(false);
+		s.focus(true);
+		const rows = s.editor.render(40);
+		const { row } = cursorRow(rows);
+		assert.ok(row.includes(`${MAGENTA}${START}`), `the cursor is back in magenta: ${readable(row)}`);
+	} finally { s.dispose(); clock.uninstall(); }
+});

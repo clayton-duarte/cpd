@@ -136,6 +136,7 @@ error_codes! {
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
     PlanInactive = "plan_inactive" => Refused,
+    SessionRestartLoop = "session_restart_loop" => Refused,
     Broadcast = "broadcast" => Refused,
     Duplicate = "duplicate" => Refused,
     NoManager = "no_manager" => Refused,
@@ -235,6 +236,7 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     TopicNotFound = "topic_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
+    McpUnknown = "mcp_unknown" => NotFound,
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
@@ -451,6 +453,7 @@ mod tests {
             (ErrorCode::MergeNotClean, 3),
             (ErrorCode::JobNotFound, 4),
             (ErrorCode::SessionNotFound, 4),
+            (ErrorCode::McpUnknown, 4),
             (ErrorCode::BaseNotFound, 4),
             (ErrorCode::StoreBusy, 5),
             (ErrorCode::LockTimeout, 5),

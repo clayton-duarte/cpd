@@ -6,7 +6,8 @@ use serde_json::json;
 
 use super::row::{self, Role, Row};
 use super::state::scoped;
-use super::{Env, SendArgs, archive};
+use super::moves::start_parked;
+use super::{Env, SendArgs, archive, no_cockpit};
 use crate::args::Text;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -130,6 +131,17 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let from = sender()?;
     let mut env = Env::open()?;
     let id = env.resolve(&args.id)?;
+    // A stopped Lead or Manager with no live pane is started after the Event commits (hs-d725); no cockpit refuses first.
+    let needs_pane = {
+        let target = env.store.read(|conn| row::load(conn, &id))?;
+        check(&target)?;
+        let tmux = env.tmux();
+        let wake = target.state.as_str() == "stopped" && !tmux.list_panes().unwrap_or_default().iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&id));
+        if wake && !tmux.has_session(&env.config.tmux.cockpit_session)? {
+            return Err(no_cockpit(&env.config.tmux.cockpit_session));
+        }
+        wake
+    };
     let (event, target) = env.store.write("session send", |tx| {
         let target = row::load(tx, &id)?;
         check(&target)?;
@@ -139,5 +151,9 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
         let event = write(tx, &target, &from, text.as_str(), Some(args.unblocks.as_str()), true)?;
         Ok((event, target))
     })?;
-    Ok(Output::success(json!({"event": event, "session": target.id, "from": from, "unblocks": args.unblocks.as_str()})))
+    let pane = if needs_pane { start_parked(&mut env, &target, "session send")? } else { None };
+    Ok(Output::success(json!({
+        "event": event, "session": target.id, "from": from, "unblocks": args.unblocks.as_str(),
+        "started": pane.is_some(), "pane": pane.as_ref().map(|p| p.as_str()),
+    })))
 }

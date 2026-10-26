@@ -2,11 +2,12 @@
  * The input widget: pi-tui's Editor drawn as a rounded box in the Dango palette (docs/contract.md 6.1.1, 6.9
  * "The input widget"). Every row is a margin space, the wall or corner, one padding space, the text, one padding
  * space, the wall or corner, a margin space; the text starts at column 3. The border is one colour by state: cyan 6
- * while the agent works, else bright blue 12 while the terminal pane has focus, else 15. Pi's own `borderColor`
+ * while the agent works, else bright blue 12 while the terminal pane has focus, else 15. The pane counts as focused from a focus-in
+ * report, a key the editor takes or a left-button press in it; only a focus-out report unfocuses it (6.9). Pi's own `borderColor`
  * (thinking level, bash mode) is ignored. Indexed SGR only.
  */
 import { Editor, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { setClockFocused } from "./compact-tools-clock.ts";
 import { italic } from "../../lib/italic.ts";
@@ -21,10 +22,23 @@ const SIDE = 3;
 const MIN_WIDTH = SIDE * 2 + 2;
 const FOCUS_IN = "\x1b[I";
 const FOCUS_OUT = "\x1b[O";
+/** A left-button press in SGR: button 0 (any modifier bits), motion bit 32 and wheel bit 64 clear, final byte M. */
+const SGR_MOUSE = /^\x1b\[<(\d+);\d+;\d+M$/;
+const isLeftPress = (data: string): boolean => {
+	const match = SGR_MOUSE.exec(data);
+	if (!match) return false;
+	const button = Number(match[1]);
+	return (button & 3) === 0 && (button & 32) === 0 && (button & 64) === 0;
+};
+
+/** Set by the bound controller: the one place focus changes. */
+let focusSetter: ((focused: boolean) => void) | undefined;
 
 interface EditorState {
-	/** The terminal pane has focus; false until a focus report says otherwise. */
+	/** The terminal pane has focus: false at a pi startup, then set by input evidence or a focus report (6.9). */
 	focused: boolean;
+	/** How many times the pane gained focus; the cursor restarts its blink on a change. */
+	gains: number;
 	/** The words of the working label while the agent works, without padding. */
 	words: string | undefined;
 	/** The loader frame index, stepped by the progress label's tick of the shared clock. */
@@ -33,13 +47,18 @@ interface EditorState {
 
 function state(): EditorState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: EditorState };
-	holder[STATE_KEY] ??= { focused: false, words: undefined, frame: 0 };
+	holder[STATE_KEY] ??= { focused: false, gains: 0, words: undefined, frame: 0 };
 	return holder[STATE_KEY];
 }
 
 /** The pane focus state the box tracks; the cursor reads it so focus is not tracked twice. */
 export function editorFocused(): boolean {
 	return state().focused;
+}
+
+/** The count of focus gains so far. */
+export function editorFocusGains(): number {
+	return state().gains;
 }
 
 /** Progress tells the box what the working label says; undefined when nothing is working. */
@@ -110,6 +129,16 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 }
 
 export function hookEditor(): void {
+	// Any key the pane receives for its editor is evidence it has focus (6.9). CustomEditor handles extension shortcuts and
+	// app actions before it calls Editor, so it is wrapped too; Editor's wrapper skips it so a key counts once.
+	const focusOnKey = (self: unknown, args: unknown[], original: (...args: unknown[]) => unknown): unknown => {
+		// A focus report that reaches the editor as a key is not evidence of focus.
+		if (args[0] !== FOCUS_IN && args[0] !== FOCUS_OUT) focusSetter?.(true);
+		return original.apply(self, args);
+	};
+	hookMethod(Editor.prototype, "handleInput", "editor.box.input", (self, args, original) =>
+		self instanceof CustomEditor ? original.apply(self, args) : focusOnKey(self, args, original));
+	hookMethod(CustomEditor.prototype, "handleInput", "custom-editor.box.input", focusOnKey);
 	hookMethod(Editor.prototype, "render", "editor.box.render", (self, args, original) =>
 		boxRows(self, args[0], (width) => original.call(self, width)));
 	// A click's column is counted from the text column, in the text area's width.
@@ -127,24 +156,29 @@ export function hookEditor(): void {
 export class EditorBoxController {
 	private stopInput: (() => void) | undefined;
 
-	bind(ctx: ExtensionContext, reload: boolean): void {
+	bind(ctx: ExtensionContext, startup: boolean): void {
 		this.release();
 		hookEditor();
-		// A fresh start (not a /reload) has no prior report; a reload keeps the focus the pane reported.
-		if (!reload) state().focused = false;
+		// Only a pi startup has no report; reload, new, resume and fork keep the focus the pane reported (6.9).
+		if (startup) state().focused = false;
 		setClockFocused(state().focused);
 		let tui: TUI | undefined;
 		ctx.ui.setWidget(WIDGET_KEY, (host) => {
 			tui = host;
 			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
-		const seen = (data: string): void => {
-			if (data !== FOCUS_IN && data !== FOCUS_OUT) return;
-			const focused = data === FOCUS_IN;
+		const set = (focused: boolean): void => {
 			if (state().focused === focused) return;
 			state().focused = focused;
+			if (focused) state().gains++;
 			setClockFocused(focused);
 			tui?.requestRender();
+		};
+		focusSetter = set;
+		const seen = (data: string): void => {
+			if (data === FOCUS_IN) set(true);
+			else if (data === FOCUS_OUT) set(false);
+			else if (isLeftPress(data)) set(true);
 		};
 		const stopListener = ctx.ui.onTerminalInput((data) => {
 			seen(data);
@@ -164,6 +198,7 @@ export class EditorBoxController {
 		this.stopInput = () => {
 			stopListener();
 			if (own) delete own.handleViewportInput;
+			if (focusSetter === set) focusSetter = undefined;
 		};
 	}
 

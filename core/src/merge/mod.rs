@@ -144,8 +144,7 @@ fn steps(store: &mut Store, home: &CpdHome, config: &Config, target: &Attempt) -
     // A linear Attempt's branch is the PR's Lead Branch (hs-d680, A5): its merge skips the rebase and fast-forward.
     let linear = git::worktree::is_linear(&target.branch, &target.lead_branch);
     // 0. Branch check (engine-W1): the Attempt branch is still what `attempt submit` checked. A linear Attempt's
-    // branch is the Lead Branch, which a sibling's merge may have advanced; only a rewrite that drops the submitted
-    // commit is tampering.
+    // branch is the Lead Branch; only a rewrite that drops the submitted commit is tampering.
     let submitted = target.submitted_sha.as_deref().ok_or_else(|| {
         CpdError::new(ErrorCode::StoreFailed, format!("Attempt {} is merging with no submitted_sha.", target.id))
     })?;

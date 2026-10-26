@@ -67,9 +67,22 @@ pub struct Started {
     pub pid: u32,
 }
 
+/// Whether the PR has a live (not `ended`) linear Attempt other than `except` (pro-d52): its branch is the PR's Lead
+/// Branch. The one place that derives it, for the starter and E3.
+pub fn pr_has_live_linear(conn: &Connection, plan: &PlanId, pr: &str, except: &str) -> Result<bool, CpdError> {
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+           JOIN prs ON prs.plan = j.plan AND prs.key = j.pr
+          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3 AND a.branch = prs.lead_branch",
+        params![plan.as_str(), pr, except],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 /// How an Attempt of a PR is allocated (hs-d680/hs-d682/hs-d683): a **linear** Attempt reuses the PR's workflow worktree on
 /// its Lead Branch; a **parallel** one gets its own worktree and branch. E3 derives it and passes it to the starter, which
-/// enforces it atomically. `None` means the caller passed no allocation: the starter derives it from the PR's live Attempts.
+/// enforces it atomically, refusing any start next to a live linear Attempt of the PR. `None` means the caller passed no allocation: the starter derives it from the PR's live Attempts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Allocation {
     /// The workflow worktree on the PR's Lead Branch.
@@ -234,13 +247,22 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, all
     };
     // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
     let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
-    // hs-d554: a Job stored on a Tier outside H3, S0-S3 is never started (E3 raises one `error` per Job).
+    // pro-d53, hs-d554: a Job stored on a Tier outside H0-H4, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
-    // A linear Attempt (hs-d680) is the PR's only live Attempt: it runs in the PR's one workflow worktree on the
-    // Lead Branch. A live sibling gets its own worktree and branch (A1). Counted here, inside the same transaction
-    // that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    // A linear Attempt (hs-d680, pro-d52) is the PR's only live Attempt for its whole life: it runs in the PR's one
+    // workflow worktree on the Lead Branch, which a parallel Attempt's merge would move under it. Counted here, inside
+    // the same transaction that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    if pr_has_live_linear(conn, plan, job.pr.as_str(), &attempt.to_string())? {
+        return Err(CpdError::new(
+            ErrorCode::CasLost,
+            format!("Attempt {attempt} of Job {key} cannot start: the workflow worktree of PR {} is held by a live linear Attempt.", job.pr),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())
+        .with("pr", job.pr.as_str()));
+    }
     let live: i64 = conn.query_row(
         "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",

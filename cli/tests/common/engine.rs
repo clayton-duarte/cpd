@@ -200,9 +200,14 @@ impl Fx {
 
     /// [`Fx::add_job`] in PR `pr` of Plan `pay`.
     pub fn add_job_in(&self, pr: &str, key: &str, needs: &[&str], then: &str) {
+        self.add_job_on("S2", pr, key, needs, then);
+    }
+
+    /// [`Fx::add_job_in`] with the Job's Tier `tier`.
+    pub fn add_job_on(&self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('{PLAN}', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('{PLAN}', '{key}', '{need}');");

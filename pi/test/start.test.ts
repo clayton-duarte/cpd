@@ -30,6 +30,7 @@ test("start-up runs §15.2's steps in order and follows from the cursor", async 
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
+  await f.trackerListed();
 
   assert.deepEqual(f.argvs(), [
     ["session", "show", ID],
@@ -134,6 +135,7 @@ test("a session show that fails once then succeeds starts the adapter normally (
   await waitFor("a retry", () => f.argvs().filter((a) => a[1] === "show").length >= 3);
   f.respond("session-show", shown());
   await waitFor("the follower", () => f.follows().length > 0);
+  await f.trackerListed();
   assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
   assert.deepEqual(f.argvs().slice(-3), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"], ["review", "list", "--session", ID]]);
   assert.equal(f.pi.sessionName, "the lead");

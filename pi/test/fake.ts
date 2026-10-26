@@ -391,6 +391,16 @@ export class Fixture {
     return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "events");
   }
 
+  /** Resolves when the adapter started its Event follower. */
+  async followerStarted(): Promise<void> {
+    await waitFor("the follower", () => this.follows().length > 0);
+  }
+
+  /** Resolves when the tracker ran `cpd review list` (started after the follower, not awaited by it). */
+  async trackerListed(): Promise<void> {
+    await waitFor("the tracker's review list", () => this.argvs().some((a) => a[0] === "review" && a[1] === "list"));
+  }
+
   /** `--since` of every follower start. */
   sinces(): number[] {
     return this.follows().map((c) => Number(c.since));
@@ -660,6 +670,14 @@ export class FakePi implements PiApi {
   /** The models `pi.setModel` was called with, in order (commands.md §15.3 `session-retiered`), and the levels `pi.setThinkingLevel` was called with. */
   readonly modelsSet: { provider: string; id: string }[] = [];
   readonly thinkingSet: string[] = [];
+  /** The `registerMcpServer` calls (commands.md §15.3 `mcp-attached`), in order; `mcpThrows` is thrown by each when set. */
+  readonly registeredMcp: { name: string; config: unknown }[] = [];
+  mcpThrows?: Error;
+  registerMcpServer(name: string, config: unknown): void {
+    this.registeredMcp.push({ name, config });
+    notify();
+    if (this.mcpThrows) throw this.mcpThrows;
+  }
   /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
   modelAccepted = true;
   /** The models `ctx.modelRegistry.find(provider, id)` knows, as `provider/id`. */
@@ -800,3 +818,8 @@ export function waitFor<T>(what: string, fn: () => T | undefined | null | false,
 /** `session state` argvs, without the session id, as `idle`, `blocked:<label>` or `waiting:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
   f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" || a[2] === "waiting" ? `${a[2]}:${a[a.indexOf("--label") + 1]}` : a[2]!));
+
+/** Resolves when pi asked for `count` transports (it connects every server it knows in the background after `session_start`; `transports` is the harness's record). */
+export function transportsStarted(transports: readonly unknown[], count = 1): Promise<void> {
+  return waitFor(`${count} transport(s) pi connects`, () => transports.length >= count, 5000).then(() => {});
+}

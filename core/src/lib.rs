@@ -33,6 +33,7 @@ pub mod inbox;
 pub mod install;
 pub mod incident;
 pub mod job;
+pub mod mcp;
 pub mod merge;
 pub mod metrics;
 pub mod plan;

@@ -754,16 +754,16 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     assert_eq!(border.matches('\u{e0b6}').count(), 2, "{border}");
     assert_eq!(border.matches('\u{e0b4}').count(), 2, "{border}");
     assert!(!border.contains("\u{e0b6}#[reverse] ") && !border.contains(" #[noreverse]"), "{border}");
-    // Every pill starts three columns from its pane's edge (hs-d478): tmux draws two border cells, then one `━` always in colour 7
-    // (the border line's colour, whatever the pill's, hs-d684), then the pill's colour, then the left cap.
-    let grey_line = "#[fg=colour7]\u{2501}";
-    assert_eq!(border.matches(grey_line).count(), 2, "{border}");
+    // Every pill starts three columns from its pane's edge (hs-d478): tmux draws two border cells, then one `━` with no colour
+    // of its own (it takes the border line's style, pro-d61), then the pill's colour, then the left cap.
+    assert_eq!(border.matches('\u{2501}').count(), 2, "{border}");
+    assert!(!border.contains("#[fg=colour7]\u{2501}"), "{border}");
     // The Lead's, the Worker's and another pane's pill is colour 7 (grey) and, on the focused pane, blue (colour 4): the format
     // itself says it (`pane_active`), whatever the border's colour is. The three views' pills keep their dango colour.
+    assert!(border.contains("\u{2501}#{?pane_active,#[fg=colour4],#[fg=colour7]}\u{e0b6}#[reverse]#{@cpd_title}"), "{border}");
     let plain = "#{?pane_active,#[fg=colour4],#[fg=colour7]}";
-    assert!(border.contains(&format!("{grey_line}{plain}\u{e0b6}#[reverse]#{{@cpd_title}}")), "{border}");
     let dango = format!(
-        "{grey_line}#{{?#{{==:#{{@cpd_view}},tree}},#[fg=colour5],#{{?#{{==:#{{@cpd_view}},plan}},#[fg=colour7],#{{?#{{==:#{{@cpd_view}},widgets}},#[fg=colour2],{plain}}}}}}}\u{e0b6}#[reverse]"
+        "\u{2501}#{{?#{{==:#{{@cpd_view}},tree}},#[fg=colour5],#{{?#{{==:#{{@cpd_view}},plan}},#[fg=colour7],#{{?#{{==:#{{@cpd_view}},widgets}},#[fg=colour2],{plain}}}}}}}\u{e0b6}#[reverse]"
     );
     assert!(border.contains(&dango), "{border}");
     // The Lead's pane carries the header the pill shows.
@@ -775,12 +775,15 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     for focused in [lead.as_str(), plan.id.as_str()] {
         out(&fx, &["select-pane", "-t", focused]);
         for (title, id) in titled {
-            let shown = pill(id);
-            assert!(shown.contains(&format!("\u{e0b6}#[reverse]{title}#[noreverse]\u{e0b4}")), "{title}: {shown}");
-            if title == "Retry Payouts" {
-                let colour = if id == focused { "#[fg=colour4]" } else { "#[fg=colour7]" };
-                assert!(shown.starts_with(&format!("#[fg=colour7]\u{2501}{colour}\u{e0b6}")), "{title} (focus on {focused}): {shown}");
-            }
+            let colour = match title {
+                "Context" => "colour5",
+                "Plan" => "colour7",
+                "Deploy" => "colour2",
+                _ if id == focused => "colour4",
+                _ => "colour7",
+            };
+            let want = format!("\u{2501}#[fg={colour}]\u{e0b6}#[reverse]{title}#[noreverse]\u{e0b4}");
+            assert_eq!(pill(id), want, "{title} (focus on {focused})");
         }
     }
 }

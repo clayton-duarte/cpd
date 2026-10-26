@@ -62,12 +62,12 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!(fx.job_status("api"), "queued");
 }
 
-/// hs-d554: a store written before the rule may hold a queued Job on a Tier outside H3, S0-S3. E3 never starts it:
+/// pro-d53 (hs-d554): a store written before the rule may hold a queued Job on a Tier outside H0-H4, S0-S3. E3 never starts it:
 /// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
 #[test]
 fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
     let mut fx = Fx::with_plan("");
-    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H2")] {
+    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H5")] {
         fx.add_job_on(tier, "repo", key, &[], "");
     }
 
@@ -84,7 +84,7 @@ fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_err
     for (_, _, _, data) in &errors {
         assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
     }
-    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("hs-d554")), "{:?}", texts(&mut fx, "error"));
+    assert!(texts(&mut fx, "error").iter().all(|t| t.contains("pro-d53")), "{:?}", texts(&mut fx, "error"));
     assert_eq!(attempts(&mut fx), 0);
     for key in ["api", "web", "app", "ui"] {
         assert_eq!(fx.job_status(key), "queued", "{key}");
@@ -161,33 +161,86 @@ fn new_plan() -> Fx {
     fx
 }
 
+/// The branch `cpd_core::git::attempt_branch` gives parallel Attempt `id` of Plan `pay`.
+fn parallel_branch(id: &str) -> String {
+    cpd_core::git::attempt_branch(&cpd_core::ids::PlanId::parse("pay").unwrap(), &cpd_core::ids::AttemptId::parse(id).unwrap())
+}
+
+/// A live linear Attempt `lin-a1` of the PR `repo`: on its Lead Branch, in its workflow worktree.
+fn add_live_linear(fx: &mut Fx) {
+    fx.add_running("lin", "running", &ago(1));
+    fx.fixture("UPDATE attempts SET branch = 'cpd/pay/repo', worktree = '/repos/r.lead' WHERE id = 'lin-a1';");
+}
+
 #[test]
-fn e3_marks_the_first_live_sibling_linear_and_the_rest_parallel() {
-    // Two Ready sibling Jobs of one PR, no live Attempt: the first in READY order is linear, the second parallel.
+fn e3_starts_two_ready_siblings_of_one_pr_both_parallel() {
     let mut fx = new_plan();
     fx.add_job("api", &[], "");
     fx.add_job("web", &[], "");
-    let (lead_branch, lead_worktree, repo) = lead(&mut fx);
+    let (lead_branch, _, _) = lead(&mut fx);
     tick_on_fake_ports(&mut fx);
-    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch.clone(), lead_worktree.clone()), "the first live sibling is the linear Attempt");
-    let (branch, worktree) = allocated(&mut fx, "web-a1");
-    let plan = cpd_core::ids::PlanId::parse("pay").unwrap();
-    let attempt = cpd_core::ids::AttemptId::parse("web-a1").unwrap();
-    assert_eq!(branch, cpd_core::git::attempt_branch(&plan, &attempt), "the second is a parallel sibling");
-    assert_eq!(worktree, cpd_core::git::attempt_worktree_path(std::path::Path::new(&repo), &plan, &attempt).unwrap().display().to_string());
+    for id in ["api-a1", "web-a1"] {
+        let (branch, _) = allocated(&mut fx, id);
+        assert_ne!(branch, lead_branch, "{id} must not be linear");
+        assert_eq!(branch, parallel_branch(id), "{id} is parallel");
+    }
+}
 
-    // One live Attempt of the PR already running: a newly started Job of the PR is parallel.
+#[test]
+fn e3_holds_a_ready_job_while_a_linear_attempt_of_its_pr_is_live() {
     let mut fx = new_plan();
-    fx.add_running("busy", "running", &ago(1));
+    add_live_linear(&mut fx);
     fx.add_job("api", &[], "");
+    let (lead_branch, lead_worktree, _) = lead(&mut fx);
     tick_on_fake_ports(&mut fx);
-    let attempt = cpd_core::ids::AttemptId::parse("api-a1").unwrap();
-    assert_eq!(allocated(&mut fx, "api-a1").0, cpd_core::git::attempt_branch(&plan, &attempt), "a sibling of a live Attempt is parallel");
+    assert_eq!(fx.job_status("api"), "queued", "held");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "no Attempt row");
+    assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
 
-    // A Job with no sibling live is linear.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'lin-a1'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'lin';");
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "alone, it starts linear");
+}
+
+#[test]
+fn e3_holds_an_urgent_ready_job_while_a_linear_attempt_of_its_pr_is_live() {
+    let mut fx = new_plan();
+    fx.engine.config.concurrency = 2;
+    add_live_linear(&mut fx);
+    fx.add_job("api", &[], "UPDATE jobs SET urgent = 1 WHERE key = 'api';");
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(fx.job_status("api"), "queued", "held");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0, "no Attempt row");
+    assert_eq!(fx.count("error"), 0, "{:?}", texts(&mut fx, "error"));
+}
+
+#[test]
+fn e3_starts_a_lone_ready_job_linear() {
     let mut fx = new_plan();
     fx.add_job("api", &[], "");
     let (lead_branch, lead_worktree, _) = lead(&mut fx);
     tick_on_fake_ports(&mut fx);
     assert_eq!(allocated(&mut fx, "api-a1"), (lead_branch, lead_worktree), "a Job started alone is linear");
+}
+
+#[test]
+fn e3_starts_a_ready_job_parallel_beside_a_live_parallel_attempt() {
+    let mut fx = new_plan();
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("api", &[], "");
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(allocated(&mut fx, "api-a1").0, parallel_branch("api-a1"), "a sibling of a live parallel Attempt is parallel");
+}
+
+#[test]
+fn e3_starts_a_ready_job_of_another_pr_beside_a_live_linear_attempt() {
+    let mut fx = new_plan();
+    fx.fixture(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'other', '/repos/o', 'main', 'dispatch', 'cpd/pay/other', '/repos/o.lead', 'Other', 'config', cpd_txn(), 't', 't');",
+    );
+    add_live_linear(&mut fx);
+    fx.add_job_in("other", "web", &[], "");
+    tick_on_fake_ports(&mut fx);
+    assert_eq!(allocated(&mut fx, "web-a1"), ("cpd/pay/other".to_owned(), "/repos/o.lead".to_owned()), "not held, alone in its PR");
 }

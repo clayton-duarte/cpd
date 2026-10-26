@@ -41,6 +41,7 @@ mod review_close;
 mod review_plannotator;
 mod policy;
 mod policy_fallback;
+mod policy_machine;
 mod policy_layout;
 mod policy_model;
 mod policy_model_use;

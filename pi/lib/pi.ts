@@ -15,7 +15,7 @@ export type CommandCtx = Ctx & Pick<ExtensionCommandContext, "reload">;
 
 export type PiApi = Pick<
   ExtensionAPI,
-  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerMessageRenderer" | "registerTool" | "registerCommand" | "sendUserMessage" | "setModel" | "setThinkingLevel"
+  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerMessageRenderer" | "registerTool" | "registerCommand" | "sendUserMessage" | "setModel" | "setThinkingLevel" | "registerMcpServer"
 >;
 
 export type Exec = PiApi["exec"];

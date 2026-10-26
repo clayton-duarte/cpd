@@ -87,6 +87,7 @@ fn tools_with_passes_a_tmux_development_build() {
     let tmux = named(&checks, "tmux");
     assert!(tmux.ok);
     assert_eq!(tmux.found, Some(json!("next-3.5")));
+    drop(runner);
 }
 
 #[test]

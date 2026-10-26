@@ -14,7 +14,7 @@ use cpd_core::output::Output;
 use cpd_core::ports::Ports;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
+use cpd_core::{ask, attempt, board, config, context, events, gate, inbox, incident, job, mcp, plan, policy, pr, prune, review, secret, session, tag, testsel, version_sync};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -64,6 +64,9 @@ pub enum Command {
     /// Policies (commands.md §22)
     #[command(subcommand)]
     Policy(policy::Command),
+    /// MCP servers (commands.md §24)
+    #[command(subcommand)]
+    Mcp(mcp::Command),
     /// Sessions and their tmux panes (commands.md §10)
     #[command(subcommand)]
     Session(session::Command),
@@ -170,6 +173,7 @@ fn dispatch(ports: &Ports, command: Command) -> Result<Output, CpdError> {
         Command::Pr(c) => pr::run(ports, c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
+        Command::Mcp(c) => mcp::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Incident(c) => incident::run(c),
@@ -381,7 +385,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 14);
+        assert_eq!(fields["protocol"], cpd_core::events::PROTOCOL);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors
