@@ -146,6 +146,7 @@ pub struct Item {
     pub closed_at: Option<String>,
     pub snoozed_until: Option<String>,
     pub dismissed_at: Option<String>,
+    pub claimed_at: Option<String>,
 }
 
 impl Item {
@@ -214,6 +215,7 @@ impl Item {
             closed_at: row.get(13)?,
             snoozed_until: row.get(14)?,
             dismissed_at: row.get(15)?,
+            claimed_at: None,
         })
     }
 }

@@ -870,3 +870,5 @@ mod tests;
 mod blue_tests;
 #[cfg(test)]
 mod cyan_tests;
+#[cfg(test)]
+mod claim_tests;

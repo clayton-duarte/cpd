@@ -456,6 +456,7 @@ pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency
         closed_at: None,
         snoozed_until: None,
         dismissed_at: None,
+        claimed_at: None,
     }
 }
 
