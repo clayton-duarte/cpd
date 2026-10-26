@@ -1379,7 +1379,10 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
     new(&["set", "-p", "-t", &pane, "@cpd_view", "hologram"]);
     fx.env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, tmux_pane, state, state_at, created_at)
-           VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
+           VALUES ('s-gone', 'lead', 'ctx', 'old', 'Gone', '/', 'O3', '%999', 'working', 't', 't');
+         -- A done Plan's Lead is not restarted (A4): the restart is tested in session.rs, this test is about the unknown view.
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('old', 'ctx', 'Old', 'done', 's-gone', 't', 't', 't');",
     );
 
     // The product prints the unknown view to its stderr, once per value and process.
