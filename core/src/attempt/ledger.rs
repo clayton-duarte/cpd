@@ -505,6 +505,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_cause_is_listed_and_reads_back() {
+        use super::{Cause, Stored};
+        assert_eq!(Cause::ALL.len(), 10);
+        for cause in Cause::ALL {
+            assert_eq!(Cause::parse(cause.as_str()), Some(*cause));
+            assert_eq!(Stored::parse(cause.as_str()), Some(Stored::Failed(*cause)));
+            assert_eq!(Stored::Failed(*cause).outcome(), "failed");
+        }
+        assert_eq!(Stored::parse("merged"), Some(Stored::Merged));
+        assert_eq!(Stored::parse("cancel_requested").map(Stored::outcome), Some("cancelled"));
+        assert_eq!(Stored::parse("review_rejected"), None);
+        assert_eq!(Cause::parse("merged"), None);
+    }
+
     /// engine-G1: the ladder, the end transaction, the cancel read, the load of an Attempt and the
     /// Event texts are defined once, here, for the driver, the engine and the merge. (The needles
     /// are built from two halves so that this file does not contain them.)
