@@ -39,7 +39,7 @@ const DOWN_FOR: Duration = Duration::from_secs(60);
 const DOWN_TOLD: &str = "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.";
 
 /// The longest name of a Session (commands.md §1.4).
-/// Rows a wheel notch scrolls the tree or the Inbox section by.
+/// Rows a wheel notch scrolls the tree by.
 const WHEEL_ROWS: usize = 3;
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";

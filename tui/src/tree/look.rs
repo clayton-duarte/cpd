@@ -1,7 +1,6 @@
-//! The tree column's section look v3, as exact rows (commands.md §13.2 "Rows", "Inbox section", "Clicks"; §17
-//! "Collapsible blocks", "Section titles", "Scroll cues"; hs-d344 to hs-d349). Red until the tree draws them: the
-//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰬪` when no rows; hs-d574), the Inbox's title is the
-//! pill under one empty row, its item rows keep their icon and colour, and its scroll cues are right-aligned.
+//! The tree column's section look v3, as exact rows (commands.md §13.2 "Rows", "Clicks"; §17
+//! "Collapsible blocks", "Section titles", "Scroll cues"; hs-d344 to hs-d349). The
+//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰬪` when no rows; hs-d574).
 //!
 //! The view is drawn on a `TestBackend` and read back cell by cell, so the rows and the styles that matter are pinned
 //! together. Every row is found by what it says, not by a count of rows from the top, where the look allows.
@@ -180,8 +179,6 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     assert!(matches!(click(&mut view, 2, 12), Effect::Ask(_)), "the new row asks for the New Plan title");
     assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
-
-// ---------- scroll cues in the Inbox: right-aligned, and the line on their left unbroken (hs-d348) ----------
 
 // ---------- the Inbox's tier glyphs (hs-d483) ----------
 
