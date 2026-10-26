@@ -281,6 +281,16 @@ fn phase(fx: &Fx, before: Vec<String>, change: impl FnMut() + 'static, signals: 
     show(fx, 30, signals, &World::new().at(move |screen| screen.ends_with(&before), change))
 }
 
+/// The start of the `engine-down` item's row: red, first of the rows, `engine is down`.
+fn engine_down() -> String {
+    format!(" │ {} engine is down", palette::TIER_RED)
+}
+
+/// Whether the Inbox counts 5 items and its first row is `engine-down`'s.
+fn shows_down(screen: &[String]) -> bool {
+    screen.iter().position(|r| *r == pill(5)).is_some_and(|t| screen[t + 1].starts_with(&engine_down()))
+}
+
 #[test]
 fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
     let fx = view_fx();
@@ -289,8 +299,6 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
     let commits = || vec![Signal::Commit, Signal::Commit, gone()];
 
     // an engine that starts takes `engine-down` away; it has no Event, the view reads when the clock moves on
-    let engine_down = format!(" │ {} engine is down", palette::TIER_RED);
-    let shows_down = |screen: &[String]| screen.iter().position(|r| *r == pill(5)).is_some_and(|t| screen[t + 1].starts_with(&engine_down));
     let held = Rc::new(RefCell::new(None));
     let world = {
         let (held, clock, home) = (Rc::clone(&held), fx.fakes.clock.clone(), home.clone());
@@ -341,12 +349,11 @@ fn the_inbox_follows_its_events_a_started_engine_and_a_snooze_that_ends() {
 #[test]
 fn the_engine_down_item_shows_first_when_no_engine_and_no_manager() {
     let fx = prepared(&four());
-    let engine_down = format!(" │ {} engine is down", palette::TIER_RED);
     // no engine holds the lock and no Manager lives: red, first of the rows, counted
     let frames = show(&fx, 30, vec![Signal::Commit, gone()], &World::new());
     let at = frame_with(&frames, 0, "the engine-down item first and 5 items counted", |screen| {
         let bottom = &screen[screen.len() - 7..];
-        bottom[..2] == ["", pill(5).as_str()] && bottom[2].starts_with(&engine_down) && bottom[3..] == [
+        bottom[..2] == ["", pill(5).as_str()] && bottom[2].starts_with(&engine_down()) && bottom[3..] == [
             common::inbox::item_row(FOUR[0].0, FOUR[0].1, "5m"),
             common::inbox::item_row(FOUR[1].0, FOUR[1].1, "5m"),
             expand(),
