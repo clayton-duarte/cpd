@@ -19,14 +19,22 @@ pub fn now() -> String {
     timestamp(OffsetDateTime::now_utc())
 }
 
-/// STUB: `at` as prose for a person (`YYYY-MM-DD HH:MM ZZZ`) in `zone`.
-pub fn prose(at: OffsetDateTime, _zone: &TimeZone) -> String {
-    timestamp(at)
+fn zoned(at: OffsetDateTime, zone: &TimeZone) -> jiff::Zoned {
+    let ts = jiff::Timestamp::from_nanosecond(at.unix_timestamp_nanos()).expect("a time in jiff's range");
+    ts.to_zoned(zone.clone())
 }
 
-/// STUB: the local `HH:MM:SS` of `at` in `zone`, bare.
-pub fn time_of_day(at: OffsetDateTime, _zone: &TimeZone) -> String {
-    timestamp(at)
+/// `at` as prose for a person (`YYYY-MM-DD HH:MM ZZZ`) in `zone`: the abbreviation when letters only, else the numeric offset.
+pub fn prose(at: OffsetDateTime, zone: &TimeZone) -> String {
+    let z = zoned(at, zone);
+    let abbr = zone.to_offset_info(z.timestamp()).abbreviation().to_string();
+    let label = if !abbr.is_empty() && abbr.chars().all(|c| c.is_ascii_alphabetic()) { abbr } else { z.strftime("%:z").to_string() };
+    format!("{} {label}", z.strftime("%Y-%m-%d %H:%M"))
+}
+
+/// The local `HH:MM:SS` of `at` in `zone`, bare.
+pub fn time_of_day(at: OffsetDateTime, zone: &TimeZone) -> String {
+    zoned(at, zone).strftime("%H:%M:%S").to_string()
 }
 
 /// The time a wait reads and the nap it takes; a test passes a [`ManualClock`].

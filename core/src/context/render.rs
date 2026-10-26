@@ -185,8 +185,8 @@ fn nested_brief(brief: &Record) -> String {
     format!("  - brief {} ({}): {}\n", brief.id, date(brief), brief.first_line())
 }
 
-fn date(record: &Record) -> &str {
-    record.at.get(..10).unwrap_or(&record.at)
+fn date(record: &Record) -> String {
+    format!("{} UTC", record.at.get(..10).unwrap_or(&record.at))
 }
 
 #[cfg(test)]
@@ -229,10 +229,10 @@ mod tests {
         let order = ["## Decisions", "## Superseded decisions", "## Open questions", "## Answered questions", "## Notes"];
         assert!(order.windows(2).all(|w| at(w[0]) < at(w[1])), "{md}");
         assert!(!md.contains("## Plans"));
-        assert!(md.contains("- hs-d1 (2026-10-14): Old. (superseded by hs-d2)"));
-        assert!(md.contains("- hs-d2 (2026-10-14): New. (supersedes hs-d1)"));
-        assert!(md.contains("- hs-q2 (2026-10-14): When?"));
-        assert!(md.contains("- hs-q1 (2026-10-14): Why?\n  - answer hs-a1 (2026-10-14): Because."));
+        assert!(md.contains("- hs-d1 (2026-10-14 UTC): Old. (superseded by hs-d2)"));
+        assert!(md.contains("- hs-d2 (2026-10-14 UTC): New. (supersedes hs-d1)"));
+        assert!(md.contains("- hs-q2 (2026-10-14 UTC): When?"));
+        assert!(md.contains("- hs-q1 (2026-10-14 UTC): Why?\n  - answer hs-a1 (2026-10-14 UTC): Because."));
         assert!(md.contains("Line one\n  line two"));
     }
 
@@ -246,8 +246,8 @@ mod tests {
         let md = markdown("Building", None, &records, 0, &Repos::new());
         let notes = md.split("## Notes").nth(1).unwrap();
         let at = |needle: &str| notes.find(needle).unwrap_or_else(|| panic!("{needle} in\n{notes}"));
-        assert!(at("- hs-n2 (2026-10-14): New fact. (supersedes hs-n1)") < at("- hs-n3"));
-        assert!(at("- hs-n3") < at("- hs-n1 (2026-10-14): Old fact. (superseded by hs-n2)"));
+        assert!(at("- hs-n2 (2026-10-14 UTC): New fact. (supersedes hs-n1)") < at("- hs-n3"));
+        assert!(at("- hs-n3") < at("- hs-n1 (2026-10-14 UTC): Old fact. (superseded by hs-n2)"));
     }
 
     #[test]
@@ -261,8 +261,8 @@ mod tests {
             (3, rec("hs-b2", "Orphan.\nMore.", Draft::Brief(plan("gone")))),
         ];
         let md = markdown("Building", None, &records, 0, &Repos::new());
-        assert!(md.contains("- hs-p1 (2026-10-14): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14): First line.\n"), "{md}");
-        assert!(md.contains("- hs-b2 (2026-10-14): brief of gone (on hs): Orphan.\n"), "{md}");
+        assert!(md.contains("- hs-p1 (2026-10-14 UTC): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14 UTC): First line.\n"), "{md}");
+        assert!(md.contains("- hs-b2 (2026-10-14 UTC): brief of gone (on hs): Orphan.\n"), "{md}");
         assert!(!md.contains("Second line") && !md.contains("More."), "{md}");
         // A new brief brings its Plan; an older Plan alone is not listed again.
         let md = markdown("Building", None, &records, 1, &Repos::new());
@@ -270,7 +270,7 @@ mod tests {
         let md = markdown("Building", None, &records, 2, &Repos::new());
         assert!(!md.contains("hs-p1") && !md.contains("hs-b1") && md.contains("hs-b2"), "{md}");
         let one = single("Building", None, &records[1].1);
-        assert!(one.contains("## hs-b1 (brief of pay, 2026-10-14)\n\n\nFirst line.\nSecond line.\n"), "{one}");
+        assert!(one.contains("## hs-b1 (brief of pay, 2026-10-14 UTC)\n\n\nFirst line.\nSecond line.\n"), "{one}");
     }
 
     #[test]
@@ -280,7 +280,7 @@ mod tests {
         assert!(!md.contains("- hs-d1 ("), "{md}");
         assert!(!md.contains("hs-q2"), "{md}");
         // The answer is new, so its older question comes with it.
-        assert!(md.contains("- hs-q1 (2026-10-14): Why?\n  - answer hs-a1"), "{md}");
+        assert!(md.contains("- hs-q1 (2026-10-14 UTC): Why?\n  - answer hs-a1"), "{md}");
         assert!(md.contains("hs-n1"));
     }
 }
