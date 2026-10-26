@@ -3661,12 +3661,12 @@ fn rebase_touches_only_its_pr() {
 
 /// Plan `pay` in `phase` (`done` or `dispatch`) with its one PR `repo`, in-process: `cpd` runs through `run_with` on the
 /// fake ports, and the repo is a keyed repo of the git route. What `pr add` reads of git is the repo's refs.
-struct Added {
-    fx: Kit,
-    repo: PathBuf,
+pub(crate) struct Added {
+    pub(crate) fx: Kit,
+    pub(crate) repo: PathBuf,
 }
 
-fn added(phase: &str) -> Added {
+pub(crate) fn added(phase: &str) -> Added {
     let fx = Kit::with_ports();
     fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = fx.keyed_repo("pay").canonicalize().unwrap();
@@ -3724,7 +3724,7 @@ fn added(phase: &str) -> Added {
 
 impl Added {
     /// The `needs` of PR `key` in Plan `pay`, sorted.
-    fn needs_of(&self, key: &str) -> Vec<String> {
+    pub(crate) fn needs_of(&self, key: &str) -> Vec<String> {
         self.fx.env.read(|c| {
             let mut q = c.prepare("SELECT needs FROM pr_needs WHERE plan = 'pay' AND pr = ?1 ORDER BY needs")?;
             let rows = q.query_map([key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
@@ -3737,7 +3737,7 @@ impl Added {
     }
 
     /// The `data` of the `pr-added` Events of Plan `pay`, in order.
-    fn pr_added(&self) -> Vec<Value> {
+    pub(crate) fn pr_added(&self) -> Vec<Value> {
         let data: Vec<String> = self.fx.env.read(|c| {
             let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND kind = 'pr-added' ORDER BY id")?;
             stmt.query_map([], |r| r.get::<_, String>(0))?.collect()
@@ -3745,7 +3745,7 @@ impl Added {
         data.iter().map(|d| serde_json::from_str(d).unwrap()).collect()
     }
 
-    fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
+    pub(crate) fn add(&self, key: &str, repo: &Path, extra: &[&str]) -> Run {
         let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
         args.extend(extra);
         self.fx.cpd(&args)
