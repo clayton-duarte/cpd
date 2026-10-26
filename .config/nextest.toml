@@ -24,15 +24,19 @@ fail-fast = false
 # 14 cores; a clean run had at most 42 test processes at once, failing runs 56-70 (rs-dyn),
 # G Gates x 4. Supports a Worker cap of 10 (10 x 4 = 40); 14 would need 3 (42).
 # 3 Gates at once at 4 threads (load 33-63): 252-271 s each (/tmp/cpd-leak-flake/proof/summary.txt).
-# A per-run limit only (pro-d30: no slots). leak-timeout stays 100 ms: it can still fire when
-# the machine's total load is high, as nextest's timer loses the race (rs-diag). Evidence:
-# docs/research/leak-flake-verdict.md and leak-flake-*.md.
+# A per-run limit only (pro-d30: no slots). leak-timeout is 1 s (below): it can still fire at
+# a load far above 50. Evidence: docs/research/leak-flake-verdict.md and leak-flake-*.md.
 test-threads = 4
 
 # A test that leaves a process holding its stdout/stderr pipes is marked LEAK by
 # nextest and, by default, still passes. Fail it, so no leak comes back
-# (ms-leak: the fake old engine's `sleep` outlived an `install_script` test).
-leak-timeout = { period = "100ms", result = "fail" }
+# (ms-leak: the fake old engine's `sleep` outlived an `install_script` test, 2.4-3.0 s: still caught).
+# 1 s: the 100 and 200 ms timers lost the race with nextest reading the EOF of a finished test
+# under load, though no process held the pipe. rs-diag, same pressure: 23 LEAK-FAIL at 100 ms, 0 at
+# 1 s and 5 s; 34 and 8 in 18 runs at 14 and 4 threads at 100 ms (docs/research/leak-flake-ab.md);
+# the Gate at 200 ms leaked at 0.305 s. The User: 200 ms ~11:55 EDT, 1 s ~12:30 EDT, 2026-10-26.
+# A leak of 1 s or more is caught; one shorter goes unseen (none is known). Still possible far above load 50.
+leak-timeout = { period = "1s", result = "fail" }
 
 # The per-test limit: a test is reported slow after 30 s and killed, and so
 # failed, after 3 periods (90 s). Measured on hs with `scripts/test-time.sh`, 7
