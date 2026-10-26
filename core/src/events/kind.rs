@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -135,6 +135,9 @@ kinds! {
     Error = "error",
     ReviewOpened = "review-opened",
     ReviewClosed = "review-closed",
+    IncidentStarted = "incident-started",
+    IncidentPlans = "incident-plans",
+    IncidentEnded = "incident-ended",
 }
 
 impl Kind {
@@ -209,6 +212,9 @@ impl Kind {
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
             ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
             ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
+            IncidentStarted => spec([N, N, N, N, N], &["by", "reason", "started_at", "plans"], &["until_pr"]),
+            IncidentPlans => spec([N, N, N, N, N], &["by", "plans"], &["until_pr"]),
+            IncidentEnded => spec([N, N, N, N, N], &["by", "ended_at", "cause"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
     }
@@ -240,10 +246,10 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10) and hs-d571 (`session-resumed`: 12) hs-d573 (`session report`: 13) and pro-d8 (`mcp-attached`: 14).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13), hs-d634 (the incident kinds: 14) and pro-d8 (`mcp-attached`: 15).
     #[test]
-    fn the_protocol_is_14_with_the_mcp_attached_kind() {
-        assert_eq!(PROTOCOL, 14);
+    fn the_protocol_is_15_with_the_mcp_attached_kind() {
+        assert_eq!(PROTOCOL, 15);
     }
 
     #[test]

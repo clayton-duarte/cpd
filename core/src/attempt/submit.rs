@@ -1,8 +1,8 @@
 //! `attempt submit` (commands.md §6.1, contract §7.3): the Worker's preconditions,
-//! the `checks` span (the tamper check, the quick check, the kind's tests, the Gate), and the one transaction that moves the Attempt to `merging`.
+//! the `checks` span (the tamper check, the red-test guard and the kind's tests), and the one transaction that moves the Attempt to `merging`.
+//! The quick check and the Gates run at the merge (§7.4 step 6), not here (hs-d679).
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use serde_json::json;
 
@@ -10,8 +10,7 @@ use super::row::{self, Attempt};
 use super::{Env, SubmitArgs, kind, span};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
-use crate::git::{self, HookOutcome, Operation, Pipeline, run_hook};
-use crate::home::Hook;
+use crate::git;
 use crate::ids::{AttemptId, PlanId};
 use crate::output::Output;
 
@@ -71,16 +70,16 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     // 5 and 6. The checks, in ONE `checks` span (contract §7.7): the Worker's clocks stop from the first check to the end of the
     // merge. A review Job has no checks and no span. Every way out ends the span once, before the error returns.
     let span = if review { None } else { Some(span::open(&mut env, &plan, &id, &job.key)?) };
-    let checked = if review { Ok(None) } else { run_checks(&mut env, &plan, &id, &job, &attempt.job, &root, &base, &sha, cpd_job) };
+    let checked = if review { Ok(()) } else { run_checks(&mut env, &plan, &id, &job, &attempt.job, &root, &base, &sha) };
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.
-    let checked = checked.and_then(|tail| match git::run::rev_parse(&root, "HEAD") {
-        Ok(now) if now == sha => Ok(tail),
-        Ok(_) => Err(CpdError::new(ErrorCode::CasLost, "HEAD moved while the quick check ran: submit again.").with("attempt", id.to_string())),
+    let checked = checked.and_then(|()| match git::run::rev_parse(&root, "HEAD") {
+        Ok(now) if now == sha => Ok(()),
+        Ok(_) => Err(CpdError::new(ErrorCode::CasLost, "HEAD moved while the checks ran: submit again.").with("attempt", id.to_string())),
         Err(e) => Err(e),
     });
-    let check_tail = match checked {
-        Ok(tail) => tail,
+    match checked {
+        Ok(()) => {}
         Err(e) => {
             if let Some(span) = span {
                 // The refusal is what returns; a failed `end` is E2's to close (`died: true`).
@@ -103,10 +102,10 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             span.end_in(tx)?;
         }
         let moved = tx.execute(
-            "UPDATE attempts SET status = 'merging', submitted_sha = ?3, check_tail = ?4,
+            "UPDATE attempts SET status = 'merging', submitted_sha = ?3,
                     submitted_at = (SELECT at FROM txns WHERE id = cpd_txn())
               WHERE plan = ?1 AND id = ?2 AND status = 'running'",
-            rusqlite::params![plan.as_str(), id.to_string(), sha, check_tail],
+            rusqlite::params![plan.as_str(), id.to_string(), sha],
         )?;
         if moved == 0 {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {id} changed meanwhile: submit again."))
@@ -115,7 +114,7 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         let text = format!(
             "Attempt {id} of Job {} was submitted{}; the driver merges it. Next: cpd attempt show {id} --plan {plan}",
             now.job,
-            if review { " (a review Job: nothing to check)" } else { " and passed the quick check" }
+            if review { " (a review Job: nothing to check)" } else { "" }
         );
         let job = crate::ids::JobKey::parse(&now.job).map_err(|_| CpdError::bad_row(format!("job key {:?}", now.job)))?;
         append(
@@ -140,8 +139,8 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     Ok(done(&id, &sha, outcome))
 }
 
-/// The checks of a non-review Job, in order: the tamper check, the guard of the `test` Jobs' files, the quick check, the kind's
-/// check (`[test-commands]`) and, for an `open` or `update` Job, the base check and the Gate. Returns the quick check's tail.
+/// The checks of a non-review Job, in order: the tamper check, the guard of the `test` Jobs' files and the kind's check
+/// (`[test-commands]`). The quick check and the Gates run at the merge (§7.4 step 6, hs-d679).
 #[allow(clippy::too_many_arguments)]
 fn run_checks(
     env: &mut Env,
@@ -152,8 +151,7 @@ fn run_checks(
     root: &Path,
     base: &str,
     sha: &str,
-    cpd_job: bool,
-) -> Result<Option<String>, CpdError> {
+) -> Result<(), CpdError> {
     // A stacked PR's check reads the root base too (§7.5), so one more ref than an unstacked PR's.
     let (lead, base_refs) = env.store.read(|conn| {
         let (lead, repo, pr_base) = lead_branch(conn, plan, key)?;
@@ -163,16 +161,11 @@ fn run_checks(
     git::tamper::check_over(root, &lead, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, &lead, base, sha)?;
-    let tail = quick_check(env, &policy.hooks.pre_commit, plan, id, root, &lead)?;
     // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[test-commands]`.
     if kind::has_checks(job) {
         kind::check(env, plan, id, job, &policy, root, &lead, sha)?;
     }
-    // An `open` or `update` Job's base check and Gate; the wait for a test slot is inside the span too.
-    if cpd_job {
-        crate::pr::submit_checks(env, plan, id, job, root, sha)?;
-    }
-    Ok(tail)
+    Ok(())
 }
 
 /// A review Job's preconditions (B2, contract §7.3 precondition 3): no commit
@@ -241,7 +234,7 @@ fn head(worktree: &Path) -> Result<Option<String>, CpdError> {
 
 /// The worktree's real path, when the caller's cwd is inside it and it is on the Attempt branch;
 /// else `wrong_worktree`.
-fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdError> {
+pub(super) fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdError> {
     let wrong = |why: String| {
         CpdError::new(
             ErrorCode::WrongWorktree,
@@ -261,34 +254,5 @@ fn require_inside(attempt: &Attempt, worktree: &Path) -> Result<PathBuf, CpdErro
     match git::run::current_branch(&root)? {
         Some(branch) if branch == attempt.branch => Ok(root),
         found => Err(wrong(format!("The worktree is on {}, not on {}", found.as_deref().unwrap_or("no branch"), attempt.branch))),
-    }
-}
-
-/// The quick check of §7.3: `pre-commit` in the worktree. Its last 60 lines for `check_tail`;
-/// `None` when nothing ran. Refuses `check_failed` (exit 3) or `check_error` (exit 1).
-fn quick_check(env: &Env, pipeline: &Pipeline, plan: &PlanId, id: &AttemptId, root: &Path, lead: &str) -> Result<Option<String>, CpdError> {
-    let log = env.home.hook_log(plan, id, Hook::PreCommit);
-    let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
-    let operation = Operation { branch: lead };
-    let result = run_hook(Hook::PreCommit, pipeline, root, Some(&operation), timeout, &log)?;
-    let refuse = |code: ErrorCode, message: String| {
-        let mut e = CpdError::new(code, message).with("attempt", id.to_string()).with("tail", result.tail.clone());
-        if result.tail.is_some() {
-            e = e.with("log", log.display().to_string());
-        }
-        e
-    };
-    match &result.outcome {
-        HookOutcome::Passed => Ok(result.tail),
-        HookOutcome::Failed { exit } => Err(refuse(
-            ErrorCode::CheckFailed,
-            format!("The quick check failed (exit {exit}): fix it, commit, and submit again. The tail is in details.tail."),
-        )
-        .with("exit", *exit)),
-        HookOutcome::Error(why) => Err(refuse(
-            ErrorCode::CheckError,
-            format!("The quick check could not be judged: {why}. Ask the Lead: cpd ask {id} \"<question>\"."),
-        )
-        .with("reason", why.to_string())),
     }
 }

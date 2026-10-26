@@ -20,12 +20,18 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   assert.ok(block, "core/src/events/kind.rs has no `kinds! { … }` block");
   const core = [...block[1]!.matchAll(/=\s*"([a-z-]+)"\s*,/g)].map((m) => m[1]!);
   assert.ok(core.length > 0, "no kinds read from core");
+  for (const kind of ["incident-started", "incident-ended"]) {
+    assert.ok(core.includes(kind), `core's kinds are missing ${kind}`);
+    assert.ok((KINDS as readonly string[]).includes(kind), `KINDS is missing ${kind}`);
+  }
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
 });
 
-test("pro-d8: the protocol is 14, mcp-attached is a known kind and has no message", () => {
-  assert.equal(PROTOCOL, 14); // pro-d8 raised it from 13 with mcp-attached; hs-d573 raised it to 13: the adapter runs `session report`; hs-d571 added session-resumed
-  assert.ok((KINDS as readonly string[]).includes("mcp-attached"), "mcp-attached is not in KINDS");
+test("hs-d634, pro-d8: the protocol is 15, the incident kinds and mcp-attached are known", () => {
+  assert.equal(PROTOCOL, 15); // hs-d634 raised it from 13 to 14 for incident-started and incident-ended; pro-d8 raised it to 15 with mcp-attached
+  for (const kind of ["incident-started", "incident-ended", "mcp-attached"]) {
+    assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
+  }
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["mcp-attached"], undefined, "mcp-attached is not a LEAD_MESSAGES entry: delivery none");
   assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
   // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry

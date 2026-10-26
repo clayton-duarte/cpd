@@ -3,7 +3,7 @@ resolver = "3"
 members = ["core", "engine", "cli", "tui"]
 
 [workspace.package]
-version = "0.14.46"
+version = "0.15.53"
 edition = "2024"
 publish = false
 
@@ -16,6 +16,8 @@ minijinja = "3.0"
 nix = { version = "0.31", features = ["fs", "poll", "process", "signal"] }
 # commit watcher of the store directory (inotify, FSEvents); decision D1 of Plan sync
 notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+# the reentrant lock of the fake tmux (std::sync::ReentrantLock is unstable)
+parking_lot = "0.12"
 ratatui = "0.30"
 rusqlite = { version = "0.40", features = ["bundled", "functions", "hooks"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -15,37 +15,34 @@ use std::ffi::OsString;
 use std::fmt;
 
 use ratatui::Frame;
+use ratatui::backend::Backend;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
-use crate::palette;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 use rusqlite::OptionalExtension;
 
+use crate::box_widget::spacing;
+use crate::dialog::{Dialog, Mode};
+
+use super::popup;
 use super::viewlog::ViewLog;
-use super::{RunCommand, dialog, not_a_terminal, on_a_terminal};
+use super::view_ports::{Ctx, RunFn};
+use super::{Capture, dialog, run_view_on};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 
 /// The merge method the dialog names (the one `pr merge` uses, §9.10).
 const METHOD: &str = "squash";
-/// The popup's size `(columns, rows)`, border included: the dialog's five rows and 58 columns inside it.
-const POPUP: (u16, u16) = (60, 7);
-const MERGE: &str = "[Merge]";
-const CANCEL: &str = "[Cancel]";
-/// The dialog's button row, and the columns of its buttons, relative to the view's area.
-const BUTTON_ROW: u16 = 4;
-const MERGE_COLUMN: u16 = 2;
-const CANCEL_COLUMN: u16 = MERGE_COLUMN + MERGE.len() as u16 + 3;
+/// The popup's size `(columns, rows)`, border included: the kit's confirm with a three-row body (W 60, H body + 5).
+const POPUP: (u16, u16) = (60, 8);
 /// The view the merge's log is named after (`$CPD_HOME/run/tui/merge.log`, hs-d364): the action is the `merge`
 /// view's.
 const LOG: &str = "merge";
@@ -54,8 +51,8 @@ const LOG: &str = "merge";
 /// `pr merge` is the authority on the rest.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
-    repo: String,
-    number: i64,
+    pub(crate) repo: String,
+    pub(crate) number: i64,
 }
 
 impl Pull {
@@ -64,7 +61,7 @@ impl Pull {
         Pull::parse(subject.strip_prefix("pr:")?).ok()
     }
 
-    pub(crate) fn parse(text: &str) -> Result<Pull, String> {
+    pub fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
         let number = number.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(bad)?;
@@ -94,7 +91,7 @@ pub struct Args {
 
 /// What the User's key or click asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Action {
+pub enum Action {
     Merge,
     Cancel,
 }
@@ -111,12 +108,11 @@ fn on_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
-/// The two buttons' rects in `area`: `[Merge]`, `[Cancel]`.
-fn buttons(area: Rect) -> [Rect; 2] {
-    let at = |column: u16, text: &str| {
-        Rect::new(area.x + column, area.y + BUTTON_ROW, text.len() as u16, 1).intersection(area)
-    };
-    [at(MERGE_COLUMN, MERGE), at(CANCEL_COLUMN, CANCEL)]
+/// The dialog the view shows: the kit's confirm, `Merge` and `Cancel`, the body's rows already cut to the content width.
+fn view_dialog(pull: &Pull, title: Option<&str>) -> Dialog {
+    let width = usize::from(POPUP.0) - 4;
+    let text = format!("{}\n{}\nmethod: {METHOD}", cut(&pull.to_string(), width), cut(title.unwrap_or(""), width));
+    Dialog::new("merge".to_owned(), text, Mode::Confirm { yes: "Merge".to_owned() })
 }
 
 /// The action of a mouse event over a dialog in `area`: a left click on a button.
@@ -125,13 +121,10 @@ fn on_mouse(area: Rect, mouse: MouseEvent) -> Option<Action> {
         return None;
     }
     let at = Position::new(mouse.column, mouse.row);
-    let [merge, cancel] = buttons(area);
-    if merge.contains(at) {
-        Some(Action::Merge)
-    } else if cancel.contains(at) {
-        Some(Action::Cancel)
-    } else {
-        None
+    let buttons = view_dialog(&Pull { repo: String::new(), number: 0 }, None).buttons(area);
+    match buttons.iter().position(|b| b.contains(at))? {
+        0 => Some(Action::Merge),
+        _ => Some(Action::Cancel),
     }
 }
 
@@ -145,28 +138,19 @@ fn cut(text: &str, width: usize) -> String {
 
 /// Draws the dialog in `area`. `title` is the stored title, if the store has the pull request.
 fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>) {
-    let width = usize::from(area.width).saturating_sub(2);
-    fn row(f: &mut Frame, area: Rect, n: u16, line: Line<'static>) {
-        f.render_widget(Paragraph::new(line), Rect::new(area.x, area.y + n, area.width, 1).intersection(area));
+    view_dialog(pull, title).draw_in(f, area);
+    // the pull request's row is bold
+    let row = Rect::new(area.x + 2, area.y + 2, u16::try_from(cut(&pull.to_string(), usize::from(POPUP.0) - 4).chars().count()).unwrap_or(0), 1);
+    let buf = f.buffer_mut();
+    for position in row.intersection(buf.area).positions() {
+        buf[position].modifier.insert(Modifier::BOLD);
     }
-    row(f, area, 0, Line::from(Span::styled(format!(" {}", cut(&pull.to_string(), width)), palette::read_only_text().add_modifier(Modifier::BOLD))));
-    if let Some(title) = title {
-        row(f, area, 1, Line::styled(format!(" {}", cut(title, width)), palette::read_only_text()));
-    }
-    row(f, area, 2, Line::styled(format!(" method: {METHOD}"), palette::read_only_text()));
-    let [merge, cancel] = buttons(area);
-    f.render_widget(Paragraph::new(MERGE).style(palette::selected()), merge);
-    f.render_widget(Paragraph::new(CANCEL).style(palette::clickable_text()), cancel);
 }
 
-/// The popup's size, border included, at most the client's `(columns, rows)`.
+/// The popup's size `(columns, rows)`, border included: fixed, at most the client's width less a margin each side
+/// (at least 1) and height.
 fn popup_size(client: (u16, u16)) -> (u16, u16) {
-    (POPUP.0.min(client.0), POPUP.1.min(client.1))
-}
-
-/// `arg` as one word for the popup's shell: in single quotes.
-fn sh_quote(arg: &str) -> String {
-    format!("'{}'", arg.replace('\'', r"'\''"))
+    (POPUP.0.min(client.0.saturating_sub(2 * spacing::MARGIN_X)).max(1), POPUP.1.min(client.1))
 }
 
 /// The tmux arguments that open the dialog for `arg` (`<owner>/<repo>#<n>`) in a popup on the client `name`, at most
@@ -174,36 +158,8 @@ fn sh_quote(arg: &str) -> String {
 /// expand formats in `display-popup`'s shell command, so the `#` of `arg` stays as it is.)
 pub fn popup_args(name: &str, client: (u16, u16), arg: &str) -> Vec<String> {
     let (w, h) = popup_size(client);
-    [
-        "display-popup".to_owned(),
-        "-E".to_owned(),
-        "-c".to_owned(),
-        name.to_owned(),
-        "-T".to_owned(),
-        " merge ".to_owned(),
-        "-w".to_owned(),
-        w.to_string(),
-        "-h".to_owned(),
-        h.to_string(),
-        "--".to_owned(),
-        format!("{PROGRAM} tui view merge {} --client {}", sh_quote(arg), sh_quote(name)),
-    ]
-    .to_vec()
-}
-
-/// The name and the size `(columns, rows)` of the most recently active client in `list-clients`'
-/// `#{client_activity} #{client_width} #{client_height} #{client_name}` lines.
-fn newest_named_client(listing: &str) -> Option<(String, (u16, u16))> {
-    listing
-        .lines()
-        .filter_map(|line| {
-            let mut words = line.splitn(4, ' ');
-            let activity: u64 = words.next()?.parse().ok()?;
-            let size = (words.next()?.parse().ok()?, words.next()?.parse().ok()?);
-            Some((activity, words.next().filter(|n| !n.is_empty())?.to_owned(), size))
-        })
-        .max_by_key(|(activity, _, _)| *activity)
-        .map(|(_, name, size)| (name, size))
+    let command = format!("{PROGRAM} tui view merge {} --client {}", popup::sh_quote(arg), popup::sh_quote(name));
+    popup::args(popup::Popup { title: None, border: true, client: Some(name), dash: true, size: (w, h), command: &command })
 }
 
 /// The merge icon's click, the menu's Merge and an Inbox `pr-ready` item's: the dialog for `arg` in a tmux popup over
@@ -211,7 +167,7 @@ fn newest_named_client(listing: &str) -> Option<(String, (u16, u16))> {
 pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
     let format = "#{client_activity} #{client_width} #{client_height} #{client_name}";
     let clients = tmux.run(&["list-clients", "-F", format].map(str::to_owned))?;
-    let (name, size) = newest_named_client(&clients).ok_or_else(|| {
+    let (name, size) = popup::newest_client(&clients).and_then(|(name, size)| Some((name?, size))).ok_or_else(|| {
         CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
     })?;
     tmux.run(&popup_args(&name, size, arg)).map(drop)
@@ -221,7 +177,7 @@ pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
 /// quoted for the shell, then every `#` doubled for `run-shell`'s format expansion, so it reaches `cpd` unchanged;
 /// stderr is dropped, as the StatusBar's binding drops it (`run-shell -b` shows any output in view mode).
 fn start_args(pull: &Pull, client: &str) -> Vec<String> {
-    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", sh_quote(&pull.to_string()), sh_quote(client));
+    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", popup::sh_quote(&pull.to_string()), popup::sh_quote(client));
     ["run-shell".to_owned(), "-b".to_owned(), command.replace('#', "##")].to_vec()
 }
 
@@ -239,40 +195,65 @@ fn stored_title(store: &mut Store, pull: &Pull) -> Result<Option<String>, CpdErr
     })
 }
 
-pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view merge"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let title = stored_title(&mut store, &args.pull)?;
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal, &args.pull, title.as_deref()));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    let action = result.map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view merge failed: {e}."))
-            .with("command", "tui view merge")
-    })?;
-    if action == Action::Merge {
-        // The merge runs in the background, owned by the tmux server: this process ends now, and the popup closes.
-        Tmux::new(config.tmux.socket).run(&start_args(&args.pull, &args.client))?;
-    }
+/// The dialog for the pull request `arg` (`<owner>/<repo>#<n>`) as `run` shows it, with its title read from `store`, drawn on
+/// `f`. Tests draw it on a `TestBackend` instead of running the view in a terminal.
+pub fn draw_dialog(store: &mut Store, f: &mut Frame, arg: &str) -> Result<(), CpdError> {
+    let pull = Pull::parse(arg).map_err(|e| CpdError::new(ErrorCode::ArgsInvalid, e))?;
+    let title = stored_title(store, &pull)?;
+    draw(f, f.area(), &pull, title.as_deref());
+    Ok(())
+}
+
+pub(super) fn run(ports: &Ports, args: Args) -> Result<Output, CpdError> {
+    // `run_view_on` refuses `not_a_terminal` first, then `prepare` reads the store; the same order as before.
+    let mut ending: Option<(Action, String)> = None;
+    run_view_on(
+        ports,
+        "merge",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let title = stored_title(&mut store, &args.pull)?;
+            Ok((config.tmux.socket, title))
+        },
+        |ctx, (socket, title)| {
+            let action = show(ctx, &args.pull, title.as_deref())?;
+            ending = Some((action, socket));
+            Ok(())
+        },
+    )?;
+    // The terminal is restored; the merge runs in the background, owned by the tmux server: this process ends now, and
+    // the popup closes.
+    let (action, socket) = ending.expect("the body ran");
+    finish(&Tmux::new(socket).with_runner(ports.runner.clone()), &args.pull, &args.client, action)?;
     Ok(Output::Owned)
 }
 
+/// What the view does once the User answered: a [`Action::Merge`] starts the merge in the background (`tmux run-shell -b`,
+/// see [`start_args`]), a [`Action::Cancel`] does nothing.
+pub fn finish(tmux: &Tmux, pull: &Pull, client: &str, action: Action) -> Result<(), CpdError> {
+    match action {
+        Action::Merge => tmux.run(&start_args(pull, client)).map(drop),
+        Action::Cancel => Ok(()),
+    }
+}
+
 /// Draws and takes input until the User confirms or cancels.
-fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+fn show<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
+    show_with(ctx, pull, title)
+}
+
+/// [`show`] on a [`Ctx`]: input and frames are the context's.
+pub fn show_with<B: Backend>(ctx: &mut Ctx<B>, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
     loop {
         let mut area = Rect::default();
-        terminal.draw(|f| {
+        ctx.draw(|f| {
             area = f.area();
             draw(f, area, pull, title);
         })?;
-        let action = match event::read()? {
+        let action = match ctx.input.read()? {
             Event::Key(key) => on_key(key),
             Event::Mouse(mouse) => on_mouse(area, mouse),
             _ => None,
@@ -293,34 +274,40 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
 /// The merge marker ([`marker`], hs-d495) is written first, before `pr merge`, and removed when the request ends:
 /// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
 /// exists, the action does nothing but log `merge already running`.
-pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
+#[cfg(test)]
+pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: super::RunCommand) -> Result<(), CpdError> {
+    action_with(&Ports::real(), home, tmux, pull, client, &run_command)
+}
+
+/// [`action`] on injected ports: the clock stamps the marker and the log, the commands are `run`'s, tmux is `tmux`'s.
+pub(crate) fn action_with(ports: &Ports, home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run: RunFn) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
     let config = Config::load(home)?;
     let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
     let open = open_pulls(&mut store)?;
     // The only clean-up of a marker left behind: a merged one whose row is no longer open.
     marker::remove_settled(home, &open);
-    if marker::live(home, &open).contains(&pull.to_string()) {
+    if marker::live_with(ports, home, &open).contains(&pull.to_string()) {
         // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
-        let _ = log.append(&format!("merge already running {pull}"));
+        let _ = log.append_with(ports, &format!("merge already running {pull}"));
         return Ok(());
     }
-    marker::write(home, pull)?;
+    marker::write_on(ports, home, pull)?;
     let mut marked = Marked { home, pull, keep: false };
-    let cpd = |words: &[&str]| run_command(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
+    let cpd = |words: &[&str]| run(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
     let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
         Ok(_) => {
             // The merge happened: the marker stays, marked merged, until a read stores it (hs-d550).
-            marker::write_merged(home, pull)?;
+            marker::write_merged_on(ports, home, pull)?;
             if let Err(e) = cpd(&["pr", "poll"]) {
                 // Nothing else to show it with: the next periodic poll refreshes the column.
-                let _ = log.append(&format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
+                let _ = log.append_with(ports, &format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
             }
             match open_pulls(&mut store) {
                 Ok(open) => marked.keep = open.contains(&pull.to_string()),
                 Err(e) => {
                     marked.keep = true;
-                    let _ = log.append(&format!("read after merge {pull}: {}: {}", e.code(), e.message()));
+                    let _ = log.append_with(ports, &format!("read after merge {pull}: {}: {}", e.code(), e.message()));
                 }
             }
             return Ok(());
@@ -330,7 +317,7 @@ pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run
     // The request has ended: the spinner goes before the dialog opens.
     drop(marked);
     let mut text = format!("merge {pull}: {}: {}", failed.code(), failed.message());
-    if let Err(unwritten) = log.append(&text) {
+    if let Err(unwritten) = log.append_with(ports, &text) {
         text = format!("{text}\n{unwritten}");
     }
     dialog::show_error_on(tmux, client, &format!("merge {pull}"), &text)
@@ -355,10 +342,6 @@ impl Drop for Marked<'_> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
-
     use super::*;
 
     fn pull() -> Pull {
@@ -369,46 +352,11 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn click(column: u16, row: u16) -> MouseEvent {
-        MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE }
-    }
-
-    fn render(title: Option<&str>, width: u16, height: u16) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &pull(), title)).unwrap();
-        terminal.backend().buffer().clone()
-    }
-
-    fn rows(buf: &Buffer) -> Vec<String> {
-        (0..buf.area.height)
-            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
-            .collect()
-    }
-
     #[test]
     fn the_argument_is_owner_repo_hash_number() {
         assert_eq!(pull().to_string(), "o/r#7");
         for bad in ["", "o/r", "o/r#", "o/r#x", "o/r#0", "o/r#-1", "r#7", "o#7"] {
             assert!(Pull::parse(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
-        let buf = render(Some("Add the thing"), 58, 5);
-        assert_eq!(rows(&buf), [" o/r#7", " Add the thing", " method: squash", "", "  [Merge]   [Cancel]"]);
-    }
-
-    #[test]
-    fn a_missing_title_shows_no_title_and_a_long_one_is_cut() {
-        assert_eq!(rows(&render(None, 58, 5))[1], "");
-        assert_eq!(rows(&render(Some("a very long title indeed"), 12, 5))[1], " a very lo…");
-    }
-
-    #[test]
-    fn a_dialog_in_a_tiny_area_draws_without_panicking() {
-        for (w, h) in [(0, 0), (1, 1), (10, 2), (58, 3)] {
-            render(Some("T"), w, h);
         }
     }
 
@@ -427,29 +375,9 @@ mod tests {
     }
 
     #[test]
-    fn a_left_click_on_a_button_acts_and_nothing_else_does() {
-        let area = Rect::new(0, 0, 58, 5);
-        let [merge, cancel] = buttons(area);
-        assert_eq!((merge, cancel), (Rect::new(2, 4, 7, 1), Rect::new(12, 4, 8, 1)));
-        assert_eq!(on_mouse(area, click(2, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(area, click(8, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(area, click(12, 4)), Some(Action::Cancel));
-        assert_eq!(on_mouse(area, click(19, 4)), Some(Action::Cancel));
-        for (column, row) in [(1, 4), (9, 4), (11, 4), (20, 4), (2, 3), (2, 0)] {
-            assert_eq!(on_mouse(area, click(column, row)), None, "{column},{row}");
-        }
-        let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
-        assert_eq!(on_mouse(area, right), None);
-        // the buttons are where they are drawn
-        let buf = render(None, 58, 5);
-        assert_eq!(buf[(merge.x, merge.y)].symbol(), "[");
-        assert_eq!(buf[(cancel.x + cancel.width - 1, cancel.y)].symbol(), "]");
-    }
-
-    #[test]
     fn the_argument_is_quoted_for_the_popups_shell() {
-        assert_eq!(sh_quote("o/r#7"), "'o/r#7'");
-        assert_eq!(sh_quote("a'b"), r"'a'\''b'");
+        assert_eq!(popup::sh_quote("o/r#7"), "'o/r#7'");
+        assert_eq!(popup::sh_quote("a'b"), r"'a'\''b'");
     }
 
     #[test]
@@ -462,10 +390,11 @@ mod tests {
 
     #[test]
     fn the_popup_opens_on_the_newest_named_client() {
+        let named = |listing: &str| popup::newest_client(listing).and_then(|(name, size)| Some((name?, size)));
         let listing = "100 80 24 /dev/pts/1\n300 215 62 /dev/pts/4\n200 120 30 /dev/pts/2\n";
-        assert_eq!(newest_named_client(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
+        assert_eq!(named(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
         for bad in ["", "junk\n", "100 80 24\n", "100 80 24 \n", "x 80 24 /dev/pts/1\n"] {
-            assert_eq!(newest_named_client(bad), None, "{bad:?}");
+            assert_eq!(named(bad), None, "{bad:?}");
         }
     }
 }
@@ -473,3 +402,5 @@ mod tests {
 #[cfg(test)]
 #[path = "action_d550.rs"]
 mod d550;
+#[cfg(test)]
+mod dialog_tests;

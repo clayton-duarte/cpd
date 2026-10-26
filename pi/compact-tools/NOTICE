@@ -13,4 +13,5 @@ The changes cpd made on top (docs/implementing.md, "The compact-tools extension"
 - Erasable syntax only: the constructor parameter properties of compact-tools-activity.ts, -codex-rows.ts, -grouping.ts, -layout.ts, -progress.ts, -runtime.ts and -silent.ts (the last one's onVisible parameter is the previous item) are explicit fields assigned in the constructor.
 - The policy-neutral guard: the five comments that cited a record id (compact-tools.ts, -config.ts, -layout.ts, -thinking.ts, -types.ts) cite docs/contract.md section 6.9 instead.
 - The double load: the new module compact-tools-double-load.ts and the early return of the factory in compact-tools.ts.
+- The compaction fold: the new module compact-tools-compaction.ts re-draws pi's compaction notice as contract section 6.9 'The compaction fold'.
 - One comment of compact-tools-codex-rows.ts quoted a corner glyph after the word "from", which the import scan of pi/test/compact-tools/layout.test.ts reads as an import; it names the glyph instead.

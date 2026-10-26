@@ -3,10 +3,8 @@
 //! `starting` Attempt with its Tier (§9), and spawns the driver `cpd attempt
 //! run` detached, handing it the lock as fd 3.
 
-use std::fs::OpenOptions;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -20,6 +18,8 @@ use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
+use crate::host::spawn::Launch;
+use crate::ports::Ports;
 use crate::store::Store;
 
 /// What the starter needs from its caller.
@@ -67,6 +67,17 @@ pub struct Started {
     pub pid: u32,
 }
 
+/// How an Attempt of a PR is allocated (hs-d680/hs-d682/hs-d683): a **linear** Attempt reuses the PR's workflow worktree on
+/// its Lead Branch; a **parallel** one gets its own worktree and branch. E3 derives it and passes it to the starter, which
+/// enforces it atomically. `None` means the caller passed no allocation: the starter derives it from the PR's live Attempts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Allocation {
+    /// The workflow worktree on the PR's Lead Branch.
+    Linear,
+    /// Its own `cpd/<plan>--<attempt>` worktree and branch.
+    Parallel,
+}
+
 /// The Attempt the starter is about to insert, decided from one read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Next {
@@ -83,11 +94,30 @@ struct Next {
 /// changed meanwhile), `no_slot`. When the spawn fails the Attempt is ended
 /// `failed` / `crashed` and the result is `spawn_failed`.
 pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
-    let next = store.read(|conn| decide(conn, ctx.catalog, plan, key))?;
+    start_with_allocation(&Ports::current(), store, ctx, plan, key, None)
+}
+
+/// [`start`] on `ports`: the driver is started through `ports.spawn` (`Spawn::spawn`, which a `FakeSpawn` only records),
+/// from `ports.spawn.self_exe()`.
+pub fn start_with(ports: &Ports, store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey) -> Result<Started, CpdError> {
+    start_with_allocation(ports, store, ctx, plan, key, None)
+}
+
+/// [`start_with`] with the linear vs parallel allocation E3 derived (`None`: derive it here from the PR's live Attempts),
+/// which the starter enforces atomically in its write transaction.
+pub fn start_with_allocation(
+    ports: &Ports,
+    store: &mut Store,
+    ctx: &StartCtx<'_>,
+    plan: &PlanId,
+    key: &JobKey,
+    allocation: Option<Allocation>,
+) -> Result<Started, CpdError> {
+    let next = store.read(|conn| decide(conn, ctx.catalog, plan, key, allocation))?;
     // §3.4 step 1: the lock before the transaction that inserts the Attempt.
     let lock = Starter::take(ctx.home, plan, &next.attempt)?;
     store.write(ctx.command, |tx| {
-        if decide(tx, ctx.catalog, plan, key)? != next {
+        if decide(tx, ctx.catalog, plan, key, allocation)? != next {
             return Err(CpdError::new(ErrorCode::CasLost, format!("Job {key} changed while its Attempt was being started: try again."))
                 .with("plan", plan.as_str())
                 .with("job", key.as_str()));
@@ -109,7 +139,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
     })?;
 
     // §3.4 step 2: spawn the driver with the lock as fd 3.
-    let spawned = spawn(ctx.home, plan, &next.attempt, &lock);
+    let spawned = spawn(ports, ctx.home, plan, &next.attempt, &lock);
     let pid = match spawned {
         Ok(pid) => pid,
         Err(e) => {
@@ -141,8 +171,9 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
 }
 
 /// Decides the next Attempt of Job `key`, refusing a Job that is not Ready or
-/// does not match its fingerprint.
-fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> Result<Next, CpdError> {
+/// does not match its fingerprint. `allocation` is E3's derived linear vs parallel choice (`None`: derive it from the
+/// PR's live Attempts).
+fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey, allocation: Option<Allocation>) -> Result<Next, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let phase = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
@@ -189,8 +220,9 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
         }
         (None, Some((number, tier, never_started))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
-            if *never_started {
+            if *never_started || !catalog.is_valid(last) {
                 // The ledger queued the Job at that Tier again: the Attempt was not a try.
+                // A Tier the catalog refuses is left as is here: step_up below raises it.
                 (last, Origin::Ladder)
             } else {
                 let next = catalog.next(last)?.ok_or_else(|| {
@@ -200,12 +232,49 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
             }
         }
     };
+    // hs-n465, hs-d632: a stored or retry Tier the catalog refuses starts at the next valid Worker Tier.
+    let tier = if catalog.is_valid(tier) { tier } else { catalog.step_up(tier).unwrap_or(tier) };
     // hs-d554: a Job stored on a Tier outside H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));
-    let worktree = git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?;
-    Ok(Next { branch: git::attempt_branch(plan, &attempt), attempt, tier, origin, worktree })
+    // A linear Attempt (hs-d680) is the PR's only live Attempt: it runs in the PR's one workflow worktree on the
+    // Lead Branch. A live sibling gets its own worktree and branch (A1). Counted here, inside the same transaction
+    // that inserts the Attempt, so two concurrent starts cannot both take the workflow worktree.
+    let live: i64 = conn.query_row(
+        "SELECT count(*) FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+          WHERE a.plan = ?1 AND j.pr = ?2 AND a.status <> 'ended' AND a.id <> ?3",
+        params![plan.as_str(), job.pr.as_str(), attempt.to_string()],
+        |r| r.get(0),
+    )?;
+    // E3's derived allocation wins when it passed one; otherwise the starter derives it from the live Attempts.
+    // A requested Linear while another Attempt of the PR is live cannot take the PR's one workflow worktree: CasLost,
+    // so the caller re-reads and retries (§3.7 E3, hs-d680/hs-d682/hs-d683).
+    let linear = match allocation {
+        Some(Allocation::Linear) if live > 0 => {
+            return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {attempt} of Job {key} cannot be linear: another Attempt of PR {} is live.", job.pr))
+                .with("plan", plan.as_str())
+                .with("job", key.as_str())
+                .with("pr", job.pr.as_str()));
+        }
+        Some(Allocation::Linear) => true,
+        Some(Allocation::Parallel) => false,
+        None => live == 0,
+    };
+    let (branch, worktree) = if linear {
+        let (lead_branch, lead_worktree): (String, Option<String>) = conn.query_row(
+            "SELECT lead_branch, lead_worktree FROM prs WHERE plan = ?1 AND key = ?2",
+            params![plan.as_str(), job.pr.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let lead_worktree = lead_worktree.ok_or_else(|| {
+            CpdError::new(ErrorCode::StoreFailed, format!("PR {} of Plan {plan} has no workflow worktree.", job.pr)).with("pr", job.pr.as_str())
+        })?;
+        (lead_branch, PathBuf::from(lead_worktree))
+    } else {
+        (git::attempt_branch(plan, &attempt), git::attempt_worktree_path(std::path::Path::new(&repo), plan, &attempt)?)
+    };
+    Ok(Next { branch, attempt, tier, origin, worktree })
 }
 
 /// Ready (§3.2): `queued`, in a Plan in phase `dispatch` or `deploy`, whose PR is
@@ -291,46 +360,33 @@ fn insert(tx: &crate::store::WriteTxn<'_>, plan: &PlanId, key: &JobKey, next: &N
 
 /// Spawns `cpd attempt run <attempt> --plan <plan>` detached (`setsid`), with
 /// the lock as fd 3, stdin from `/dev/null`, and stdout and stderr appended to
-/// `run/<plan>/logs/attempt-<attempt>.log`. Returns its pid.
-fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
+/// `run/<plan>/logs/attempt-<attempt>.log`, through `ports.spawn`. Returns its pid.
+fn spawn(ports: &Ports, home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> Result<u32, String> {
     // The path recorded at process start: the live path of the file is `(deleted)` after an install.
-    let exe = crate::host::exe::started_as().map_err(|e| e.to_string())?;
+    let exe = ports.spawn.self_exe().map_err(|e| e.to_string())?;
     let log_path = home.driver_log(plan, attempt);
     let dir = log_path.parent().expect("a log lives in a directory");
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
-    let stdout = log.try_clone().map_err(|e| format!("cannot use {}: {e}", log_path.display()))?;
 
     // `nice` would start with a missing binary and die with 127: a driver that cannot start is a spawn failure.
     if !exe.exists() {
         return Err(format!("cannot run {}: no such file", exe.display()));
     }
-    // hs-d528: nice and ionice exec, so the recorded pid is the driver's.
-    let prefix = crate::host::priority::idle_prefix();
-    let mut command = Command::new(prefix[0]);
-    command
-        .args(&prefix[1..])
-        .arg(&exe)
-        .args(["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()])
-        .current_dir(home.root())
-        .env("CPD_HOME", home.root())
+    // hs-d528: nice and ionice exec (`idle`), so the recorded pid is the driver's.
+    let launch = Launch {
+        program: exe.display().to_string(),
+        args: ["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()].map(str::to_owned).to_vec(),
+        env_set: vec![("CPD_HOME".to_owned(), home.root().display().to_string())],
         // The caller's own identity is not the driver's.
-        .env_remove("CPD_PLAN")
-        .env_remove("CPD_SESSION")
-        .env_remove("CPD_ATTEMPT")
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::null())
-        .stdout(stdout)
-        .stderr(log);
-    lock.hand_over(&mut command);
-    let mut child = command.spawn().map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
-    let pid = child.id();
-    // Reaps it if this process outlives it (the engine); detached otherwise.
-    std::thread::spawn(move || child.wait());
-    Ok(pid)
+        env_remove: ["CPD_PLAN", "CPD_SESSION", "CPD_ATTEMPT", "TMUX", "TMUX_PANE"].map(str::to_owned).to_vec(),
+        cwd: Some(home.root().to_path_buf()),
+        setsid: true,
+        stdout_to: Some(log_path),
+        hand_over: Some(lock.fd()),
+        idle: true,
+        foreground: false,
+    };
+    // The real `Spawn` reaps the child on a thread, if this process outlives it (the engine); detached otherwise.
+    let pid = ports.spawn.spawn(&launch).map_err(|e| format!("cannot run {}: {e}", exe.display()))?;
+    Ok(pid.0)
 }

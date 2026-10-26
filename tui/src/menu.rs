@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, Mous
 use ratatui::layout::{Position, Rect};
 use crate::palette::{self, Meaning};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::box_widget::{BoxWidget, Walls};
 
@@ -89,11 +89,7 @@ impl<E: Entry> Menu<E> {
     /// it takes to fit (and cut, when the pane is smaller than the box).
     pub fn rect(&self, pane: Rect) -> Rect {
         let widest = self.items.iter().map(|i| Span::raw(i.label()).width() + if i.busy() { SPINNER_WIDTH } else { 0 }).max().unwrap_or(0) as u16;
-        let width = (widest + 4).min(pane.width);
-        let height = (self.items.len() as u16 + 2).min(pane.height);
-        let x = self.at.x.min(pane.right().saturating_sub(width)).max(pane.x);
-        let y = self.at.y.min(pane.bottom().saturating_sub(height)).max(pane.y);
-        Rect::new(x, y, width, height)
+        Rect::new(self.at.x, self.at.y, widest + 4, self.items.len() as u16 + 2).clamp(pane)
     }
 
     pub fn hit(&self, pane: Rect, at: Position) -> Hit {
@@ -101,9 +97,12 @@ impl<E: Entry> Menu<E> {
         if !rect.contains(at) {
             return Hit::Outside;
         }
-        let inside = at.x > rect.x && at.x + 1 < rect.right() && at.y > rect.y && at.y + 1 < rect.bottom();
-        match usize::from(at.y.saturating_sub(rect.y + 1)) {
-            i if inside && i < self.items.len() => Hit::Item(i),
+        let inner = Block::bordered().inner(rect);
+        if !inner.contains(at) {
+            return Hit::Border;
+        }
+        match usize::from(at.y.saturating_sub(inner.y)) {
+            i if i < self.items.len() => Hit::Item(i),
             _ => Hit::Border,
         }
     }
@@ -136,7 +135,7 @@ impl<E: Entry> Menu<E> {
         self.draw_at(f, pane, crate::palette::frame(std::time::SystemTime::now()));
     }
 
-    /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 8]` (hs-d495).
+    /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 28]` (hs-d495).
     pub fn draw_at(&self, f: &mut Frame, pane: Rect, frame: usize) {
         let rect = self.rect(pane);
         let lines: Vec<Line> = self

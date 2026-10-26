@@ -28,8 +28,8 @@ export type Message = Parameters<PiApi["sendMessage"]>[0] & { content: string };
 export type SendOptions = NonNullable<Parameters<PiApi["sendMessage"]>[1]>;
 export type { ToolDefinition };
 
-/** A custom message as pi hands it to a renderer, reduced to what the adapter reads. */
-export type RenderedMessage = { customType: string; content: unknown; details?: unknown };
+/** A custom message as pi hands it to a renderer, reduced to what the adapter reads. `timestamp` is pi's `CustomMessage.timestamp` (Unix ms), the source of the fold's local time. */
+export type RenderedMessage = { customType: string; content: unknown; details?: unknown; timestamp: number };
 /** pi's `Theme`, reduced to what the renderer paints with (colour names are pi's `ThemeColor` and `ThemeBg`). */
 export type Theme = { fg(color: string, text: string): string; bg(color: string, text: string): string; bold(text: string): string };
 /** The adapter's renderers take the narrow types above, which pi's own `MessageRenderer` arguments satisfy. */

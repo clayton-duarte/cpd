@@ -1,4 +1,4 @@
-//! `mcp attach` (commands.md §25.1; contract §5.2 `mcp-attached`; pro-d2, pro-d8): one Event addressed to the
+//! `mcp attach` (commands.md §24.1; contract §5.2 `mcp-attached`; pro-d2, pro-d8): one Event addressed to the
 //! caller's Session, which its adapter turns into `pi.registerMcpServer`. Nothing else is written.
 
 use clap::{Args, Subcommand};
@@ -12,10 +12,10 @@ use crate::events::{NewEvent, append};
 use crate::output::Output;
 use crate::policy::{load_machine, name_ok};
 
-/// The `mcp` commands (commands.md §25).
+/// The `mcp` commands (commands.md §24).
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Attach a server of this machine's policy to this Session only (§25.1)
+    /// Attach a server of this machine's policy to this Session only (§24.1)
     Attach(AttachArgs),
 }
 

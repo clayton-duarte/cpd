@@ -7,13 +7,12 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::Pull;
+use cpd_core::atomic;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use nix::errno::Errno;
-use nix::sys::signal::kill;
-use nix::unistd::Pid;
+use cpd_core::host::spawn::Pid;
+use cpd_core::ports::Ports;
 use serde::Deserialize;
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 /// The marker file of `pull`: `<owner>/<repo>#<n>` is `<owner>__<repo>__<n>.json`.
@@ -25,36 +24,40 @@ pub fn path(home: &CpdHome, pull: &Pull) -> PathBuf {
 /// Writes the marker of `pull` for this process (`{"pid": <this pid>, "at": <RFC 3339 now>}`), atomically (a temporary
 /// file, then a rename), replacing any marker there, a stale one included.
 pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_with(home, pull, false)
+    write_on(&Ports::current(), home, pull)
+}
+
+/// [`write`] stamped by the clock of `ports`.
+pub fn write_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(ports, home, pull, false)
 }
 
 /// Rewrites the marker of `pull` as `{"pid", "at", "merged": true}` (hs-d550): `pr merge` succeeded, and the marker
 /// holds until a read stores the merge. Atomic, as [`write`].
 pub fn write_merged(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    write_with(home, pull, true)
+    write_merged_on(&Ports::current(), home, pull)
 }
 
-fn write_with(home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
+/// [`write_merged`] stamped by the clock of `ports`.
+pub fn write_merged_on(ports: &Ports, home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(ports, home, pull, true)
+}
+
+fn write_with(ports: &Ports, home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
     let target = path(home, pull);
     let pid = std::process::id();
-    let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+    let at = ports.clock.utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::Internal, format!("Cannot write the merge marker {}: {e}.", target.display()))
             .with("path", target.display().to_string())
     };
-    let dir = target.parent().expect("a marker is in a directory");
-    std::fs::create_dir_all(dir).map_err(failed)?;
-    // The temporary name does not end in `.json`, so no reader takes it for a marker; the pid keeps two writers apart.
-    let temporary = dir.join(format!(".{pid}.tmp"));
     let mut json = serde_json::json!({ "pid": pid, "at": at });
     if merged {
         json["merged"] = true.into();
     }
     let text = json.to_string();
-    std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target)).map_err(|e| {
-        let _ = std::fs::remove_file(&temporary);
-        failed(e)
-    })
+    // The temporary name ends in `.tmp`, never `.json`, so no reader takes it for a marker.
+    atomic::write_atomic(&target, text).map_err(failed)
 }
 
 /// Removes the marker of `pull`; none there is no error.
@@ -82,9 +85,14 @@ fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
 /// `merged` whose pull request is in `open` (the open rows of `pull_requests`: no read has stored the merge yet). A
 /// stale marker, and a `merged` one whose pull request is not open, are none.
 pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
+    live_with(&Ports::current(), home, open)
+}
+
+/// [`live`] with the pids asked of `ports.spawn`.
+pub fn live_with(ports: &Ports, home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
     markers(home)
         .into_iter()
-        .filter(|(_, pull, marker)| alive(marker.pid) || (marker.merged && open.contains(pull)))
+        .filter(|(_, pull, marker)| u32::try_from(marker.pid).is_ok_and(|pid| ports.spawn.alive(Pid(pid))) || (marker.merged && open.contains(pull)))
         .map(|(_, pull, _)| pull)
         .collect()
 }
@@ -111,16 +119,10 @@ fn path_dir(home: &CpdHome) -> PathBuf {
     home.run_dir().join("tui").join("merging")
 }
 
-/// Whether process `pid` exists (signal 0). A process of another user exists too (`EPERM`).
-fn alive(pid: i64) -> bool {
-    // 0 and the negatives would signal a process group, not a process.
-    let Some(pid) = i32::try_from(pid).ok().filter(|p| *p > 0) else { return false };
-    !matches!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::OffsetDateTime;
 
     fn pull(repo: &str, number: i64) -> Pull {
         Pull::parse(&format!("{repo}#{number}")).unwrap()
@@ -130,13 +132,8 @@ mod tests {
         CpdHome::resolve(Some(dir.path().into()), None).unwrap()
     }
 
-    /// A pid that is not alive: a child that has ended and been waited for.
-    fn dead_pid() -> u32 {
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let pid = child.id();
-        child.wait().unwrap();
-        pid
-    }
+    /// A pid that is not alive: above every platform's `pid_max` (Linux's is at most 2^22), so no process has it; `kill(pid, 0)` says `ESRCH`.
+    const DEAD_PID: u32 = 999_999_999;
 
     /// A marker file as the action leaves it, written by hand: `file` is its name in `run/tui/merging/`.
     fn put(dir: &tempfile::TempDir, file: &str, pid: u32) {
@@ -169,7 +166,7 @@ mod tests {
     #[test]
     fn writing_replaces_a_stale_marker_and_leaves_the_markers_of_other_pull_requests() {
         let dir = tempfile::tempdir().unwrap();
-        put(&dir, "acme__api__3.json", dead_pid());
+        put(&dir, "acme__api__3.json", DEAD_PID);
         put(&dir, "acme__web__4.json", std::process::id());
         write(&home(&dir), &pull("acme/api", 3)).unwrap();
         let text = std::fs::read_to_string(dir.path().join("run/tui/merging/acme__api__3.json")).unwrap();
@@ -193,7 +190,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::new(), "no directory: none");
         put(&dir, "acme__api__3.json", std::process::id());
-        put(&dir, "acme__web__4.json", dead_pid());
+        put(&dir, "acme__web__4.json", DEAD_PID);
         assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::from(["acme/api#3".to_owned()]));
         // a restarted view reads the same files
         assert_eq!(live(&home(&dir), &BTreeSet::new()), live(&home(&dir), &BTreeSet::new()));

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type Component } from "@earendil-works/pi-tui";
-import { eventMessage } from "../lib/delivery.ts";
+import { eventMessage as rawEventMessage } from "../lib/delivery.ts";
 import type { CpdEvent } from "../lib/event.ts";
 import type { Theme } from "../lib/pi.ts";
 import { Rendering } from "../lib/render.ts";
@@ -15,6 +15,10 @@ const theme: Theme = {
   bg: (_color, text) => text,
   bold: (text) => text,
 };
+
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+const eventMessage = (...args: Parameters<typeof rawEventMessage>) => ({ ...rawEventMessage(...args), timestamp: TIME_MS });
 
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
@@ -53,10 +57,10 @@ test("cpd pill cuts a first sentence over 60 characters with an ellipsis", () =>
 test("cpd message lead and rails are 8 and the toggle is 7", () => {
   const collapsed = render("Job api-1 merged.\nsecond line");
   assert.ok(collapsed[0]!.includes("\x1b[90m╭─\x1b[39m"), JSON.stringify(collapsed[0]));
-  assert.ok(collapsed.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${FOLDED} expand\x1b[39m`), JSON.stringify(collapsed.at(-1)));
+  assert.ok(collapsed.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${FOLDED} expand · 03:11\x1b[39m`), JSON.stringify(collapsed.at(-1)));
   const expanded = render("Job api-1 merged.\nsecond line", true);
   assert.ok(expanded[1]!.includes("\x1b[90m│ \x1b[39m"), JSON.stringify(expanded[1]));
-  assert.ok(expanded.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${OPEN} collapse\x1b[39m`), JSON.stringify(expanded.at(-1)));
+  assert.ok(expanded.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${OPEN} collapse · 03:11\x1b[39m`), JSON.stringify(expanded.at(-1)));
 });
 
 test("cpd message draws only indexed colours 0-15", () => {

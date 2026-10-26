@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 
+// Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
+process.env.TZ = "Asia/Kolkata";
+
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
   type: "custom_message",
   customType,
@@ -371,7 +374,7 @@ test("a Lead gets one cpd-context message with new decisions, board posts and op
       "- hs-n4: Cut the wake.",
       "",
       "Board:",
-      "- User (2026-10-21T15:30:00Z): PR #207 opened",
+      "- User (2026-10-21 21:00): PR #207 opened",
       "",
       "PRs:",
       "- PR api opened: https://github.com/o/r/pull/211",
@@ -414,7 +417,7 @@ test("board posts are taken at turn start and shown in full", async (t) => {
   f.respond("board-take", take({ id: 1, from_session: null, text: long }, { id: 2, from_session: null, text: "Second post" }));
   const m = await beforeTurn(f);
   assert.equal(m.content.split("\n")[0], "Context ctx: 2 board posts");
-  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21T15:30:00Z): ${long}`, "- User (2026-10-21T15:30:00Z): Second post"]);
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21 21:00): ${long}`, "- User (2026-10-21 21:00): Second post"]);
   assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
   assert.deepEqual(f.pi.sent, [], "a post never starts a turn");
 });

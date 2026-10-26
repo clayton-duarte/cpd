@@ -4,7 +4,7 @@
 //! Every test here fails before the command exists, for the reason its comment gives.
 
 use crate::common::{TestEnv, refused};
-use crate::session::{events, setup};
+use crate::common::session::{events, setup};
 
 use std::fs;
 use std::path::PathBuf;

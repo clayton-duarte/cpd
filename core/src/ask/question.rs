@@ -1,8 +1,7 @@
 //! `ask` (commands.md §8.1, contract §3.3, §3.5): `(none) → open`, then the
 //! wait, then `open → answered` (by `answer`) or `open → expired` (here).
 
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
@@ -36,21 +35,28 @@ enum Settled {
     TimedOut,
 }
 
-pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
-    let plan = args.plan.require()?.clone();
-    let mut env = Env::open()?;
-    let minutes = args.timeout_minutes.unwrap_or(env.config.timeouts.ask_minutes);
-    let deadline = Instant::now() + Duration::from_secs(u64::from(minutes) * 60);
+/// [`ask`] for Attempt `attempt` of `plan` on the ports of `env`: the deadline and the 500 ms polls are read on
+/// `env.ports.clock`. `timeout_minutes` is `--timeout-minutes`.
+pub(crate) fn ask_in(
+    env: &mut Env,
+    plan: &PlanId,
+    attempt: &AttemptId,
+    question: &str,
+    timeout_minutes: Option<u32>,
+) -> Result<Output, CpdError> {
+    let minutes = timeout_minutes.unwrap_or(env.config.timeouts.ask_minutes);
+    let clock = env.ports.clock.clone();
+    let deadline = clock.now() + Duration::from_secs(u64::from(minutes) * 60);
 
-    let (asker, id) = env.store.write(COMMAND, |tx| open(tx, &plan, &args.attempt, args.question.as_str()))?;
+    let (asker, id) = env.store.write(COMMAND, |tx| open(tx, plan, attempt, question))?;
 
     let settled = loop {
         let (status, _) = env.store.read(|conn| row(conn, &asker.plan, &id))?;
         let open = status == "open";
-        if !open || Instant::now() >= deadline {
-            break settle(&mut env, &asker, &id, open)?;
+        if !open || clock.now() >= deadline {
+            break settle(env, &asker, &id, open)?;
         }
-        sleep(POLL);
+        clock.sleep(POLL);
     };
     match settled {
         Settled::Answered(answer) => Ok(Output::success(json!({"escalation": id, "answer": answer}))),
@@ -62,6 +68,12 @@ pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
         .with("escalation", id.to_string())
         .with("timeout_minutes", minutes)),
     }
+}
+
+pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
+    let plan = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    ask_in(&mut env, &plan, &args.attempt, args.question.as_str(), args.timeout_minutes)
 }
 
 /// Transaction 1: the Escalation, the Worker Session `waiting`, their Events.

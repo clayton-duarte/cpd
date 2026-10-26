@@ -66,7 +66,7 @@ type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalid
  * A message's text rows as a balloon (docs/contract.md section 6.9). Pi's own padding columns and rows of the
  * Markdown are dropped for the render, so the text wraps at `width - 8` and the balloon adds the only margins.
  */
-function balloonOf(child: MarkdownLike, side: BalloonSide, width: number): string[] {
+function balloonOf(child: MarkdownLike, side: BalloonSide, width: number, at?: number): string[] {
 	if (width < MIN_BALLOON_WIDTH) return child.render(width);
 	const { paddingX, paddingY } = child;
 	child.paddingX = 0;
@@ -84,7 +84,7 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number): strin
 	// Markdown pads every row to the full width; the balloon fits the longest row instead.
 	const paint = painter();
 	const fitted = rows.map((row) => row.replace(/ +((?:\x1b\[[0-9;]*m)*)$/, "$1")).map((row) => paint ? paint(row) : row);
-	return drawBalloon(fitted, side, width);
+	return drawBalloon(fitted, side, width, at);
 }
 
 /** Render `container` with its children replaced by `swap`, restoring them afterwards. */
@@ -306,7 +306,7 @@ function publishOverrides(): void {
 				const leading = container.children?.[0];
 				const dropLeading = isKind(leading, Spacer) && isKind(container.children?.[1], Markdown);
 				return withChildren(container, (child) => {
-					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w));
+					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w, (target as { lastMessage?: { timestamp?: number } }).lastMessage?.timestamp));
 					if (child === leading && dropLeading) return rowsOf(() => []);
 					return paint ? rowsOf((w) => child.render(w).map(paint)) : child;
 				}, () => next(width));

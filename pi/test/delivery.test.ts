@@ -6,6 +6,9 @@ import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
 import { ev, Fixture, ID, OTHER, planShow, shown, stateCalls, waitFor } from "./fake.ts";
 
+// Pin the process timezone so the expected local times are deterministic and prove the rendering is local, not UTC.
+process.env.TZ = "Asia/Kolkata";
+
 const DATA: Record<string, Record<string, unknown>> = {
   "job-merged": { turn: true },
   escalation: { escalation: "j-a1-q1", question: "q?" },
@@ -221,7 +224,7 @@ test("session-message for this Lead: one cpd message that starts a turn, followU
   assert.equal(f.pi.sent.length, 1);
   const s = f.pi.delivered()[0]!;
   assert.equal(s.message.customType, "cpd");
-  assert.equal(s.message.content, `Message from the manager (${OTHER}): ship it`);
+  assert.equal(s.message.content, `Message from the manager (${OTHER}) (03:11): ship it`);
   assert.equal((s.message.details as any).delivered_to, ID);
   assert.equal((s.message.details as any).id, 101);
   assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
@@ -253,8 +256,8 @@ test("session-message: from null is the User; an unreadable sender is named by i
   f.emit(message(101, null), message(102, "gone"), message(103, null, { session: OTHER }));
   await waitFor("two messages", () => f.pi.delivered().length === 2);
   await f.drain();
-  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User: ship it");
-  assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone: ship it");
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11): ship it");
+  assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone (03:11): ship it");
   assert.equal(f.pi.sent.length, 2);
 });
 
