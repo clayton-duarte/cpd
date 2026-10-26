@@ -484,10 +484,25 @@ mod tests {
         let (_dir, home) = tmp_home();
         drop(open_named(&home, schema::NAMED).unwrap());
         // A live store wrote these rows at apply time; a tool that is not cpd reaches them
-        // by dropping the append-only guards first.
+        // by dropping the append-only guards first. The live store's guards are intact, so
+        // capture their text and restore them before opening: the schema must stay a fresh
+        // store's (§4.3), or the migrating transaction rolls back.
+        let guards: Vec<String> = {
+            let conn = Connection::open(home.db()).unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT sql FROM sqlite_schema WHERE type = 'trigger'\
+                     AND name IN ('schema_migrations_no_update', 'schema_migrations_no_delete')",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<String>>>().unwrap()
+        };
         raw(&home, "DROP TRIGGER schema_migrations_no_update; DROP TRIGGER schema_migrations_no_delete");
         raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch')");
         raw(&home, "UPDATE schema_migrations SET name = '20261025T2300-queue-failed' WHERE name = '20261027T1100-queue-failed'");
+        for sql in guards {
+            raw(&home, &sql);
+        }
         let verdict = judge(&home, schema::NAMED);
         assert!(verdict.opens(), "{verdict:?}");
         assert!(verdict.unknown.is_empty(), "{verdict:?}");
