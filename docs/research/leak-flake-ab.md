@@ -9,7 +9,7 @@ Plan leak-flake, Job vdict-docs, attempt a1. Machine `pro` (macOS, arm64, 14 cor
 - A had one round with 0 (round 5, load 37.3 at start; rounds 1 and 3 gave 20 and 14): the leak is bursty. Neither "B had 0" nor "A had 0 in all 3" held, so P3 was not run (step 3 conditions not met).
 - Poisson guess (inference; the counts are over-dispersed, A per round 20/14/0, so this overstates): B's 8 from A's rate of 34 per 3 rounds: P(X<=8) = 1e-7. Conditional binomial (8 of 42 LEAKs in B, p = 0.5 if the settings were equal): 3e-5. Either way, B's rate is lower than A's; not zero.
 - Wall time is not worse with 4 threads at this pressure: A 55-61 s, B 59-62 s per run (the machine is the limit). Verified: `wall` files.
-- The watcher saw no extra live child at any of the 42 LEAK lines: `pgrep -P <nextest>` showed at most 14 (A) and 4 (B) children, the test slots in use; the leaking test had exited. This agrees with rs-diag: the cause is nextest's timer losing the race, not a process holding the pipe. Verified (children counts), the "no pipe holder" reading is inference from `ps` only.
+- The watcher saw no extra live child at any of the 42 LEAK lines: `pgrep -P <nextest>` showed at most 14 (A) and 4 (B) children, the test slots in use; the leaking test is not listed (unverified which children they were). This agrees with rs-diag: the cause is nextest's timer losing the race, not a process holding the pipe. Verified (children counts), the "no pipe holder" reading is inference from `ps` only.
 - One synthetic run (1,800 tests, trivial) is not a Gate (5,100+ tests, 4.8-6.6 ms CPU per exec, 68% system time per rs-cost): inference that a Gate leaks at least as often per test.
 
 ## Evidence
@@ -36,7 +36,7 @@ Table B, P2, file's 4 threads (treatment):
 
 P3 (8 runs + 6 burners): not run (neither condition of step 3 held: B was not 0, A was not 0 in all rounds). So "how far B holds" has no P3 datum: B already leaks at P2.
 
-Watcher at every LEAK line (per leak: time, children of nextest, full `ps -Ao pid,ppid,etime,pcpu,command`; files `out/<round>/leak<run>.<ns>.ps`): 42 LEAK lines in all (34 A, 8 B). The LEAK-FAIL time in the line was 0.16-0.53 s (B: 0.182, 0.304, 0.161, 0.163, 0.196, 0.526, 0.181, 0.251 s). Children of nextest at the leak: A 14 each time at most, B 3-4; every child was a running test of the same binaries, none was the leaked test; no test process of another run was a child. The leaking test names were trivial (`t237`, `t345`, ...). One note (verified): the burners are children of the script, not of nextest.
+Watcher at every LEAK line (per leak: time, children of nextest, full `ps -Ao pid,ppid,etime,pcpu,command`; files `out/<round>/leak<run>.<ns>.ps`): 42 LEAK lines in all (34 A, 8 B). The LEAK-FAIL time in the line was 0.16-0.53 s (B: 0.182, 0.304, 0.161, 0.163, 0.196, 0.526, 0.181, 0.251 s). Children of nextest at the leak (`pgrep -P`): A up to 14, B 3-4, i.e. the slots in use. The per-child `ps -p` lines are empty in all 42 files (the children had gone by the time `ps` ran), so which processes they were is unverified; the leaked test's name is in none of the files (verified: grep). The leaking test names were trivial (`t237`, `t345`, ...). One note (verified): the burners are children of the script, not of nextest.
 
 ## Reproduction
 
