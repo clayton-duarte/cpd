@@ -282,7 +282,7 @@ fn mcp_attach_reads_servers_from_a_host_toml_that_also_holds_the_model_table() {
     assert_eq!(attached(&env)[0]["data"]["server"], slack());
 }
 
-/// The old layout's `policy/machines/pro.toml` is not read: its server is unknown, and no Event is appended.
+/// A file of the old layout's `machines` directory is not read: its server is unknown, and no Event is appended.
 #[test]
 fn mcp_attach_does_not_read_a_file_of_the_old_machines_directory() {
     let env = TestEnv::new();

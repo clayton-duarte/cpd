@@ -3713,7 +3713,7 @@ A **policy** says how cpd and its agents work for one GitHub owner or repo: what
 | `test-commands` | `build`, `run`, optional `list` (§7.7); **no `text`** | repo | none |
 | `protected` | `paths`, a list of strings (§7.5; `[]`); **no `text`** | repo | none |
 
-`mcp` is **not** a domain of a policy: its `[mcp]` table is the MCP servers of a machine file only ("MCP servers of the machine scope"). A file of another scope with an `mcp` key is refused `policy_invalid`, and the message says `mcp` is set in a machine file.
+`mcp` is **not** a domain of a policy: its `[mcp]` table is the MCP servers of a machine file only ("MCP servers of the machine scope"). A file of another scope with an `mcp` key is refused `policy_invalid`, and the message says `mcp` is set in a machine file (`policy/host.toml`).
 
 #### Models
 
@@ -3751,10 +3751,10 @@ The **`[model]`** domain (pro-d27, Plan policy-scopes, PR `tiers`) replaces the 
 
 #### MCP servers of the machine scope
 
-The machine file (`$CPD_HOME/policy/machines/<host>.toml`, "Files"; `<host>` is the config key `host` of this instance, §8.2) is a full scope of its own ("Model": the domains exposed to the machine scope); besides them it may hold one table that no other scope's file may: `[mcp.servers.<name>]`, the MCP servers this machine may use (pro-d1, pro-d9). This section reads only that table: the file may hold nothing else, or any domain the machine scope exposes, and the scope loader reads those. The `machine.name` of `cpd policy show` (commands.md §22.1) is still the config key `machine`, not `host`. By design the User's dotfiles sync the file to every machine, and only the machine it is named for reads it. The rest of the file is the machine scope of "Model", and the loader of the scope leaves `[mcp]` to the one below.
+The machine file (`$CPD_HOME/policy/host.toml`, "Files") is a full scope of its own ("Model": the domains exposed to the machine scope); besides them it may hold one table that no other scope's file may: `[mcp.servers.<name>]`, the MCP servers this machine may use (pro-d1, pro-d9). This section reads only that table: the file may hold nothing else, or any domain the machine scope exposes, and the scope loader reads those. The `machine.name` of `cpd policy show` (commands.md §22.1) is the config key `machine`. Dotfiles render the file per machine: its `[model]` table first, then the machine's `cpd.policy` text, which holds its `[mcp.servers.*]`. The rest of the file is the machine scope of "Model", and the loader of the scope leaves `[mcp]` to the one below.
 
-- **Only this host's file is read.** Other hosts' files are not parsed (a broken one is no error here); the names of the entries of `machines/` are checked as "Files" says.
-- **`mcp` is not a domain.** The set of domains stays the nine above, and `[mcp]` has its own small type, in `core/src/policy/machine.rs`. It is in no policy: not in the resolved policy of a key, not in `cpd policy show`'s `policy` map (it has its own key, `machine`), and nothing resolves it per key. An owner or repo file with an `mcp` key is `policy_invalid`, and the message says `mcp` is set in a machine file.
+- **Only `host.toml` is read.** No owner or repo file is parsed by this section (a broken one is no error here); the entries of `policy/` are checked as "Files" says.
+- **`mcp` is not a domain.** The set of domains stays the nine above, and `[mcp]` has its own small type, in `core/src/policy/machine.rs`. It is in no policy: not in the resolved policy of a key, not in `cpd policy show`'s `policy` map (it has its own key, `machine`), and nothing resolves it per key. An owner or repo file with an `mcp` key is `policy_invalid`, and the message says `mcp` is set in a machine file (`policy/host.toml`).
 - **No file, no servers.** A missing machine file, or one with no `[mcp]` table, means no servers: nothing is attachable and nothing is attached by default. The servers are this machine's file only: no other scope inherits, merges or overrides them.
 - **Source labels** of the servers are `default` (no servers) or `machine:<realpath>`, as the other scopes' (above).
 - **A server name** `<name>` matches `^[a-z][a-z0-9-]{0,31}$`: stricter than pi's rule on purpose, with no `_`, so two names never collide as pi treats `-` and `_` alike.

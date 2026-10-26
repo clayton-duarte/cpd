@@ -240,10 +240,10 @@ fn a_host_toml_with_model_and_mcp_reports_the_model_domain_and_the_servers() {
     assert_eq!(out["machine"]["mcp"]["servers"]["slack"], slack_json(), "{out}");
 }
 
-// The old layout: `policy/machines/pro.toml` is never read; `check_file_names` refuses it (policy_layout.rs l1).
+// The old layout: a file in the `machines` directory is never read; `check_file_names` refuses it (policy_layout.rs l1).
 #[test]
 fn a_file_of_the_old_machines_directory_is_refused_by_policy_show() {
     let fx = Fx::new();
-    fx.write("machines/pro.toml", SLACK);
+    fx.write("machines/old.toml", SLACK);
     refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
 }

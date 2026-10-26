@@ -277,7 +277,7 @@ What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(log
 _Avoid_: scope, selector, context
 
 **Machine policy** (changed, pro-d1):
-The machine Scope's file, `policy/machines/<host>.toml` (contract §8.3). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key. Only the machine it is named for reads it.
+The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.
 _Avoid_: machine config
 
 **MCP server** (new, pro-d1):
