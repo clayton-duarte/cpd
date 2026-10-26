@@ -766,8 +766,8 @@ fn an_invalid_scroll_file_starts_the_view_at_the_top_logs_it_and_the_next_write_
         assert!(screen.shown_rows().iter().all(|l| !l.contains("scroll positions reset")), "no note: {}", screen.text());
         assert_eq!(fs::read_to_string(home.join("run").join("tui").join("plan-scroll.json")).unwrap(), "{not json", "nothing is written until an offset changes");
     });
-    // scroll down the chart: the file becomes a valid one; the view is alive until the script ends it
-    let mut signals: Vec<Signal> = (0..45).map(|_| press('j')).collect();
+    // scroll down the chart with the wheel: the file becomes a valid one; the view is alive until the script ends it
+    let mut signals: Vec<Signal> = (0..15).map(|_| scroll_down()).collect();
     signals.push(gone());
     show(&fx, signals, &steps);
     assert!(
@@ -954,11 +954,13 @@ fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_lo
 #[test]
 fn q_does_not_quit_the_view() {
     let fx = fx();
-    fx.env.sql(&plan_with("dispatch", None, &[("a", "queued", "S3", &[], 0)]));
-    // The view handles keys in order: once `j` has selected the pill, `q` before it has been handled; the script ends the view
-    // after both, so a `q` that quit it would have ended it before the `j`.
-    let steps = Steps::new().at("the pill selected", any_selected, |screen| assert!(screen.shown_row(2).contains(" a│"), "{}", screen.text()));
-    show(&fx, vec![press('q'), press('j'), gone()], &steps);
+    fx.env.sql(&tall_plan());
+    // The view handles input in order: once the wheel has scrolled the chart, `q` before it has been handled; the script ends the
+    // view after both, so a `q` that quit it would have ended it before the wheel.
+    let steps = Steps::new().at("the chart scrolled", |s| s.height() > 2 && !s.shown_row(2).contains(" j10│"), |screen| {
+        assert!(screen.shown_rows().iter().all(|l| !l.contains(" j10│")), "{}", screen.text());
+    });
+    show(&fx, vec![press('q'), scroll_down(), gone()], &steps);
 }
 
 #[test]
