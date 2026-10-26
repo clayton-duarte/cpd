@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 45
+-- cpd-migration: breaking after 52
 -- pro-d16: the Inbox tier stored as `blue` is stored as `cyan` (blue is only for focus); `inbox_items` is rebuilt as `loop-guard` rebuilt it, every `blue` row copied as `cyan`.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
