@@ -473,7 +473,7 @@ fn a_pull_request_box_title_ends_in_a_link_to_it() {
     fx.env.sql(&plan_under_review(2, "pending"));
     let buf = draw(&fx);
     let screen = rows(&buf);
-    assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ╮")), "{}", screen.join("\n"));
+    assert!(screen.iter().any(|l| *l == format!(" ╭─ repo · repo 󱦰 main · #7 open {CUE} ─╮")), "{}", screen.join("\n"));
     // plain cells: the `Link` widget writes no escape
     let cells = (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y)));
     assert!(cells.into_iter().all(|at| !buf[at].symbol().contains('\x1b')), "{}", screen.join("\n"));
