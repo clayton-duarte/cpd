@@ -7,6 +7,7 @@ mod common;
 mod board;
 mod host;
 mod host_pill;
+mod mcp_attach;
 mod session_list_archived;
 mod session_asleep;
 mod session_first_message;

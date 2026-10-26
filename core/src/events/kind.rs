@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 14;
+pub const PROTOCOL: u32 = 15;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -111,6 +111,7 @@ kinds! {
     SessionRenamed = "session-renamed",
     SessionTitled = "session-titled",
     SessionRetiered = "session-retiered",
+    McpAttached = "mcp-attached",
     SessionAsleep = "session-asleep",
     SessionResumed = "session-resumed",
     PlanDeleted = "plan-deleted",
@@ -189,6 +190,7 @@ impl Kind {
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
             SessionRetiered => spec([Y, M, N, N, Y], &["from", "to"], &[]),
+            McpAttached => spec([Y, M, N, N, Y], &["name", "server"], &[]),
             SessionAsleep => spec([Y, M, N, N, Y], &[], &[]),
             SessionResumed => spec([Y, M, N, N, Y], &[], &[]),
             PlanDeleted => spec([Y, Y, N, N, N], &["jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
@@ -244,10 +246,10 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13) and hs-d634 (the incident kinds: 14).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10), hs-d571 (`session-resumed`: 12), hs-d573 (`session report`: 13), hs-d634 (the incident kinds: 14) and pro-d8 (`mcp-attached`: 15).
     #[test]
-    fn the_protocol_is_14_with_the_incident_kinds() {
-        assert_eq!(PROTOCOL, 14);
+    fn the_protocol_is_15_with_the_mcp_attached_kind() {
+        assert_eq!(PROTOCOL, 15);
     }
 
     #[test]

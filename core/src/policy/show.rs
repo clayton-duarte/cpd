@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 
 use super::resolve::{machine_path, owner_path, repo_path};
 use super::domain::{BUILD, FEEDBACK_CHECKS, GATE_PR, LIST, MERGE, PATHS, PRE_COMMIT, PRE_MERGE, PRE_START, RUN};
-use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
+use super::{audience, check_file_names, load_machine, resolve, Domain, DomainSource, Machine, PolicyKey};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName, SessionId};
@@ -140,7 +140,7 @@ fn session_from_env() -> Result<SessionId, CpdError> {
 }
 
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let Env { home, mut store, .. } = Env::open()?;
+    let Env { home, mut store, config, .. } = Env::open()?;
     let (role, key) = match args.key.select(&mut store)? {
         Some(key) => (None, key),
         None => {
@@ -151,6 +151,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     };
     check_file_names(&home)?;
     let resolved = resolve(&home, &key)?;
+    let machine = load_machine(&home)?;
 
     // The files read, machine first (`host.toml`); the owner's exists (resolve refused otherwise).
     let mut files = vec![machine_path(&home), owner_path(&home, key.owner())];
@@ -182,6 +183,8 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "role": role,
         "files": files,
         "policy": policy,
+        "machine": {"name": config.machine.as_str(), "mcp": {"source": machine.source.to_string(), "servers": machine.servers}},
+        "markdown": machine_markdown(config.machine.as_str(), &machine),
     });
     if !resolved.warnings.is_empty() {
         out["warnings"] = json!(resolved.warnings);
@@ -231,4 +234,19 @@ fn typed_keys(domain: Domain, resolved: &super::Resolved, source: &DomainSource)
         keys.insert(name.to_owned(), json!({"value": value, "source": source}));
     }
     Value::Object(keys)
+}
+
+/// The `## Machine <name>` section: each server's name, `url` and `exposure`.
+fn machine_markdown(name: &str, machine: &Machine) -> String {
+    let mut md = format!("## Machine {name}\n\n");
+    if machine.servers.is_empty() {
+        md.push_str("No MCP servers.\n");
+    }
+    for (server, entry) in &machine.servers {
+        let exposure = entry.exposure.map_or(String::new(), |e| {
+            format!(", exposure {}", serde_json::to_value(e).ok().and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default())
+        });
+        md.push_str(&format!("- {server}: {}{exposure}\n", entry.url));
+    }
+    md
 }

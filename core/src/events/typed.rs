@@ -366,6 +366,10 @@ impl NewEvent {
         make(Kind::SessionRetiered, text, json!({"from": from, "to": to}))
     }
 
+    pub fn mcp_attached(text: impl Into<String>, name: &str, server: impl Serialize) -> NewEvent {
+        make(Kind::McpAttached, text, json!({"name": name, "server": server}))
+    }
+
     pub fn session_asleep(text: impl Into<String>) -> NewEvent {
         make(Kind::SessionAsleep, text, json!({}))
     }
@@ -568,6 +572,7 @@ mod tests {
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
+            Kind::McpAttached => vec![NewEvent::mcp_attached(T, s, json!({}))],
             Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
             Kind::SessionResumed => vec![NewEvent::session_resumed(T)],
             Kind::PlanDeleted => vec![NewEvent::plan_deleted(T, &Counts::default())],

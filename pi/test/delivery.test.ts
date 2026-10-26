@@ -179,6 +179,7 @@ test("Worker: attempt-nudge for itself is a message with data.prompt and a turn;
   for (const kind of KINDS) {
     if (kind === "attempt-nudge") f.emit(event(id++, kind, { session: OTHER }), event(id++, kind, { session: ID }));
     else if (kind === "session-renamed") f.emit(event(id++, kind, { session: ID }));
+    else if (kind === "mcp-attached") f.emit(event(id++, kind, { session: OTHER, data: { name: "slack", server: { url: "https://mcp.slack.com/mcp" } } }));
     else f.emit(event(id++, kind));
   }
   await waitFor("the nudge", () => f.pi.delivered().length === 1);

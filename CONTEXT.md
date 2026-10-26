@@ -253,7 +253,7 @@ _Avoid_: principle, convention, philosophy, rule
 ## Policies
 
 **Policy** (changed, hs-d9, hs-d12):
-How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's machine, owner and repo files under `$CPD_HOME/policy/` (contract §8.3). The machine file is optional and per-machine, never per owner or repo. Its `[mcp]` table, read only from the machine file, lists the MCP servers the machine may use (hs-d263, pro-d1; below). cpd reads nothing from a repo's tree. `cpd policy show` prints one. A Policy specialises the Axioms and never contradicts one.
 _Avoid_: rules, settings, profile, config
 
 **Domain** (new, hs-d288):
@@ -275,6 +275,18 @@ _Avoid_: visibility, permission
 **Policy key** (new, hs-d288):
 What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
 _Avoid_: scope, selector, context
+
+**Machine policy** (changed, pro-d1):
+The machine Scope's file, `$CPD_HOME/policy/host.toml` (contract §8.3), which dotfiles render per machine: its `[model]` table first, then the machine's `cpd.policy` text (its `[mcp.servers.*]`). Besides Domains it may hold an `[mcp]` table, the MCP servers the machine may use, which only a machine file may have; `[mcp]` is not a Domain and takes no part in a Policy key.
+_Avoid_: machine config
+
+**MCP server** (new, pro-d1):
+A remote server cpd may attach to a Session; listed in a Machine policy. Its tools reach a Session only through an explicit attach, which another Job documents. cpd holds no credential: pi's own OAuth store does.
+_Avoid_: tool server, plugin
+
+**Attach** (new, pro-d2, pro-d8):
+Giving an MCP server to a Session: one explicit `cpd mcp attach <name>` (commands §24.1), for that Session only, not saved and never by default.
+_Avoid_: enable, load, install
 
 **Resolved policy** (changed, hs-d9, hs-d12):
 The Policy of one Policy key: every Domain's value with its source (`default`, `machine:<path>`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
