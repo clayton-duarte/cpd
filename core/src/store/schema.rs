@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "0c952b1ddce472da4b9925d2349eec6ed1cdbb0a9bf3f6b5b56177d56c5988da";
+pub const SCHEMA_HASH: &str = "93563a209ff6778bf16f5127955a6d5ca8dcf55ce913158bdb8f05f1ed868683";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.

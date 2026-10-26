@@ -175,7 +175,7 @@ impl From<&Item> for Condition {
 }
 
 const COLUMNS: &str = "id, kind, urgency, subject, label, url, context, plan, job, session, record, event,
-                       opened_at, closed_at, snoozed_until, dismissed_at";
+                       opened_at, closed_at, snoozed_until, dismissed_at, claimed_at";
 
 /// A stored value that does not parse: the database was written outside cpd.
 fn corrupt(id: i64, column: &str, value: &str) -> CpdError {
@@ -215,7 +215,7 @@ impl Item {
             closed_at: row.get(13)?,
             snoozed_until: row.get(14)?,
             dismissed_at: row.get(15)?,
-            claimed_at: None,
+            claimed_at: row.get(16)?,
         })
     }
 }
@@ -238,7 +238,7 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<Item>, CpdError> {
 /// Which items [`list`] returns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
-    /// Open and not hidden at `now` (not dismissed, not snoozed past `now`).
+    /// Open and not hidden at `now` (not dismissed, not claimed, not snoozed past `now`).
     Visible { now: String },
     /// Every open item, hidden ones too.
     Open,
@@ -284,7 +284,7 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
         State::Visible { now } => items(
             conn,
             &format!(
-                "{select} closed_at IS NULL AND dismissed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?2)
+                "{select} closed_at IS NULL AND dismissed_at IS NULL AND claimed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until <= ?2)
                  ORDER BY {rank}"
             ),
             params![context, now],
