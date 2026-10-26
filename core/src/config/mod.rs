@@ -7,8 +7,12 @@
 mod cache;
 pub mod catalog;
 mod file;
+mod migrate;
 mod repo;
 mod tier;
+
+#[cfg(test)]
+mod migrate_tests;
 
 #[cfg(test)]
 mod runner_tests;

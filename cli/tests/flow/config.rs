@@ -1110,3 +1110,74 @@ fn context_curation_min_records_defaults_to_25_and_refuses_below_1_and_non_integ
     }
 }
 
+
+// ---------------------------------------------------------------- config --migrate
+
+/// The stale config of contract §8.1 "Config migrations": H2 for the distiller and the
+/// removed `test_concurrency` key.
+const STALE_CONFIG: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H2\"  # stale\ntest_concurrency = 2\nconcurrency = 5\n";
+
+/// `STALE_CONFIG` after the two migrations.
+const MIGRATED_CONFIG: &str = "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"  # stale\nconcurrency = 5\n";
+
+/// commands.md §14.2: `config --migrate` rewrites a stale config to the valid form, reports
+/// the path and the applied names, and leaves the file equal to the migrated text.
+#[test]
+fn config_migrate_rewrites_a_stale_config_and_reports_it() {
+    let fx = Fx::new();
+    let path = fx.env.cpd_home().join("config.toml");
+    fx.env.write_config(STALE_CONFIG);
+
+    let run = fx.cpd(&["config", "--migrate"]);
+    let out = run.ok();
+    assert_eq!(out["path"], path.to_str().unwrap(), "{out}");
+    assert_eq!(out["migrated"], json!(["distill-tier-gx", "drop-test-concurrency"]), "{out}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), MIGRATED_CONFIG);
+}
+
+/// A second run changes nothing: it reports `migrated: []` and the file's bytes and mtime are
+/// unchanged.
+#[test]
+fn config_migrate_again_writes_nothing() {
+    let fx = Fx::new();
+    let path = fx.env.cpd_home().join("config.toml");
+    fx.env.write_config(STALE_CONFIG);
+    let _ = fx.cpd(&["config", "--migrate"]).ok();
+
+    let before = fs::read(&path).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+    let run = fx.cpd(&["config", "--migrate"]);
+    let out = run.ok();
+    assert_eq!(out["migrated"], json!([]), "{out}");
+    assert_eq!(fs::read(&path).unwrap(), before, "the file was rewritten");
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified, "the file was written again");
+}
+
+/// A config that is still invalid after the migrations is refused and the file is untouched:
+/// it keeps the stale value and the unknown key.
+#[test]
+fn config_migrate_refuses_an_invalid_config_and_writes_nothing() {
+    let fx = Fx::new();
+    let path = fx.env.cpd_home().join("config.toml");
+    let stale = format!("{STALE_CONFIG}unknown_key = 1\n");
+    fx.env.write_config(&stale);
+
+    let run = fx.cpd(&["config", "--migrate"]);
+    let err = run.error();
+    assert_eq!(err["code"], "config_invalid", "{err}");
+    assert_eq!(err["details"]["key"], "unknown_key", "{err}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), stale, "the file was written");
+}
+
+/// A missing file is `config_missing`, with the config path in `details`.
+#[test]
+fn config_migrate_on_a_missing_file_is_config_missing() {
+    let fx = Fx::new();
+    let path = fx.env.cpd_home().join("config.toml");
+
+    let run = fx.cpd(&["config", "--migrate"]);
+    let err = run.error();
+    assert_eq!(err["code"], "config_missing", "{err}");
+    assert_eq!(err["details"]["path"], path.to_str().unwrap(), "{err}");
+}
