@@ -35,6 +35,7 @@ Evidence labels, as in the research notes: **verified** means run on the homeser
 - **One engine per machine** (D5): one `cpd watch` schedules every Plan under one concurrency limit.
 - **A Plan is one deliverable over one or more PRs** (R34): each PR is the Plan's part in one repo, with its own base, Lead Branch, Lead worktree, Gate and GitHub pull request; one repo may hold several PRs of one Plan. A Plan of one PR behaves exactly as a Plan did before R34.
 - **Kept from cpd 1:** the vocabulary (Job, Spec, Dependency, Attempt, Escalation, Tier, Gate, Lead Branch, Merged, Locked); the roles User, Manager (Plan manager B3, §3.1), Lead and Worker (cpd 1's Reviewer is removed by R19, §10); Workers write all the code; the Lead never writes code.
+- **The mark** (hs-d694). cpd is written **φ**, as pi is written **π**; the mark and its logo font are specified once in [`mark.md`](mark.md). The word `cpd` itself is never changed.
 
 ### 1.2 Output: one JSON value (D1)
 
