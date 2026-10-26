@@ -13,7 +13,7 @@ const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const TERM = "\u{F0B2A}";
-const PILL = `\x1b[35m${CAP_L}\x1b[7mcpd\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
+const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[3mcpd\x1b[23m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
 const GREY = (s: string): string => `\x1b[90m${s}\x1b[39m`;
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 

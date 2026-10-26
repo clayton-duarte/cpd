@@ -30,7 +30,7 @@ const render = (text: string, expanded = false): string[] => {
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   return (rendering.render(m, { expanded, outputPad: 1 }, theme) as Component).render(200);
 };
-const PILL = `\x1b[35m${CAP_L}\x1b[7mcpd\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
+const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[3mcpd\x1b[23m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
 // the pill holds only `cpd`; the first sentence follows it outside, text 7
 const pill = (sentence: string): string => `${PILL} \x1b[37m${sentence}\x1b[39m`;
 

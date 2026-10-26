@@ -47,6 +47,8 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[90m/g, "<c8>")
     .replace(/\x1b\[35m/g, "<c5>")
         .replace(/\x1b\[37m/g, "<t7>")
+    .replace(/\x1b\[3m/g, "<i>")
+    .replace(/\x1b\[23m/g, "</i>")
     .replace(/\x1b\[7m/g, "<inv>")
     .replace(/\x1b\[27m/g, "</inv>")
     .replace(/\x1b\[1m/g, "<b>")
@@ -69,7 +71,7 @@ const first = (summary: string): string => {
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv><i>cpd</i></inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
 const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
 const TERM = `<c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => `<c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
@@ -375,5 +377,18 @@ test("the title row is ╭─, the title as a pill between U+E0B6 and U+E0B4, no
     assert.equal(lines[0], HEAD("Job api-1 merged."));
     assert.equal(plain(lines)[0], PLAIN_HEAD("Job api-1 merged."));
     assert.ok(!lines.join("\n").includes(DOT), "no dot glyph");
+  }
+});
+
+test("the cpd pill's text is italic and its caps are not, in every cpd message type", () => {
+  const PILL = `\x1b[35m${CAP_L}\x1b[7m\x1b[3mcpd\x1b[23m\x1b[27m\x1b[35m${CAP_R}\x1b[39m`;
+  const raw = (m: RenderedMessage): string => (rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component).render(WIDTH)[0]!;
+  const make = (customType: string): RenderedMessage =>
+    timed({ role: "custom", customType, content: "line one\nline two", display: true, details: { text: "Hello.", review: "r1", approved: true, summary: "Hello." } }) as unknown as RenderedMessage;
+  assert.deepEqual([...RENDERED_TYPES].sort(), ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
+  for (const type of RENDERED_TYPES) {
+    const row = raw(make(type));
+    assert.ok(row.includes(PILL), `${type}: ${JSON.stringify(row)}`);
+    assert.equal(row.split("\x1b[3m").length - 1, 1, `${type}: one italic span, only the text`);
   }
 });
