@@ -448,6 +448,11 @@ impl FakeSpawn {
         self.table().cmdlines.insert(pid, line.to_owned());
     }
 
+    /// What `ppid(pid)` returns: `parent`, for a pid a `Launch` started (`add_process` names its parent itself).
+    pub fn set_parent(&self, pid: Pid, parent: Pid) {
+        self.table().parents.insert(pid, parent);
+    }
+
     /// A running process that no `Launch` started: a child of `parent` (a pid the test names, a pane's) whose `cmdline` is `line`.
     /// It counts in `descendants(parent)` until it exits (`exit`, or a signal).
     pub fn add_process(&self, parent: Pid, line: &str) -> Pid {
@@ -517,8 +522,8 @@ impl Spawn for FakeSpawn {
         pids
     }
 
-    fn ppid(&self, _p: Pid) -> Option<Pid> {
-        None
+    fn ppid(&self, p: Pid) -> Option<Pid> {
+        self.table().parents.get(&p).copied()
     }
 
     fn descendants(&self, root: Pid) -> Vec<Pid> {

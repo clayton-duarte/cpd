@@ -145,8 +145,8 @@ fn a_review_job_needs_every_existing_job_of_its_pr_that_is_not_cancelled() {
     let shown = fx.fx.cpd(&["plan", "show", "--plan", PLAN]).ok()["jobs"].clone();
     let flag = |k: &str| shown.as_array().unwrap().iter().find(|j| j["key"] == k).unwrap()["review"].clone();
     assert_eq!((flag("final"), flag("api")), (json!(true), json!(false)));
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
+    assert_eq!(fx.value::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
+    assert_eq!(fx.value::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
     let events = fx.fx.cpd(&["events", "list", "--kind", "job-added", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
     let added = events.iter().find(|e| e["job"] == "final").expect("job-added");
     assert_eq!(added["data"]["review"], true);
@@ -168,12 +168,12 @@ fn a_job_added_later_does_not_become_a_dependency_of_the_review_job() {
 fn a_review_add_is_idempotent_until_another_job_is_added() {
     let fx = fx();
     add(&fx, "final", &["--review"]).ok();
-    let before: i64 = fx.query("SELECT count(*) FROM txns");
+    let before: i64 = fx.value("SELECT count(*) FROM txns");
 
     let again = add(&fx, "final", &["--review"]).ok();
 
     assert_eq!(again["already"], true);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
+    assert_eq!(fx.value::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
     add(&fx, "fix", &[]).ok();
     refused(&add(&fx, "final", &["--review"]), "job_key_exists", 3);
     // The same key without --review is another Job.
@@ -189,7 +189,7 @@ fn a_review_job_takes_no_needs_and_refuses_a_failed_job_of_its_pr() {
     insert_job(&fx, "broken", "failed");
     let error = refused(&add(&fx, "final", &["--review"]), "needs_unavailable", 3);
     assert_eq!(error["details"]["jobs"], json!(["broken"]));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
+    assert_eq!(fx.value::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
 }
 
 // ---------- the Worker ----------
@@ -201,7 +201,7 @@ fn the_worker_is_a_fork_of_the_lead_that_commits_nothing_and_the_merge_leaves_th
     add(&fx, "final", &["--review"]).ok();
 
     let mut submitted = None;
-    let (id, _) = fx.drive("final", |live, id, nap| {
+    let (id, _) = fx.drive_parallel("final", |live, id, nap| {
         if nap == 1 {
             submitted = Some(reviewer(live, id));
         }
@@ -252,7 +252,7 @@ fn the_worker_is_a_fork_of_the_lead_that_commits_nothing_and_the_merge_leaves_th
     let findings = fx.fx.env.cpd_home().join("run/pay/reviews/final.md");
     assert!(spec.starts_with("# Worker Spec: final, Attempt 1\n"), "{spec}");
     assert!(spec.contains("**review Job**") && spec.contains("commit nothing"), "{spec}");
-    assert!(spec.contains("git diff main...cpd/pay"), "{spec}");
+    assert!(spec.contains("git diff main...cpd/pay/repo"), "{spec}");
     assert!(spec.contains(findings.to_str().unwrap()), "{spec}");
     assert!(spec.contains("`review_commits`") && spec.contains("`review_missing`"), "{spec}");
     assert!(!spec.contains("no_commits") && !spec.contains("quick check"), "{spec}");
@@ -313,7 +313,7 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
             // Still waiting: `starting`, no Worker, no Session, nothing forked.
             assert_eq!(live.attempt(id)["status"], "starting");
             assert!(pi_calls(live).is_empty());
-            assert_eq!(live.query::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
+            assert_eq!(live.value::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
         }
         if nap == 5 {
             fixture(&live.fx.env, "UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");

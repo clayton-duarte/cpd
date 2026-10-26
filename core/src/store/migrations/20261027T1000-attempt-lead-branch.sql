@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 49
+-- cpd-migration: breaking after 50
 -- A linear Attempt runs on its PR's Lead Branch (contract §7.1/§7.2, hs-d680/hs-d682/hs-d683): its
 -- `attempts.branch` is the PR's `lead_branch` (`cpd/<plan>/<key>`) and its `worktree` the PR's Lead
 -- worktree, not the parallel `cpd/<plan>--<attempt>` form. `ALTER TABLE` cannot change a CHECK, so
