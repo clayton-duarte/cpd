@@ -4,7 +4,7 @@ import { ev, Fixture, ID, OTHER, sessionShow, stateCalls, waitFor } from "./fake
 
 /** commands.md §15.15 (hs-d552, hs-d571): the adapter's loop guard counts self-started turns, trips, gates, reports blocked, resumes and survives a reload. */
 
-const LABEL = "blocked:cpd: loop guard";
+const LABEL = "blocked:φ: loop guard";
 const WINDOW_MS = 600_000;
 const TURN = { ok: true, session: ID, taken: [] };
 let nextId = 200;
@@ -139,14 +139,14 @@ test("loop guard: a worker is never counted", async (t) => {
   await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
 });
 
-test("loop guard: a tripped breaker reports blocked with the label cpd: loop guard", async (t) => {
+test("loop guard: a tripped breaker reports blocked with the label φ: loop guard", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await start(f);
   await selfTurn(f, 21);
   await waitFor("the blocked state", () => stateCalls(f).includes(LABEL));
   assert.equal(stateCalls(f).at(-1), LABEL);
-  assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "blocked", "--label", "cpd: loop guard", "--session", ID]);
+  assert.deepEqual(f.argvs().filter((a) => a[1] === "state").at(-1), ["session", "state", "blocked", "--label", "φ: loop guard", "--session", ID]);
 });
 
 test("loop guard: a message that would start a turn is sent with triggerTurn false and nextTurn while tripped", async (t) => {
@@ -263,5 +263,5 @@ test("loop guard: session show without loop_guard_turns is bad_output", async (t
   f.load({ now: () => clock.now });
   await f.pi.fire("session_start");
   const [m] = await waitFor("the error", () => (f.pi.errors().length ? f.pi.errors() : undefined));
-  assert.match(m!.message.content, /^cpd adapter: session show: bad_output: /);
+  assert.match(m!.message.content, /^φ adapter: session show: bad_output: /);
 });

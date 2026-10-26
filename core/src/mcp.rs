@@ -46,7 +46,7 @@ fn attach(args: AttachArgs) -> Result<Output, CpdError> {
         .ok_or_else(|| CpdError::new(ErrorCode::SessionRequired, "No Session selected: pass --session <id>, or set CPD_SESSION."))?;
     let mut env = Env::open()?;
     let session = env.store.read(|conn| crate::session::resolve(conn, &reference))?;
-    let machine = load_machine(&env.home, &env.config.host)?;
+    let machine = load_machine(&env.home)?;
     let Some(server) = machine.servers.get(&name) else {
         let available: Vec<&str> = machine.servers.keys().map(String::as_str).collect();
         let listed = if available.is_empty() { "none".to_owned() } else { available.join(", ") };

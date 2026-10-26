@@ -8,7 +8,8 @@ use cpd_core::config::Tier;
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, EscalationId, PlanId};
-use cpd_core::spec::{self, Answer, Cause, Input, JobKind, Previous};
+use cpd_core::attempt::ledger::{Cause, Stored};
+use cpd_core::spec::{self, Answer, Evidence, Input, JobKind, Previous};
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -96,9 +97,10 @@ fn later() -> String {
         Previous {
             number: 1,
             tier: Tier::parse("S2").unwrap(),
-            cause: Cause::MergeConflict { files: strings(&["src/schema.rs", "Cargo.lock"]) },
+            cause: Stored::Failed(Cause::MergeConflict),
+            evidence: Evidence::Files(strings(&["src/schema.rs", "Cargo.lock"])),
         },
-        Previous { number: 2, tier: Tier::parse("S3").unwrap(), cause: Cause::Crashed },
+        Previous { number: 2, tier: Tier::parse("S3").unwrap(), cause: Stored::Failed(Cause::Crashed), evidence: Evidence::None },
     ];
     let answers = [Answer {
         id: EscalationId::parse("api-schema-a1-q1").unwrap(),
@@ -143,17 +145,19 @@ fn every_cause_has_its_outcome_and_a_sentence() {
         ("cas_lost", "failed", "The Lead Branch kept moving, so the merge could not be completed."),
         ("dirty_target", "failed", "The Lead worktree was not clean when the merge ran."),
         ("tampered", "failed", "Its diff touched a protected path."),
+        ("gate_failed", "failed", "The Gate failed at its merge."),
+        ("gate_error", "failed", "The Gate could not be judged at its merge: it was killed, timed out or could not run, which is a problem of the Gate, not a failing check of your work."),
     ];
     let (plan, attempt, lists) = (plan(), attempt("api-schema-a2"), lists());
     for (cause, outcome, sentence) in cases {
-        let cause = Cause::parse(cause, vec![]).unwrap();
+        let cause = spec::parse_cause(cause).unwrap();
         assert_eq!(cause.outcome(), outcome);
-        let previous = [Previous { number: 1, tier: Tier::parse("S2").unwrap(), cause: cause.clone() }];
+        let previous = [Previous { number: 1, tier: Tier::parse("S2").unwrap(), cause, evidence: Evidence::None }];
         let text = spec::render(&Input { previous: &previous, ..first_input(&plan, &attempt, &lists) }).unwrap();
         let expected = format!("- Outcome: {outcome}\n- Cause: {}\n- {sentence}\n", cause.as_str());
         assert!(text.contains(&expected), "{text}");
     }
-    assert_eq!(Cause::parse("review_rejected", vec![]).unwrap_err().code(), ErrorCode::StoreFailed);
+    assert_eq!(spec::parse_cause("review_rejected").unwrap_err().code(), ErrorCode::StoreFailed);
 }
 
 #[test]

@@ -144,10 +144,11 @@ fn fx_bare(config_extra: &str) -> Fx {
     }
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let lead = create_lead_worktree(&repo, &PlanId::parse(PLAN).unwrap(), "main", &setup).unwrap().path;
+    env.write_models();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\n{config_extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
+            "version = 1\nmachine = \"m1\"\n{config_extra}\n\
              [watch]\ntick_seconds = {TICK_SECONDS}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
@@ -828,7 +829,11 @@ fn a_restart_sends_no_downtime_notice() {
     let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped' ORDER BY id LIMIT 1");
     fx.watch_first_tick().unwrap();
     // The record is the Event's text, not a message (hs-d514: the Managers are not told of a restart).
-    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {stopped_at}")), "{:?}", fx.texts("watch-started"));
+    // The field stays UTC; the sentence says the time in the engine's zone, which the harness pins (`TZ`, `TestEnv::isolation`) to
+    // the rule of `ManualClock`'s zone.
+    let at = time::OffsetDateTime::parse(&stopped_at, &time::format_description::well_known::Rfc3339).unwrap();
+    let local = cpd_core::clock::prose(at, &cpd_core::clock::ManualClock::new().zone());
+    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {local}")), "{local} {:?}", fx.texts("watch-started"));
     assert_eq!(fx.messages(), [], "no Manager is sent the downtime");
 }
 
@@ -2366,23 +2371,31 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = polling("");
-    // The first poll leaves 50 requests until `reset_at`, a minute from now; the next one, which E5 must not run before that (it
-    // polls every tick otherwise), 4987. The engine reads the reset against the wall clock and waits it out on the `ManualClock`.
-    let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+    // The first poll leaves 50 requests until `reset_at`, a minute from then; the next one, which E5 must not run before that (it
+    // polls every tick otherwise), 4987. Both the stamp and the engine's wait are the `ManualClock`'s, so the real handover
+    // between the first poll answering and the guard reading the reset does not shorten the wait (a flake under load).
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
-    let (clock, noted, low) = (fx.fakes.clock.clone(), starts.clone(), search_reply(50, &reset_at));
+    let reset = Arc::new(Mutex::new(None::<String>));
+    let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
     fx.route_fn("gh", move |_| {
         let mut noted = noted.lock().unwrap();
         noted.push(clock.elapsed());
-        Reply::ok(&if noted.len() == 1 { low.clone() } else { search_reply(4987, "2099-01-01T00:00:00Z") })
+        if noted.len() == 1 {
+            let reset_at = (clock.utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+            *stamped.lock().unwrap() = Some(reset_at.clone());
+            Reply::ok(&search_reply(50, &reset_at))
+        } else {
+            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+        }
     });
 
     let seen = starts.clone();
     fx.watch_steps(move |_| seen.lock().unwrap().len() >= 2).unwrap();
 
-    // The second poll started when the reset came (a minute, less what the test took to get here): the ticks in between ran no poll.
+    // The second poll started when the reset came (a minute, less the handover to the engine): the ticks in between ran no poll.
     let starts = starts.lock().unwrap();
     assert_eq!(starts.len(), 2, "{starts:?}");
+    let reset_at = reset.lock().unwrap().clone().expect("the first poll answered a reset");
     assert!(starts[1] - starts[0] >= Duration::from_secs(55), "polled {:?} after the first, before the reset ({reset_at})", starts[1] - starts[0]);
     // One Event, for the machine, with what the User needs; resuming raised nothing more.
     let errors = fx.events("error");
@@ -2994,7 +3007,8 @@ impl InstallRig {
         let at = |path: PathBuf, args: &'static [&'static str]| move |c: &Call| Path::new(&c.program) == path && (args.is_empty() || c.args == args);
         let _ = (*fx.fakes.runner)
             .clone()
-            .on("cpd", at(built, &["--version"]), Reply::ok(&version))
+            .on("cpd", at(built.clone(), &["--version"]), Reply::ok(&version))
+            .on("cpd", at(built, &["config", "--migrate"]), Reply::ok(r#"{"ok":true,"migrated":[]}"#))
             .on("cpd", at(installed.clone(), &["config"]), Reply::ok(&config))
             .on("cpd", at(installed, &["watch", "--check"]), Reply::ok(r#"{"ok":true}"#))
             .on("tag-version.sh", at(tag, &[]), Reply::ok(""));
@@ -3015,6 +3029,14 @@ impl InstallRig {
         let exit = cpd_core::install::run(&self.fx.fakes.ports, &self.install, &mut stderr);
         self.fx.git_route.assert_supported();
         Installed { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
+    }
+
+    /// Runs `cpd install --root <checkout>` through the command tree, in process on the `Fx`'s ports: the CLI's own
+    /// wiring of the install, unlike [`InstallRig::run`], which calls `cpd_core::install::run` directly.
+    fn cli(&self) -> Run {
+        let root = self.install.root.to_str().expect("the checkout path is UTF-8");
+        let target = self.install.target_dir.to_str().expect("the target dir path is UTF-8");
+        self.fx.cpd_with(self.install.root.as_path(), &["install", "--root", root], &[("CARGO_TARGET_DIR", target)])
     }
 
     /// [`InstallRig::run`] of an install that must succeed: its stderr.
@@ -3046,7 +3068,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let stderr = rig.run_ok();
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(rig.calls(), [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
+    assert_eq!(rig.calls(), [vec!["--version"], vec!["config", "--migrate"], vec!["config"], vec!["watch", "--check"]]);
 }
 
 #[test]
@@ -3078,6 +3100,40 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert_eq!(out.exit, 0, "{store}: {}", out.stderr);
         assert!(rig.fx.env.home().join(".local/bin/cpd").exists());
     }
+}
+
+#[test]
+fn install_cli_installs_the_binary_and_the_adapter_into_a_temporary_home() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let rig = InstallRig::new(OPENS);
+
+    let run = rig.cli();
+
+    let json = run.ok();
+    assert!(!json["binary"].as_str().expect("binary is a string").is_empty(), "{json}");
+    assert!(!json["adapter"].as_str().expect("adapter is a string").is_empty(), "{json}");
+    assert!(!json["version"].as_str().expect("version is a string").is_empty(), "{json}");
+
+    // The binary is the built one, at <HOME>/.local/bin/cpd, mode 755.
+    let built = rig.install.target_dir.join("release/cpd");
+    let bin = rig.install.home.join(".local/bin/cpd");
+    assert!(bin.is_file(), "{} is not a file", bin.display());
+    assert_eq!(fs::read(&bin).unwrap(), fs::read(&built).unwrap(), "the installed binary is not the built one");
+    assert_eq!(fs::metadata(&bin).unwrap().permissions().mode() & 0o777, 0o755, "the binary is not mode 755");
+
+    // The adapter is <HOME>/.local/share/cpd/pi -> pi.<id>, the checkout's pi/ minus test/.
+    let adapter = rig.share().join("pi");
+    assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is not a symlink");
+    let target = fs::read_link(&adapter).unwrap().to_string_lossy().into_owned();
+    assert!(target.starts_with("pi.") && !target.contains('/'), "the target `{target}` is not a relative pi.<id>");
+    let expected: Vec<String> = tree(&rig.install.root.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert_eq!(tree(&adapter), expected);
+
+    // The follow-ups ran on the installed binary.
+    let calls = rig.calls();
+    assert!(calls.contains(&vec!["config".to_string()]), "no config follow-up: {calls:?}");
+    assert!(calls.contains(&vec!["watch".to_string(), "--check".to_string()]), "no watch --check follow-up: {calls:?}");
 }
 
 // ---------- the adapter swap of `cpd install` (pi-ci-W9) ----------

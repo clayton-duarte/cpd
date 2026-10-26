@@ -77,7 +77,7 @@ pub(super) fn report(args: ReportArgs) -> Result<Output, CpdError> {
         details.insert("what".into(), json!(what.0));
         details.insert("session".into(), json!(session.id));
         details.insert("plan".into(), json!(session.plan));
-        let text = format!("cpd adapter: {}: {}: {}", what.0, code.0, message.0);
+        let text = format!("φ adapter: {}: {}: {}", what.0, code.0, message.0);
         let event = NewEvent::error(text, "adapter", &code.0, &message.0, Value::Object(details)).context(session.context.clone());
         append(tx, event)
     })?;

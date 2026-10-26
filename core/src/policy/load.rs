@@ -48,7 +48,7 @@ fn parse_scope_of(file: &Path, text: &str, kind: Option<ScopeKind>) -> Result<Sc
         Err(e) => {
             let path = bad_key::<Scope>(&table);
             let why = if path.first().is_some_and(|k| k == "mcp") {
-                "`mcp` is set in a machine file (policy/machines/<host>.toml), not in an owner or repo file".to_owned()
+                "`mcp` is set in a machine file (policy/host.toml), not in an owner or repo file".to_owned()
             } else {
                 e.message().to_owned()
             };

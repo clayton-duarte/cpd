@@ -741,7 +741,7 @@ export class FakePi implements PiApi {
     const out: unknown[] = [];
     for (const h of this.handlers.get(event) ?? []) {
       const result = await h({ type: event, ...payload }, this.ctx());
-      if (h.name !== "markReply" && h.name !== "policyHandler" && h.name !== "loopGuardHandler") out.push(result);
+      if (h.name !== "markReply" && h.name !== "policyHandler" && h.name !== "timeZoneHandler" && h.name !== "loopGuardHandler") out.push(result);
     }
     return out;
   }

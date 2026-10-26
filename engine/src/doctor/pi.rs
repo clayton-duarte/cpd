@@ -8,20 +8,29 @@ use serde_json::{Value, json};
 use super::deadline;
 use super::check::{Check, Severity};
 use cpd_core::config::catalog::read as read_catalog;
+use cpd_core::policy::model::Models;
 use cpd_core::config::{Config, locate_pi};
 use cpd_core::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
 
-/// Each `tiers.*` model is in pi's catalog and `lead_tier` is valid for its model.
+/// Each model of the machine layer's `[model]` (over cpd's default) is in pi's catalog and `lead_tier` is valid for its model.
 ///
 /// The catalog is asked of pi each time, never read from the cache, so the check
 /// proves pi answers and doctor writes nothing.
 pub fn tiers(config: &Config) -> Check {
+    let home = match cpd_core::home::CpdHome::from_env() {
+        Ok(home) => home,
+        Err(e) => return Check::from_error("tiers", Severity::Error, &e),
+    };
+    let models = match cpd_core::policy::resolve_machine(&home) {
+        Ok(resolved) => Models::of(&resolved.policy),
+        Err(e) => return Check::from_error("tiers", Severity::Error, &e),
+    };
     let name = "tiers";
     let pi = match locate_pi() {
         Ok(pi) => pi,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    let catalog = match read_catalog(&pi, config, deadline()) {
+    let catalog = match read_catalog(&pi, &models, deadline()) {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };

@@ -258,6 +258,50 @@ fn every_additive_migration_is_additive_on_its_prefix() {
     }
 }
 
+/// O3: a breaking migration's `breaking after n` is checked against the names
+/// that sort before it. A migration already on `origin/main` has a historical
+/// header: it may keep a stale `n` (one no larger than the count), but a
+/// migration the PR adds must count the names before it exactly. `on_main`
+/// answers whether a name is in `origin/main`.
+fn check_breaking_headers(
+    list: &[(&str, &str, &str)],
+    legacy: usize,
+    on_main: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    for (index, (name, compat, sql)) in list.iter().enumerate() {
+        match declaration(sql).map_err(|why| format!("{name}: {why}"))? {
+            None => {
+                if *compat != "additive" {
+                    return Err(format!("{name}: the list says {compat}, the header says additive"));
+                }
+            }
+            Some(n) => {
+                if *compat != "breaking" {
+                    return Err(format!("{name}: the list says {compat}, the header says breaking"));
+                }
+                let expected = legacy + index;
+                if on_main(name) {
+                    if n > expected {
+                        return Err(format!(
+                            "{name} says `breaking after {n}` but only {expected} migrations sort before it. \
+                             A migration already on main has a historical header and is never renamed; it may \
+                             not claim more names than exist (O3)."
+                        ));
+                    }
+                } else if n != expected {
+                    return Err(format!(
+                        "{name} says `breaking after {n}` but {expected} migrations sort before it. A migration \
+                         the PR adds may be renumbered to a newer timestamp before it lands \
+                         (scripts/new-migration.sh); re-check its rebuild against what landed, and write the new \
+                         count (O3)."
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn every_breaking_migration_counts_the_names_before_it_and_the_headers_match_the_list() {
     let list = named_migrations();
@@ -272,22 +316,27 @@ fn every_breaking_migration_counts_the_names_before_it_and_the_headers_match_the
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|f| f.ends_with(".sql") && f.split_once('-').is_some_and(|(n, _)| n.len() == 4 && n.bytes().all(|c| c.is_ascii_digit())))
         .count();
-    for (index, (name, compat, sql)) in list.iter().enumerate() {
-        match declaration(sql).unwrap_or_else(|why| panic!("{name}: {why}")) {
-            None => assert_eq!(*compat, "additive", "{name}: the list says {compat}, the header says additive"),
-            Some(n) => {
-                assert_eq!(*compat, "breaking", "{name}: the list says {compat}, the header says breaking");
-                assert_eq!(
-                    n,
-                    legacy + index,
-                    "{name} says `breaking after {n}` but {} migrations sort before it. A migration that landed \
-                     before it has an earlier name: rename this one to a newer timestamp (scripts/new-migration.sh, \
-                     git mv), re-check its rebuild against what landed, and write the new count (O3).",
-                    legacy + index
-                );
-            }
-        }
-    }
+    let on_main = |name: &str| {
+        Command::new("git")
+            .args(["cat-file", "-e", &format!("origin/main:core/src/store/migrations/{name}.sql")])
+            .current_dir(repo_root())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    check_breaking_headers(&list, legacy, &on_main).unwrap_or_else(|why| panic!("{why}"));
+}
+
+#[test]
+fn a_pr_added_breaking_migration_must_count_the_names_before_it() {
+    let list = [("20300101T0000-add-a", "breaking", "-- cpd-migration: breaking after 0\nSELECT 1;\n")];
+    let why = check_breaking_headers(&list, 2, &|_| false).unwrap_err();
+    assert!(why.contains("breaking after 0") && why.contains("2 migrations sort before it"), "{why}");
+}
+
+#[test]
+fn a_breaking_migration_on_main_may_keep_a_stale_count() {
+    let list = [("20261025T2300-queue-failed", "breaking", "-- cpd-migration: breaking after 2\nSELECT 1;\n")];
+    check_breaking_headers(&list, 3, &|_| true).unwrap();
 }
 
 #[test]
@@ -532,22 +581,66 @@ fn the_frozen_check_passes_on_no_change_and_on_a_new_migration() {
     clone.check().unwrap();
 }
 
-/// N5 after hs-d661: the O3 repair may rename a breaking migration to a newer name
-/// when only its header (the `after n` count) changes and its body is untouched.
-#[test]
-fn the_frozen_check_passes_on_a_breaking_renumber_with_an_unchanged_body() {
-    let clone = Clone::new();
-    let old = clone.migrations().join(MAIN_FILES[1].0);
-    let new = clone.migrations().join("20260301T0000-kind-tables.sql");
-    // The additive migration now sorts before the new name, so the count rises from 1 to 2.
-    fs::rename(&old, &new).unwrap();
-    fs::write(&new, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
-    clone.commit();
-    clone.check().unwrap();
+/// The module is named `migrations` (not `tests`) so nextest prefixes each test with the
+/// file: `migrations::<fn>` is the name the Job's acceptance lists.
+mod migrations {
+    use super::*;
+
+    /// hs-d697: a breaking migration may be restored to the name a live store applied with
+    /// its body unchanged, even when that older name sorts before its current one.
+    #[test]
+    fn the_frozen_check_passes_on_a_breaking_restore_to_an_older_name() {
+        let clone = Clone::new();
+        let old = clone.migrations().join(MAIN_FILES[1].0);
+        let new = clone.migrations().join("20251201T0000-kind-tables.sql");
+        // The body is untouched; the older name still has the one legacy migration before it.
+        fs::rename(&old, &new).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// hs-d700: when a restore shifts the count, a breaking migration's `breaking after <n>`
+    /// header may be corrected in place while every line after the first stays byte-identical.
+    #[test]
+    fn the_frozen_check_passes_on_a_header_only_correction_of_a_breaking_migration() {
+        let clone = Clone::new();
+        let file = clone.migrations().join(MAIN_FILES[1].0);
+        fs::write(&file, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// hs-d704: a breaking migration that is already on the base may not be renumbered to
+    /// a newer name, even with its body untouched; only the hs-d700 restore (back to an
+    /// older name a live store already applied) is allowed.
+    #[test]
+    fn the_frozen_check_refuses_a_renumber_of_a_migration_on_the_base() {
+        let clone = Clone::new();
+        let old = clone.migrations().join(MAIN_FILES[1].0);
+        let new = clone.migrations().join("20260301T0000-kind-tables.sql");
+        fs::rename(&old, &new).unwrap();
+        clone.commit();
+        let why = clone.check().expect_err("a base migration may not be renumbered");
+        assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{why}");
+    }
+
+    /// hs-d704: a migration the branch adds is not on the base, so renumbering it to a
+    /// newer name before it lands is not a change to a frozen file.
+    #[test]
+    fn the_frozen_check_passes_on_a_renumber_of_a_migration_the_pr_adds() {
+        let clone = Clone::new();
+        let added = clone.migrations().join("20260301T0000-added.sql");
+        fs::write(&added, "-- cpd-migration: breaking after 3\nSELECT 1;\n").unwrap();
+        clone.commit();
+        let renamed = clone.migrations().join("20260401T0000-added.sql");
+        fs::rename(&added, &renamed).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
 }
 
-/// Everything that is not that one renumber still fails: an edit, a delete, and a rename
-/// of a migration without the breaking header (legacy or additive).
+/// Everything that is not one of those allowances still fails: an edit, a delete, and a
+/// rename of a migration without the breaking header (legacy or additive).
 #[test]
 fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
     let cases: [(&str, &str, fn(&Clone)); 4] = [
@@ -571,29 +664,17 @@ fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
     }
 }
 
-/// A breaking renumber that changes a body line, or moves to an older name, is refused.
+/// A breaking rename that changes a body line is refused, however it is renamed.
 #[test]
-fn the_frozen_check_fails_on_a_rename_that_changes_the_body_or_goes_backwards() {
-    let cases: [(&str, fn(&Clone)); 2] = [
-        ("body changed", |c| {
-            let old = c.migrations().join(MAIN_FILES[1].0);
-            let new = c.migrations().join("20260301T0000-kind-tables.sql");
-            fs::rename(&old, &new).unwrap();
-            fs::write(&new, BREAKING_TEXT.replace("DROP TRIGGER jobs_status;", "DROP TRIGGER jobs_status_old;")).unwrap();
-        }),
-        ("older name", |c| {
-            let old = c.migrations().join(MAIN_FILES[1].0);
-            let new = c.migrations().join("20250101T0000-kind-tables.sql");
-            fs::rename(&old, &new).unwrap();
-        }),
-    ];
-    for (what, change) in cases {
-        let clone = Clone::new();
-        change(&clone);
-        clone.commit();
-        let why = clone.check().expect_err(what);
-        assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{what}: {why}");
-    }
+fn the_frozen_check_fails_on_a_rename_that_changes_the_body() {
+    let clone = Clone::new();
+    let old = clone.migrations().join(MAIN_FILES[1].0);
+    let new = clone.migrations().join("20260301T0000-kind-tables.sql");
+    fs::rename(&old, &new).unwrap();
+    fs::write(&new, BREAKING_TEXT.replace("DROP TRIGGER jobs_status;", "DROP TRIGGER jobs_status_old;")).unwrap();
+    clone.commit();
+    let why = clone.check().expect_err("body changed");
+    assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "body changed: {why}");
 }
 
 #[test]

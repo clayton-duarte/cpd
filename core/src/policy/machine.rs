@@ -1,5 +1,5 @@
 //! The `[mcp]` table of the machine file (contract §8.3 "MCP servers of the machine scope" and "Machine domains";
-//! commands.md §22.1 "The machine object"): `$CPD_HOME/policy/machines/<host>.toml`, `<host>` the config key `host`.
+//! commands.md §22.1 "The machine object"): `$CPD_HOME/policy/host.toml`.
 //! The file is also the machine scope (its other domains are read by the scope loader, `load.rs`); this module reads
 //! `[mcp.servers.<name>]` only.
 //!
@@ -10,8 +10,8 @@
 //!   has at least one entry and non-empty keys. Every refusal is `policy_invalid` (`policy::policy_invalid`) with
 //!   `details.file` the `file` argument and `details.key` the dotted path of the offending key (null when the file
 //!   does not parse).
-//! - [`load_machine`]: reads only `machines/<host>.toml` of the home (no file: no servers, [`MachineSource::Default`];
-//!   else [`MachineSource::File`] with its realpath). The names in `machines/` are checked by `check_file_names`.
+//! - [`load_machine`]: reads only `host.toml` of the home's `policy/` (no file: no servers, [`MachineSource::Default`];
+//!   else [`MachineSource::File`] with its realpath). The names in `policy/` are checked by `check_file_names`.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -23,8 +23,7 @@ use toml::{Table, Value};
 use super::load::{bad_key, policy_invalid};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::HostName;
-use super::resolve::machine_file;
+use super::resolve::machine_path;
 
 /// One of pi's four exposures, spelled `codemode`, `deferred`, `direct` or `hidden`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,9 +218,9 @@ pub fn parse_machine(file: &Path, text: &str) -> Result<BTreeMap<String, McpServ
     Ok(servers)
 }
 
-/// The `[mcp]` servers of the machine file of `host` in `home` (the machine scope, `policy/machines/<host>.toml`; contract §8.3).
-pub fn load_machine(home: &CpdHome, host: &HostName) -> Result<Machine, CpdError> {
-    let path = machine_file(home, host);
+/// The `[mcp]` servers of the machine file of `home` (the machine scope, `policy/host.toml`; contract §8.3).
+pub fn load_machine(home: &CpdHome) -> Result<Machine, CpdError> {
+    let path = machine_path(home);
     let none = Machine { source: MachineSource::Default, servers: BTreeMap::new() };
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,

@@ -40,7 +40,7 @@ fn report_appends_one_error_event_for_the_managers_digest() {
     assert_eq!(event["data"]["code"], "store_busy");
     assert_eq!(event["data"]["message"], "the store is busy");
     assert_eq!(event["data"]["details"], json!({"n": 3, "what": "follower", "session": "lead1", "plan": "pay"}));
-    assert_eq!(event["text"], "cpd adapter: follower: store_busy: the store is busy");
+    assert_eq!(event["text"], "φ adapter: follower: store_busy: the store is busy");
 }
 
 #[test]

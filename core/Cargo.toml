@@ -15,6 +15,7 @@ fakes = ["dep:parking_lot"]
 
 [dependencies]
 clap.workspace = true
+jiff.workspace = true
 minijinja.workspace = true
 nix.workspace = true
 # Only the fakes (feature `fakes`): a lock the same thread takes again, for a `run-shell` child that calls the fake tmux.

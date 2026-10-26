@@ -18,7 +18,7 @@ process.env.TZ = "Asia/Kolkata";
 const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const REFUSAL = "cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: 1789 characters (limit 1500)";
+const REFUSAL = "φ: ask_user_question is for a few short choices; put anything larger in plannotator; refused: 1789 characters (limit 1500)";
 const LONG = "TypeError: cannot read properties of undefined while compiling the project, see the diagnostic output above";
 const SEPARATOR = " \u00B7 ";
 let sequence = 0;
@@ -69,9 +69,9 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 		shutdown(harness);
 	}
 	const expected: Record<number, string> = {
-		60: "cpd: ask_user_question is fo\u2026",
-		80: "cpd: ask_user_question is for a few sh\u2026",
-		100: "cpd: ask_user_question is for a few short choice\u2026",
+		60: "φ: ask_user_question is for \u2026",
+		80: "φ: ask_user_question is for a few shor\u2026",
+		100: "φ: ask_user_question is for a few short choices;\u2026",
 	};
 	for (const [width, reason] of Object.entries(expected)) {
 		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
@@ -82,7 +82,7 @@ test("collapsed failed row cuts the reason below half the width", async () => {
 		const { row, harness } = await failedRow("ask_user_question", {}, REFUSAL);
 		const line = closing(row.render(80));
 		assert.ok(line.startsWith(" \u2570"), line);
-		assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 cpd: ask_user_question is for a few sh\u2026$/u);
+		assert.match(line, /^ \u2570\S+ expand \u00B7 03:11 \u00B7 Failed in [0-9.]+m?s \u00B7 φ: ask_user_question is for a few shor\u2026$/u);
 		shutdown(harness);
 	}
 	{

@@ -12,10 +12,11 @@ use minijinja::syntax::SyntaxConfig;
 use minijinja::value::Value;
 use minijinja::{Environment, UndefinedBehavior};
 
+use crate::attempt::ledger::{Cause, Stored};
 use crate::config::Tier;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::Pipeline;
-use crate::home::CpdHome;
+use crate::home::{CpdHome, Hook};
 use crate::ids::{AttemptId, EscalationId, PlanId};
 
 const TEMPLATE: &str = include_str!("worker.md");
@@ -23,88 +24,65 @@ const TEMPLATE: &str = include_str!("worker.md");
 /// What no Attempt may touch, whatever the PR's `protected.paths` say (§7.5).
 const ALWAYS_PROTECTED: [&str; 1] = [".cpd/"];
 
-/// How an earlier Attempt ended (§3.4): its cause, which fixes its outcome.
-/// Only `merge_conflict` carries what explains it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Cause {
-    Merged,
-    CancelRequested,
-    SetupFailed,
-    TimedOut,
-    Crashed,
-    NoSubmit,
-    /// The files the rebase conflicted in.
-    MergeConflict { files: Vec<String> },
-    CasLost,
-    DirtyTarget,
-    Tampered,
+/// The cause an `attempts` row holds, read for a Spec. A value outside the table's CHECK is a corrupt row: `store_failed`.
+pub fn parse_cause(cause: &str) -> Result<Stored, CpdError> {
+    Stored::parse(cause).ok_or_else(|| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Unknown Attempt cause {cause:?}.")).with("cause", cause)
+    })
 }
 
-impl Cause {
-    /// The cause as the `attempts` table spells it. `conflicts` is read only for
-    /// `merge_conflict`. An unknown cause is an error: the table's CHECK should
-    /// have kept it out.
-    pub fn parse(cause: &str, conflicts: Vec<String>) -> Result<Cause, CpdError> {
-        Ok(match cause {
-            "merged" => Cause::Merged,
-            "cancel_requested" => Cause::CancelRequested,
-            "setup_failed" => Cause::SetupFailed,
-            "timed_out" => Cause::TimedOut,
-            "crashed" => Cause::Crashed,
-            "no_submit" => Cause::NoSubmit,
-            "merge_conflict" => Cause::MergeConflict { files: conflicts },
-            "cas_lost" => Cause::CasLost,
-            "dirty_target" => Cause::DirtyTarget,
-            "tampered" => Cause::Tampered,
-            other => {
-                return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown Attempt cause {other:?}."))
-                    .with("cause", other));
+/// What explains how an earlier Attempt ended, read from its end Event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Evidence {
+    None,
+    /// `merge_conflict`: the files the rebase conflicted in.
+    Files(Vec<String>),
+    /// `gate_failed` or `gate_error`: the failed Gate's hook and log, when the detail names them.
+    Gate(Option<(Hook, PathBuf)>),
+}
+
+/// One sentence saying what happened; it ends with a colon when a list item follows (the files or the Gate's log).
+/// Exhaustive over the Ledger's causes: a cause without a sentence does not compile.
+fn explanation(cause: Stored, evidence: &Evidence) -> String {
+    let gate = match evidence {
+        Evidence::Gate(gate) => gate.as_ref(),
+        _ => None,
+    };
+    let files = match evidence {
+        Evidence::Files(files) => files.as_slice(),
+        _ => &[],
+    };
+    match cause {
+        Stored::Merged => "It was merged.".to_owned(),
+        Stored::CancelRequested => "The Lead cancelled the Job while the Attempt ran.".to_owned(),
+        Stored::Failed(cause) => match cause {
+            Cause::SetupFailed => "The worktree or its `pre-start` hook failed, so the Worker never started.".to_owned(),
+            Cause::TimedOut => "The Worker ran out of time before it submitted.".to_owned(),
+            Cause::Crashed => "The Worker or its driver died before the work was merged.".to_owned(),
+            Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.".to_owned(),
+            Cause::MergeConflict if files.is_empty() => "Rebasing it onto the newer Lead Branch conflicted.".to_owned(),
+            Cause::MergeConflict => "Rebasing it onto the newer Lead Branch conflicted in these files:".to_owned(),
+            Cause::CasLost => "The Lead Branch kept moving, so the merge could not be completed.".to_owned(),
+            Cause::DirtyTarget => "The Lead worktree was not clean when the merge ran.".to_owned(),
+            Cause::Tampered => "Its diff touched a protected path.".to_owned(),
+            Cause::GateFailed => match gate {
+                Some((hook, _)) => format!(
+                    "The Gate (`{}`) failed at its merge. Its whole output is in this log; read it and fix what it reports:",
+                    hook.as_str()
+                ),
+                None => "The Gate failed at its merge.".to_owned(),
+            },
+            Cause::GateError => {
+                const WHY: &str = "it was killed, timed out or could not run, which is a problem of the Gate, not a failing check of your work.";
+                match gate {
+                    Some((hook, _)) => format!(
+                        "The Gate (`{}`) could not be judged at its merge: {WHY} Its output so far is in this log, if the hook started:",
+                        hook.as_str()
+                    ),
+                    None => format!("The Gate could not be judged at its merge: {WHY}"),
+                }
             }
-        })
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Cause::Merged => "merged",
-            Cause::CancelRequested => "cancel_requested",
-            Cause::SetupFailed => "setup_failed",
-            Cause::TimedOut => "timed_out",
-            Cause::Crashed => "crashed",
-            Cause::NoSubmit => "no_submit",
-            Cause::MergeConflict { .. } => "merge_conflict",
-            Cause::CasLost => "cas_lost",
-            Cause::DirtyTarget => "dirty_target",
-            Cause::Tampered => "tampered",
-        }
-    }
-
-    /// `merged`, `cancelled` or `failed` (the `attempts` table's CHECKs).
-    pub fn outcome(&self) -> &'static str {
-        match self {
-            Cause::Merged => "merged",
-            Cause::CancelRequested => "cancelled",
-            _ => "failed",
-        }
-    }
-
-    /// One sentence saying what happened; for `merge_conflict` it ends with a
-    /// colon when the files follow as a list.
-    fn explanation(&self) -> &'static str {
-        match self {
-            Cause::Merged => "It was merged.",
-            Cause::CancelRequested => "The Lead cancelled the Job while the Attempt ran.",
-            Cause::SetupFailed => "The worktree or its `pre-start` hook failed, so the Worker never started.",
-            Cause::TimedOut => "The Worker ran out of time before it submitted.",
-            Cause::Crashed => "The Worker or its driver died before the work was merged.",
-            Cause::NoSubmit => "The Worker went idle twice without running `cpd attempt submit`, even after a nudge.",
-            Cause::MergeConflict { files } if files.is_empty() => {
-                "Rebasing it onto the newer Lead Branch conflicted."
-            }
-            Cause::MergeConflict { .. } => "Rebasing it onto the newer Lead Branch conflicted in these files:",
-            Cause::CasLost => "The Lead Branch kept moving, so the merge could not be completed.",
-            Cause::DirtyTarget => "The Lead worktree was not clean when the merge ran.",
-            Cause::Tampered => "Its diff touched a protected path.",
-        }
+        },
     }
 }
 
@@ -113,7 +91,8 @@ impl Cause {
 pub struct Previous {
     pub number: u32,
     pub tier: Tier,
-    pub cause: Cause,
+    pub cause: Stored,
+    pub evidence: Evidence,
 }
 
 /// An `answered` Escalation of an earlier Attempt.
@@ -217,17 +196,18 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         .previous
         .iter()
         .map(|p| {
-            let files: &[String] = match &p.cause {
-                Cause::MergeConflict { files } => files,
-                _ => &[],
+            let items: Vec<String> = match &p.evidence {
+                Evidence::None | Evidence::Gate(None) => Vec::new(),
+                Evidence::Files(files) => files.clone(),
+                Evidence::Gate(Some((_, log))) => vec![log.display().to_string()],
             };
             Value::from_pairs([
                 ("number", Value::from(p.number)),
                 ("tier", Value::from(p.tier.to_string())),
                 ("outcome", Value::from(p.cause.outcome())),
                 ("cause", Value::from(p.cause.as_str())),
-                ("explanation", Value::from(p.cause.explanation())),
-                ("files", Value::from(files.to_vec())),
+                ("explanation", Value::from(explanation(p.cause, &p.evidence))),
+                ("files", Value::from(items)),
             ])
         })
         .collect();

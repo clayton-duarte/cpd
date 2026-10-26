@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { onTick } from "./compact-tools-clock.ts";
 import { hookEditor, setWorkingWords } from "./compact-tools-editor.ts";
-import { pill, RUNNING } from "./compact-tools-indices.ts";
+import { pill, RUNNING, workingWords } from "./compact-tools-indices.ts";
 import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "./compact-tools-loader.ts";
 import type { ToolArgs } from "./compact-tools-types.ts";
 
@@ -129,7 +129,7 @@ export class ProgressController {
 	private renderMessage(): void {
 		if (!this.message || !this.context) return;
 		setWorkingWords(this.message, this.frame);
-		this.context.ui.setWorkingMessage(pill(RUNNING, this.message));
+		this.context.ui.setWorkingMessage(pill(RUNNING, workingWords(this.message)));
 	}
 
 	private clearMessage(): void {

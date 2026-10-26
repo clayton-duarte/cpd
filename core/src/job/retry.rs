@@ -24,7 +24,7 @@ pub(super) fn retry(args: RetryArgs) -> Result<Output, CpdError> {
     let key = args.key;
     let tier = args.tier.to_string();
     let mut env = Env::open()?;
-    env.check_tier(args.tier)?;
+    env.check_tier(&plan, &key, None, args.tier)?;
 
     let already = match env.store.read(|conn| decide(conn, &plan, &key, &tier))? {
         Decision::Already => true,

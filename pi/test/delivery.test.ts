@@ -140,20 +140,20 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   // The two lines may be read in different polls: `blocked` follows the first, the second is delivered on its own time.
   await waitFor("both escalations delivered", () => f.pi.delivered().length === 2);
   await waitFor("waiting", () => stateCalls(f).length === 2);
-  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:φ: Worker question"]);
   assert.equal(f.pi.delivered().length, 2, "both are messages with a turn");
 
   f.emit(event(103, "escalation-answered"), event(104, "escalation-answered"));
   await waitFor("idle again", () => stateCalls(f).length === 3);
   await f.drain();
-  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:φ: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 2, "answered is no message");
 
   // A state change wanted while a call is in flight replaces the one wanted before: let the last call finish first.
   await waitFor("no call in flight", () => f.pi.execsRunning.size === 0);
   f.emit(event(105, "escalation", { data: { escalation: "j-a1-q2", question: "?" } }), event(106, "escalation-expired", { data: { escalation: "j-a1-q2", reason: "timeout" } }));
   await waitFor("blocked and closed", () => stateCalls(f).length === 5);
-  assert.deepEqual(stateCalls(f).slice(3), ["waiting:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f).slice(3), ["waiting:φ: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 3, "expired is no message");
 });
 
@@ -165,7 +165,7 @@ test("session-renamed for itself: setSessionName and a notice, no message, no tu
   await waitFor("the name", () => f.pi.sessionName === "new name");
   await f.pi.fire("session_info_changed", { name: "new name" });
   await f.drain();
-  assert.deepEqual(f.pi.notices, ['cpd: session renamed to "new name"']);
+  assert.deepEqual(f.pi.notices, ['\x1b[1mφ\x1b[22m: session renamed to "new name"']);
   assert.deepEqual(f.pi.sent, []);
   assert.equal(f.argvs().some((a) => a[1] === "rename"), false, "the session-renamed it causes comes back and changes nothing");
 });
@@ -192,7 +192,7 @@ test("Worker: attempt-nudge for itself is a message with data.prompt and a turn;
   assert.equal((s.message.details as any).kind, "attempt-nudge");
   assert.equal((s.message.details as any).delivered_to, ID);
   assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
-  assert.deepEqual(f.pi.notices, ['cpd: session renamed to "new name"']);
+  assert.deepEqual(f.pi.notices, ['\x1b[1mφ\x1b[22m: session renamed to "new name"']);
 });
 
 test("a message delivered to this Session is what a restart's cursor reads back", async (t) => {
@@ -224,7 +224,7 @@ test("session-message for this Lead: one cpd message that starts a turn, followU
   assert.equal(f.pi.sent.length, 1);
   const s = f.pi.delivered()[0]!;
   assert.equal(s.message.customType, "cpd");
-  assert.equal(s.message.content, `Message from the manager (${OTHER}) (03:11): ship it`);
+  assert.equal(s.message.content, `Message from the manager (${OTHER}) (03:11 +05:30): ship it`);
   assert.equal((s.message.details as any).delivered_to, ID);
   assert.equal((s.message.details as any).id, 101);
   assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
@@ -256,8 +256,8 @@ test("session-message: from null is the User; an unreadable sender is named by i
   f.emit(message(101, null), message(102, "gone"), message(103, null, { session: OTHER }));
   await waitFor("two messages", () => f.pi.delivered().length === 2);
   await f.drain();
-  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11): ship it");
-  assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone (03:11): ship it");
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:11 +05:30): ship it");
+  assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone (03:11 +05:30): ship it");
   assert.equal(f.pi.sent.length, 2);
 });
 
@@ -367,4 +367,16 @@ test("G1: a different error is reported, then the first is reported again", asyn
   host.deliver("policy show", a);
   assert.deepEqual((await reports(3)).map((r) => r.code), ["bad_output", "lock_timeout", "bad_output"]);
   assert.deepEqual(pi.sent, []);
+});
+
+test("a session-message names the zone after the time", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "the manager" } });
+  const at = "2026-10-25T22:29:00.000Z";
+  f.emit(message(101, null, { at }), message(102, OTHER, { at }));
+  await f.drain();
+  assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User (03:59 +05:30): ship it");
+  assert.equal(f.pi.delivered()[1]!.message.content, `Message from the manager (${OTHER}) (03:59 +05:30): ship it`);
 });

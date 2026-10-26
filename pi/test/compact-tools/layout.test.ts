@@ -20,7 +20,7 @@ const SOURCES = [
 	"compact-tools-activity.ts", "compact-tools-balloon.ts", "compact-tools-claude.ts", "compact-tools-clock.ts", "compact-tools-codex-rows.ts",
 	"compact-tools-codex.ts", "compact-tools-command.ts", "compact-tools-compaction.ts", "compact-tools-config.ts",
 	"compact-tools-core.ts", "compact-tools-cursor.ts", "compact-tools-custom.ts", "compact-tools-double-load.ts", "compact-tools-grouping.ts",
-	"compact-tools-hook.ts", "compact-tools-indices.ts", "compact-tools-invocation.ts", "compact-tools-layout.ts", "compact-tools-loader.ts",
+	"compact-tools-hook.ts", "compact-tools-indices.ts", "compact-tools-invocation.ts", "compact-tools-italic.ts", "compact-tools-layout.ts", "compact-tools-loader.ts",
 	"compact-tools-nested.ts", "compact-tools-progress.ts",
 	"compact-tools-rendering.ts", "compact-tools-runtime.ts", "compact-tools-shell.ts", "compact-tools-silent.ts", "compact-tools-editor.ts",
 	"compact-tools-thinking.ts", "compact-tools-transcript.ts", "compact-tools.ts", "compact-tools-types.ts",
@@ -41,13 +41,13 @@ test("pi/package.json lists the adapter and the compact-tools extension, each a 
 test("extensions/ holds the fork's source files under their names, but compact-tools-release.ts, and the double-load module, importing nothing else", () => {
 	const names = readdirSync(join(EXTENSION, "extensions")).filter((name) => name.endsWith(".ts")).sort();
 	assert.deepEqual(names, [...SOURCES].sort());
-	// ...which import only pi, pi-tui, node: modules, each other and the shared dependency-free atoms (lib/pill.ts, lib/time.ts), so the package gains no dependency.
+	// ...which import only pi, pi-tui, node: modules, each other and the shared dependency-free atoms (lib/pill.ts, lib/time.ts, lib/italic.ts), so the package gains no dependency.
 	const found: string[] = [];
 	for (const name of names) {
 		const source = readFileSync(join(EXTENSION, "extensions", name), "utf8");
 		for (const match of source.matchAll(/(?:from\s+|import\(\s*)["']([^"']+)["']/gu)) {
 			const specifier = match[1]!;
-			if (!(specifier.startsWith("./") || specifier === "../../lib/pill.ts" || specifier === "../../lib/time.ts" || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
+			if (!(specifier.startsWith("./") || specifier === "../../lib/pill.ts" || specifier === "../../lib/time.ts" || specifier === "../../lib/italic.ts" || specifier.startsWith("node:") || specifier === "@earendil-works/pi-coding-agent" || specifier === "@earendil-works/pi-tui")) found.push(`${name}: ${specifier}`);
 		}
 	}
 	assert.deepEqual(found, []);

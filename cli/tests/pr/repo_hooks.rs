@@ -19,7 +19,7 @@ use cpd_core::driver::worker::render_spec;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::host::runner::{Call, Reply};
-use cpd_core::ids::{AttemptId, HostName, PlanId};
+use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::merge::Ctx;
 use cpd_core::store::Store;
 use serde_json::json;
@@ -394,13 +394,12 @@ fn the_worker_spec_lists_the_pre_commit_commands_of_the_repo_file() {
     ));
     let home = cpd_core::home::CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
-    let host = HostName::parse("m1").unwrap();
     let path = store
         .read(|conn| {
             let target = ledger::load(conn, &plan(), &AttemptId::parse("spec-a1").unwrap())?;
             let jobs = cpd_core::plan::jobs::load(conn, &plan())?;
             let job = jobs.iter().find(|j| j.key == "spec").expect("the Job `spec`");
-            render_spec(conn, &home, &host, &target, job)
+            render_spec(conn, &home, &target, job)
         })
         .unwrap();
     assert_eq!(path, fx.env.cpd_home().join("run/pay/specs/spec-a1.md"));

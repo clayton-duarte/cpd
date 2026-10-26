@@ -31,8 +31,9 @@ const ARCHIVED_MANAGER: &str = "manager0";
 /// (`O2`), and an archived Lead `lead5` and an archived Manager `manager0`, both stale.
 fn fixture(env: &TestEnv) {
     setup(env);
+    env.write_models();
     env.write_tmux_config(
-        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+        "lead_tier = \"O2\"\nmanager_tier = \"O4\"\n[timeouts]\nfork_quiet_seconds = 1\n",
     );
     let cwd = env.root().display().to_string();
     env.sql(&format!(
@@ -58,7 +59,7 @@ fn tiers(fx: &Fx) -> Vec<(String, String)> {
 }
 
 /// A Lead goes to `lead_tier`: its row, one Event addressed to it with `{from, to}`, and `session show` names the
-/// model and thinking level of the new Tier (config `tiers.O`, `O2` = `medium`).
+/// model and thinking level of the new Tier (the machine `[model]` O, `O2` = `medium`).
 /// Fails now: `usage` (no such subcommand), exit 2, and no Event.
 #[test]
 fn retier_one_moves_a_lead_to_lead_tier_with_one_event() {
@@ -194,7 +195,7 @@ fn retier_refuses_what_it_may_not_touch_and_writes_nothing() {
     assert!(events(&fx, "session-retiered").is_empty());
 }
 
-/// A relaunch **resumes** on the row's current Tier (hs-d506): `--model <tiers.O>:<level>` before `--session <file>`,
+/// A relaunch **resumes** on the row's current Tier (hs-d506): `--model <O of [model]>:<level>` before `--session <file>`,
 /// so pi runs the conversation on the new model instead of the one its file recorded. The row is set by the fixture
 /// (no command): the assertion is about the launch alone.
 /// Fails now: the resume argv is `--session <file>` with no `--model`.

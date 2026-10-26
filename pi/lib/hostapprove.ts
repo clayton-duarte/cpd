@@ -18,7 +18,7 @@ export function hostApproveBypass(command: string): string | undefined {
 
 /** The rule's reason, one line. */
 export function reasonText(matched: string): string {
-  return `cpd: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: ${matched}`;
+  return `φ: approvals are the User's: ask with the tool cpd_host_approve (commands.md §15.18); refused: ${matched}`;
 }
 
 type Params = { reason?: unknown };

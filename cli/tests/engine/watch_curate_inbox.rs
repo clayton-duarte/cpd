@@ -75,7 +75,7 @@ impl Curate {
         let items = self.items(kind);
         assert!(items.iter().any(|i| i["context"] == context && i["label"] == label), "no {kind} item `{label}` of {context}: {items:?}");
         let item = items.into_iter().find(|i| i["context"] == context).unwrap();
-        assert_eq!(item["urgency"], "blue", "{item}");
+        assert_eq!(item["urgency"], "cyan", "{item}");
         assert_eq!(item["subject"], format!("{kind}:{context}"), "{item}");
         for null in ["plan", "job", "session", "record"] {
             assert!(item[null].is_null(), "{null} must be null: {item}");
@@ -121,7 +121,7 @@ fn e8_opens_a_curate_docs_item_and_closes_it_when_none_pending() {
 }
 
 #[test]
-fn e8_opens_the_curate_items_blue() {
+fn e8_opens_the_curate_items_cyan() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3"]);
     fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1"], &["hs-n3"]);
@@ -129,7 +129,7 @@ fn e8_opens_the_curate_items_blue() {
     fx.assert_item("curate-retire", "building", "building: 1 to retire");
     fx.assert_item("curate-docs", "building", "building: 1 doc candidates");
     for kind in ["curate-retire", "curate-docs"] {
-        assert!(fx.items(kind).iter().all(|i| i["urgency"] == "blue"), "{:?}", fx.items(kind));
+        assert!(fx.items(kind).iter().all(|i| i["urgency"] == "cyan"), "{:?}", fx.items(kind));
     }
 }
 

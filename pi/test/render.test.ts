@@ -63,14 +63,14 @@ const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), `cpd` and the first sentence; no dot.
+// hs-d534, hs-d537, hs-d708: `╭─` 8; the pill by explicit SGR (caps colour 5, inverted text), the bold φ and the first sentence; no dot.
 const first = (summary: string): string => {
   const at = summary.search(/[.:]/);
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv>cpd</inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
-const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
+const HEAD = (summary: string) => `<c8>╭─</><c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const PLAIN_HEAD = (summary: string) => `╭─${CAP_L}φ${CAP_R} ${first(summary)}`;
 const TERM = `<c8>╰\u{F0B2A}</>`;
 const rail = (line: string) => `<c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F0B26}";
@@ -82,6 +82,13 @@ const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev
 const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
+
+test("the cpd message pill reads a bold phi", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged." }), ID);
+  const row = draw(rendering().render(m, { expanded: false, outputPad: 1 }, theme))[0]!;
+  assert.ok(row.includes(`<c5>${CAP_L}<inv><b>φ</b></inv><c5>${CAP_R}</>`), `the pill holds the bold φ: ${JSON.stringify(row)}`);
+  assert.ok(!row.includes("cpd"), `the pill no longer reads cpd: ${JSON.stringify(row)}`);
+});
 
 test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰬦 expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
@@ -95,7 +102,7 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
 
 test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}cpd${CAP_R} `.length);
+  const summary = plain(show(m, false))[0]!.slice(`╭─${CAP_L}φ${CAP_R} `.length);
   assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
@@ -103,9 +110,9 @@ test("a long summary is cut to 60 characters and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
+  assert.ok(lines[0]!.startsWith(`╭─${CAP_L}φ${CAP_R} alpha`), lines[0]);
   assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith("│ ")), "continuation rows are aligned like a tool row's");
-  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
+  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|φ/gu, "").includes("zeta"), "never cut");
   assert.equal(lines.at(-1), `╰${FOLDED} expand · ${TIME}`);
 });
 
@@ -119,16 +126,16 @@ test("an empty content shows no body", () => {
 test("a message from the User: `Message from the User`", () => {
   const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
   assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("expand")]);
-  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11): hi there"), closing("collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User (03:11 +05:30): hi there"), closing("collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
   const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
   assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("expand")]);
-  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11): hello`)]);
+  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}) (03:11 +05:30): hello`)]);
   const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
-  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11): hello`)]);
+  assert.deepEqual(show(unnamed, true).slice(1, 2), [rail(`Message from ${OTHER} (03:11 +05:30): hello`)]);
 });
 
 // ---- the adapter's errors ----
@@ -136,7 +143,7 @@ test("a message from a Session: its name, or its id when it has none", () => {
 test("an adapter error: `adapter: <what>`", () => {
   const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
   assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("expand")]);
-  assert.deepEqual(show(message, true)[1], rail("cpd adapter: session show: bad_output: cpd session show: the session object lacks role"));
+  assert.deepEqual(show(message, true)[1], rail("<b>φ</b> adapter: session show: bad_output: cpd session show: the session object lacks role"));
 });
 
 test("an `error` Event (it has an id) is an Event: its text", () => {
@@ -152,8 +159,8 @@ const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key
 const context = () => timed(contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!);
 const FULL = [
   "Context ctx: 2 new records since your last turn.",
-  "- hs-n1 note (2026-10-17): note 1",
-  "- hs-n2 note (2026-10-17): note 2",
+  "- hs-n1 note (2026-10-17 UTC): note 1",
+  "- hs-n2 note (2026-10-17 UTC): note 2",
   "",
   "Plans:",
   "- pay-4521: 3 phase changes",
@@ -276,7 +283,7 @@ test("Click to expand is gone; only the closing ╰ row names the toggle, muted"
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}φ${CAP_R} A`, `╰${FOLDED} expand · ${TIME}`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {

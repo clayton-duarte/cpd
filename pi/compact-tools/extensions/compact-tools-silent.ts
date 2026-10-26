@@ -99,8 +99,14 @@ function withChildren(container: { children?: unknown[] }, swap: (child: any) =>
 	}
 }
 
-/** A child whose rows are produced by `rows`; pi's containers only call render and invalidate. */
+/** A child whose rows are produced by `rows`; pi's containers call render and invalidate, and route mouse events with handleMouse (a plain child has none). */
 const rowsOf = (rows: (width: number) => string[]) => ({ render: rows, invalidate() {} });
+
+/** `child` with its rows repainted by `paint`, still receiving its mouse events (the Thinking block's click). */
+const paintedChild = (child: { render(width: number): string[] }, paint: (line: string) => string) => ({
+	...rowsOf((w) => child.render(w).map(paint)),
+	handleMouse: (event: unknown) => (child as { handleMouse?: (e: unknown) => unknown }).handleMouse?.(event),
+});
 
 function sharedState(): SilentState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: SilentState };
@@ -308,7 +314,7 @@ function publishOverrides(): void {
 				return withChildren(container, (child) => {
 					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w, (target as { lastMessage?: { timestamp?: number } }).lastMessage?.timestamp));
 					if (child === leading && dropLeading) return rowsOf(() => []);
-					return paint ? rowsOf((w) => child.render(w).map(paint)) : child;
+					return paint ? paintedChild(child, paint) : child;
 				}, () => next(width));
 			};
 			if (!silent()) return boxed(component, render);

@@ -16,7 +16,7 @@ use toml::{Table, Value};
 use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{HostName, MachineName};
+use crate::ids::MachineName;
 
 /// Where a leaf key's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -26,7 +26,7 @@ pub enum Source {
     Default,
 }
 
-/// Every leaf key's source, by dotted key path (`tiers.O`, `timeouts.attempt_minutes`).
+/// Every leaf key's source, by dotted key path (`timeouts.attempt_minutes`).
 pub type Sources = BTreeMap<String, Source>;
 
 /// The effective configuration: the file merged over the built-in defaults.
@@ -34,8 +34,6 @@ pub type Sources = BTreeMap<String, Source>;
 pub struct Config {
     pub version: u32,
     pub machine: MachineName,
-    /// The ssh `Host` that names `policy/machines/<host>.toml`; the value of `machine` by default (§8.2).
-    pub host: HostName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
@@ -68,7 +66,6 @@ pub struct Config {
     pub context_engine_reindex_timeout_ms: u32,
     /// One port per Plan's plannotator review (§6.5).
     pub plannotator_ports: PortRange,
-    pub tiers: Tiers,
     pub timeouts: Timeouts,
     pub watch: Watch,
     pub inbox: Inbox,
@@ -106,19 +103,6 @@ impl Serialize for PortRange {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
-}
-
-/// pi model per Tier letter, `<provider>/<model-id>`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Tiers {
-    #[serde(rename = "O")]
-    pub o: String,
-    #[serde(rename = "S")]
-    pub s: String,
-    #[serde(rename = "H")]
-    pub h: String,
-    #[serde(rename = "G")]
-    pub g: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -268,12 +252,10 @@ impl Config {
                 .with("path", path.display().to_string())
         })?;
         let mut r = Reader { table, path, sources: Sources::new() };
-        r.sections_are_tables(&["tiers", "timeouts", "watch", "inbox", "events", "tmux"])?;
+        r.sections_are_tables(&["timeouts", "watch", "inbox", "events", "tmux"])?;
 
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
-        let host_default = HostName::parse(machine.as_str()).expect("a machine name is a valid host name");
-        let host = r.get("host", host_default, |v| HostName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
@@ -325,12 +307,6 @@ impl Config {
             PortRange::parse(text_of(&v)?)
         })?;
 
-        let tiers = Tiers {
-            o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| model_ref(text_of(&v)?))?,
-            s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| model_ref(text_of(&v)?))?,
-            h: r.get("tiers.H", "github-copilot/claude-haiku-4.5".into(), |v| model_ref(text_of(&v)?))?,
-            g: r.get("tiers.G", "github-copilot/gemini-3.8-flash".into(), |v| model_ref(text_of(&v)?))?,
-        };
         let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
             attempt_minutes: positive(&mut r, "timeouts.attempt_minutes", 30)?,
@@ -393,7 +369,6 @@ impl Config {
         let config = Config {
             version,
             machine,
-            host,
             concurrency,
             retry_cap,
             lead_tier,
@@ -411,7 +386,6 @@ impl Config {
             context_engine_timeout_ms,
             context_engine_reindex_timeout_ms,
             plannotator_ports,
-            tiers,
             timeouts,
             watch,
             inbox,
@@ -559,7 +533,7 @@ impl Reader<'_> {
     }
 }
 
-const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "events", "tmux"];
+const KNOWN_SECTIONS: [&str; 5] = ["timeouts", "watch", "inbox", "events", "tmux"];
 
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
 fn leader_tier(value: &Value) -> Result<Tier, String> {
@@ -595,17 +569,6 @@ fn int(value: Value, min: u32, max: u32) -> Result<u32, String> {
 
 fn non_empty(s: &str) -> Result<String, String> {
     if s.is_empty() { Err("must not contain an empty string".into()) } else { Ok(s.to_owned()) }
-}
-
-/// `^[^/\s]+/\S+$`: `<provider>/<model-id>`.
-fn model_ref(s: &str) -> Result<String, String> {
-    let ok = s.split_once('/').is_some_and(|(provider, id)| {
-        !provider.is_empty()
-            && !provider.chars().any(char::is_whitespace)
-            && !id.is_empty()
-            && !id.chars().any(char::is_whitespace)
-    });
-    if ok { Ok(s.to_owned()) } else { Err(format!("{s:?} is not <provider>/<model-id>")) }
 }
 
 /// `^[A-Za-z0-9_-]{1,32}$`.

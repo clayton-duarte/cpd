@@ -76,13 +76,17 @@ pub struct Failed {
 
 impl Pending {
     /// The one line `doctor` and bare `cpd` say about it.
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, zone: &cpd_core::clock::TimeZone) -> String {
+        let local = |at: &str| match OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339) {
+            Ok(t) => cpd_core::clock::prose(t, zone),
+            Err(_) => at.to_owned(),
+        };
         match &self.failed {
             None => format!(
                 "A tmux restart is pending since {}: the server runs tmux {}, the installed tmux is {}. No Attempt starts until it has run.",
-                self.at, self.server, self.installed
+                local(&self.at), self.server, self.installed
             ),
-            Some(f) => format!("The tmux restart failed at {}: {} See run/tmux-restart.log.", f.at, f.reason),
+            Some(f) => format!("The tmux restart failed at {}: {} See run/tmux-restart.log.", local(&f.at), f.reason),
         }
     }
 }

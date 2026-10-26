@@ -233,7 +233,7 @@ pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize
             let age_minutes = if attempt_live { Some(0) } else { latest.get(&key).map(|&at| (now_ms - at).max(0) / 60_000) };
             let work = head.counts.queued + head.counts.running > 0;
             let old = age_minutes.is_none_or(|m| m >= QUIET_MINUTES);
-            out.push(PulseRow {
+            out.push((lead.dot.order_key(&head.created_at), PulseRow {
                 plan: head.id.clone(),
                 lead: lead.id.clone(),
                 dot: lead.dot,
@@ -241,8 +241,11 @@ pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize
                 merges: merged.get(&key).copied().unwrap_or(0),
                 age_minutes,
                 quiet: work && !attempt_live && old && !lead.dot.needs_you(),
-            });
+            }));
         }
+        // tree order (hs-d686, pro-d48): the Lead's dot tier, then the Plan's creation, newest first; stable
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        let out: Vec<PulseRow> = out.into_iter().map(|(_, row)| row).collect();
         Ok(Pulse { context: context.clone(), rows: out, max, events_cursor: highest_id(conn)? })
     })
 }

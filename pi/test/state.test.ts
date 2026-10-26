@@ -59,7 +59,7 @@ test("a refused call is reported once and the next change is tried normally", as
 
   await f.pi.fire("agent_start");
   await waitFor("the error", () => adapterErrors(f).length === 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: session state: illegal_transition: stopped to working\.$/);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: session state: illegal_transition: stopped to working\.$/);
   await f.quiet();
   assert.equal(adapterErrors(f).length, 1, "once");
 
@@ -249,7 +249,7 @@ test("a blocked -> idle that closes the last reason of a reply run carries --rep
 });
 
 // hs-d303 (audit J2): `blocked` only while a human reason (dialog) is open; else `waiting` while an agent reason (Worker question) is open.
-const QUESTION = "cpd: Worker question";
+const QUESTION = "φ: Worker question";
 const question = (id: number, esc: string) => ev(id, "escalation", { data: { escalation: esc, question: "q?" } });
 const answered = (id: number, esc: string) => ev(id, "escalation-answered", { data: { escalation: esc } });
 

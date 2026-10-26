@@ -1065,7 +1065,7 @@ test("keeps the progress controller inert until it is bound to a TUI", () => {
 		},
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
-	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[36m\ue0b4\x1b[39m"]);
+	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[7m\x1b[3mThinking…\x1b[23m\x1b[27m\x1b[36m\ue0b4\x1b[39m"]);
 
 	// Disposed again: later events must not reach the detached context.
 	controller.dispose();
@@ -1108,7 +1108,7 @@ test("the working label is palette index 6 whatever the thinking level", () => {
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
 	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "low" });
-	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[36m\ue0b4\x1b[39m");
+	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[7m\x1b[3mThinking…\x1b[23m\x1b[27m\x1b[36m\ue0b4\x1b[39m");
 	controller.dispose();
 });
 
@@ -1140,7 +1140,7 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 	handlers.get("agent_end")?.({});
 	assert.equal(messages.length, beforeAgentEnd, "a low-level run may still retry or continue");
 	handlers.get("agent_settled")?.({});
-	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[7m${label}\x1b[27m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
+	assert.deepEqual(messages, ["\x1b[3mThinking…\x1b[23m", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[7m${label}\x1b[27m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
 	controller.dispose();
 });
 
@@ -1217,7 +1217,7 @@ test("a one-paragraph thinking block is the Thinking pill 7 with its text inside
 
 	// hs-d557 item 1: the one title is the Thinking pill (inverted 7); the paragraph is inside the fold.
 	const view = render();
-	assert.ok(view?.includes("\x1b[37m\ue0b6\x1b[7mThinking…\x1b[27m\x1b[37m\ue0b4\x1b[39m") && !view.includes("Planning"), JSON.stringify(view));
+	assert.ok(view?.includes("\x1b[37m\ue0b6\x1b[7m\x1b[3mThinking…\x1b[23m\x1b[27m\x1b[37m\ue0b4\x1b[39m") && !view.includes("Planning"), JSON.stringify(view));
 	controller.dispose();
 });
 
@@ -1234,7 +1234,7 @@ test("renders each thinking view without changing source content", () => {
 		renderThinkingView(thinking, "detail", 80),
 		"Thinking…  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
 	);
-	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking…");
+	assert.equal(renderThinkingView(thinking, "hidden", 80), "\x1b[3mThinking…\x1b[23m");
 	assert.equal(thinking, "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.");
 });
 

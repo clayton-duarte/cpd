@@ -3,13 +3,14 @@ resolver = "3"
 members = ["core", "engine", "cli", "tui"]
 
 [workspace.package]
-version = "0.15.53"
+version = "0.15.55"
 edition = "2024"
 publish = false
 
 # Every dependency of cpd 2, declared once here. Later Jobs may not add any:
 # the list and the reasons are in docs/implementing.md.
 [workspace.dependencies]
+jiff = "=0.2.35"
 clap = { version = "4.6", features = ["derive", "env"] }
 libproc = "0.14"
 minijinja = "3.0"

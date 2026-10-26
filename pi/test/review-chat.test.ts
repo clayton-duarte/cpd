@@ -10,12 +10,12 @@ const waitFor = <T>(what: string, fn: () => T | undefined | null | false, ms = 3
 
 // commands.md §15.5 "The Plan review in chat" (hs-d502): the summary in the Lead's chat and one dialog (Approve, Change, Open full plan).
 
-const REVIEW_LABEL = "blocked:cpd: plan review";
+const REVIEW_LABEL = "blocked:φ: plan review";
 const TITLE = "Review title";
 const SUMMARY = `# ${TITLE}\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)\n`;
 const OPTIONS = ["Approve", "Change", "Open full plan"];
 const STILL_WAITING = (r: string) => `Plan review ${r} is still waiting: /plan-review reopens it`;
-const NONE_WAITING = "cpd: no plan review is waiting in chat";
+const NONE_WAITING = "\x1b[1mφ\x1b[22m: no plan review is waiting in chat";
 
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, title: TITLE, ...over } });
 const reviewEvent = (id: number, review = "r1", status = "pending") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status, title: TITLE } });
@@ -119,7 +119,7 @@ test("a failed read of the summary is an error without a turn; nothing is writte
   mkdirSync(join(f.cpdHome, "run", "p1", "summary-r2.md"));
   f.emit(reviewEvent(101, "r2"));
   await waitFor("the error", () => adapterErrors(f).length === 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r2: file_unreadable: /);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r2: file_unreadable: /);
   assert.deepEqual(entries(f), []);
   assert.equal(nSelects(f), 0);
   assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
@@ -202,7 +202,7 @@ test("a failed plan decide from the dialog is an error with a turn, the entry st
   f.respond("plan-decide", { ok: false, error: { code: "store_failed", message: "Disk full.", details: {} } }, { exit: 1 });
   d.answer("Approve");
   await waitFor("the error", () => adapterErrors(f).length === 1);
-  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
+  assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan decide r1: store_failed: Disk full\.$/);
   await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
   assert.equal(entries(f).at(-1).status, "pending");
   assert.deepEqual(decisions(f), []);
@@ -276,7 +276,7 @@ for (const [name, answer] of [
     const d = await opens(f);
     d.answer("Open full plan");
     await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
-    assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r1: plannotator_/);
+    assert.match(adapterErrors(f)[0]!.message.content, /^φ adapter: plan review r1: plannotator_/);
       await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
     assert.deepEqual(entries(f), [chatEntry()]);
     assert.deepEqual(decides(f), []);
@@ -543,7 +543,7 @@ test("the tool: `already` with no pending entry opens the review in chat; with o
 const PROMPT = { reason: "ui_prompt", kind: "select" };
 const dialogCalls = (f: Fixture) => f.argvs().filter((a) => a[1] === "state" && a.includes("dialog"));
 
-test("hs-d524: the review's select opens no dialog reason; the state stays blocked on cpd: plan review", async (t) => {
+test("hs-d524: the review's select opens no dialog reason; the state stays blocked on φ: plan review", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await opens(f);

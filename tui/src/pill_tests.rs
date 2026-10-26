@@ -90,7 +90,7 @@ fn pill_atom_follows_the_spec_for_every_meaning() {
         (m.failed, Meaning::Failed),
         (m.planning, Meaning::Planning),
         (m.nothing, Meaning::Nothing),
-        (m.focus, Meaning::Notice),
+        (m.in_progress, Meaning::Notice),
     ];
     for (index, meaning) in all {
         assert_eq!(fg(palette::pill(meaning)), n(index), "{meaning:?}");

@@ -109,7 +109,6 @@ fn cpd_config_on_fake_ports_returns_the_config_json_with_no_process() {
 
     let json = run.ok();
     assert_eq!(json["config"]["machine"], "m1");
-    assert_eq!(json["config"]["host"], "m1");
     assert_eq!(json["sources"]["machine"], "file");
     assert_eq!(json["path"], fx.env.cpd_home().join("config.toml").display().to_string());
     assert_eq!(waitpid(None, Some(WaitPidFlag::WNOHANG)), Err(Errno::ECHILD), "a child process lived while the command ran");

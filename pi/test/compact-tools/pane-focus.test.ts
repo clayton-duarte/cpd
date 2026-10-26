@@ -35,6 +35,8 @@ interface Session {
 	indicator(): { frames: string[]; intervalMs?: number } | undefined;
 	/** The terminal reports focus in (true) or out (false), through the path an extension sees. */
 	focus(inside: boolean): void;
+	/** Pi restarts the extension: session_shutdown, then session_start with reason reload. */
+	reload(): void;
 	dispose(): void;
 }
 
@@ -80,6 +82,10 @@ async function session(): Promise<Session> {
 		focus(inside) {
 			for (const handler of inputs) handler(inside ? FOCUS_IN : FOCUS_OUT);
 		},
+		reload() {
+			emit("session_shutdown", { reason: "reload" });
+			emit("session_start", { reason: "reload" });
+		},
 		dispose() {
 			emit("session_shutdown", { reason: "quit" });
 		},
@@ -124,6 +130,32 @@ test("focus in starts the clock and focus out stops it and renders once", async 
 		clock.tick(10_000);
 		assert.equal(ticks, 1, "no callback runs after focus out");
 	} finally { stop(); s.dispose(); clock.uninstall(); }
+});
+
+test("a reload keeps the focus the pane reported", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	let ticks = 0;
+	const stop = onTick(() => { ticks++; });
+	try {
+		s.focus(true);
+		assert.equal(editorFocused(), true, "the pane reported its field focused");
+		assert.equal(clock.countTimers(), 1, "the focused pane runs the shared clock");
+		s.reload();
+		assert.equal(editorFocused(), true, "a reload keeps the focus the pane reported");
+		assert.equal(clock.countTimers(), 1, "the reloaded focused pane runs the shared clock again");
+		clock.tick(80);
+		assert.equal(ticks, 1, "the reloaded focused pane still ticks");
+	} finally { stop(); s.dispose(); clock.uninstall(); }
+});
+
+test("a fresh pane with no report is still unfocused", async () => {
+	const clock = install({ toFake: ["setInterval", "clearInterval"] });
+	const s = await session();
+	try {
+		assert.equal(editorFocused(), false, "a fresh pane has no focus report, so it is unfocused");
+		assert.equal(clock.countTimers(), 0, "a fresh unfocused pane owns no clock");
+	} finally { s.dispose(); clock.uninstall(); }
 });
 
 test("the working indicator carries no frames for pi to animate", async () => {

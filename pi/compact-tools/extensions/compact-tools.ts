@@ -78,6 +78,7 @@ import { ToolRuntime } from "./compact-tools-runtime.ts";
 import { SilentModeController } from "./compact-tools-silent.ts";
 import { attemptUI, createTranscriptRenderer, type UIFailure } from "./compact-tools-transcript.ts";
 import { ThinkingCycleController } from "./compact-tools-thinking.ts";
+import { hookItalicSpans } from "./compact-tools-italic.ts";
 import { CompactionFoldController } from "./compact-tools-compaction.ts";
 import { ViewportKeeper } from "./compact-tools-viewport.ts";
 import {
@@ -822,6 +823,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	sessionReady = false;
 	publicOwners = new WeakMap();
 	publicBases = new WeakMap();
+	hookItalicSpans(() => runtime.config.style !== "off");
 	const thinkingCycle = new ThinkingCycleController(pi, () => runtime.config.style !== "off",
 		() => foldToggles() ? runtime.config.toggle : undefined);
 	const compaction = new CompactionFoldController(pi, () => runtime.config.style !== "off",
@@ -862,7 +864,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	const enableUI = (ctx: ExtensionContext, reload: boolean, resume: boolean, failures: UIFailure[]) => {
 		// Observe relayout keys before the thinking controller consumes them.
 		// Before the thinking controller: its terminal input handler is the one the tests (and the key relayout) look for last.
-		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx));
+		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx, reload));
 		attemptUI(failures, "cursor bind", () => cursor.bind());
 		attemptUI(failures, "viewport bind", () => viewport.bind(ctx));
 		attemptUI(failures, "progress bind", () => progress.bind(ctx, resume));

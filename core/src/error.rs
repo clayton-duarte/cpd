@@ -99,6 +99,8 @@ error_codes! {
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
+    // The install (commands.md §14.4).
+    InstallFailed = "install_failed" => Failure,
     // The holographic engine rail (contract §4.6, hs-d677).
     EngineFailed = "engine_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
@@ -173,6 +175,7 @@ error_codes! {
     OutlineIncomplete = "outline_incomplete" => Refused,
     NeedsUnknown = "needs_unknown" => Refused,
     NeedsUnavailable = "needs_unavailable" => Refused,
+    NeedsRequired = "needs_required" => Refused,
     JobLocked = "job_locked" => Refused,
     JobMerged = "job_merged" => Refused,
     JobNotFailed = "job_not_failed" => Refused,
@@ -257,6 +260,12 @@ error_codes! {
     PrEnded = "pr_ended" => Refused,
     PrClosed = "pr_closed" => Refused,
     PrTitleRequired = "pr_title_required" => Refused,
+    AdoptNotOpen = "adopt_not_open" => Refused,
+    AdoptFork = "adopt_fork" => Refused,
+    AdoptCpdBranch = "adopt_cpd_branch" => Refused,
+    AdoptTaken = "adopt_taken" => Refused,
+    AdoptForeign = "adopt_foreign" => Refused,
+    PrAdopted = "pr_adopted" => Refused,
     PrNotClosed = "pr_not_closed" => Refused,
     BaseConflict = "base_conflict" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
@@ -265,7 +274,6 @@ error_codes! {
     ShapeViolation = "shape_violation" => Refused,
     ShapeIncomplete = "shape_incomplete" => Refused,
     TestsUnconfigured = "tests_unconfigured" => Refused,
-    RepoUnconfigured = "repo_unconfigured" => Refused,
     TestFilesMissing = "test_files_missing" => Refused,
     TestsBuildFailed = "tests_build_failed" => Refused,
     TestsNotRed = "tests_not_red" => Refused,
@@ -466,6 +474,12 @@ mod tests {
             (ErrorCode::PrEnded, 3),
             (ErrorCode::PrClosed, 3),
             (ErrorCode::PrTitleRequired, 3),
+            (ErrorCode::AdoptNotOpen, 3),
+            (ErrorCode::AdoptFork, 3),
+            (ErrorCode::AdoptCpdBranch, 3),
+            (ErrorCode::AdoptTaken, 3),
+            (ErrorCode::AdoptForeign, 3),
+            (ErrorCode::PrAdopted, 3),
             (ErrorCode::PrNotClosed, 3),
             (ErrorCode::BaseConflict, 3),
             (ErrorCode::NeedsOtherPr, 3),
@@ -493,7 +507,6 @@ mod tests {
             (ErrorCode::RepoUnkeyed, 1),
             (ErrorCode::OwnerMismatch, 3),
             (ErrorCode::OwnerUnset, 3),
-            (ErrorCode::RepoUnconfigured, 3),
             (ErrorCode::OwnerInUse, 3),
         ];
         for (code, exit) in cases {

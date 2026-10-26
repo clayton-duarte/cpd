@@ -9,7 +9,8 @@ import { Editor, truncateToWidth, visibleWidth, type TUI } from "@earendil-works
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { setClockFocused } from "./compact-tools-clock.ts";
-import { INDEX, RUNNING, paint, pill } from "./compact-tools-indices.ts";
+import { italic } from "../../lib/italic.ts";
+import { INDEX, RUNNING, THINKING_LABEL, paint, pill } from "./compact-tools-indices.ts";
 import { LOADER_FRAMES } from "./compact-tools-loader.ts";
 
 const STATE_KEY = Symbol.for("pi-compact-tools.editor.state");
@@ -90,7 +91,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 		const room = inner - 1 - 2 - 2;
 		if (room >= 1) {
 			const label = truncateToWidth(words, room, "…");
-			const block = pill(RUNNING, `${loaderFrame()} ${label}`);
+			const block = pill(RUNNING, `${loaderFrame()} ${words === THINKING_LABEL ? italic(label) : label}`);
 			let rest = inner - 1 - 2 - 2 - visibleWidth(label);
 			let tail = "";
 			const scroll = hidden > 0 ? ` ↑ ${hidden} more ` : "";
@@ -126,11 +127,12 @@ export function hookEditor(): void {
 export class EditorBoxController {
 	private stopInput: (() => void) | undefined;
 
-	bind(ctx: ExtensionContext): void {
+	bind(ctx: ExtensionContext, reload: boolean): void {
 		this.release();
 		hookEditor();
-		state().focused = false;
-		setClockFocused(false);
+		// A fresh start (not a /reload) has no prior report; a reload keeps the focus the pane reported.
+		if (!reload) state().focused = false;
+		setClockFocused(state().focused);
 		let tui: TUI | undefined;
 		ctx.ui.setWidget(WIDGET_KEY, (host) => {
 			tui = host;
@@ -167,7 +169,6 @@ export class EditorBoxController {
 
 	dispose(ctx?: ExtensionContext): void {
 		this.release();
-		state().focused = false;
 		setClockFocused(false);
 		state().words = undefined;
 		ctx?.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });

@@ -78,6 +78,10 @@ _Avoid_: pre-Gate review
 **Addressing** (step):
 Feedback Jobs are appended and the Plan returns to Dispatching; an update Job, which cpd queues when one of them is queued (or when the pull request conflicts with its base), then brings the pull request up to date. `pr rebase` and `pr push` are the repair.
 
+**φ** (new, hs-d694):
+cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
+_Avoid_: cpd logo (the logo is defined soon)
+
 ## Work units
 
 **Context** (entity):
@@ -257,15 +261,12 @@ One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`
 _Avoid_: section, category, setting
 
 **Scope** (changed, hs-d9, hs-d12):
-Where a Domain's value is set: cpd's default, a machine file, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > machine > default, hs-d279); no Domain adds up across Scopes. The machine Scope holds policies for one machine on which cpd runs, named by its ssh Host (§8.2 `host`), and is optional: a missing machine file sets nothing. It is never part of a Policy key; a Policy resolves the same for every key on one machine and differently across machines.
+Where a Domain's value is set: cpd's default, a machine file, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > machine > default, hs-d279); no Domain adds up across Scopes. The machine Scope holds policies for one machine on which cpd runs, in the file `policy/host.toml`, and is optional: a missing machine file sets nothing. It is never part of a Policy key; a Policy resolves the same for every key on one machine and differently across machines.
 _Avoid_: layer, level, override file
 
 **Repo policy file** (new):
-The repo scope of a Policy, `$CPD_HOME/policy/repos/<owner>/<name>.toml`: required for every repo cpd works on (`repo_unconfigured` when missing; an empty file means nothing to configure), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
+The repo scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: optional (a repo without one has no repo scope and inherits default, machine and owner; an empty file means the same), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
 
-**Host** (new, §8.2):
-The name of one machine from its ssh config `Host`, such as `homeserver`, `mac-pro` or `mac-air`. Named in config.toml §8.2 and defaults to the value of `machine` (contract §2.1). It uniquely identifies the machine's policy file `policy/machines/<host>.toml` and is never an id prefix or a Context field.
-_Avoid_: hostname, domain, server, computer
 
 **Exposure** (new, hs-d9, hs-d12):
 The set of Scopes from which a Domain may be set, named in the domain table of contract §8.3. An unexposed Domain in a Scope's file is `policy_invalid`.
@@ -292,7 +293,7 @@ The Policy of one Policy key: every Domain's value with its source (`default`, `
 _Avoid_: effective config, merged policy
 
 **Known owner** (new, hs-d288):
-An owner with an `owners/<owner>.toml` file in `$CPD_HOME/policy/` (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback` on `context new --owner <login>` or `context owner <login>`. Confirming creates `owners/<login>.toml` as a relative symlink to `clayton-duarte.toml`. Deleting the link revokes the confirmation.
+An owner with a `policy/<owner>/owner.toml` file in `$CPD_HOME/policy/` (a file or a symlink that resolves). The known owners on this instance are `clayton-duarte`, `missionlane`, and `missionlane-scratch`, their files shipped by the User's dotfiles. Any other GitHub login is unknown until confirmed with `--confirm-fallback` on `context new --owner <login>` or `context owner <login>`. Confirming creates `policy/<owner>/owner.toml` as a relative symlink to `../clayton-duarte/owner.toml`. Deleting the link revokes the confirmation.
 _Avoid_: registered, available
 
 **Fallback** (new, hs-d288):

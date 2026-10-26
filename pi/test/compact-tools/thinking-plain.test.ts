@@ -15,6 +15,7 @@ test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, for
 
 const NERD = { expand: "\u{F0B26}", collapse: "\u{F0B2C}" };
 const ITALIC = /\x1b\[3m/u;
+const LABEL_ITALIC = /\x1b\[3mThinking…\x1b\[23m/gu;
 const plain = (line: string) => line.replace(/\x1b\][^\x07]*\x07/gu, "").replace(/\x1b\[[0-9;]*m/gu, "").trim();
 
 type Build = "after" | "before" | "streaming";
@@ -55,7 +56,7 @@ function expanded(thinking: string, build: Build = "after") {
 }
 
 const noItalic = (lines: string[], what: string) =>
-	assert.ok(!ITALIC.test(lines.join("\n")), `${what} draws SGR 3: ${JSON.stringify(lines.join("\n"))}`);
+	assert.ok(!ITALIC.test(lines.join("\n").replace(LABEL_ITALIC, "")), `${what} draws SGR 3 outside the label: ${JSON.stringify(lines.join("\n"))}`);
 
 test("emphasis in thinking text draws no italic in the expanded view", () => {
 	const lines = expanded("I think this is *really* hard.\n\nThe *user* said _other_ things.");

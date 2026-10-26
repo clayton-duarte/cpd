@@ -27,7 +27,7 @@ use cpd_core::store::Store;
 /// The Context of the machine's host Manager (contract §3.7 E6).
 const CONTEXT: &str = "host";
 /// The report of a click with no host Manager.
-const NO_MANAGER: &str = "cpd: no host Manager: apply dotfiles";
+const NO_MANAGER: &str = "φ: no host Manager: apply dotfiles";
 /// What the incident message unblocks (`session send --unblocks`).
 const UNBLOCKS: &str = "cpd install skipped";
 /// The checkout the incident message names, literally.

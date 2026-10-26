@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { BOUND_SECONDS, blockingReason, reasonText } from "../lib/noblock.ts";
 import { Fixture, shown, waitFor } from "./fake.ts";
 
-// commands.md §15.11: a Manager's bash call that waits over 30 s is refused.
+// commands.md §15.11: a Manager's or a Lead's bash call that waits over 30 s is refused.
 
 const refused = (command: string, timeout?: number) => assert.notEqual(blockingReason(command, timeout), undefined, `${command} (timeout ${timeout}) must be refused`);
 const passes = (command: string, timeout?: number) => assert.equal(blockingReason(command, timeout), undefined, `${command} (timeout ${timeout}) must run`);
@@ -82,10 +82,17 @@ test("commands that match nothing run, and a pattern in an argument or in quotes
 });
 
 test("the reason is one line naming the rule and what matched", () => {
-  const r = reasonText(blockingReason("sleep 1m")!);
-  assert.equal(r, "cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m");
+  const r = reasonText(blockingReason("sleep 1m")!, "manager");
+  assert.equal(r, "φ: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m");
   assert.equal(r.includes("\n"), false);
-  assert.match(reasonText(blockingReason("ls", 120)!), /refused: bash timeout 120$/);
+  assert.match(reasonText(blockingReason("ls", 120)!, "manager"), /refused: bash timeout 120$/);
+});
+
+test("the Lead reason names a Lead and leaves the wait to the background or the engine Events", () => {
+  const r = reasonText(blockingReason("sleep 1m")!, "lead");
+  assert.equal(r, `φ: a Lead never blocks: a wait over 30 s runs in the background or is left to the engine's Events; refused: sleep 1m`);
+  assert.equal(r.includes("\n"), false);
+  assert.match(reasonText(blockingReason("ls", 120)!, "lead"), /refused: bash timeout 120$/);
 });
 
 // ---- through the adapter ----
@@ -108,7 +115,9 @@ const CASES: [Record<string, unknown>, boolean][] = [
   [{ command: "watch -n 2 cpd plan show" }, true],
   [{ command: "while true; do cpd plan show; sleep 5; done" }, true],
   [{ command: "ls", timeout: 120 }, true],
+  [{ command: "for i in 1 2; do git fetch origin; sleep 280; done" }, true],
   [{ command: "sleep 30" }, false],
+  [{ command: "for i in 1 2; do sleep 5; done" }, false],
   [{ command: "cpd plan show" }, false],
   [{ command: "timeout 20 cmd" }, false],
 ];
@@ -120,7 +129,7 @@ test("a Manager's refused calls get block and the rule's reason; the others run"
     const r = await call(f, input);
     if (isRefused) {
       assert.equal(r?.block, true, JSON.stringify(input));
-      assert.match(r?.reason ?? "", /^cpd: a Manager never blocks: .* refused: /);
+      assert.match(r?.reason ?? "", /^φ: a Manager never blocks: .* refused: /);
     } else assert.equal(r, undefined, JSON.stringify(input));
   }
 });
@@ -131,12 +140,28 @@ test("a Manager's other tools are never refused", async (t) => {
   assert.equal(await call(f, { command: "sleep 60", timeout: 120 }, "read"), undefined);
 });
 
-test("a Lead's and a Worker's identical calls are never refused", async (t) => {
-  for (const role of ["lead", "worker"]) {
-    const f = await started(role);
-    t.after(() => f.close());
-    for (const [input] of CASES) assert.equal(await call(f, input), undefined, `${role}: ${JSON.stringify(input)}`);
+test("a Lead refused calls get block and the Lead reason and the others run", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  for (const [input, isRefused] of CASES) {
+    const r = await call(f, input);
+    if (isRefused) {
+      assert.equal(r?.block, true, JSON.stringify(input));
+      assert.match(r?.reason ?? "", /^φ: a Lead never blocks: .* refused: /);
+    } else assert.equal(r, undefined, JSON.stringify(input));
   }
+});
+
+test("a Worker identical calls are never refused", async (t) => {
+  const f = await started("worker");
+  t.after(() => f.close());
+  for (const [input] of CASES) assert.equal(await call(f, input), undefined, `worker: ${JSON.stringify(input)}`);
+});
+
+test("a Lead other tools are never refused", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  assert.equal(await call(f, { command: "sleep 60", timeout: 120 }, "read"), undefined);
 });
 
 test("before session_start no call is refused", async (t) => {
