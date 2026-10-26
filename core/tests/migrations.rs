@@ -258,6 +258,50 @@ fn every_additive_migration_is_additive_on_its_prefix() {
     }
 }
 
+/// O3: a breaking migration's `breaking after n` is checked against the names
+/// that sort before it. A migration already on `origin/main` has a historical
+/// header: it may keep a stale `n` (one no larger than the count), but a
+/// migration the PR adds must count the names before it exactly. `on_main`
+/// answers whether a name is in `origin/main`.
+fn check_breaking_headers(
+    list: &[(&str, &str, &str)],
+    legacy: usize,
+    on_main: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
+    for (index, (name, compat, sql)) in list.iter().enumerate() {
+        match declaration(sql).map_err(|why| format!("{name}: {why}"))? {
+            None => {
+                if *compat != "additive" {
+                    return Err(format!("{name}: the list says {compat}, the header says additive"));
+                }
+            }
+            Some(n) => {
+                if *compat != "breaking" {
+                    return Err(format!("{name}: the list says {compat}, the header says breaking"));
+                }
+                let expected = legacy + index;
+                if on_main(name) {
+                    if n > expected {
+                        return Err(format!(
+                            "{name} says `breaking after {n}` but only {expected} migrations sort before it. \
+                             A migration already on main has a historical header and is never renamed; it may \
+                             not claim more names than exist (O3)."
+                        ));
+                    }
+                } else if n != expected {
+                    return Err(format!(
+                        "{name} says `breaking after {n}` but {expected} migrations sort before it. A migration \
+                         the PR adds may be renumbered to a newer timestamp before it lands \
+                         (scripts/new-migration.sh); re-check its rebuild against what landed, and write the new \
+                         count (O3)."
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn every_breaking_migration_counts_the_names_before_it_and_the_headers_match_the_list() {
     let list = named_migrations();
@@ -272,22 +316,27 @@ fn every_breaking_migration_counts_the_names_before_it_and_the_headers_match_the
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .filter(|f| f.ends_with(".sql") && f.split_once('-').is_some_and(|(n, _)| n.len() == 4 && n.bytes().all(|c| c.is_ascii_digit())))
         .count();
-    for (index, (name, compat, sql)) in list.iter().enumerate() {
-        match declaration(sql).unwrap_or_else(|why| panic!("{name}: {why}")) {
-            None => assert_eq!(*compat, "additive", "{name}: the list says {compat}, the header says additive"),
-            Some(n) => {
-                assert_eq!(*compat, "breaking", "{name}: the list says {compat}, the header says breaking");
-                assert_eq!(
-                    n,
-                    legacy + index,
-                    "{name} says `breaking after {n}` but {} migrations sort before it. A migration that landed \
-                     before it has an earlier name: rename this one to a newer timestamp (scripts/new-migration.sh, \
-                     git mv), re-check its rebuild against what landed, and write the new count (O3).",
-                    legacy + index
-                );
-            }
-        }
-    }
+    let on_main = |name: &str| {
+        Command::new("git")
+            .args(["cat-file", "-e", &format!("origin/main:core/src/store/migrations/{name}.sql")])
+            .current_dir(repo_root())
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    check_breaking_headers(&list, legacy, &on_main).unwrap_or_else(|why| panic!("{why}"));
+}
+
+#[test]
+fn a_pr_added_breaking_migration_must_count_the_names_before_it() {
+    let list = [("20300101T0000-add-a", "breaking", "-- cpd-migration: breaking after 0\nSELECT 1;\n")];
+    let why = check_breaking_headers(&list, 2, &|_| false).unwrap_err();
+    assert!(why.contains("breaking after 0") && why.contains("2 migrations sort before it"), "{why}");
+}
+
+#[test]
+fn a_breaking_migration_on_main_may_keep_a_stale_count() {
+    let list = [("20261025T2300-queue-failed", "breaking", "-- cpd-migration: breaking after 2\nSELECT 1;\n")];
+    check_breaking_headers(&list, 3, &|_| true).unwrap();
 }
 
 #[test]
