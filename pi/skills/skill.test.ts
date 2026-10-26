@@ -631,6 +631,12 @@ test("cpd-manager never blocks and says the adapter refuses waits over 30 second
   assert.match(text, /waits longer than 30 seconds/);
 });
 
+test("cpd-lead never blocks and says the adapter refuses waits over 30 seconds", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /\*\*Stay free for the User\.\*\*/);
+  assert.match(text, /Never poll, sleep or run a foreground loop\. The adapter refuses a bash call of yours that waits longer than 30 seconds\./);
+});
+
 test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees the PRs whose Jobs are all merged (hs-d340)", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /\*\*cpd opens the PRs, you do not\.\*\*/);

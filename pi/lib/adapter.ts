@@ -84,7 +84,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const command = typeof input.command === "string" ? input.command : "";
     if (role === "manager") {
       const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
-      return matched === undefined ? undefined : { block: true, reason: reasonText(matched) };
+      return matched === undefined ? undefined : { block: true, reason: reasonText(matched, "manager") };
     }
     const matched = unfilteredTestRun(command);
     return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };

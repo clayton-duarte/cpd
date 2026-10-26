@@ -6,7 +6,7 @@ import { PREFIXES, simpleCommands } from "./shell.ts";
 export const BOUND_SECONDS = 30;
 
 /** The rule's reason, one line naming it (§15.11). */
-export const reasonText = (matched: string): string =>
+export const reasonText = (matched: string, _role: "manager" | "lead"): string => // stub: the implementation names the role
   `cpd: a Manager never blocks: a wait over ${BOUND_SECONDS} s runs in the background or is the owning Lead's or Worker's job; refused: ${matched}`;
 
 const LOOPS = new Set(["while", "until"]);
