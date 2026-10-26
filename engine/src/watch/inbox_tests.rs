@@ -110,6 +110,18 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
     assert_eq!(data(&mut fx, "error"), Vec::<Value>::new());
 }
 
+/// hs-d694: the plan review's visible label is `φ: plan review`, so a Lead `blocked` with exactly that label
+/// opens no `dialog` (the matcher must recognise the φ label, not only `cpd: plan review`).
+#[test]
+fn a_phi_plan_review_blocked_session_is_not_a_dialog() {
+    let mut fx = fx();
+    fx.fixture("UPDATE sessions SET state = 'blocked', state_label = 'φ: plan review' WHERE id = 'lead1';");
+
+    tick(&mut fx);
+    assert!(item(&mut fx, "dialog").is_none(), "{:?}", open_sessions(&mut fx));
+    assert!(data(&mut fx, "inbox-opened").iter().all(|e| e["kind"] != "dialog"), "{:?}", data(&mut fx, "inbox-opened"));
+}
+
 /// The text of the one message for a PR's stuck Jobs (contract §3.7 "A stuck Job"): `<key>` and `<T>` stay for the
 /// Manager to choose.
 fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
