@@ -7,11 +7,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-	advance, announce, CASES, CUSTOM_CASES, loadExtension, makeRow, restoreClocks, shutdown, type Harness,
+	advance, announce, CASES, CUSTOM_CASES, loadExtension, makeRow, restoreClocks, setNow, shutdown, type Harness,
 } from "./indicator-harness.ts";
 import { DEFAULT_CONFIG, mergeConfig } from "../../compact-tools/extensions/compact-tools-config.ts";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+// The machine-local time is the process timezone's: pin it, so `03:11` is the same on every machine.
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const BOX = { head: "\u256D", close: "\u2570", rail: "\u2502", plainClose: "\u2514" }; // ╭ ╰ │ └
@@ -121,6 +125,7 @@ async function drawRow(config: object, name: string, options: { failed?: boolean
 		const row = makeRow(name, id, outcome.args, harness.definitions.get(name));
 		row.setExpanded(options.expanded ?? false);
 		row.setArgsComplete();
+		setNow(TIME_MS);
 		harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: name, args: outcome.args });
 		row.markExecutionStarted();
 		const running = row.render(WIDTH).map(plain);
@@ -159,7 +164,7 @@ test("a folded row closes with ╰<glyph> expand · <metadata>", async () => {
 	for (const name of ["bash", "read", "grep", "find", "ls", "web_search"]) {
 		const status = await drawRow(STATUS, name);
 		const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, name);
-		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.expand} expand · ${metadataOf(status.done)}`, name);
+		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.expand} expand · 03:11 · ${metadataOf(status.done)}`, name);
 		assert.equal(toggle.done.filter((line) => line.includes("└")).length, 0, `${name}: no └ left`);
 	}
 });
@@ -168,7 +173,7 @@ test("an expanded row closes with ╰<glyph> collapse · <metadata> under its ' 
 	for (const name of ["bash", "read", "web_search"]) {
 		const status = await drawRow(STATUS, name, { expanded: true });
 		const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, name, { expanded: true });
-		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.collapse} collapse · ${metadataOf(status.done)}`, name);
+		assert.equal(lastLine(toggle.done), ` ${BOX.close}${NERD.collapse} collapse · 03:11 · ${metadataOf(status.done)}`, name);
 		const body = (lines: string[]) => lines.filter((line) => line.startsWith(` ${BOX.rail} `));
 		assert.deepEqual(body(toggle.done), body(status.done), `${name}: the body rail is unchanged`);
 		assert.ok(body(toggle.done).length > 0, name);
@@ -177,29 +182,29 @@ test("an expanded row closes with ╰<glyph> collapse · <metadata> under its ' 
 
 test("the default glyphs are U+F0B26 and U+F0B2C", async () => {
 	const folded = await drawRow(TOGGLE, "read");
-	assert.match(lastLine(folded.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in `, "u"));
+	assert.match(lastLine(folded.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · 03:11 · Done in `, "u"));
 	const expanded = await drawRow(TOGGLE, "read", { expanded: true });
-	assert.match(lastLine(expanded.done), new RegExp(`^ ${BOX.close}${NERD.collapse} collapse · Done in `, "u"));
+	assert.match(lastLine(expanded.done), new RegExp(`^ ${BOX.close}${NERD.collapse} collapse · 03:11 · Done in `, "u"));
 	const plain = await drawRow({ ...TOGGLE, toggle: PLAIN }, "read");
-	assert.match(lastLine(plain.done), new RegExp(`^ ${BOX.close}${PLAIN.expand} expand · Done in `, "u"), "a file can still ask for ▸ and ▾");
+	assert.match(lastLine(plain.done), new RegExp(`^ ${BOX.close}${PLAIN.expand} expand · 03:11 · Done in `, "u"), "a file can still ask for ▸ and ▾");
 });
 
-test("a row with no metadata closes with the bare toggle, no ' · '", async () => {
-	// A custom tool with an empty result has no line count: the closing row is only the toggle.
-	const harness = await loadExtension({ style: "compact", ...TOGGLE, toggle: NERD }, { defaults: true });
+test("a row with no metadata closes with the toggle and the time alone, or the bare toggle when too narrow", async () => {
+	// A custom tool with an empty result has no line count; a restored row has no live timing, so
+	// only its branch entry can give the time, and the closing row is the toggle and the time.
+	const id = `fold-${++sequence}`;
+	const branch = [{ type: "message", timestamp: new Date(TIME_MS).toISOString(), message: { role: "toolResult", toolName: "web_search", toolCallId: id, timestamp: TIME_MS } }];
+	const harness = await loadExtension({ style: "compact", ...TOGGLE, toggle: NERD }, { defaults: true, sessionManager: { getBranch: () => branch } });
 	try {
-		const id = `fold-${++sequence}`;
-		announce(harness, id, "web_search");
 		const row = makeRow("web_search", id, CUSTOM_CASES.web_search!.args, undefined);
 		row.setArgsComplete();
-		harness.handlers.get("tool_execution_start")!({ toolCallId: id, toolName: "web_search", args: {} });
-		row.markExecutionStarted();
-		harness.handlers.get("tool_execution_end")!({ toolCallId: id, isError: false });
 		row.updateResult({ content: [], details: undefined, isError: false } as never, false);
 		const lines = row.render(WIDTH).map(plain);
 		const closing = lastLine(lines);
-		assert.ok(closing.startsWith(` ${BOX.close}${NERD.expand} expand`), closing);
-		if (!closing.includes(" · ")) assert.equal(closing, ` ${BOX.close}${NERD.expand} expand`);
+		assert.equal(closing, ` ${BOX.close}${NERD.expand} expand · 03:11`);
+		// One column short of the toggle and time: the time is omitted and the row is unchanged.
+		assert.equal(lastLine(row.render(18).map(plain)), ` ${BOX.close}${NERD.expand} expand · 03:11`);
+		assert.equal(lastLine(row.render(17).map(plain)), ` ${BOX.close}${NERD.expand} expand`);
 	} finally { shutdown(harness); }
 });
 
@@ -210,16 +215,16 @@ test("a failed row closes with ╰<glyph> expand · Failed in …", async () => 
 		const word = expanded ? "collapse" : "expand";
 		const glyph = expanded ? NERD.collapse : NERD.expand;
 		const closing = lastLine(toggle.done);
-		assert.equal(closing, ` ${BOX.close}${glyph} ${word} · ${metadataOf(status.done)}`);
-		assert.match(closing, /· Failed in 0\.300s/u);
+		assert.equal(closing, ` ${BOX.close}${glyph} ${word} · 03:11 · ${metadataOf(status.done)}`);
+		assert.match(closing, /· 03:11 · Failed in 0\.300s/u);
 	}
 	const folded = await drawRow(TOGGLE, "bash", { failed: true });
-	assert.match(lastLine(folded.done), /· Failed in 0\.300s · Command exited with code 1$/u, "with a reason, after the time");
+	assert.match(lastLine(folded.done), /· 03:11 · Failed in 0\.300s · Command exited with code 1$/u, "with a reason, after the time");
 });
 
 test("an edit's closing row carries its diff counts after the toggle", async () => {
 	const toggle = await drawRow({ ...TOGGLE, toggle: NERD }, "edit");
-	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
+	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · 03:11 · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
 });
 
 test("while a row runs the head wears ' ╭─' with no dot and the closing row is the loader, with no toggle", async () => {

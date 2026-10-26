@@ -10,13 +10,23 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { AssistantMessageComponent, UserMessageComponent } from "@earendil-works/pi-coding-agent";
 import { loadExtension, shutdown, type Harness } from "./compact-tools/indicator-harness.ts";
 
+process.env.TZ = "Asia/Kolkata";
+/** hs-d637: the one known instant every surface renders; in Asia/Kolkata (UTC+05:30) it is 03:11 the next day. */
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
+/** The time the agent balloon's bottom border carries: right after the tail, `│╭─HH:MM` then the rest of the dashes. */
+const agentTail = (box: number): string =>
+	box < 9
+		? `\u2502\u256d${"\u2500".repeat(box - 3)}\u256f`
+		: `\u2502\u256d\u250003:11${"\u2500".repeat(box - 9)}\u256f`;
+
 type Side = "user" | "agent";
-type Draw = (rows: string[], side: Side, width: number) => string[];
+type Draw = (rows: string[], side: Side, width: number, at?: number) => string[];
 
 // A variable specifier: the module does not exist yet, which is the red, and must not break the typecheck.
 const BALLOON = "../lib/balloon.ts";
-const draw = async (rows: string[], side: Side, width: number): Promise<string[]> =>
-	((await import(BALLOON)) as { drawBalloon: Draw }).drawBalloon(rows, side, width);
+const draw = async (rows: string[], side: Side, width: number, at?: number): Promise<string[]> =>
+	((await import(BALLOON)) as { drawBalloon: Draw }).drawBalloon(rows, side, width, at);
 
 const SGR = /\x1b\[[0-9;]*m/g;
 const OSC = /\x1b\][^\x07]*\x07/g;
@@ -26,40 +36,45 @@ const plain = (rows: string[]) => rows.map(bare);
 test("a user balloon is the template with the tail at the bottom right", async () => {
 	const rows = await draw(["user prompt"], "user", 19);
 	assert.deepEqual(plain(rows), [
-		"   ╭─────────────╮ ",
-		"   │ user prompt │ ",
-		"   ╰────────────╮│ ",
-		"                ╰╯ ",
+		"   ╭─────────────╮",
+		"   │ user prompt │",
+		"   ╰────────────╮│",
+		"                ╰╯",
 	]);
 });
 
 test("an agent balloon is the mirrored template with the tail at the bottom left", async () => {
-	const rows = await draw(["agent reply"], "agent", 19);
+	const rows = await draw(["agent reply"], "agent", 19, TIME_MS);
 	assert.deepEqual(plain(rows), [
-		" ╭─────────────╮",
-		" │ agent reply │",
-		" │╭────────────╯",
-		" ╰╯",
+		"╭─────────────╮",
+		"│ agent reply │",
+		agentTail(15),
+		"╰╯",
 	]);
+});
+
+test("the agent balloon omits the time when the corner is too small for it", async () => {
+	const rows = await draw(["one"], "agent", 19, TIME_MS);
+	assert.deepEqual(plain(rows), ["╭─────╮", "│ one │", "│╭────╯", "╰╯"]);
 });
 
 test("the balloon is the longest row plus two padding columns and two borders wide", async () => {
 	const rows = ["fix the build", "then ship it"];
 	const user = plain(await draw(rows, "user", 24));
 	assert.deepEqual(user, [
-		"      ╭───────────────╮ ",
-		"      │ fix the build │ ",
-		"      │ then ship it  │ ",
-		"      ╰──────────────╮│ ",
-		"                     ╰╯ ",
+		"      ╭───────────────╮",
+		"      │ fix the build │",
+		"      │ then ship it  │",
+		"      ╰──────────────╮│",
+		"                     ╰╯",
 	]);
 	const agent = plain(await draw(rows, "agent", 24));
 	assert.deepEqual(agent, [
-		" ╭───────────────╮",
-		" │ fix the build │",
-		" │ then ship it  │",
-		" │╭──────────────╯",
-		" ╰╯",
+		"╭───────────────╮",
+		"│ fix the build │",
+		"│ then ship it  │",
+		"│╭──────────────╯",
+		"╰╯",
 	]);
 	// A wider pane does not widen the balloon.
 	assert.deepEqual(plain(await draw(rows, "agent", 80)), agent);
@@ -69,27 +84,27 @@ test("a user balloon ends one column before the pane's edge and an agent balloon
 	for (const width of [15, 24, 60]) {
 		const user = plain(await draw(["hello"], "user", width));
 		assert.equal(user.length, 4);
-		for (const row of user) assert.equal(row.length, width, `user row ${JSON.stringify(row)} ends in column ${width}`);
+		for (const row of user) assert.equal(row.length, width - 1, `user row ${JSON.stringify(row)} ends in column ${width}`);
 		assert.equal(user[0]!.trim().length, 9);
 		assert.equal(user[0]![width - 2], "╮");
 		const agent = plain(await draw(["hello"], "agent", width));
-		assert.equal(agent[0]![1], "╭");
-		assert.equal(agent[1]![1], "│");
-		assert.equal(agent[3]![1], "╰");
+		assert.equal(agent[0]![0], "╭");
+		assert.equal(agent[1]![0], "│");
+		assert.equal(agent[3]![0], "╰");
 	}
 });
 
 test("every row of a multi-line balloon keeps the right wall in one column", async () => {
 	const rows = ["a", "a longer line here", "mid", ""];
 	const user = plain(await draw(rows, "user", 40));
-	const wall = user[0]!.length - 2;
+	const wall = user[0]!.length - 1;
 	assert.equal(user.length, rows.length + 3);
 	for (const row of user.slice(0, 1 + rows.length + 1)) assert.equal(row[wall], row.trim().at(-1), row);
 	for (const row of user.slice(1, 1 + rows.length)) assert.equal(row[wall], "│", row);
 	const agent = plain(await draw(rows, "agent", 40));
 	const bodies = agent.slice(1, 1 + rows.length);
-	for (const row of bodies) assert.equal(row.length, 23, row);
-	for (const row of bodies) assert.ok(row.startsWith(" │") && row.endsWith("│"), row);
+	for (const row of bodies) assert.equal(row.length, 22, row);
+	for (const row of bodies) assert.ok(row.startsWith("│") && row.endsWith("│"), row);
 });
 
 test("borders and tails are colour 8 and the text is not recoloured", async () => {
@@ -127,7 +142,7 @@ test("wide characters and styled text keep the wall aligned", async () => {
 		const widths = body.map(visibleWidth);
 		assert.equal(new Set(widths).size, 1, `${side}: ${widths}`);
 		for (const row of body) assert.ok(bare(row).trimEnd().endsWith("│"), row);
-		assert.equal(visibleWidth(out[0]!), side === "user" ? 30 : 14, "longest row 9 columns + 4, plus the margins");
+		assert.equal(visibleWidth(out[0]!), side === "user" ? 29 : 13, "longest row 9 columns + 4, less the outer margins");
 	}
 });
 
@@ -166,16 +181,16 @@ async function withHarness<T>(body: (harness: Harness) => Promise<T> | T): Promi
 }
 
 const assistant = (content: unknown[], extra: object = {}) =>
-	new AssistantMessageComponent({ role: "assistant", content, stopReason: "stop", ...extra } as never);
+	new AssistantMessageComponent({ role: "assistant", content, stopReason: "stop", timestamp: TIME_MS, ...extra } as never);
 
 test("pi's user message component draws a user balloon with its OSC 133 zone marks", async () => {
 	await withHarness(() => {
 		const rows = new UserMessageComponent("user prompt").render(40);
 		assert.deepEqual(plain(rows), [
-			" ".repeat(24) + "╭─────────────╮ ",
-			" ".repeat(24) + "│ user prompt │ ",
-			" ".repeat(24) + "╰────────────╮│ ",
-			" ".repeat(24) + "             ╰╯ ",
+			" ".repeat(24) + "╭─────────────╮",
+			" ".repeat(24) + "│ user prompt │",
+			" ".repeat(24) + "╰────────────╮│",
+			" ".repeat(24) + "             ╰╯",
 		]);
 		assert.ok(rows[0]!.startsWith(ZONE_A), "the zone start is on the first row");
 		assert.ok(rows.at(-1)!.includes(ZONE_BC), "the zone end is on the last row");
@@ -187,15 +202,15 @@ test("pi's assistant message component draws one agent balloon per text block", 
 	await withHarness(() => {
 		const rows = assistant([{ type: "text", text: "one" }, { type: "text", text: "two" }]).render(40);
 		assert.deepEqual(plain(rows), [
-			" ╭─────╮", " │ one │", " │╭────╯", " ╰╯",
-			" ╭─────╮", " │ two │", " │╭────╯", " ╰╯",
+			"╭─────╮", "│ one │", "│╭────╯", "╰╯",
+			"╭─────╮", "│ two │", "│╭────╯", "╰╯",
 		]);
 		assert.ok(rows[0]!.startsWith(ZONE_A));
 		assert.ok(rows.at(-1)!.includes(ZONE_BC));
 		// The text wraps at the pane width minus eight (margins, borders and paddings).
 		const wrapped = plain(assistant([{ type: "text", text: "alpha beta gamma delta" }]).render(14));
 		for (const row of wrapped) assert.ok(row.length <= 11, row);
-		assert.ok(wrapped.slice(1, -2).every((row) => row.startsWith(" │ ") && row.endsWith(" │")), wrapped.join("\n"));
+		assert.ok(wrapped.slice(1, -2).every((row) => row.startsWith("│ ") && row.endsWith(" │")), wrapped.join("\n"));
 	});
 });
 
@@ -245,7 +260,7 @@ test("a mention in the text is painted inside the balloon", async () => {
 			const text = rows.find((row) => row.includes("abc12345"));
 			assert.ok(text, rows.join("\n"));
 			assert.ok(text.includes("\x1b[35mabc12345\x1b[39m"), "the mention is magenta");
-			assert.equal(bare(text), " │ ping abc12345 │");
+			assert.equal(bare(text), "│ ping abc12345 │");
 			assert.ok(!rows.join("").includes("PAINTED AFTER BOXING"));
 			assert.equal(rows.filter((row) => BOX.test(bare(row))).length, 4);
 		});
@@ -260,7 +275,7 @@ test("silent mode draws the answer as a balloon", async () => {
 		await harness.commands.get("silent")!.handler("on", ctx);
 		try {
 			const final = assistant([{ type: "thinking", thinking: "pondering" }, { type: "text", text: "answer" }], { stopReason: "length" });
-			assert.deepEqual(plain(final.render(40)), [" ╭────────╮", " │ answer │", " │╭───────╯", " ╰╯"]);
+			assert.deepEqual(plain(final.render(40)), ["╭────────╮", "│ answer │", agentTail(10), "╰╯"]);
 			const handoff = assistant([{ type: "text", text: "Before call" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }]);
 			assert.deepEqual(handoff.render(40), [], "an intermediate turn is still hidden");
 		} finally {

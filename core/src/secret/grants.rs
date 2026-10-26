@@ -124,6 +124,16 @@ pub fn approve(home: &CpdHome, approval: &Approval) -> Result<OffsetDateTime, Cp
     Ok(at + APPROVAL_LIFETIME)
 }
 
+/// [`approve`] with `at` the time of `ports.clock.utc()`: the approval `want` (its `at` ignored), and when it expires.
+pub(crate) fn approve_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<OffsetDateTime, CpdError> {
+    approve(home, &Approval { at: crate::clock::timestamp(ports.clock.utc()), ..want.clone() })
+}
+
+/// [`take_approval`] at `ports.clock.utc()`.
+pub(crate) fn take_approval_on(ports: &crate::ports::Ports, home: &CpdHome, want: &Approval) -> Result<bool, CpdError> {
+    take_approval(home, want, ports.clock.utc())
+}
+
 /// Consumes the first approval equal to `want` (its `at` aside) that has not expired: removes it and says so.
 /// Expired files are removed and ignored.
 pub fn take_approval(home: &CpdHome, want: &Approval, now: OffsetDateTime) -> Result<bool, CpdError> {

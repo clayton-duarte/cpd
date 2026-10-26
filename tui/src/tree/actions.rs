@@ -16,14 +16,18 @@
 //! with `-` is still a value.
 
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use serde_json::Value;
 
 use cpd_core::config::Config;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::deadline::Failed as RunFailed;
+use cpd_core::host::runner::{Call, NO_DEADLINE, Runner as ProcessRunner};
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::ports::Ports;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 use crate::merge::Pull;
@@ -294,16 +298,25 @@ pub struct Runner {
     busy_ms: u64,
     tmux: Tmux,
     cockpit: String,
+    /// What runs the `cpd` commands, as it runs the tmux calls.
+    processes: Arc<dyn ProcessRunner>,
 }
 
 impl Runner {
-    pub fn new(home: CpdHome, config: &Config) -> Runner {
+    /// A runner whose commands and tmux calls run on the runner and the clock of `ports`.
+    pub fn new(home: CpdHome, config: &Config, ports: &Ports) -> Runner {
         Runner {
             home,
             busy_ms: u64::from(config.timeouts.store_busy_ms),
-            tmux: Tmux::new(config.tmux.socket.clone()),
+            tmux: Tmux::new(config.tmux.socket.clone()).with_runner(ports.runner.clone()).with_clock(ports.clock.clone()),
             cockpit: config.tmux.cockpit_session.clone(),
+            processes: ports.runner.clone(),
         }
+    }
+
+    /// Runs the command of `action`: its reply, or why it failed.
+    fn command(&self, action: &Action) -> Result<Value, String> {
+        command_on(&*self.processes, action)
     }
 
     /// The live Managers of the machine (role `manager`, not archived), oldest first: who hears that the engine cannot be started.
@@ -335,12 +348,12 @@ impl Runner {
                 Action::CopyId(_) | Action::CopyUrl(_) => {
                     self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| fail(e.message().to_owned()))?
                 }
-                _ => command(&step).map_err(fail)?,
+                _ => self.command(&step).map_err(fail)?,
             };
             said = step.done(&reply);
             if let Some(open) = step.open_new(&reply).map_err(fail)? {
                 // the Plan or fork stays created when this is refused
-                command(&open).map_err(|why| Failed { step: open.clone(), why })?;
+                self.command(&open).map_err(|why| Failed { step: open.clone(), why })?;
                 self.focus_chat().map_err(|e| fail(e.message().to_owned()))?;
             }
             if matches!(step, Action::Open(_) | Action::History(_)) {
@@ -431,7 +444,7 @@ impl Dialogs for Runner {
     }
 
     fn preview(&self, what: &Deletable) -> Result<Value, String> {
-        command(&Action::Delete { what: what.clone(), yes: false })
+        self.command(&Action::Delete { what: what.clone(), yes: false })
     }
 }
 
@@ -467,15 +480,28 @@ impl Failure {
 }
 
 /// Runs the command of `action`: its reply, or why it failed.
+#[cfg(test)]
 pub fn call(action: &Action) -> Result<Value, Failure> {
-    let output = Command::new(PROGRAM)
-        .args(action.argv())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {e}")))?;
+    call_with(&*Ports::current().runner, action)
+}
+
+/// [`call`] on `runner`.
+pub fn call_with(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, Failure> {
+    let argv = action.argv();
+    let call = Call {
+        tool: PROGRAM.to_owned(),
+        program: PROGRAM.to_owned(),
+        args: argv.clone(),
+        envs: Vec::new(),
+        cwd: None,
+        deadline: NO_DEADLINE,
+        stdin: None,
+        stderr_to: None,
+    };
+    let output = runner.run(&call).map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {}", failed_reason(e))))?;
     let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim()))
+        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", argv.join(" "), output.status.code().map_or_else(|| output.status.to_string(), |c| format!("exit code: {c}")), stderr.trim()))
     })?;
     if reply["ok"] == true {
         Ok(reply)
@@ -488,9 +514,16 @@ pub fn call(action: &Action) -> Result<Value, Failure> {
     }
 }
 
-/// [`call`], the failure in the words of the dialog.
-fn command(action: &Action) -> Result<Value, String> {
-    call(action).map_err(|failure| match failure {
+fn failed_reason(failed: RunFailed) -> String {
+    match failed {
+        RunFailed::Io(e) => e.to_string(),
+        RunFailed::Timeout(e) => e.message().to_owned(),
+    }
+}
+
+/// [`call_with`], the failure in the words of the dialog.
+fn command_on(runner: &dyn ProcessRunner, action: &Action) -> Result<Value, String> {
+    call_with(runner, action).map_err(|failure| match failure {
         Failure::Refused { code, message } => action.failed(&code, &message),
         Failure::Broken(why) => why,
     })

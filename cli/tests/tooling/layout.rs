@@ -172,23 +172,50 @@ fn the_binaries_are_those_of_the_area_table() {
     assert!(problems.is_empty(), "the modules do not follow the area table:\n{}", problems.join("\n"));
 }
 
-/// The workspace's packages from `cargo metadata --no-deps`: package name to (its directory, the names it depends on).
+/// A Cargo.toml read as text: the repo's own manifests and `Cargo.lock` are the subject, not cargo's resolver, so no
+/// cargo runs here (`cargo metadata` and `cargo tree` are cargo's, not ours).
+fn read_toml(path: &Path) -> toml::Table {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    text.parse().unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+}
+
+/// The `[dependencies]`-like tables of a manifest: `(kind, table)` for the plain ones and those under `[target.*]`.
+/// `kind` is `dependencies`, `dev-dependencies` or `build-dependencies`.
+fn dependency_tables(manifest: &toml::Table) -> Vec<(&'static str, &toml::Table)> {
+    let mut tables = Vec::new();
+    let scopes: Vec<&toml::Table> = std::iter::once(manifest)
+        .chain(manifest.get("target").and_then(toml::Value::as_table).into_iter().flat_map(|t| t.values().filter_map(toml::Value::as_table)))
+        .collect();
+    for scope in scopes {
+        for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
+            if let Some(table) = scope.get(kind).and_then(toml::Value::as_table) {
+                tables.push((kind, table));
+            }
+        }
+    }
+    tables
+}
+
+/// The package a dependency entry `key = spec` names: `package = "x"` renames it.
+fn dependency_package<'a>(key: &'a str, spec: &'a toml::Value) -> &'a str {
+    spec.get("package").and_then(toml::Value::as_str).unwrap_or(key)
+}
+
+/// The workspace's packages from the manifests: package name to (its directory, the names it depends on).
 fn packages() -> BTreeMap<String, (PathBuf, Vec<String>)> {
-    let out = std::process::Command::new(env!("CARGO"))
-        .args(["metadata", "--format-version", "1", "--no-deps", "--offline", "--manifest-path"])
-        .arg(root().join("Cargo.toml"))
-        .output()
-        .expect("run cargo metadata");
-    assert!(out.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr));
-    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).expect("cargo metadata prints JSON");
-    metadata["packages"]
-        .as_array()
-        .expect("packages")
+    let workspace = read_toml(&root().join("Cargo.toml"));
+    let members = workspace["workspace"]["members"].as_array().expect("[workspace] members");
+    members
         .iter()
-        .map(|p| {
-            let manifest = Path::new(p["manifest_path"].as_str().expect("manifest_path"));
-            let deps = p["dependencies"].as_array().expect("dependencies").iter().map(|d| d["name"].as_str().expect("name").to_owned()).collect();
-            (p["name"].as_str().expect("name").to_owned(), (manifest.parent().expect("manifest dir").to_owned(), deps))
+        .map(|member| {
+            let dir = root().join(member.as_str().expect("a member is a path"));
+            let manifest = read_toml(&dir.join("Cargo.toml"));
+            let name = manifest["package"]["name"].as_str().expect("[package] name").to_owned();
+            let deps = dependency_tables(&manifest)
+                .into_iter()
+                .flat_map(|(_, table)| table.iter().map(|(key, spec)| dependency_package(key, spec).to_owned()))
+                .collect();
+            (name, (dir.canonicalize().expect("member dir"), deps))
         })
         .collect()
 }
@@ -250,63 +277,48 @@ fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend
     assert!(problems.is_empty(), "the crates are not those of docs/implementing.md's Layout:\n{}", problems.join("\n"));
 }
 
-/// The features `cargo tree` resolves for `scope` (`-p <member>` or `--workspace`), with tests and dev-dependencies
-/// (cargo tree's default edges, what `nextest run` builds): package (`name vX.Y.Z`) to the distinct feature lists it
-/// resolves to. `--locked --offline` reads the lock file and the local registry only: no network, no resolution
-/// against an index, so it is a few milliseconds per scope (measured: 0.14 s for `--workspace`).
-fn resolved_features(scope: &[&str]) -> BTreeMap<String, Vec<String>> {
-    let out = std::process::Command::new(env!("CARGO"))
-        .args(["tree", "--locked", "--offline", "--prefix", "none", "--format", "{p}|{f}", "-e", "normal,build,dev", "--manifest-path"])
-        .arg(root().join("Cargo.toml"))
-        .args(scope)
-        .output()
-        .expect("run cargo tree");
-    assert!(out.status.success(), "cargo tree {scope:?} failed: {}", String::from_utf8_lossy(&out.stderr));
-    let mut resolved: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // One tree per workspace member under `--workspace`, a blank line between them.
-    for line in String::from_utf8(out.stdout).expect("cargo tree prints UTF-8").lines().filter(|l| !l.is_empty()) {
-        let (package, features) = line.split_once('|').unwrap_or_else(|| panic!("cargo tree line without `|`: {line:?}"));
-        // `name vX.Y.Z (proc-macro)` or `(/path)`: the name and the version; a repeated subtree ends in ` (*)`.
-        let package = package.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-        let features = features.trim_end_matches(" (*)").to_owned();
-        let lists = resolved.entry(package).or_default();
-        if !lists.contains(&features) {
-            lists.push(features);
-        }
-    }
-    for lists in resolved.values_mut() {
-        lists.sort();
-    }
-    resolved
-}
-
-/// The distinct feature names in `lists`.
-fn feature_names(lists: &[String]) -> Vec<&str> {
-    let names: std::collections::BTreeSet<_> = lists.iter().flat_map(|l| l.split(',')).filter(|f| !f.is_empty()).collect();
-    names.into_iter().collect()
-}
+/// The dependencies that decide the features other crates resolve, which every member must have (as a dependency or a
+/// dev-dependency, `workspace = true`): ratatui is what enables rustix `termios`/`stdio`, hashbrown 0.16's features,
+/// syn `extra-traits` and time `local-offset`, and only `tui` uses it.
+const UNIFIERS: [&str; 1] = ["ratatui"];
 
 /// `-p <member>` resolves every dependency's features as `--workspace` does (docs/implementing.md, Tests): the first
 /// `-p` run after the Gate's workspace test build then compiles nothing. `-p` unifies features over that member alone,
 /// `--workspace` over all of them, so a member that lacks a dependency another member has (ratatui: tui only) resolves
 /// fewer features, and cargo rebuilds what they touch. The fix is a dev-dependency on what differs, in the member.
+///
+/// Read from the text of the manifests, no cargo runs (`cargo tree`'s resolver is cargo's, not ours; research
+/// tests-mock-mig-rest.md §5 row 3). That is the weaker check: it knows only the dependencies named in [`UNIFIERS`], where
+/// `cargo tree` found every difference. A new one is added there, with its reason, when a `-p` run rebuilds.
 #[test]
 fn every_member_resolves_the_features_of_the_workspace_build() {
-    let workspace = resolved_features(&["--workspace"]);
+    let workspace = read_toml(&root().join("Cargo.toml"));
+    let shared = workspace["workspace"]["dependencies"].as_table().expect("[workspace.dependencies]");
     let mut problems = Vec::new();
-    for member in packages().keys() {
-        for (package, lists) in resolved_features(&["-p", member]) {
-            let Some(all) = workspace.get(&package) else { continue };
-            if &lists != all {
-                let (own, wide) = (feature_names(&lists), feature_names(all));
-                let differ: Vec<_> = own.iter().filter(|f| !wide.contains(f)).chain(wide.iter().filter(|f| !own.contains(f))).collect();
-                problems.push(format!("{member}: {package}: `-p {member}` resolves {lists:?}, `--workspace` {all:?} (differ: {differ:?})"));
+    for unifier in UNIFIERS {
+        if !shared.contains_key(unifier) {
+            problems.push(format!("{unifier} is not in [workspace.dependencies]"));
+        }
+        for (member, (_, deps)) in packages() {
+            if !deps.iter().any(|d| d == unifier) {
+                problems.push(format!("{member} has no `{unifier}` dependency"));
+            }
+        }
+        // Where it is the member's own dependency it is inherited, so every member resolves it with the same features.
+        for (member, (dir, _)) in packages() {
+            let manifest = read_toml(&dir.join("Cargo.toml"));
+            for (kind, table) in dependency_tables(&manifest) {
+                if let Some(spec) = table.get(unifier) {
+                    if spec.get("workspace").and_then(toml::Value::as_bool) != Some(true) {
+                        problems.push(format!("{member}: [{kind}] {unifier} is not `workspace = true`"));
+                    }
+                }
             }
         }
     }
     assert!(
         problems.is_empty(),
-        "`-p <member>` resolves other features than `--workspace`, so its first run after the workspace test build rebuilds them; \
+        "`-p <member>` may resolve other features than `--workspace`, so its first run after the workspace test build rebuilds them; \
          add `ratatui.workspace = true` to the member's [dev-dependencies] (as core's):\n{}",
         problems.join("\n")
     );

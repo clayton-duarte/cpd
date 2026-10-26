@@ -1,5 +1,6 @@
 import { CpdError, isObject } from "./cpd.ts";
 import type { Message } from "./pi.ts";
+import { localDateTime } from "./time.ts";
 
 /** commands.md §15.7a: the custom type of the hidden first message of a by-user Session; its `details.event` counts for the cursor. */
 export const FIRST_MESSAGE_TYPE = "cpd-first-message";
@@ -191,7 +192,7 @@ const sender = (from: string | null) => (from === null ? "User" : from);
 
 /** The `Board:` section: each post in full with its sender. Empty when there is none. */
 function boardSection(posts: readonly BoardPost[]): string[] {
-  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p.from)} (${p.at}): ${p.text}`)];
+  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p.from)} (${localDateTime(p.at)}): ${p.text}`)];
 }
 
 /** The Event kinds of a Plan's line, in their fixed order, with how each is counted. */

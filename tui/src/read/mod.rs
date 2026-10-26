@@ -37,6 +37,8 @@ mod logs;
 mod look_tests;
 pub mod pr_look;
 mod pulse;
+#[cfg(test)]
+mod pulse_tests;
 mod shared;
 mod tree;
 mod widgets;
@@ -59,7 +61,7 @@ pub use pr_look::{PrFacts, PrLook, pr_look};
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
-pub use tree::{ContextNode, PlanNode, Tree, snooze_end, tree};
+pub use tree::{ContextNode, PlanNode, Tree, snooze_end, snooze_end_at, tree, tree_at};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, open_pulls, slots, widgets,
 };

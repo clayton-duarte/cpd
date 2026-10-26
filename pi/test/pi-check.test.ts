@@ -137,14 +137,29 @@ test("pi-check passes while the adapter accepts what its fake cpd answers, and f
 /** What the fake pi of the pty tests wrote in `out`. */
 type Seen = { pid: number; child: number; columns: number; rows: number; stdinTTY: boolean; stdoutTTY: boolean };
 const seen = (out: string): Seen => JSON.parse(readFileSync(join(out, "seen"), "utf8")) as Seen;
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+/** The state of `pid` as `ps -o stat=` prints it, or undefined when there is no such process. */
+const psState = (pid: number): string | undefined => {
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+  return state === "" ? undefined : state;
 };
+/**
+ * Whether `pid` is still running. A killed process whose parent is gone stays a zombie (state Z) until init reaps it, and `kill(pid, 0)` succeeds on a
+ * zombie (macOS, under load: the incident of the Gate of PR clk), so the state decides: no process, or Z, is gone. Every assertion below goes through here.
+ */
+const alive = (pid: number, stateOf: (pid: number) => string | undefined = psState): boolean => {
+  const state = stateOf(pid);
+  return state !== undefined && !state.startsWith("Z");
+};
+
+test("alive: a zombie and a process that does not exist are gone, a live process (whatever its state) is not", () => {
+  const reaped = spawnSync(process.execPath, ["-e", ""]).pid;
+  assert.equal(alive(reaped), false, "a reaped process");
+  assert.equal(alive(process.pid), true, "this process, really running");
+  assert.equal(alive(process.pid, () => "Z"), false, "a zombie: kill(pid, 0) succeeds on it, yet it is gone");
+  assert.equal(alive(process.pid, () => "Z+"), false, "a zombie that holds a tty");
+  for (const state of ["R", "S", "S+", "Ss", "U", "T", "I"]) assert.equal(alive(process.pid, () => state), true, `state ${state} is a process that outlived the check`);
+});
+
 /** A fake pi that records its pid, its tty and a child of its own that never ends (stands for what pi starts), into `out/seen`, then runs `after` (JS). */
 const recordingPi = (dir: string, out: string, after = ""): string =>
   nodePi(

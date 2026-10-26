@@ -1,22 +1,31 @@
-//! `cpd tui view history` (commands.md §13.2, §17), end to end: the built binary
-//! runs in a pane of a private tmux server (its terminal), over a prepared
-//! store and a fixture pi session file; a test reads the screen
-//! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are
-//! unit-tested in `tui/src/history/` and `tui/src/worker/`.
+//! `cpd tui view history` (commands.md §13.2, §17): the frame drawn over a prepared store and a fixture pi session
+//! file (on a `TestBackend`, in this process), the refusals before drawing (`run_with`, in this process, `Fx`) and the
+//! keys: the view loop (`cpd_tui::show_history_with`) in this process on a `SharedBackend`, the scripted input
+//! (`common::screen::Script`) and the `ManualClock`. Rendering and scrolling are unit-tested in `tui/src/history/` and
+//! `tui/src/worker/`.
 
 use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{CPD, TestEnv};
+use common::fx::Fx;
+use common::screen::{Screen, Script, SharedBackend, Step};
+use common::TestEnv;
+use cpd_tui::view_ports::Ctx;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use serde_json::json;
 
 // ---------- the prepared store ----------
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
+    configure(&env);
     env
+}
+
+fn configure(env: &TestEnv) {
+    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n").unwrap();
 }
 
 /// Context `alpha` with the Lead Session `l1`, named `old lead`, with `file` (or none registered), archived or not.
@@ -53,138 +62,126 @@ fn session_file(env: &TestEnv) -> PathBuf {
     path
 }
 
-// ---------- the pane ----------
-
-const SESSION: &str = "history";
-const TOP: &str = "old lead (archived, read-only)";
-const PLACEHOLDER: &str = "No Lead here: pick a Plan in the session tree";
-
-struct Pane<'a> {
-    env: &'a TestEnv,
-}
-
-impl<'a> Pane<'a> {
-    /// Runs `cpd tui view history l1` in a `width` × `height` pane of the env's private tmux server.
-    fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
-        let out = env.tmux(&[
-            "-u",
-            "set-option",
-            "-g",
-            "remain-on-exit",
-            "on",
-            ";",
-            "new-session",
-            "-d",
-            "-s",
-            SESSION,
-            "-x",
-            &width.to_string(),
-            "-y",
-            &height.to_string(),
-            &format!("{CPD} tui view history l1"),
-        ]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        Pane { env }
-    }
-
-    /// The screen, each row without trailing blanks, without the empty rows at the end.
-    fn screen(&self) -> Vec<String> {
-        let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap();
-        let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
-        while rows.last().is_some_and(String::is_empty) {
-            rows.pop();
-        }
-        rows
-    }
-
-    fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        common::wait_screen(what, || self.screen(), done)
-    }
-
-    fn keys(&self, keys: &[&str]) {
-        let mut args = vec!["send-keys", "-t", SESSION];
-        args.extend(keys);
-        assert!(self.env.tmux(&args).status.success());
-    }
-
-    fn dead(&self) -> bool {
-        let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
-    }
-}
 
 // ---------- tests ----------
 
+/// The view's first frame in a `width` × `height` pane over the file of the Session `l1` of `fx`, as the rows the pane shows.
+fn drawn(fx: &Fx, width: u16, height: u16) -> Vec<String> {
+    let (name, archived, file): (String, bool, String) = fx
+        .env
+        .read(|c| c.query_row("SELECT name, archived_at IS NOT NULL, file FROM sessions WHERE id = 'l1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))));
+    let text = std::fs::read_to_string(file).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| cpd_tui::draw_history(&name, archived, &text, f)).unwrap();
+    let mut rows = Screen::from_buffer(terminal.backend().buffer()).rows();
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop();
+    }
+    rows
+}
+
 #[test]
 fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), true);
-    let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
     assert_eq!(
-        screen,
+        drawn(&fx, 40, 12),
         [
-            TOP,
-            "16:33:44 you",
-            "      Plan the API.",
-            "16:33:44 agent",
-            "      Here is the plan.",
-            "16:33:44 → bash cpd plan show",
-            "        󰘌 ok",
+            "",
+            " old lead (archived, read-only)",
+            " 16:33:44 you",
+            "       Plan the API.",
+            " 16:33:44 agent",
+            "       Here is the plan.",
+            " 16:33:44 → bash cpd plan show",
+            "         󰘌 ok",
         ]
     );
 }
 
 #[test]
 fn a_session_that_is_not_archived_says_read_only_only() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), false);
-    let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
-    assert_eq!(screen[0], "old lead (read-only)");
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), false);
+    let screen = drawn(&fx, 40, 12);
+    assert_eq!(screen[0], "", "the pad's first row is blank");
+    assert_eq!(screen[1], " old lead (read-only)");
+    assert!(screen.iter().any(|r| r.contains("󰘌 ok")), "{screen:?}");
 }
 
 #[test]
 fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
-    let env = env();
-    let file = session_file(&env);
-    populate(&env, Some(&file), true);
-    let pane = Pane::start(&env, 40, 4);
-    pane.wait("the end", |s| s.iter().any(|r| r.contains("󰘌 ok")));
-    pane.keys(&["g"]); // not a key
-    pane.keys(&["k", "k", "k", "k", "k", "k"]);
-    let screen = pane.wait("the top", |s| s.get(1).is_some_and(|r| r.contains("you")));
-    // the pane's last row (row 4) stays empty: only rows 1..3 are pinned
-    assert_eq!(screen[..3], [TOP, "16:33:44 you", "      Plan the API."]);
-    pane.keys(&["G"]);
-    pane.wait("the end again", |s| s.iter().any(|r| r.contains("󰘌 ok")));
-    pane.keys(&["q"]);
-    // the placeholder wraps in a 40-column pane
-    let screen = pane.wait("the placeholder", |s| s.join(" ").replace("  ", " ").contains(PLACEHOLDER));
-    assert!(!pane.dead(), "the pane stays, showing the placeholder: {screen:?}");
-    assert!(!screen.iter().any(|r| r.contains("read-only")), "the history is gone: {screen:?}");
+    let fx = Fx::new();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
+    let text = std::fs::read_to_string(&file).unwrap();
+    let screen = SharedBackend::new(40, 4);
+    let steps = vec![
+        Step::look(|s| assert!(s.contains("󰘌 ok"), "the end: {:?}", s.rows())),
+        Step::ch('g'), // not a key
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::ch('k'),
+        Step::look(|s| {
+            let rows = s.rows();
+            assert!(rows.get(2).is_some_and(|r| r.contains("you")), "the top: {rows:?}");
+            // the uniform 1-cell pad: row 0 and row 3 blank, the title in row 1, the body in row 2
+            assert_eq!(rows, ["", " old lead (archived, read-only)", " 16:33:44 you", ""]);
+        }),
+        Step::ch('G'),
+        Step::look(|s| assert!(s.contains("󰘌 ok"), "the end again: {:?}", s.rows())),
+        // q ends the loop, which `run` follows with the chat slot's placeholder
+        Step::ch('q'),
+    ];
+    let mut input = Script::on_screen(fx.fakes.clock.clone(), &screen, steps);
+    let mut ctx = Ctx::new(&fx.fakes.ports, screen.terminal(), &mut input);
+    cpd_tui::show_history_with(&mut ctx, "old lead", true, &text).unwrap();
+    drop(ctx);
+    assert_eq!(input.remaining(), 0, "the loop ended on q, the last step");
 }
 
 #[test]
 fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
-    let env = env();
-    populate(&env, None, true);
-    let run = env.cpd(&["tui", "view", "history", "nope"]);
+    // `load` refuses before `run_view` looks at the terminal, so no terminal is reached.
+    let fx = Fx::with_ports();
+    let env = &fx.env;
+    configure(env);
+    populate(env, None, true);
+    let run = fx.cpd(&["tui", "view", "history", "nope"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("session_not_found")), "{run:?}");
-    let run = env.cpd(&["tui", "view", "history", "l1"]);
+    let run = fx.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a Session with no file: {run:?}");
     env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
-    let run = env.cpd(&["tui", "view", "history", "l1"]);
+    let run = fx.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a file that is not there: {run:?}");
-    let run = env.cpd(&["tui", "view", "history"]);
+    let run = fx.cpd(&["tui", "view", "history"]);
     assert_eq!((run.exit, run.error()["code"].clone()), (2, json!("usage")), "{run:?}");
 }
 
 #[test]
 fn the_view_needs_a_terminal() {
+    let fx = Fx::with_ports();
+    configure(&fx.env);
+    let file = session_file(&fx.env);
+    populate(&fx.env, Some(&file), true);
+    let run = fx.cpd_without_a_terminal(&["tui", "view", "history", "l1"]);
+    assert_eq!(run.exit, 3, "{run:?}");
+    let error = run.error();
+    assert_eq!(error["code"], "not_a_terminal");
+    assert_eq!(error["details"]["command"], "tui view history");
+}
+
+/// The one smoke of the built binary for the refusal (until `tooling/smoke.rs` has it): the real `isatty` of piped stdio.
+#[test]
+fn the_built_binary_needs_a_terminal() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file), true);

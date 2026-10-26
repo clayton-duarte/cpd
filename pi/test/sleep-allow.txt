@@ -1,0 +1,46 @@
+# Debts of the static sleep checks: <path> <count>  # <tag>: <reason>. A line may only be lowered or removed, never raised, except the line named in its reason as a one-time raise.
+cli/tests/flow/plan.rs 1  # m-flow: sleep or wall-clock wait
+cli/tests/store/events.rs 1  # m-engine: sleep or wall-clock wait
+cli/tests/store/store.rs 3  # m-engine: sleep or wall-clock wait
+cli/tests/tooling/harness.rs 1  # m-tooling: sleep or wall-clock wait
+cli/tests/tui/tui_plan_cancelled.rs 1  # m-tui-t: sleep or wall-clock wait
+core/src/driver/worker.rs 1  # m-units: sleep or wall-clock wait
+core/src/host/deadline.rs 4  # m-units: sleep or wall-clock wait
+core/src/host/exe.rs 1  # m-units: sleep or wall-clock wait
+core/src/inbox/team.rs 2  # m-units: sleep or wall-clock wait
+core/src/lock.rs 1  # m-units: sleep or wall-clock wait
+core/src/store/lock.rs 1  # m-units: sleep or wall-clock wait
+core/src/store/mod.rs 1  # m-units: sleep or wall-clock wait
+pi/test/askguard.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/chat-pad.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/compact-tools/codemode-host.test.ts 2  # m-pi: sleep or wall-clock wait
+pi/test/compact-tools/compact-tools.test.ts 3  # m-pi: sleep or wall-clock wait
+pi/test/compact-tools/editor-box.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/delivery.test.ts 27  # m-pi: sleep or wall-clock wait
+pi/test/first-message.test.ts 5  # m-pi: sleep or wall-clock wait
+pi/test/follower.test.ts 21  # m-pi: sleep or wall-clock wait
+pi/test/handle.test.ts 10  # m-pi: sleep or wall-clock wait
+pi/test/loop-guard.test.ts 24  # m-pi: sleep or wall-clock wait
+pi/test/mainguard.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/mainguard-tools.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/manager-errors.test.ts 3  # m-pi: sleep or wall-clock wait
+pi/test/noblock.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/pi-check.test.ts 3  # m-pi: sleep or wall-clock wait
+pi/test/plan-review.test.ts 47  # m-pi: sleep or wall-clock wait
+pi/test/protocol.test.ts 6  # m-pi: sleep or wall-clock wait
+pi/test/reload.test.ts 10  # m-pi: sleep or wall-clock wait
+pi/test/reminder.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/reply.test.ts 9  # m-pi: sleep or wall-clock wait
+pi/test/retier.test.ts 8  # m-pi: sleep or wall-clock wait
+pi/test/review-chat.test.ts 45  # m-pi: sleep or wall-clock wait
+pi/test/slack-channel.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/start.test.ts 20  # m-pi: sleep or wall-clock wait
+pi/test/state.test.ts 31  # m-pi: sleep or wall-clock wait
+pi/test/testguard.test.ts 1  # m-pi: sleep or wall-clock wait
+pi/test/updates.test.ts 1  # m-pi: sleep or wall-clock wait
+tui/src/menu.rs 1  # m-units: sleep or wall-clock wait
+tui/src/plan/mod.rs 2  # m-units: sleep or wall-clock wait
+tui/src/tree/folds.rs 1  # m-units: sleep or wall-clock wait
+tui/src/tree/view.rs 8  # m-units: sleep or wall-clock wait
+pi/test/secret-approve.test.ts 3  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact
+pi/test/secretguard.test.ts 1  # m-pi: new debt of PR #311 (cpd secret) landed before the ratchet; lower it when the file waits on the fact

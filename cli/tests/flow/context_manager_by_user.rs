@@ -1,75 +1,61 @@
-//! `context manager --by-user` (commands.md §3.10, §10.8 step 3, hs-d542).
+//! `context manager --by-user` (commands.md §3.10, §10.8 step 3, hs-d542), run in this process (`Fx::with_ports`) on the
+//! fake tmux. `context manager` writes the first-message file only without `--by-user`, and records the flag on the
+//! Session row, which `session run` reads to start pi with `-- @<path>` or without a first message (the session area's,
+//! `start` in `session/run.rs`): here the file, the row and the window's command are asserted.
 
 use crate::common;
 
 use std::fs;
 
-use common::{SLEEP_SECONDS, TestEnv, wait_until};
+use common::fx::Fx;
 
-/// A fake `pi` that creates its session file and sleeps.
-fn fake_pi(env: &TestEnv) {
-    env.fake_pi(&format!(
-        "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
-         if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
-         printf '{{\"type\":\"session\"}}\\n' > \"$HOME/.pi/agent/sessions/g/2026_$id.jsonl\"; fi\n\
-         exec sleep {SLEEP_SECONDS}"
-    ));
+/// The Context `ctx`, the config and the cockpit.
+fn setup(fx: &Fx) {
+    fx.env.write_tmux_config("");
+    fx.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+    fx.cockpit();
 }
 
-/// The cockpit: session `cpd`, window `main` with a tree pane and the placeholder in the chat slot.
-fn cockpit(env: &TestEnv) {
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
-    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
-    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+/// The argv the fake server started in the Manager's window: `new-window` made it once, and it is `cpd session run <id>`.
+fn window_argv(fx: &Fx, id: &str) -> Vec<String> {
+    let made: Vec<_> = fx
+        .calls("tmux")
+        .into_iter()
+        .map(|c| c.args)
+        .filter(|a| a.iter().any(|x| x == "new-window") && a.iter().any(|x| x == "ctx-ctx"))
+        .collect();
+    assert_eq!(made.len(), 1, "one new-window: {made:?}");
+    let argv: Vec<String> = made[0].iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
+    assert_eq!(argv, ["cpd", "session", "run", id]);
+    argv
 }
 
-fn setup(env: &TestEnv) {
-    env.write_tmux_config("");
-    env.fake_cpd_views();
-    fake_pi(env);
-    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
-    cockpit(env);
-}
-
-/// The argv of the one pi start, once it has happened.
-fn pi_argv(env: &TestEnv) -> Vec<String> {
-    wait_until("the fake pi", || !env.calls("pi").is_empty());
-    env.calls("pi")[0].clone()
-}
-
-fn manager(env: &TestEnv, by_user: bool) -> String {
+fn manager(fx: &Fx, by_user: bool) -> String {
     let mut args = vec!["context", "manager", "--context", "ctx"];
     if by_user {
         args.push("--by-user");
     }
-    env.cpd(&args).ok()["manager"]["session"].as_str().unwrap().to_owned()
+    fx.cpd(&args).ok()["manager"]["session"].as_str().unwrap().to_owned()
 }
 
 #[test]
 fn context_manager_by_user_starts_the_manager_without_a_first_message() {
-    let env = TestEnv::new();
-    setup(&env);
-    let id = manager(&env, true);
-    let argv = pi_argv(&env);
+    let fx = Fx::with_ports();
+    setup(&fx);
+    let id = manager(&fx, true);
+    let argv = window_argv(&fx, &id);
     assert!(!argv.iter().any(|a| a == "--" || a.starts_with('@')), "no first message file: {argv:?}");
-    assert!(!env.cpd_home().join("run/ctx/manager-message.md").exists(), "no first-message file");
-    assert_eq!(env.cpd(&["session", "show", &id]).ok()["session"]["by_user"], true);
+    assert!(!fx.env.cpd_home().join("run/ctx/manager-message.md").exists(), "no first-message file");
+    assert_eq!(fx.cpd(&["session", "show", &id]).ok()["session"]["by_user"], true);
 }
 
 #[test]
 fn context_manager_without_by_user_keeps_the_first_message() {
-    let env = TestEnv::new();
-    setup(&env);
-    let id = manager(&env, false);
-    let argv = pi_argv(&env);
-    let path = env.cpd_home().join("run/ctx/manager-message.md");
-    assert_eq!(argv[argv.len() - 2..], ["--".to_owned(), format!("@{}", path.display())], "{argv:?}");
+    let fx = Fx::with_ports();
+    setup(&fx);
+    let id = manager(&fx, false);
+    window_argv(&fx, &id);
+    let path = fx.env.cpd_home().join("run/ctx/manager-message.md");
     assert!(fs::read_to_string(&path).unwrap().starts_with("You are the Manager of Context ctx"));
-    assert_eq!(env.cpd(&["session", "show", &id]).ok()["session"]["by_user"], false);
+    assert_eq!(fx.cpd(&["session", "show", &id]).ok()["session"]["by_user"], false);
 }

@@ -134,6 +134,7 @@ fn open_pr() -> OpenPr {
         lead: Some(SessionId::parse("l-a").unwrap()),
         lead_working: false,
         plan_failed: false,
+        plan_phase: None,
         merging: false,
     }
 }
@@ -205,18 +206,18 @@ fn a_working_lead_of_a_plan_with_a_failed_job_shows_the_red_loader_in_the_dispat
 
 #[test]
 fn a_working_lead_of_a_plan_without_a_failed_job_shows_the_plain_spinner_in_both() {
-    assert_eq!(Dot::working(false), Dot::Working);
+    assert_eq!(Dot::working(false, None), Dot::Working(None));
     let cells = box_top(Pull { lead_working: true, ..pull(PrState::Open) }, &[], 2);
-    assert_eq!(spinner_fg(&cells), palette::dot_span(Dot::Working, 2, false).style.fg);
+    assert_eq!(spinner_fg(&cells), palette::dot_span(Dot::Working(None), 2, false).style.fg);
     let [_, second] = pr_lines(&OpenPr { lead_working: true, ..open_pr() }, 60, 2);
-    assert!(second.spans.contains(&palette::dot_span(Dot::Working, 2, false)), "{second:?}");
+    assert!(second.spans.contains(&palette::dot_span(Dot::Working(None), 2, false)), "{second:?}");
 }
 
 #[test]
 fn dot_working_is_the_working_branch_of_dot_of() {
-    assert_eq!(Dot::working(false), Dot::Working);
-    assert_eq!(Dot::working(true), Dot::Fixing);
+    assert_eq!(Dot::working(false, None), Dot::Working(None));
+    assert_eq!(Dot::working(true, None), Dot::Fixing);
     for failed in [false, true] {
-        assert_eq!(Dot::of(State::Working, None, failed), Dot::working(failed));
+        assert_eq!(Dot::of(State::Working, None, failed, None), Dot::working(failed, None));
     }
 }

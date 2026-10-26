@@ -52,15 +52,15 @@ test("the expand key is spelled the way Codex spells a modifier on each platform
 });
 
 test("the disclosure control starts a quarter in, at most four, and drops a hint it cannot fit", () => {
-	assert.equal(codexDisclosure(100, false, 9), "     + 9 lines (ctrl+o to expand)");
-	assert.equal(codexDisclosure(100, false, 1), "     + 1 line (ctrl+o to expand)");
-	assert.equal(codexDisclosure(100, false), "     + Show details");
-	assert.equal(codexDisclosure(100, true, 9), "     − Show less");
-	assert.equal(codexDisclosure(12, false), "    + Show details", "a quarter of 12 is three columns");
-	assert.equal(codexDisclosure(30, false, 9), "     + 9 lines", "the hint needs more room than 30 columns");
-	assert.equal(codexDisclosure(33, false, 9), "     + 9 lines (ctrl+o to expand)", "exactly fits");
-	assert.equal(codexDisclosure(32, false, 9), "     + 9 lines");
-	assert.equal(codexDisclosure(2, false), " + Show details", "below four columns only the margin is left; the row is cut where drawn");
+	assert.equal(codexDisclosure(100, false, 9), "    + 9 lines (ctrl+o to expand)");
+	assert.equal(codexDisclosure(100, false, 1), "    + 1 line (ctrl+o to expand)");
+	assert.equal(codexDisclosure(100, false), "    + Show details");
+	assert.equal(codexDisclosure(100, true, 9), "    − Show less");
+	assert.equal(codexDisclosure(12, false), "   + Show details", "a quarter of 12 is three columns");
+	assert.equal(codexDisclosure(30, false, 9), "    + 9 lines", "the hint needs more room than 30 columns");
+	assert.equal(codexDisclosure(32, false, 9), "    + 9 lines (ctrl+o to expand)", "exactly fits");
+	assert.equal(codexDisclosure(31, false, 9), "    + 9 lines");
+	assert.equal(codexDisclosure(2, false), "+ Show details", "below four columns no indent is left; the row is cut where drawn");
 });
 
 const read = (name: string): ExploreAction => ({ kind: "read", name });

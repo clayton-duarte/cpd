@@ -6,6 +6,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::text::{Line, Span};
 
+use crate::cells;
+
 /// Rows a wheel notch moves (the Worker and Plan views' notch).
 pub(crate) const WHEEL_ROWS: usize = 3;
 
@@ -24,8 +26,8 @@ pub(crate) fn cue(which: Cue, n: usize, width: usize) -> Line<'static> {
         Cue::Above => "▲",
         Cue::Below => "▼",
     };
-    let text: String = format!("{arrow} {n} more").chars().take(width).collect();
-    let pad = " ".repeat(width - text.chars().count());
+    let text: String = cells::take(&format!("{arrow} {n} more"), width).to_string();
+    let pad = " ".repeat(width - cells::width(&text));
     Line::from(vec![Span::raw(pad), Span::styled(text, crate::palette::muted_text())])
 }
 

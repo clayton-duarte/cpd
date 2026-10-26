@@ -1,4 +1,4 @@
-//! `cpd context pending` (commands.md §3.11, hs-d159 P1): the built binary
+//! `cpd context pending` (commands.md §3.11, hs-d159 P1): the command tree, in this process (`Fx`),
 //! against a temporary `$CPD_HOME` with Plans written straight into the database.
 
 use crate::common;
@@ -6,6 +6,7 @@ use crate::common;
 use std::fs;
 
 use common::TestEnv;
+use common::fx::Fx;
 use cpd_core::home::CpdHome;
 use serde_json::{Value, json};
 
@@ -85,42 +86,42 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
     );
 }
 
-fn env() -> TestEnv {
-    let env = TestEnv::new();
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+fn env() -> Fx {
+    let fx = Fx::new();
+    let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    env.sql(
+    fx.env.sql(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't'), ('empty', 'Empty', 't', 't');",
     );
-    env
+    fx
 }
 
 /// Plan `live` has PRs in every status and Jobs in every status; `ctx` also has a done and an archived Plan,
 /// and `other` has a Plan of its own.
-fn fixture() -> TestEnv {
-    let env = env();
-    plan(&env, "ctx", "live", "dispatch", false);
-    pr(&env, "live", "api", "dispatch");
+fn fixture() -> Fx {
+    let fx = env();
+    plan(&fx.env, "ctx", "live", "dispatch", false);
+    pr(&fx.env, "live", "api", "dispatch");
     for (key, status) in [("a-merged", "merged"), ("b-queued", "queued"), ("c-running", "running"), ("d-failed", "failed"), ("e-draft", "draft"), ("f-gone", "cancelled")] {
-        job(&env, "live", "api", key, status);
+        job(&fx.env, "live", "api", key, status);
     }
-    pr(&env, "live", "ui", "open");
-    job(&env, "live", "ui", "g-ui", "queued");
-    pr(&env, "live", "old", "merged");
-    job(&env, "live", "old", "h-old", "merged");
-    pr(&env, "live", "gone", "cancelled");
-    job(&env, "live", "gone", "i-gone", "cancelled");
+    pr(&fx.env, "live", "ui", "open");
+    job(&fx.env, "live", "ui", "g-ui", "queued");
+    pr(&fx.env, "live", "old", "merged");
+    job(&fx.env, "live", "old", "h-old", "merged");
+    pr(&fx.env, "live", "gone", "cancelled");
+    job(&fx.env, "live", "gone", "i-gone", "cancelled");
 
-    plan(&env, "ctx", "finished", "done", false);
-    pr(&env, "finished", "api", "merged");
-    plan(&env, "ctx", "shelved", "dispatch", true);
-    pr(&env, "shelved", "api", "dispatch");
-    job(&env, "shelved", "api", "j-shelved", "queued");
+    plan(&fx.env, "ctx", "finished", "done", false);
+    pr(&fx.env, "finished", "api", "merged");
+    plan(&fx.env, "ctx", "shelved", "dispatch", true);
+    pr(&fx.env, "shelved", "api", "dispatch");
+    job(&fx.env, "shelved", "api", "j-shelved", "queued");
 
-    plan(&env, "other", "foreign", "dispatch", false);
-    pr(&env, "foreign", "api", "dispatch");
-    job(&env, "foreign", "api", "k-foreign", "queued");
-    env
+    plan(&fx.env, "other", "foreign", "dispatch", false);
+    pr(&fx.env, "foreign", "api", "dispatch");
+    job(&fx.env, "foreign", "api", "k-foreign", "queued");
+    fx
 }
 
 fn keys(values: &Value) -> Vec<&str> {
@@ -129,8 +130,8 @@ fn keys(values: &Value) -> Vec<&str> {
 
 #[test]
 fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
-    let env = fixture();
-    let out = env.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    let fx = fixture();
+    let out = fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
     assert_eq!(out["context"], "ctx");
     let plans = out["plans"].as_array().unwrap();
     // Not `finished` (done), not `shelved` (archived), not `foreign` (another Context).
@@ -162,30 +163,32 @@ fn lists_only_active_plans_unmerged_prs_and_their_live_jobs() {
 
 #[test]
 fn the_context_is_the_selected_plans_by_default() {
-    let env = fixture();
-    let out = env.cpd(&["context", "pending", "--plan", "live"]).ok();
+    let fx = fixture();
+    let out = fx.cpd(&["context", "pending", "--plan", "live"]).ok();
     assert_eq!(out["context"], "ctx");
     assert_eq!(out["plans"][0]["id"], "live");
 }
 
 #[test]
 fn a_context_without_an_active_plan_has_no_plans() {
-    let env = fixture();
-    let out = env.cpd(&["context", "pending", "--context", "empty"]).ok();
+    let fx = fixture();
+    let out = fx.cpd(&["context", "pending", "--context", "empty"]).ok();
     assert_eq!(out["plans"], json!([]));
-    let text = env.cpd(&["context", "pending", "--context", "empty", "--markdown"]);
+    // `--markdown` prints on the process's own stdout (`print!`): the binary, which Fx cannot read.
+    let text = fx.env.cpd(&["context", "pending", "--context", "empty", "--markdown"]);
     assert_eq!((text.exit, text.stdout.as_str()), (0, "No pending work.\n"));
     // A Context whose only Plans are done or archived has none either.
-    plan(&env, "empty", "fin2", "done", false);
-    plan(&env, "empty", "shelf2", "dispatch", true);
-    pr(&env, "shelf2", "api", "dispatch");
-    assert_eq!(env.cpd(&["context", "pending", "--context", "empty"]).ok()["plans"], json!([]));
+    plan(&fx.env, "empty", "fin2", "done", false);
+    plan(&fx.env, "empty", "shelf2", "dispatch", true);
+    pr(&fx.env, "shelf2", "api", "dispatch");
+    assert_eq!(fx.cpd(&["context", "pending", "--context", "empty"]).ok()["plans"], json!([]));
 }
 
 #[test]
 fn markdown_prints_the_same_content() {
-    let env = fixture();
-    let run = env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
+    let fx = fixture();
+    // `--markdown` prints on the process's own stdout (`print!`): the binary, which Fx cannot read.
+    let run = fx.env.cpd(&["context", "pending", "--context", "ctx", "--markdown"]);
     assert_eq!(run.exit, 0, "{run:?}");
     let expected = "# Pending work in ctx\n\
 \n## live (dispatch): Title of live\n\
@@ -204,18 +207,18 @@ fn markdown_prints_the_same_content() {
 
 #[test]
 fn it_writes_nothing() {
-    let env = fixture();
-    let events = || env.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
+    let fx = fixture();
+    let events = || fx.cpd(&["events", "list"]).ok()["events"].as_array().unwrap().len();
     let before = events();
-    env.cpd(&["context", "pending", "--context", "ctx"]).ok();
+    fx.cpd(&["context", "pending", "--context", "ctx"]).ok();
     assert_eq!(events(), before);
 }
 
 #[test]
 fn refusals() {
-    let env = fixture();
-    let run = env.cpd(&["context", "pending", "--context", "nope"]);
+    let fx = fixture();
+    let run = fx.cpd(&["context", "pending", "--context", "nope"]);
     assert_eq!((run.error()["code"].clone(), run.exit), (json!("context_not_found"), 4));
-    let run = env.cpd(&["context", "pending"]);
+    let run = fx.cpd(&["context", "pending"]);
     assert_eq!((run.error()["code"].clone(), run.exit), (json!("context_required"), 2));
 }

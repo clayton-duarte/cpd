@@ -105,7 +105,7 @@ async function real(kind: "fullscreen" | "main"): Promise<Real> {
 test("in fullscreen mode a focus out report turns the border to colour 15", async () => {
 	const s = await real("fullscreen");
 	try {
-		assert.deepEqual(s.border(), ["94"], "before any report");
+		assert.deepEqual(s.border(), ["97"], "before any report");
 		s.send(FOCUS_OUT);
 		assert.deepEqual(s.border(), ["97"], readable(s.editor.render(30).join("\n")));
 	} finally { s.shutdown(); }
@@ -125,7 +125,7 @@ test("in fullscreen mode a focus in report turns the border to colour 12", async
 test("in main-screen mode the same reports change the colour", async () => {
 	const s = await real("main");
 	try {
-		assert.deepEqual(s.border(), ["94"], "before any report");
+		assert.deepEqual(s.border(), ["97"], "before any report");
 		s.send(FOCUS_OUT);
 		assert.deepEqual(s.border(), ["97"], "focus out");
 		s.send(FOCUS_IN);

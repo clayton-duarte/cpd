@@ -19,7 +19,7 @@ mod tests {
         why: &'static str,
     }
 
-    const EXEMPT: [Exempt; 8] = [
+    const EXEMPT: [Exempt; 7] = [
         Exempt {
             file: "cockpit.rs",
             line: "",
@@ -27,8 +27,8 @@ mod tests {
         },
         Exempt {
             file: "lib.rs",
-            line: "Starting again in",
-            why: "the view runner's restart message: `run_view` has already dropped its `Restore`, so the alternate screen is left",
+            line: "stderr()",
+            why: "the view runner's restart message (`view_ports::backed_off_with`): `run_view` has already dropped its `Restore`, so the alternate screen is left",
         },
         Exempt {
             file: "lib.rs",
@@ -37,23 +37,18 @@ mod tests {
         },
         Exempt {
             file: "runner.rs",
-            line: "execute!(stdout(), Enable",
-            why: "terminal setup: mouse and focus reporting on, before the first frame",
+            line: "stdout()",
+            why: "the real terminal `run_view_on` hands to `run_view_with`: its backend and the writer of the set-up and the `Restore`",
         },
         Exempt {
-            file: "runner.rs",
-            line: "execute!(stdout(), Disable",
-            why: "terminal teardown: mouse and focus reporting off, in `Restore::drop`",
+            file: "view_ports.rs",
+            line: "stdout()",
+            why: "`StdTty::is_terminal` asks whether stdout is a terminal; it writes nothing",
         },
         Exempt {
-            file: "merge/mod.rs",
-            line: "execute!(std::io::stdout(), ",
-            why: "terminal setup and teardown of the popup's mouse capture, around its frames",
-        },
-        Exempt {
-            file: "dialog/mod.rs",
-            line: "execute!(std::io::stdout(), ",
-            why: "terminal setup and teardown of the popup's mouse capture, around its frames",
+            file: "runner_tests.rs",
+            line: "trimmed_stderr()",
+            why: "the name of a test, which `stderr()` matches; it writes nothing",
         },
         Exempt {
             file: "terminal_writes.rs",

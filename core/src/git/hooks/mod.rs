@@ -7,6 +7,8 @@
 
 mod def;
 mod exec;
+#[cfg(test)]
+mod exec_runner_tests;
 mod template;
 
 use std::fmt;
@@ -16,11 +18,13 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::run::{branch_exists, current_branch, ok, rev_parse, run};
-use super::worktree::{list, worktree_of_branch};
+use super::run::{branch_exists_with, current_branch_with, ok_with, rev_parse_with, run_with};
+use super::worktree::{list_with, worktree_of_branch_with};
 use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 pub use def::{HookCommand, Pipeline, parse_value};
 pub use exec::is_withheld;
@@ -105,7 +109,21 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, pipeline, worktree, None, operation, timeout, log, Log::Truncate)
+    run_hook_with(&Ports::current(), hook, pipeline, worktree, operation, timeout, log)
+}
+
+/// [`run_hook`] on `ports`: the git calls that build the template variables and the hooks themselves go through
+/// `ports.runner`, the time of the timeout and of the git re-reads through `ports.clock`.
+pub fn run_hook_with(
+    ports: &Ports,
+    hook: Hook,
+    pipeline: &Pipeline,
+    worktree: &Path,
+    operation: Option<&Operation<'_>>,
+    timeout: Duration,
+    log: &Path,
+) -> Result<HookResult, CpdError> {
+    run_with_branch(ports, hook, pipeline, worktree, None, operation, timeout, log, Log::Truncate)
 }
 
 /// How a hook's log is opened: every hook starts its log afresh, except the Gate's `pre-merge`, whose log
@@ -138,10 +156,11 @@ pub fn run_hook_as(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
+    run_with_branch(&Ports::current(), hook, pipeline, worktree, Some(detached), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
+    ports: &Ports,
     hook: Hook,
     pipeline: &Pipeline,
     worktree: &Path,
@@ -156,7 +175,7 @@ fn run_with_branch(
     }
 
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
-    let vars = variables(hook, &cwd, detached.map(|d| d.branch), operation)?;
+    let vars = variables(ports, hook, &cwd, detached.map(|d| d.branch), operation)?;
     let mut blocks = Vec::new();
     for block in &pipeline.blocks {
         let mut rendered = Vec::new();
@@ -176,13 +195,20 @@ fn run_with_branch(
         blocks.push(rendered);
     }
 
-    Ok(run_rendered(&blocks, &cwd, detached.map_or(&[], |d| d.env), timeout, log, mode))
+    Ok(run_rendered(ports, &blocks, &cwd, detached.map_or(&[], |d| d.env), timeout, log, mode))
 }
 
 /// Runs rendered `blocks` in `cwd` and writes the output to `log` (opened as `mode` says).
-fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)], timeout: Duration, log: &Path, mode: Log) -> HookResult {
-    // The log is opened first and written as the output arrives (a killed hook
-    // or driver still leaves it, and `tail -f` works).
+fn run_rendered(
+    ports: &Ports,
+    blocks: &[Vec<exec::Rendered>],
+    cwd: &Path,
+    env: &[(&str, &str)],
+    timeout: Duration,
+    log: &Path,
+    mode: Log,
+) -> HookResult {
+    // The log is opened first, so a killed driver still leaves it; a hook's output is written when the hook ends.
     let open = || match mode {
         Log::Truncate => fs::File::create(log),
         Log::Append => fs::File::options().create(true).append(true).open(log),
@@ -194,7 +220,7 @@ fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)]
             return HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None };
         }
     };
-    let done = exec::execute(blocks, cwd, timeout, env, file, TAIL_LINES);
+    let done = exec::run_on(&*ports.runner, &*ports.clock, blocks, cwd, timeout, env, file, TAIL_LINES);
     let tail = Some(done.tail.join("\n"));
 
     let written = match done.log_error {
@@ -224,8 +250,9 @@ pub fn run_command(
     log: &Path,
     mode: Log,
 ) -> Result<HookResult, CpdError> {
+    let ports = Ports::current();
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
-    let mut vars = variables(Hook::PreCommit, &cwd, None, Some(operation))?;
+    let mut vars = variables(&ports, Hook::PreCommit, &cwd, None, Some(operation))?;
     for (key, value) in extra {
         vars.insert((*key).to_owned(), value.clone());
     }
@@ -234,13 +261,20 @@ pub fn run_command(
         Err(why) => return Ok(HookResult { outcome: HookOutcome::Error(HookError::Invalid(why)), tail: None }),
     };
     let rendered = exec::Rendered { name: None, command, context: exec::context_json(&vars) };
-    Ok(run_rendered(&[vec![rendered]], &cwd, &[], timeout, log, mode))
+    Ok(run_rendered(&ports, &[vec![rendered]], &cwd, &[], timeout, log, mode))
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the
 /// JSON each command gets on stdin. Unset ones are absent. `branch`, when
 /// given, is used instead of the branch checked out in `cwd`.
-fn variables(hook: Hook, cwd: &Path, branch: Option<&str>, operation: Option<&Operation<'_>>) -> Result<Map<String, Value>, CpdError> {
+fn variables(
+    ports: &Ports,
+    hook: Hook,
+    cwd: &Path,
+    branch: Option<&str>,
+    operation: Option<&Operation<'_>>,
+) -> Result<Map<String, Value>, CpdError> {
+    let (runner, clock) = (&*ports.runner, &*ports.clock);
     let mut vars = Map::new();
     let mut set = |key: &str, value: Value| {
         vars.insert(key.to_owned(), value);
@@ -248,27 +282,27 @@ fn variables(hook: Hook, cwd: &Path, branch: Option<&str>, operation: Option<&Op
 
     let branch = match branch {
         Some(branch) => Some(branch.to_owned()),
-        None => current_branch(cwd)?,
+        None => current_branch_with(runner, cwd)?,
     };
     if let Some(branch) = branch {
         set("branch", json!(branch));
     }
     set("worktree_path", json!(cwd));
     set("worktree_name", json!(cwd.file_name().map(|n| n.to_string_lossy().into_owned())));
-    set("commit", json!(rev_parse(cwd, "HEAD")?));
-    set("short_commit", json!(ok(cwd, &["rev-parse", "--short", "HEAD"])?.trim()));
+    set("commit", json!(rev_parse_with(runner, cwd, "HEAD")?));
+    set("short_commit", json!(ok_with(runner, cwd, &["rev-parse", "--short", "HEAD"])?.trim()));
 
-    let primary = list(cwd)?.into_iter().next().map(|w| w.path);
+    let primary = list_with(runner, clock, cwd)?.into_iter().next().map(|w| w.path);
     if let Some(primary) = primary {
         set("repo", json!(primary.file_name().map(|n| n.to_string_lossy().into_owned())));
         set("repo_path", json!(primary));
         set("primary_worktree_path", json!(primary));
     }
-    if let Some(default_branch) = default_branch(cwd)? {
+    if let Some(default_branch) = default_branch(runner, cwd)? {
         set("default_branch", json!(default_branch));
     }
-    if let Some(remote) = primary_remote(cwd)? {
-        let url = run(cwd, &["remote", "get-url", &remote])?;
+    if let Some(remote) = primary_remote(runner, cwd)? {
+        let url = run_with(runner, cwd, &["remote", "get-url", &remote])?;
         if url.code == 0 {
             set("remote_url", json!(url.stdout.trim()));
         }
@@ -281,7 +315,7 @@ fn variables(hook: Hook, cwd: &Path, branch: Option<&str>, operation: Option<&Op
             Hook::PreCommit | Hook::PreMerge => ("target", "target_worktree_path"),
         };
         set(branch_key, json!(op.branch));
-        if let Some(path) = worktree_of_branch(cwd, op.branch)? {
+        if let Some(path) = worktree_of_branch_with(runner, clock, cwd, op.branch)? {
             set(path_key, json!(path));
         }
     }
@@ -293,23 +327,23 @@ fn variables(hook: Hook, cwd: &Path, branch: Option<&str>, operation: Option<&Op
 }
 
 /// `origin`, else the first remote, else none.
-fn primary_remote(dir: &Path) -> Result<Option<String>, CpdError> {
-    let remotes = ok(dir, &["remote"])?;
+fn primary_remote(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, CpdError> {
+    let remotes = ok_with(runner, dir, &["remote"])?;
     let mut names = remotes.lines().map(str::trim).filter(|l| !l.is_empty());
     let first = names.next().map(str::to_owned);
     Ok(if remotes.lines().any(|l| l.trim() == "origin") { Some("origin".to_owned()) } else { first })
 }
 
 /// `origin/HEAD`'s branch, else `main` or `master` when it exists.
-fn default_branch(dir: &Path) -> Result<Option<String>, CpdError> {
-    let head = run(dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?;
+fn default_branch(runner: &dyn Runner, dir: &Path) -> Result<Option<String>, CpdError> {
+    let head = run_with(runner, dir, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])?;
     if head.code == 0 {
         if let Some(name) = head.stdout.trim().strip_prefix("origin/") {
             return Ok(Some(name.to_owned()));
         }
     }
     for candidate in ["main", "master"] {
-        if branch_exists(dir, candidate)? {
+        if branch_exists_with(runner, dir, candidate)? {
             return Ok(Some(candidate.to_owned()));
         }
     }

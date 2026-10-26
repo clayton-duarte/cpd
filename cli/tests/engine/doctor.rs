@@ -1,20 +1,24 @@
-//! `cpd doctor` (commands.md §14.1): the machine's checks, each against fake
-//! tools on a `PATH` that holds only the test's `bin/`.
+//! `cpd doctor` (commands.md §14.1): the machine's checks, in-process on fake ports. Every external tool is a route of
+//! the `FakeRunner` (`Fx::healthy_tools`), and a hung one is `tool_timeout` on the `ManualClock`: no process runs and no
+//! test waits.
 
 use crate::common;
 
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::io::ErrorKind;
 use std::path::Path;
+use std::time::Duration;
 
-use common::{CPD, Run, TestEnv, write_executable};
+use common::fx::Fx;
+use common::{FakeBridge, Run, TestEnv};
 use cpd_core::home::CpdHome;
+use cpd_core::host::runner::{Call, Reply};
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-const NAMES: [&str; 13] = [
+const NAMES: [&str; 14] = [
     "config",
     "store",
     "tamper",
@@ -28,93 +32,60 @@ const NAMES: [&str; 13] = [
     "pi_adapter",
     "lead_packages",
     "watch",
+    "holographic",
 ];
 
-const CODING_AGENT: &str = r#"
-export const ModelRuntime = {
-  async create(options) {
-    if (options.allowModelNetwork !== false) throw new Error("network must be off");
-    return { getModel: (provider, id) => (provider === "p" && id.startsWith("m-") ? { provider, id } : undefined) };
-  },
-};
-"#;
-const PI_AI: &str = r#"
-export function getSupportedThinkingLevels(model) {
-  return model.id === "m-low" ? ["off", "minimal", "low", "medium"] : ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-}
-"#;
+/// The deadline of each probe (`doctor::DEADLINE`, commands.md §14.1): a probe that takes this long is `tool_timeout`.
+const DEADLINE: Duration = Duration::from_secs(10);
 
-fn real_node() -> std::path::PathBuf {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path)
-        .map(|d| d.join("node"))
-        .find(|p| p.is_file())
-        .expect("node is on PATH: the Gate needs it for the TypeScript checks")
+/// A rule of the `FakeRunner`: `reply` answers a call of `program` that `matches`. It wins over the healthy route.
+fn script(fx: &Fx, program: &str, matches: impl Fn(&Call) -> bool + Send + Sync + 'static, reply: Reply) {
+    let _ = (*fx.fakes.runner).clone().on(program, matches, reply);
 }
 
-fn write_config(env: &TestEnv, extra: &str) {
-    let adapter = env.root().join("adapter");
+/// Whether the call is `gh auth ...`, the `gh_auth` probe.
+fn is_auth(call: &Call) -> bool {
+    call.args.first().map(String::as_str) == Some("auth")
+}
+
+/// A reply that takes far past [`DEADLINE`]: the tool hangs.
+fn hang() -> Reply {
+    Reply::ok("").takes(Duration::from_secs(120))
+}
+
+fn write_config(fx: &Fx, extra: &str) {
+    let adapter = fx.env.root().join("adapter");
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
+    // Every config keeps the healthy fake engine, so a test that changes another key still passes `holographic`.
+    let bridge = FakeBridge::new(&fx.env);
     let text = format!(
-        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
-        adapter.display()
+        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n{}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
+        adapter.display(),
+        bridge.config()
     );
     // `extra` holds top-level keys, so it must come before the `[tiers]` table.
-    env.write_config(&text);
+    fx.env.write_config(&text);
 }
 
-/// A fake pi install whose agent directory is the test root: `bin/pi` answering
-/// `--version`, and a release with the two entry points the catalog module imports.
-fn install_pi(env: &TestEnv, version: &str) {
-    env.fake_pi(&format!("echo '{version}'"));
-    fs::create_dir_all(env.root().join("install")).unwrap();
-    fs::write(env.root().join("install/current-version"), "1.2.0\n").unwrap();
-    let scope = env.root().join("install/releases/1.2.0/node_modules/@earendil-works");
-    for (package, source) in [("pi-coding-agent", CODING_AGENT), ("pi-ai", PI_AI)] {
-        let dist = scope.join(package).join("dist");
-        fs::create_dir_all(&dist).unwrap();
-        fs::write(scope.join(package).join("package.json"), "{\"type\": \"module\"}").unwrap();
-        fs::write(dist.join("index.js"), source).unwrap();
-    }
-}
-
-/// A machine where every check passes.
-fn healthy() -> TestEnv {
-    healthy_in(TestEnv::new())
-}
-
-/// [`healthy`] in `env`.
-fn healthy_in(env: TestEnv) -> TestEnv {
-    write_config(&env, "");
-    healthy_tools(&env);
-    symlink(real_node(), env.bin().join("node")).unwrap();
-    env
-}
-
-/// The fake git, tmux, gh and pi of [`healthy`], (re)installed in `env`.
-fn healthy_tools(env: &TestEnv) {
-    env.fake("git", "echo 'git version 2.43.0'");
-    env.fake("tmux", "case \" $* \" in *\" -V \"*) echo 'tmux 3.6';; esac; exit 0");
-    env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
-    install_pi(env, "1.2.0");
+/// A machine where every check passes: on fake ports, with the healthy tools ([`Fx::healthy_tools`]) and a config.
+fn healthy() -> Fx {
+    let fx = Fx::with_ports();
+    write_config(&fx, "");
+    fx.healthy_tools();
+    fx
 }
 
 /// `cpd doctor` with `PATH` = the test's `bin/` only, and `vars` added.
-fn doctor_with(env: &TestEnv, vars: &[(&str, &str)]) -> Run {
-    let mut cmd = env.command(CPD);
-    cmd.arg("doctor").env("PATH", env.bin()).env_remove("PLANNOTATOR_PORT").env_remove("PLANNOTATOR_REMOTE");
-    cmd.envs(vars.iter().copied());
-    let out = cmd.output().expect("run cpd");
-    Run {
-        exit: out.status.code().expect("exit code"),
-        stdout: String::from_utf8(out.stdout).expect("UTF-8"),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-    }
+fn doctor_with(fx: &Fx, vars: &[(&str, &str)]) -> Run {
+    let bin = fx.env.bin();
+    let mut all = vec![("PATH", bin.to_str().unwrap())];
+    all.extend(vars.iter().copied());
+    fx.cpd_with(fx.env.root(), &["doctor"], &all)
 }
 
-fn doctor(env: &TestEnv) -> Run {
-    doctor_with(env, &[])
+fn doctor(fx: &Fx) -> Run {
+    doctor_with(fx, &[])
 }
 
 /// The checks of a success, or of a `doctor_failed`.
@@ -158,8 +129,8 @@ fn open_store(env: &TestEnv) -> Store {
 
 #[test]
 fn a_healthy_machine_passes_every_check_in_order() {
-    let env = healthy();
-    let run = doctor(&env);
+    let fx = healthy();
+    let run = doctor(&fx);
     let json = run.ok();
     let all = checks(&run);
     let names: Vec<_> = all.iter().map(|c| c["name"].as_str().unwrap()).collect();
@@ -186,19 +157,21 @@ fn a_healthy_machine_passes_every_check_in_order() {
 
 #[test]
 fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
-    let env = healthy_in(TestEnv::empty());
-    let first = doctor(&env);
+    let fx = healthy();
+    // No store yet: the first `doctor` creates and migrates it.
+    fs::remove_file(fx.env.cpd_home().join("cpd.db")).unwrap();
+    let first = doctor(&fx);
     first.ok();
-    let db = env.cpd_home().join("cpd.db");
-    let txns = |env: &TestEnv| -> i64 {
-        let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let db = fx.env.cpd_home().join("cpd.db");
+    let txns = |fx: &Fx| -> i64 {
+        let conn = Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
         conn.query_row("SELECT count(*) FROM txns", [], |r| r.get(0)).unwrap()
     };
     assert!(db.exists());
-    assert_eq!(txns(&env), 1, "the migration's transaction only");
-    let again = doctor(&env);
+    assert_eq!(txns(&fx), 1, "the migration's transaction only");
+    let again = doctor(&fx);
     assert_eq!(again.stdout, first.stdout);
-    assert_eq!(txns(&env), 1);
+    assert_eq!(txns(&fx), 1);
     // The tiers check asks pi and does not fill the cache.
     let conn = Connection::open(db).unwrap();
     let cached: i64 = conn.query_row("SELECT count(*) FROM tier_catalog", [], |r| r.get(0)).unwrap();
@@ -207,18 +180,18 @@ fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
 
 #[test]
 fn an_argument_is_usage() {
-    let env = healthy();
-    let out = env.command(CPD).args(["doctor", "--bogus"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
+    let fx = healthy();
+    let run = fx.cpd(&["doctor", "--bogus"]);
+    assert_eq!(run.exit, 2);
 }
 
 // ------------------------------------------------------------------- config
 
 #[test]
 fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
-    let env = healthy();
-    fs::remove_file(env.cpd_home().join("config.toml")).unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    fs::remove_file(fx.env.cpd_home().join("config.toml")).unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "config", "error", "config_missing");
     for name in ["store", "tiers", "pi_adapter"] {
@@ -230,9 +203,9 @@ fn a_missing_config_fails_and_what_needs_it_is_not_checked() {
 
 #[test]
 fn an_invalid_config_fails_with_its_key() {
-    let env = healthy();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\nconcurrency = 0\n").unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\nconcurrency = 0\n").unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "config", "error", "config_invalid");
     assert_eq!(c["found"]["key"], "concurrency");
@@ -259,16 +232,12 @@ fn each_tool_must_be_at_or_above_its_minimum() {
         ("gh", "gh version 2.44.9 (2025-01-01)", false, "2.44.9"),
         ("gh", "gh version 2.46.0 (2025-01-01)", true, "2.46.0"),
     ];
-    // One env: each case is the healthy machine with one tool changed (doctor runs every tool afresh).
-    let env = healthy();
+    // Each case is the healthy machine with one tool changed (doctor runs every tool afresh), on an `Fx` of its own.
     for (tool, output, passes, found) in cases {
-        healthy_tools(&env);
-        if tool == "pi" {
-            install_pi(&env, output);
-        } else {
-            env.fake(tool, &format!("[ \"$1\" = auth ] && exit 0; echo '{output}'"));
-        }
-        let run = doctor(&env);
+        let fx = healthy();
+        // `gh auth status` stays healthy: only the version probe is changed.
+        script(&fx, tool, |call| !is_auth(call), Reply::ok(&format!("{output}\n")));
+        let run = doctor(&fx);
         let c = check(&run, tool);
         assert_eq!(c["ok"], passes, "{tool} {output:?}: {c}");
         assert_eq!(c["found"], found, "{tool} {output:?}: {c}");
@@ -284,11 +253,13 @@ fn each_tool_must_be_at_or_above_its_minimum() {
 
 #[test]
 fn a_tool_that_is_not_on_path_fails() {
-    let env = healthy();
     for tool in ["git", "tmux", "pi", "gh"] {
-        healthy_tools(&env);
-        fs::remove_file(env.bin().join(tool)).unwrap();
-        let run = doctor(&env);
+        let fx = healthy();
+        fx.fake(tool, Reply::io(ErrorKind::NotFound));
+        if tool == "pi" {
+            fs::remove_file(fx.env.bin().join("pi")).unwrap();
+        }
+        let run = doctor(&fx);
         assert_doctor_failed(&run);
         let c = assert_fails(&run, tool, "error", "not found");
         assert!(c["expected"].is_string(), "{c}");
@@ -297,10 +268,10 @@ fn a_tool_that_is_not_on_path_fails() {
 
 #[test]
 fn a_tool_that_prints_no_version_or_fails_is_a_failed_check() {
-    let env = healthy();
-    env.fake("git", "echo 'git version unknown'");
-    env.fake("tmux", "echo 'boom' >&2; exit 1");
-    let run = doctor(&env);
+    let fx = healthy();
+    fx.fake("git", Reply::ok("git version unknown\n"));
+    fx.fake("tmux", Reply::exit(1, "", "boom\n"));
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "git", "error", "no version");
     assert_fails(&run, "tmux", "error", "exited 1");
@@ -308,44 +279,58 @@ fn a_tool_that_prints_no_version_or_fails_is_a_failed_check() {
 
 #[test]
 fn gh_auth_is_a_warning_that_never_fails_doctor() {
-    let env = healthy();
-    env.fake_gh("[ \"$1\" = auth ] && { echo 'not logged in' >&2; exit 1; }; echo 'gh version 2.45.0 (2025-07-18)'");
-    let run = doctor(&env);
+    let fx = healthy();
+    script(&fx, "gh", is_auth, Reply::exit(1, "", "not logged in\n"));
+    let run = doctor(&fx);
     run.ok();
     assert_fails(&run, "gh_auth", "warn", "exited 1");
     assert_passes(&run, "gh");
-    assert_eq!(env.calls("gh").iter().filter(|c| c.as_slice() == ["auth", "status"]).count(), 1);
+    assert_eq!(fx.calls("gh").iter().filter(|c| c.args == ["auth", "status"]).count(), 1);
 }
 
 #[test]
 fn pi_node_must_run() {
-    let env = healthy();
-    fs::remove_file(env.bin().join("node")).unwrap();
-    let run = doctor(&env);
-    assert_doctor_failed(&run);
-    assert_fails(&run, "pi_node", "error", "not found");
+    {
+        let fx = healthy();
+        fx.fake("node", Reply::io(ErrorKind::NotFound));
+        let run = doctor(&fx);
+        assert_doctor_failed(&run);
+        assert_fails(&run, "pi_node", "error", "not found");
+    }
 
     // pi's own Node wins over the one on PATH, and its failure is the check's.
-    let env = healthy();
-    let pi_node = env.home().join(".local/share/pi-node/current/bin");
+    let fx = healthy();
+    let pi_node = fx.env.home().join(".local/share/pi-node/current/bin");
     fs::create_dir_all(&pi_node).unwrap();
-    write_executable(&pi_node.join("node"), "#!/bin/sh\necho 'node broke' >&2; exit 7\n");
-    let run = doctor(&env);
+    fs::write(pi_node.join("node"), "").unwrap();
+    let program = pi_node.join("node").display().to_string();
+    script(&fx, "node", move |call| call.program == program, Reply::exit(7, "", "node broke\n"));
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "pi_node", "error", "exited 7");
+}
+
+#[test]
+fn doctor_has_no_plannotator_port_check() {
+    let fx = healthy();
+    for vars in [&[][..], &[("PLANNOTATOR_REMOTE", "1")][..], &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432")][..]] {
+        let run = doctor_with(&fx, vars);
+        let checks = run.ok()["checks"].clone();
+        assert!(checks.as_array().unwrap().iter().all(|c| c["name"] != "plannotator_port"), "{checks}");
+    }
 }
 
 // ------------------------------------------------------------ pi and tiers
 
 #[test]
 fn tiers_fail_for_a_model_pi_does_not_have() {
-    let env = healthy();
+    let fx = healthy();
     fs::write(
-        env.cpd_home().join("config.toml"),
-        format!("version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/nope\"\n", env.root().join("adapter").display()),
+        fx.env.cpd_home().join("config.toml"),
+        format!("version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/nope\"\n", fx.env.root().join("adapter").display()),
     )
     .unwrap();
-    let run = doctor(&env);
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "tiers", "error", "tier_model_unknown");
     assert_eq!(c["found"]["missing"][0]["model"], "p/nope");
@@ -353,67 +338,71 @@ fn tiers_fail_for_a_model_pi_does_not_have() {
 
 #[test]
 fn tiers_fail_for_a_lead_tier_its_model_does_not_support() {
-    let env = healthy();
+    let fx = healthy();
     // H is p/m-low: efforts 0 to 2.
-    write_config(&env, "lead_tier = \"H4\"");
-    let run = doctor(&env);
+    write_config(&fx, "lead_tier = \"H4\"");
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "tiers", "error", "tier_invalid");
 }
 
 #[test]
 fn tiers_fail_when_pi_has_no_release() {
-    let env = healthy();
-    fs::remove_file(env.root().join("install/current-version")).unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    fs::remove_file(fx.env.root().join("install/current-version")).unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "tiers", "error", "pi_not_found");
 }
 
 #[test]
 fn the_adapter_directory_needs_a_package_json() {
-    // The default, beside the binary, does not exist in a build tree.
-    let env = healthy();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n").unwrap();
-    let run = doctor(&env);
-    assert_doctor_failed(&run);
-    let c = assert_fails(&run, "pi_adapter", "error", "package.json");
-    assert!(c["found"].as_str().unwrap().ends_with("share/cpd/pi"), "{c}");
+    {
+        // The default, beside the binary, does not exist in a build tree.
+        let fx = healthy();
+        fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n").unwrap();
+        let run = doctor(&fx);
+        assert_doctor_failed(&run);
+        let c = assert_fails(&run, "pi_adapter", "error", "package.json");
+        assert!(c["found"].as_str().unwrap().ends_with("share/cpd/pi"), "{c}");
+    }
 
     // A directory removed after the config was written.
-    let env = healthy();
-    fs::remove_file(env.root().join("adapter/package.json")).unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    fs::remove_file(fx.env.root().join("adapter/package.json")).unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "config", "error", "package.json");
 }
 
 #[test]
 fn lead_packages_say_how_a_lead_gets_each() {
-    let env = healthy();
-    let adapter = env.root().join("adapter").display().to_string();
-    let settings = env.home().join(".pi/agent/settings.json");
-    fs::create_dir_all(settings.parent().unwrap()).unwrap();
-    fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0"]}"#).unwrap();
-    let run = doctor(&env);
-    let c = check(&run, "lead_packages");
-    assert_eq!(c["ok"], true, "{c}");
-    let by_settings = json!({"by": "settings", "settings": settings.display().to_string()});
-    assert_eq!(
-        c["found"],
-        json!([
-            {"package": adapter, "by": "-e"},
-            {"package": "npm:@plannotator/pi-extension@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
-        ])
-    );
+    {
+        let fx = healthy();
+        let adapter = fx.env.root().join("adapter").display().to_string();
+        let settings = fx.env.home().join(".pi/agent/settings.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        fs::write(&settings, r#"{"packages": ["npm:@plannotator/pi-extension@0.1.0"]}"#).unwrap();
+        let run = doctor(&fx);
+        let c = check(&run, "lead_packages");
+        assert_eq!(c["ok"], true, "{c}");
+        let by_settings = json!({"by": "settings", "settings": settings.display().to_string()});
+        assert_eq!(
+            c["found"],
+            json!([
+                {"package": adapter, "by": "-e"},
+                {"package": "npm:@plannotator/pi-extension@0.28.17", "by": by_settings["by"], "settings": by_settings["settings"]},
+            ])
+        );
+    }
 
     // Declared by the project settings of the current directory, relative paths from that file.
-    let env = healthy();
-    write_config(&env, "lead_pi_packages = [\"./local-pkg\"]");
-    let project = env.root().join(".pi/settings.json");
+    let fx = healthy();
+    write_config(&fx, "lead_pi_packages = [\"./local-pkg\"]");
+    let project = fx.env.root().join(".pi/settings.json");
     fs::create_dir_all(project.parent().unwrap()).unwrap();
     fs::write(&project, r#"{"packages": ["../local-pkg"]}"#).unwrap();
-    let run = doctor(&env);
+    let run = doctor(&fx);
     let c = check(&run, "lead_packages");
     assert_eq!(c["ok"], true, "{c}");
     assert_eq!(c["found"][1], json!({"package": "./local-pkg", "by": "settings", "settings": project.canonicalize().unwrap().display().to_string()}));
@@ -421,33 +410,23 @@ fn lead_packages_say_how_a_lead_gets_each() {
 
 #[test]
 fn an_entry_neither_declared_nor_resolvable_is_a_warning() {
-    let env = healthy();
-    write_config(&env, "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]");
-    let run = doctor(&env);
+    let fx = healthy();
+    write_config(&fx, "lead_pi_packages = [\"/nonexistent/pi-package\", \"npm:left-pad@1.0.0\"]");
+    let run = doctor(&fx);
     run.ok();
     let c = assert_fails(&run, "lead_packages", "warn", "/nonexistent/pi-package");
     assert_eq!(c["found"][1], json!({"package": "/nonexistent/pi-package", "by": "-e", "resolvable": false}));
     assert_eq!(c["found"][2], json!({"package": "npm:left-pad@1.0.0", "by": "-e"}));
 }
 
-#[test]
-fn doctor_has_no_plannotator_port_check() {
-    let env = healthy();
-    for vars in [&[][..], &[("PLANNOTATOR_REMOTE", "1")][..], &[("PLANNOTATOR_REMOTE", "1"), ("PLANNOTATOR_PORT", "19432")][..]] {
-        let run = doctor_with(&env, vars);
-        let checks = run.ok()["checks"].clone();
-        assert!(checks.as_array().unwrap().iter().all(|c| c["name"] != "plannotator_port"), "{checks}");
-    }
-}
-
 // -------------------------------------------------------------- the store
 
 #[test]
 fn a_changed_schema_fails_store_and_tamper() {
-    let env = healthy();
-    open_store(&env);
-    Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch("DROP TRIGGER contexts_no_delete").unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    open_store(&fx.env);
+    Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap().execute_batch("DROP TRIGGER contexts_no_delete").unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "store", "error", "schema");
     assert!(c["found"].is_string() && c["expected"].is_string() && c["found"] != c["expected"], "{c}");
@@ -457,13 +436,13 @@ fn a_changed_schema_fails_store_and_tamper() {
 
 #[test]
 fn a_history_row_without_a_txn_fails_tamper_only() {
-    let env = healthy();
-    open_store(&env);
-    let conn = Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    let fx = healthy();
+    open_store(&fx.env);
+    let conn = Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap();
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     conn.create_scalar_function("cpd_txn", 0, rusqlite::functions::FunctionFlags::SQLITE_UTF8, |_| Ok(999i64)).unwrap();
     conn.execute_batch("INSERT INTO history (txn, tbl, pk, op, before, after) VALUES (999, 'contexts', '[\"x\"]', 'insert', NULL, '{}')").unwrap();
-    let run = doctor(&env);
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_passes(&run, "store");
     let c = assert_fails(&run, "tamper", "error", "outside cpd");
@@ -534,20 +513,20 @@ fn edit_locked_job_outside_cpd(env: &TestEnv) {
 
 #[test]
 fn untouched_locked_jobs_pass_tamper() {
-    let env = healthy();
-    locked_jobs(&env);
-    let run = doctor(&env);
+    let fx = healthy();
+    locked_jobs(&fx.env);
+    let run = doctor(&fx);
     run.ok();
     assert_passes(&run, "tamper");
 }
 
 #[test]
 fn a_locked_job_edited_outside_cpd_fails_tamper_and_nothing_is_written() {
-    let env = healthy();
-    locked_jobs(&env);
-    edit_locked_job_outside_cpd(&env);
-    let before = row_counts(&env);
-    let run = doctor(&env);
+    let fx = healthy();
+    locked_jobs(&fx.env);
+    edit_locked_job_outside_cpd(&fx.env);
+    let before = row_counts(&fx.env);
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_passes(&run, "store");
     let c = assert_fails(&run, "tamper", "error", "outside cpd");
@@ -556,14 +535,14 @@ fn a_locked_job_edited_outside_cpd_fails_tamper_and_nothing_is_written() {
     assert_eq!((&found[0]["kind"], &found[0]["plan"], &found[0]["job"]), (&json!("fingerprint"), &json!("pl"), &json!("a")));
     let (expected, got) = (found[0]["expected"].as_str().unwrap(), found[0]["found"].as_str().unwrap());
     assert!(expected.len() == 64 && got.len() == 64 && expected != got, "{c}");
-    assert_eq!(row_counts(&env), before, "doctor writes nothing");
+    assert_eq!(row_counts(&fx.env), before, "doctor writes nothing");
 }
 
 #[test]
 fn a_database_that_is_not_cpds_fails_store() {
-    let env = healthy();
-    fs::write(env.cpd_home().join("cpd.db"), "not a database, not a database, not a database").unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    fs::write(fx.env.cpd_home().join("cpd.db"), "not a database, not a database, not a database").unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     assert_fails(&run, "store", "error", "store_failed");
     assert_fails(&run, "tamper", "error", "not checked");
@@ -571,10 +550,10 @@ fn a_database_that_is_not_cpds_fails_store() {
 
 #[test]
 fn a_database_newer_than_this_binary_fails_store() {
-    let env = healthy();
-    open_store(&env);
-    Connection::open(env.cpd_home().join("cpd.db")).unwrap().pragma_update(None, "user_version", 99).unwrap();
-    let run = doctor(&env);
+    let fx = healthy();
+    open_store(&fx.env);
+    Connection::open(fx.env.cpd_home().join("cpd.db")).unwrap().pragma_update(None, "user_version", 99).unwrap();
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "store", "error", "store_too_new");
     // `found` is the verdict's refusal (commands.md §14.1).
@@ -584,9 +563,9 @@ fn a_database_newer_than_this_binary_fails_store() {
 
 #[test]
 fn a_store_whose_breaking_migration_this_binary_lacks_fails_store_with_the_verdicts_refusal() {
-    let env = healthy();
-    apply_newer(&env, "29991231T2359-breaking", "breaking");
-    let run = doctor(&env);
+    let fx = healthy();
+    apply_newer(&fx.env, "29991231T2359-breaking", "breaking");
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "store", "error", "store_too_new");
     assert_eq!(c["found"]["code"], "store_too_new", "{c}");
@@ -594,9 +573,9 @@ fn a_store_whose_breaking_migration_this_binary_lacks_fails_store_with_the_verdi
 
 #[test]
 fn additive_migrations_this_binary_lacks_are_no_failure_and_have_no_check_of_their_own() {
-    let env = healthy();
-    apply_newer(&env, "29991231T2359-additive", "additive");
-    let run = doctor(&env);
+    let fx = healthy();
+    apply_newer(&fx.env, "29991231T2359-additive", "additive");
+    let run = doctor(&fx);
     run.ok();
     assert_passes(&run, "store");
     assert_passes(&run, "tamper");
@@ -625,11 +604,11 @@ fn apply_newer(env: &TestEnv, name: &str, compat: &str) {
 
 #[test]
 fn doctor_has_no_contexts_check_and_ignores_an_old_store_folder() {
-    let env = healthy();
-    drop(open_store(&env));
+    let fx = healthy();
+    drop(open_store(&fx.env));
     // What an earlier version left: the check of `contexts/` is gone with the git store.
-    fs::create_dir_all(env.cpd_home().join("contexts/no-git")).unwrap();
-    let run = doctor(&env);
+    fs::create_dir_all(fx.env.cpd_home().join("contexts/no-git")).unwrap();
+    let run = doctor(&fx);
     run.ok();
     assert!(checks(&run).iter().all(|c| c["name"] != "contexts"), "{run:?}");
 }
@@ -676,20 +655,20 @@ fn hold_watch_lock(env: &TestEnv) -> Flock<fs::File> {
 #[test]
 fn the_engine_must_run_when_a_plan_is_in_dispatch_or_deploy() {
     for phase in ["dispatch", "deploy"] {
-        let env = healthy();
-        plan_in_phase(&env, phase);
-        let run = doctor(&env);
+        let fx = healthy();
+        plan_in_phase(&fx.env, phase);
+        let run = doctor(&fx);
         run.ok();
         assert_fails(&run, "watch", "warn", "no engine runs");
 
         // A lock file nobody holds is no engine either.
-        let lock = hold_watch_lock(&env);
+        let lock = hold_watch_lock(&fx.env);
         drop(lock);
-        let run = doctor(&env);
+        let run = doctor(&fx);
         assert_fails(&run, "watch", "warn", "no engine runs");
 
-        let _held = hold_watch_lock(&env);
-        let run = doctor(&env);
+        let _held = hold_watch_lock(&fx.env);
+        let run = doctor(&fx);
         run.ok();
         assert_passes(&run, "watch");
     }
@@ -697,74 +676,60 @@ fn the_engine_must_run_when_a_plan_is_in_dispatch_or_deploy() {
 
 #[test]
 fn no_engine_is_needed_when_no_plan_is_in_dispatch_or_pr() {
-    let env = healthy();
-    let run = doctor(&env);
+    {
+        let fx = healthy();
+        let run = doctor(&fx);
+        assert_passes(&run, "watch");
+    }
+    let fx = healthy();
+    plan_in_phase(&fx.env, "plan");
+    let run = doctor(&fx);
     assert_passes(&run, "watch");
-    let env = healthy();
-    plan_in_phase(&env, "plan");
-    let run = doctor(&env);
-    assert_passes(&run, "watch");
-    assert!(!Path::new(&env.cpd_home().join("locks/watch.lock")).exists(), "doctor must not create the lock");
+    assert!(!Path::new(&fx.env.cpd_home().join("locks/watch.lock")).exists(), "doctor must not create the lock");
 }
 
 // ---------------------------------------------------------------- deadlines
 
-/// commands-W6: a fake that hangs on the probe named by `hang` (a shell test on its
-/// arguments) sleeps past the deadline; `sleep` is not on the tests' `PATH`, so it is linked.
-fn link_sleep(env: &TestEnv) {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let sleep = std::env::split_paths(&path).map(|d| d.join("sleep")).find(|p| p.is_file()).expect("sleep is on PATH");
-    symlink(sleep, env.bin().join("sleep")).unwrap();
-}
-
-const HANG: &str = "exec sleep 120";
-
-/// The deadline override of the tests where one probe hangs and the others must not: the override also covers the
-/// plain `--version` probes, and a spawn takes over 1 s on a loaded Mac at the start of the Gate.
-const DEADLINE: &str = "5";
-
-/// Asserts `name` failed with `tool_timeout` naming `tool` and its deadline of `seconds` (as the override set it),
-/// and the other checks still ran.
-fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str, seconds: &str) {
+/// Asserts `name` failed with `tool_timeout` naming `tool` and the probe's deadline of 10 s, with `argv` in its message.
+fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str) {
     let c = assert_fails(run, name, severity, "tool_timeout");
     let message = c["message"].as_str().unwrap();
-    assert!(message.contains(&format!("{tool} ran past its deadline of {seconds}s")), "{message}");
+    assert!(message.contains(&format!("{tool} ran past its deadline of {}s", DEADLINE.as_secs())), "{message}");
     assert!(message.contains(argv), "{message}");
 }
 
 #[test]
 fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
-    let env = healthy();
-    link_sleep(&env);
-    env.fake_gh(&format!("[ \"$1\" = auth ] && {HANG}; echo 'gh version 2.45.0 (2025-07-18)'"));
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", DEADLINE)]);
+    let fx = healthy();
+    script(&fx, "gh", is_auth, hang());
+    let run = doctor(&fx);
     run.ok();
-    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status", DEADLINE);
+    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status");
     assert_eq!(checks(&run).len(), NAMES.len());
+    assert_eq!(fx.fakes.clock.elapsed(), DEADLINE, "the hung probe took its deadline of virtual time");
 }
 
 #[test]
 fn a_hung_tool_version_is_a_failed_error_check_and_doctor_goes_on() {
-    let env = healthy();
-    link_sleep(&env);
-    env.fake("git", HANG);
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GIT", "1")]);
+    let fx = healthy();
+    fx.fake("git", hang());
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
-    assert_timed_out(&run, "git", "error", "git", "--version", "1");
+    assert_timed_out(&run, "git", "error", "git", "--version");
     assert_passes(&run, "tmux");
     assert_passes(&run, "pi_node");
     assert_passes(&run, "tiers");
+    assert_eq!(fx.fakes.clock.elapsed(), DEADLINE);
 }
 
 #[test]
 fn a_hung_pi_node_is_a_failed_check() {
-    let env = healthy();
-    link_sleep(&env);
-    fs::remove_file(env.bin().join("node")).unwrap();
-    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n{HANG}\n"));
-    // Both probes hang: a sub-second deadline (contract §1.2 "Test overrides") is all they wait.
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "0.3")]);
+    let fx = healthy();
+    fx.fake("node", hang());
+    // Both probes hang: each takes its deadline of virtual time.
+    let run = doctor(&fx);
     assert_doctor_failed(&run);
-    assert_timed_out(&run, "pi_node", "error", "node", "--version", "0.3");
-    assert_timed_out(&run, "tiers", "error", "node", "--input-type=module", "0.3");
+    assert_timed_out(&run, "pi_node", "error", "node", "--version");
+    assert_timed_out(&run, "tiers", "error", "node", "--input-type=module");
+    assert_eq!(fx.fakes.clock.elapsed(), DEADLINE * 2);
 }

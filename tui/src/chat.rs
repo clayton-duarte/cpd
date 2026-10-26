@@ -28,11 +28,12 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Error {
     }
 }
 
-/// Draws the placeholder: [`PLACEHOLDER_TEXT`], muted, wrapped to the pane one
-/// column in from its left edge.
+/// Draws the placeholder: [`PLACEHOLDER_TEXT`], muted, inside the chat slot's
+/// uniform 1-cell pad, so the text starts at row 1, column 1 and the pane's
+/// first and last row and column stay blank.
 fn draw(frame: &mut Frame) {
     let text = Paragraph::new(Line::styled(PLACEHOLDER_TEXT, crate::palette::muted_text())).wrap(Wrap { trim: true });
-    frame.render_widget(text.block(Block::new().padding(Padding::left(1))), frame.area());
+    frame.render_widget(text.block(Block::new().padding(Padding::uniform(1))), frame.area());
 }
 
 #[cfg(test)]
@@ -57,9 +58,12 @@ mod tests {
     fn draws_the_placeholder_text_dim() {
         let buffer = render(80, 3);
         let rows = rows(&buffer);
-        assert_eq!(rows[0].trim_end(), " No Lead here: pick a Plan in the session tree", "{rows:?}");
-        assert!(rows[1..].iter().all(|r| r.trim().is_empty()), "{rows:?}");
-        assert!(crate::palette::check::is_muted(&buffer[(1, 0)]));
+        assert_eq!(rows[0].trim(), "", "the first row is blank: {rows:?}");
+        assert_eq!(rows[1].trim_end(), " No Lead here: pick a Plan in the session tree", "{rows:?}");
+        assert_eq!(rows[2].trim(), "", "the last row is blank: {rows:?}");
+        assert!(buffer[(0, 1)].symbol().trim().is_empty(), "the first column is blank");
+        assert!(buffer[(79, 1)].symbol().trim().is_empty(), "the last column is blank");
+        assert!(crate::palette::check::is_muted(&buffer[(1, 1)]));
     }
 
     #[test]

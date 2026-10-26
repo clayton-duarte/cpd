@@ -29,7 +29,9 @@ fn tmux_range_wraps_the_inner_in_a_user_range() {
 }
 
 #[test]
-fn the_border_format_title_pill_follows_pane_active_with_colour_numbers() {
+fn the_border_format_colours_the_three_view_titles_dango() {
     let f: &str = &BORDER_FORMAT;
+    let dango = "#{?#{==:#{@cpd_view},tree},#[fg=colour5],#{?#{==:#{@cpd_view},plan},#[fg=colour7],#{?#{==:#{@cpd_view},widgets},#[fg=colour2],#{?pane_active,#[fg=colour4],#[fg=colour7]}}}}";
+    assert!(f.contains(dango), "the dango view pill: {f}");
     assert!(f.contains("#{?pane_active,#[fg=colour4],#[fg=colour7]}"), "{f}");
 }

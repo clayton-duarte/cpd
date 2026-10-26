@@ -9,7 +9,7 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Select, digest};
+use super::{ContextRow, Select};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
@@ -77,7 +77,7 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
 
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
     if row.archived_at.is_some() {
@@ -147,8 +147,7 @@ fn register(
         .display()
         .to_string();
     if !by_user {
-        let message = store.read(|conn| digest::manager_message(conn, config, context, &row.title))?;
-        write_file(&home.manager_message(context), &message)?;
+        write_file(&home.manager_message(context), &manager_message(context, &row.title))?;
     }
 
     let id = SessionId::new_v4();
@@ -168,4 +167,14 @@ fn register(
         Ok(())
     })?;
     Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None })
+}
+
+/// A Manager's first message (commands.md §3.10): the header, then the pointer line. Nothing Context-wide is
+/// pushed; the Manager reads it on demand or at its turn-start message (docs/research/context-retrieval-design.md
+/// "First messages"). The one rendering `context manager` and `session first-message` share.
+pub(crate) fn manager_message(context: &ContextId, title: &str) -> String {
+    format!(
+        "You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n\
+         Context on demand: cpd context search <query> --context {context} · cpd context show --context {context} --since <seq> · cpd context show --context {context} --record <id>\n"
+    )
 }

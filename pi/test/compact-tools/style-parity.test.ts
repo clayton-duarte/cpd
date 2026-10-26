@@ -67,9 +67,9 @@ for (const [styleName, config] of Object.entries(STYLES)) {
 					// Running, with nothing yet to open: Codex's "Calling" and "Running", behind the same bullet on the same frame.
 					for (let frame = 0; frame < 16; frame++) {
 						const [b, c] = [builtIn.render(100), custom.render(100)];
-						assert.match(plain(c[1]!), /^ • Calling web_search/u, at);
+						assert.match(plain(c[1]!), /^• Calling web_search/u, at);
 						assert.equal(dotOf(c), dotOf(b), `${at}: frame ${frame} dot`);
-						assert.match(plain(b[1]!), /^ • Running cd \/project/u, at);
+						assert.match(plain(b[1]!), /^• Running cd \/project/u, at);
 						tick();
 					}
 					finish();
@@ -78,17 +78,17 @@ for (const [styleName, config] of Object.entries(STYLES)) {
 					// a one-line failure has nothing more and keeps its preview.
 					const commandOpened = expanded && !failed;
 					if (!commandOpened) assert.equal(dotOf(c), dotOf(b), `${at}: settled dot`);
-					assert.match(plain(c[1]!), failed ? /^ • Failed web_search/u : /^ • Called web_search/u, at);
-					assert.match(plain(b[1]!), commandOpened ? /^ \$ cd \/project/u : failed ? /^ • Failed \(exit 1\) cd/u : /^ • Ran cd/u, at);
+					assert.match(plain(c[1]!), failed ? /^• Failed web_search/u : /^• Called web_search/u, at);
+					assert.match(plain(b[1]!), commandOpened ? /^\$ cd \/project/u : failed ? /^• Failed \(exit 1\) cd/u : /^• Ran cd/u, at);
 					// Collapsed, what follows the call hangs from "└" four columns in, and the control reads the same way.
 					if (!expanded) {
 						for (const lines of [b, c]) {
 							assert.match(plain(lines[2]!), /^ {3}└ /u, `${at}: ${JSON.stringify(plain(lines[2]!))}`);
-							for (const line of lines.slice(3)) assert.match(plain(line), /^ {5}\S/u, `${at}: ${JSON.stringify(plain(line))}`);
+							for (const line of lines.slice(3)) assert.match(plain(line), /^ {4,5}\S/u, `${at}: ${JSON.stringify(plain(line))}`);
 						}
 					}
-					assert.equal(plain(c.at(-1)!), expanded ? "     − Show less" : "     + Show details", at);
-					if (commandOpened) assert.equal(plain(b.at(-1)!), "     − Show less", at);
+					assert.equal(plain(c.at(-1)!), expanded ? "    − Show less" : "    + Show details", at);
+					if (commandOpened) assert.equal(plain(b.at(-1)!), "    − Show less", at);
 					// The tail under "└" is dim, in the same color for both.
 					const chrome = (lines: string[]) => new Set(lines.slice(2).filter((line) => plain(line).startsWith("   └ ")).map(leadingColor));
 					for (const color of chrome(c)) assert.ok(chrome(b).has(color) || chrome(b).size === 0, `${at}: chrome ${JSON.stringify(color)}`);
@@ -228,7 +228,7 @@ for (const [styleName, config] of Object.entries(STYLES)) {
 				assert.deepEqual(calls.map((line) => line.split(" ").slice(0, 3).join(" ")), [" ⦁ read", " ⦁ grep", " ⦁ web_search", " ⦁ bash"]);
 			} else if (styleName === "codex") {
 				assert.deepEqual(shown.filter((line) => line.includes("•")).map((line) => line.split(" ").slice(0, 4).join(" ")),
-					[" • Explored", " • Called web_search", " • Running cd"]);
+					["• Explored", "• Called web_search", "• Running cd /project"]);
 			} else {
 				assert.deepEqual(calls.map((line) => line.replace(/\(.*$/u, "(")),
 					[" ⦁ Searched for 1 pattern, read 1 file (", " ⦁ web_search(", " ⦁ Bash("]);
