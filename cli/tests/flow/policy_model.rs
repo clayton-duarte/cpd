@@ -253,6 +253,12 @@ fn cache(fx: &Fx, prefixes: &[&str]) {
     write_executable(&fx.env.bin().join("pi"), "");
     fs::create_dir_all(fx.env.root().join("install")).unwrap();
     fs::write(fx.env.root().join("install/current-version"), format!("{VERSION}\n")).unwrap();
+    let scope = fx.env.root().join("install/releases").join(VERSION).join("node_modules/@earendil-works");
+    for package in ["pi-coding-agent", "pi-ai"] {
+        fs::create_dir_all(scope.join(package).join("dist")).unwrap();
+        fs::write(scope.join(package).join("package.json"), "{\"type\": \"module\"}").unwrap();
+        fs::write(scope.join(package).join("dist/index.js"), "").unwrap();
+    }
     let rows: String = prefixes
         .iter()
         .flat_map(|p| [("O", "[0,1,2,3,4,5]"), ("S", "[0,1]"), ("H", "[0,1,2]")].map(|(l, e)| (p, l, e)))
