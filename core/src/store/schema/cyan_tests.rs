@@ -79,7 +79,7 @@ fn every_blue_row_reads_cyan_and_nothing_else_changes_and_the_check_and_the_open
     assert_eq!(history(&mut store), history_before, "the copy writes no history row");
 
     // the CHECK
-    let refusal = write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', 'blue', 'curate-docs:other', 'l', 't')");
+    let refusal = write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', 'teal', 'curate-docs:other', 'l', 't')");
     assert!(format!("{refusal:?}").contains("CHECK constraint failed"), "{refusal:?}");
     write(&mut store, "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', 'cyan', 'curate-docs:other', 'l', 't')").unwrap();
     // the open-item unique index

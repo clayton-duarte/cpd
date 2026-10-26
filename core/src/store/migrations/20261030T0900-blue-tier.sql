@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 54
+-- cpd-migration: breaking after 55
 -- pro-d58: add the Inbox tier `blue` for external support (review-requested); `inbox_items` is rebuilt as `pr-adopt` rebuilt it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
