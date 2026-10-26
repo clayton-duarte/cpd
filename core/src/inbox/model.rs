@@ -79,11 +79,11 @@ pub enum Urgency {
     White,
     /// A cpd notice that blocks nothing (hs-d570).
     Cyan,
+    /// External support: a review asked of the User (pro-d58).
+    Blue,
     Magenta,
     Yellow,
     Red,
-    /// External support: a review asked of the User (pro-d58). Stub.
-    Blue,
 }
 
 impl Urgency {
@@ -94,12 +94,12 @@ impl Urgency {
             Urgency::Yellow => "yellow",
             Urgency::Red => "red",
             Urgency::Cyan => "cyan",
-            Urgency::Blue => unimplemented!("blue tier"),
+            Urgency::Blue => "blue",
         }
     }
 
     pub fn parse(s: &str) -> Option<Urgency> {
-        [Urgency::White, Urgency::Cyan, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
+        [Urgency::White, Urgency::Cyan, Urgency::Blue, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
     }
 }
 
@@ -273,11 +273,11 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
 }
 
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
-/// magenta, white, then the oldest `opened_at` first. A plain read.
+/// magenta, blue, cyan, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     let context = filter.context.as_ref().map(ContextId::as_str);
     let select = format!("SELECT {COLUMNS} FROM inbox_items WHERE (?1 IS NULL OR context = ?1) AND");
-    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 WHEN 'cyan' THEN 3 ELSE 4 END, opened_at, id";
+    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 WHEN 'blue' THEN 3 WHEN 'cyan' THEN 4 ELSE 5 END, opened_at, id";
     match &filter.state {
         State::Visible { now } => items(
             conn,
@@ -487,8 +487,8 @@ mod tests {
     }
 
     #[test]
-    fn urgency_orders_white_cyan_magenta_yellow_red_and_parses_cyan() {
-        assert!(Urgency::White < Urgency::Cyan && Urgency::Cyan < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+    fn urgency_orders_white_cyan_blue_magenta_yellow_red_and_parses_cyan() {
+        assert!(Urgency::White < Urgency::Cyan && Urgency::Cyan < Urgency::Blue && Urgency::Blue < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
         assert_eq!(Urgency::parse("cyan"), Some(Urgency::Cyan));
         assert_eq!(Urgency::Cyan.as_str(), "cyan");
     }
@@ -501,7 +501,7 @@ mod tests {
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }
-        for name in ["white", "cyan", "magenta", "yellow", "red"] {
+        for name in ["white", "cyan", "blue", "magenta", "yellow", "red"] {
             assert_eq!(Urgency::parse(name).unwrap().as_str(), name);
         }
         assert_eq!((Kind::parse("nope"), Urgency::parse("nope")), (None, None));

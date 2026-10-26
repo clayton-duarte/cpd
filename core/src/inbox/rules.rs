@@ -519,7 +519,7 @@ fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team
             let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
             Condition {
                 kind: Kind::ReviewRequested,
-                urgency: Urgency::Yellow,
+                urgency: Urgency::Blue,
                 subject: format!("pr:{}#{}", post.repo, post.number),
                 label: format!("review {name}#{}", post.number),
                 url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
@@ -1524,7 +1524,7 @@ mod tests {
     fn a_post_with_no_review_opens_an_item_with_the_posts_pull_request() {
         let mut f = fixture("dispatch");
         let c = one(reviews(&mut f, &[post("acme/pay", 812)], &[("acme/pay", 812, open_pr())]));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/pay#812", "review pay#812"));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Blue, "pr:acme/pay#812", "review pay#812"));
         assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
         assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
     }
