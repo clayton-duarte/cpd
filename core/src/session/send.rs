@@ -122,6 +122,47 @@ pub fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize,
     Ok(ids.len())
 }
 
+/// Whether `target`, a stopped Lead or Manager with no live pane, is to be started after its message commits (hs-d725);
+/// `no_cockpit` when it is and there is no cockpit to start it in.
+fn needs_pane(env: &Env, target: &Row) -> Result<bool, CpdError> {
+    let tmux = env.tmux();
+    let wake = target.state.as_str() == "stopped"
+        && !tmux.list_panes().unwrap_or_default().iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&target.id));
+    if wake && !tmux.has_session(&env.config.tmux.cockpit_session)? {
+        return Err(no_cockpit(&env.config.tmux.cockpit_session));
+    }
+    Ok(wake)
+}
+
+/// What `cpd session send <manager> <text> --unblocks <reason>` run with no sender Session does, for another command's
+/// transaction: the same checks, the `session-message` Event written in the transaction of `inside` (whose value is
+/// returned), and, after the commit, the start of a stopped Manager. Refuses before any write.
+pub(crate) fn send_as_user<T>(
+    env: &mut Env,
+    id: &SessionId,
+    command: &str,
+    text: &str,
+    unblocks: &str,
+    inside: impl FnOnce(&WriteTxn<'_>) -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
+    let needs_pane = {
+        let target = env.store.read(|conn| row::load(conn, id))?;
+        check(&target)?;
+        needs_pane(env, &target)?
+    };
+    let (value, target) = env.store.write(command, |tx| {
+        let target = row::load(tx, id)?;
+        check(&target)?;
+        let value = inside(tx)?;
+        write(tx, &target, &None, text, Some(unblocks), true)?;
+        Ok((value, target))
+    })?;
+    if needs_pane {
+        start_parked(env, &target, command)?;
+    }
+    Ok(value)
+}
+
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
@@ -135,12 +176,7 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let needs_pane = {
         let target = env.store.read(|conn| row::load(conn, &id))?;
         check(&target)?;
-        let tmux = env.tmux();
-        let wake = target.state.as_str() == "stopped" && !tmux.list_panes().unwrap_or_default().iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&id));
-        if wake && !tmux.has_session(&env.config.tmux.cockpit_session)? {
-            return Err(no_cockpit(&env.config.tmux.cockpit_session));
-        }
-        wake
+        needs_pane(&env, &target)?
     };
     let (event, target) = env.store.write("session send", |tx| {
         let target = row::load(tx, &id)?;
