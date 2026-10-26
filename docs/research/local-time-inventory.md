@@ -30,11 +30,11 @@ offset exists once, in `core/src/inbox/cmd.rs:255` `local_offset_with` (`date +%
 
 | file:line | producer | current rendered form (real example) | formatter | proposed owner of the change |
 |---|---|---|---|---|
-| `core/src/context/render.rs:188` | `date()`, called by `item` (175), `nested` (179), `nested_brief` (184), `raw` (146-148, no non-test caller found), `single` (153-159): every line of `cpd context show` markdown, `--since`, `--record`, `--topic` | `- pro-p1 (2026-10-23): owner-fix (on pro, …)`; `## pro-d41 (decision, 2026-10-26)` (live). A **UTC date** cut from `at` with `get(..10)`: the date is wrong for the User in the evening (23:03 EDT is already the next UTC day) and it names no zone | string slice, no formatter | `date()` in `render.rs`: call the one shared Rust local-time formatter on the `at` string |
+| `core/src/context/render.rs:188` | `date()`, called by `item` (175), `nested` (179), `nested_brief` (184), `raw` (146-148, never used: compiler warning), `single` (153-159): every line of `cpd context show` markdown, `--since`, `--record`, `--topic` | `- pro-p1 (2026-10-23): owner-fix (on pro, …)`; `## pro-d41 (decision, 2026-10-26)` (live). A **UTC date** cut from `at` with `get(..10)`: the date is wrong for the User in the evening (23:03 EDT is already the next UTC day) and it names no zone | string slice, no formatter | `date()` in `render.rs`: call the one shared Rust local-time formatter on the `at` string |
 | `core/src/context/distill.rs:674` | `records_md`: `records.md`/`batch.md` that the distiller pi agent reads (contract §4.6 step 3, §2084) | `[pro-d41] decision (2026-10-26)`; same UTC date slice | `record.at.get(..10)` | `records_md` in `distill.rs` (calls the same formatter as `render.rs`); guess: it is agent input, not a person's screen, but the Requirement lists "what agents write" and the distiller's output becomes records |
 | `pi/lib/updates.ts:187` | `line()`, brief branch: every record line of the digest that starts a Manager/Lead turn (`§15.7`) | `- pro-b1 brief (2026-10-23): Correct a Context's owner Plan owner-fix.` UTC date | `r.at.slice(0, 10)` | `line()` in `pi/lib/updates.ts`: call `pi/lib/time.ts` |
 | `pi/lib/updates.ts:188` | `line()`, other kinds: same digest | `- pro-d41 decision (2026-10-26): Times in the machine's time zone …` UTC date | `r.at.slice(0, 10)` | same `line()` in `pi/lib/updates.ts` |
-| `engine/src/watch/engine.rs:423` | `Downtime::sentence`, used at `engine.rs:462` (the `watch-started` Event `text`, also delivered to Managers as the Event's text) and `engine.rs:466` (`watch.log`) | `The engine was down for 3.2 s: it stopped at 2026-10-25T22:29:00.000Z.` (format from the `ports_tests.rs:303` assertion; the live store has no such Event, unverified for real output) | `clock::timestamp(self.since)` | `Downtime::sentence` in `engine/src/watch/engine.rs` |
+| `engine/src/watch/engine.rs:423` | `Downtime::sentence`, used at `engine.rs:462` (the `watch-started` Event `text`, also delivered to Managers as the Event's text) and `engine.rs:466` (`watch.log`) | `The engine was down for 3.2 s: it stopped at 2026-10-25T22:29:00.000Z.` (format from the `engine/src/watch/ports_tests.rs:303` assertion; the live store has no such Event, unverified for real output) | `clock::timestamp(self.since)` | `Downtime::sentence` in `engine/src/watch/engine.rs` |
 | `engine/src/watch/restart.rs:83` | `Pending::describe`, pending branch: `cpd doctor` check `tmux_restart` (`engine/src/doctor/mod.rs:44-45`) and bare `cpd` (`cli/src/cli.rs:245`, failed branch only) | `A tmux restart is pending since 2026-10-25T21:10:00.000Z: the server runs tmux 3.4, the installed tmux is 3.5. No Attempt starts until it has run.` (shape from source; no live restart was pending, unverified) | `self.at` is a `clock::timestamp` string (`restart.rs:91`) printed as is | `Pending::describe` in `engine/src/watch/restart.rs` |
 | `engine/src/watch/restart.rs:85` | `Pending::describe`, failed branch: same surfaces | `The tmux restart failed at 2026-10-25T21:10:00.000Z: <reason> See run/tmux-restart.log.` | `f.at` printed as is | same `describe` |
 | `engine/src/watch/pr.rs:246` | rate-limit `Failure.message` (code `gh_rate_limited`; becomes an `error` Event text the User reads) | `GitHub's rate limit has 12 requests left: PR polling pauses until 2026-10-20T11:00:00Z.` (`reset_at` is GitHub's string, printed as is; `details.reset_at` at line 247 stays a field) | `{reset_at}` raw | the `message` in `engine/src/watch/pr.rs` (parse `reset` already exists at line 241) |
@@ -51,14 +51,14 @@ guess):
   `engine/src/watch/titles.rs:70`, `core/src/session/reload.rs:81,131`, `core/src/host/install_state.rs:94`): they quote a
   malformed value on purpose to say it is not RFC 3339; keep it as written (guess: they are diagnostics of a corrupt field, so UTC
   quoting is correct; the Lead decides).
-- **Event texts** (`NewEvent::…(format!(…))`): times appear only in `watch-started` (`engine.rs:423`) and `inbox-snoozed`
-  (`inbox/cmd.rs:311`). The `session-message` Event text (`core/src/session/send.rs:99,102`) holds no time; the time of
+- **Event texts** (`NewEvent::…(format!(…))`): times appear only in `watch-started` (`engine/src/watch/engine.rs:423`) and `inbox-snoozed`
+  (`core/src/inbox/cmd.rs:311`). The `session-message` Event text (`core/src/session/send.rs:99,102`) holds no time; the time of
   that message is added by the adapter (`pi/lib/delivery.ts:43`, ALREADY LOCAL).
-- **`context show`**: `render.rs:188` above. `--digest` prints `[pro-d41] <short>` with no date (live), and `context search`
+- **`context show`**: `core/src/context/render.rs:188` above. `--digest` prints `[pro-d41] <short>` with no date (live), and `context search`
   lines (`core/src/context/search.rs:294`) carry none; `context pending --markdown` (`core/src/context/pending.rs:150`)
   and plan markdown (`core/src/plan/render.rs`, `summary.rs`) carry none (read; `rg` for `_at`/`at` found none).
 - **Digests that start a turn** (`pi/lib/updates.ts`): `line()` 187-188 (PROSE) and the `Board:` section 195 (ALREADY LOCAL).
-  The Plan Event lines of that digest (`updates.ts:59`) use the Event `text` and no time of their own.
+  The Plan Event lines of that digest (`pi/lib/updates.ts:59`) use the Event `text` and no time of their own.
 - **Inbox labels** (`core/src/inbox/rules.rs`: 187, 200, 214, 243, 283, 320-323, 524, 547): none holds a clock time;
   `loop guard, N turns in 10 min` is a duration. The Inbox row's age is a duration (`tui/src/tree/inbox.rs:162`, see "Not a time").
   The one time in the Inbox UI is the menu label `Snooze until tomorrow 09:00` (ALREADY LOCAL).
@@ -98,7 +98,7 @@ it only when a command prints the JSON field. None of these changes.
 | `core/src/store/mod.rs:768` | `txns.at` of every command (Event `at`, history `at`) | `2026-10-26T03:05:11.907Z` (live `events list`) | `clock::now()` |
 | `core/src/store/mod.rs:930` | store slow-log line field `at` | `{"at":"…Z",…}` | `clock::now()` |
 | `core/src/events/select.rs:133` | Event `at` in `events list`/`follow` JSON; read by `pi/lib/event.ts:40,85` | `"at":"2026-10-19T15:17:50.426Z"` | stored |
-| `core/src/context/record.rs:128` | record JSON `at` (`context show` JSON `records[].at`); stored `record.rs:256` | `"at":"2026-10-14T21:12:00.000Z"` | `clock::now()` at `context/write.rs`/`curation.rs:101,301,354` |
+| `core/src/context/record.rs:128` | record JSON `at` (`context show` JSON `records[].at`); stored `record.rs:256` | `"at":"2026-10-14T21:12:00.000Z"` | `clock::now()` |
 | `core/src/context/mod.rs:316` | `created_at` of a Context | `2026-10-14T21:10:00.000Z` | stored |
 | `core/src/context/search.rs:286` | search hit `at` | same | stored |
 | `core/src/context/curation.rs:101` | `curated_at` | same | `clock::now()` |
@@ -141,20 +141,20 @@ it only when a command prints the JSON field. None of these changes.
 |---|---|---|
 | `docs/contract.md:98` | §1.3 `Times are RFC 3339 UTC strings with milliseconds, 2026-10-14T21:10:00.000Z` | the FIELD rule; must be amended with the prose rule (the Job that edits docs, not this one) |
 | `docs/contract.md:125` | install-state file `since` UTC `Z` | FIELD |
-| `docs/contract.md:230` | "Each item shows its id and date" (context show rendering) | PROSE rule text (`render.rs:188`) |
+| `docs/contract.md:230` | "Each item shows its id and date" (context show rendering) | PROSE rule text (`core/src/context/render.rs:188`) |
 | `docs/contract.md:550` | Inbox snooze `tomorrow 09:00 local time` | ALREADY LOCAL text |
 | `docs/contract.md:559` | incident `started_at` RFC 3339 UTC | FIELD |
-| `docs/contract.md:899` | `The engine was down for <s> s: it stopped at <time>.` | PROSE text (`engine.rs:423`) |
+| `docs/contract.md:899` | `The engine was down for <s> s: it stopped at <time>.` | PROSE text (`engine/src/watch/engine.rs:423`) |
 | `docs/contract.md:923`, `:1830` | UTC adapter dir and migration names | FIELD (file names) |
-| `docs/contract.md:2084` | `batch.md`: `[<id>] <kind> (<date>)` | PROSE text (`distill.rs:674`) |
+| `docs/contract.md:2084` | `batch.md`: `[<id>] <kind> (<date>)` | PROSE text (`core/src/context/distill.rs:674`) |
 | `docs/contract.md:2089` | run log `started_at` RFC 3339 UTC | FIELD |
 | `docs/contract.md:2816`, `:3140`, `:3192` | tool row / balloon `HH:MM` machine-local | ALREADY LOCAL (narrow) |
 | `docs/commands.md:286` | `context show` markdown: "each item with its id and date" | PROSE text |
 | `docs/commands.md:251,294,355,1786,2524,2691,2719,2746,2795,4212,4271,4290,4711,4749,4754,4759,4764,4808,4814` | 19 JSON examples with `…Z` times (`created_at`, `at`, `reset_at`, `titled_at`, `posted_at`, `opened_at`, `snoozed_until`, `dismissed_at`, `expires_at`, `started_at`) | FIELD, unchanged |
 | `docs/commands.md:2151` | `host repair` `<ts>` = UTC `YYYYMMDDTHHMMSSZ` | FIELD (file name) |
 | `docs/commands.md:3208` | `logs`: "its time of day (`HH:MM:SS`, colour 8)" with no zone | PROSE text (`tui/src/logs/view.rs:133`) |
-| `docs/commands.md:3291` | `tmux_restart` check: `found` "the times and versions" | PROSE text (`restart.rs:83`) |
-| `docs/commands.md:3423` | `session-message` content `Message from <sender> (HH:MM)`, local, "no hardcoded offset" | ALREADY LOCAL text (`delivery.ts:43`) |
+| `docs/commands.md:3291` | `tmux_restart` check: `found` "the times and versions" | PROSE text (`engine/src/watch/restart.rs:83`) |
+| `docs/commands.md:3423` | `session-message` content `Message from <sender> (HH:MM)`, local, "no hardcoded offset" | ALREADY LOCAL text (`pi/lib/delivery.ts:43`) |
 | `docs/commands.md:3530` | reload log line `<ISO-8601 UTC time> <text>` | FIELD (log) |
 | `docs/commands.md:4261` | snooze `tomorrow` = next 09:00 local, offset from `date +%z` | ALREADY LOCAL text |
 | `docs/implementing.md:280`, `:395` | `Clock::utc()` and the `time` crate for RFC 3339 UTC | FIELD, source description |
@@ -173,12 +173,23 @@ Durations and ages are not times and need no zone: `tui/src/read/age.rs:4` `age_
 Rows per directory, counting each `file:line` row of the tables above once (a row naming several lines counts once).
 Computed by a script from this file's tables (see "Checks").
 
-COUNTS_PLACEHOLDER
+| directory | PROSE | ALREADY LOCAL | FIELD | DOC | total |
+|---|---|---|---|---|---|
+| `core/src` | 3 | 0 | 28 | 0 | 31 |
+| `docs` | 0 | 0 | 0 | 21 | 21 |
+| `engine/src` | 4 | 0 | 7 | 0 | 11 |
+| `pi/compact-tools` | 0 | 3 | 0 | 0 | 3 |
+| `pi/lib` | 2 | 4 | 2 | 0 | 8 |
+| `pi/skills` | 0 | 0 | 0 | 1 | 1 |
+| `tui/src` | 2 | 1 | 3 | 0 | 6 |
+| **rows** | 11 | 8 | 40 | 22 | 81 |
+
+`cli/src` has no row of its own: it only calls `engine`'s `Pending::describe` (`cli/src/cli.rs:245`) and formats no time. A row naming files in two directories counts once in each, so the directory totals add to more than the row total.
 
 ## Not found or unverified
 
 - **A live PROSE time of the engine-down and tmux-restart sentences**: the live store has no `watch-started` with a
-  down sentence, and no restart was pending; the examples are built from the format strings and the `ports_tests.rs:303`
+  down sentence, and no restart was pending; the examples are built from the format strings and the `engine/src/watch/ports_tests.rs:303`
   assertion (unverified as live output).
 - **The cockpit**: no `cpd tui` was started (it never exits). I read the `tui/src` producers only. I found no absolute local
   time in the cockpit (tree, inbox, plan, pr, merge views): only ages and the literal `tomorrow 09:00` label. The "cockpit board
@@ -192,8 +203,7 @@ COUNTS_PLACEHOLDER
 - **Agent-written prose** (record text, Manager and Lead messages, Worker escalations): cpd has no code that formats it; only
   skill text (`pi/skills/*/SKILL.md`) and the Worker spec template (`core/src/spec/worker.md`, no time in it) could steer it. I did not read
   every reference file in full: `pi/skills/*/references/*.md` and the two `SKILL.md` were searched by `rg`, not read through.
-- **`render::raw`** (`core/src/context/render.rs:146`): no non-test caller found by `rg`; if a caller exists under another
-  path (a macro, a binary), I missed it.
+- **`render::raw`** (`core/src/context/render.rs:146`): the compiler confirms it is unused (`warning: function `raw` is never used`, verified with `cargo build -p cpd-core`), so it renders nothing today; it still holds a UTC date slice if it is wired in.
 - **Other `pi/` extensions** (`pi/ask-user-question`, `pi/extension.ts`, `pi/lib/*.ts` not named above): `rg` over them for `Date`,
   `toISOString`, `localTime`, `slice(0, 10)`, `.at` found only the rows above; I did not read each file.
 - **Windows or non-`date` hosts**: `local_offset_with` needs `date +%z`; the zone abbreviation (`EDT`) is not available from
