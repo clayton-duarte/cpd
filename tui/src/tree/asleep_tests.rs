@@ -54,7 +54,7 @@ fn asleep_row_is_colour_7_among_live_rows() {
     let buf = draw(&mut env.view(), 60, 20);
     let plain = text_rows(&buf);
     let (asleep, live, archived) = (row_of(&plain, "f-sl"), row_of(&plain, "f-li"), row_of(&plain, "f-ar"));
-    assert!(asleep < live && live < archived, "the asleep row keeps its place among the live rows, the archived one is after them: {plain:?}");
+    assert!(live < asleep && asleep < archived, "the asleep row keeps its place among the live rows by creation, newest first (hs-d686, pro-d48), the archived one is after them: {plain:?}");
 
     // Contract §6.1.1: a live idle row's dot and name are clickable text (15); an asleep row's marks are all 7 (inactive text);
     // an archived row's are all 8 (muted); the branch `├─` is a line, 8, on all three.

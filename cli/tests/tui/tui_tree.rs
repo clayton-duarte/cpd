@@ -175,6 +175,9 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
 ///
+/// Creation orders alpha's shiro rows `ship` (newest), `sketch`, then the fork `f-idle` (oldest), so that the tree's order
+/// (tier, then creation newest first; hs-d686, pro-d48) is the seeded one: `f-blocked`, `ship`, `sketch`, `f-idle`.
+///
 /// The Inbox ([`items`]) gives the dots their filled dot: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
 /// have a Manager with an item, which alone fills a Context row's filled dot.
 ///
@@ -185,13 +188,13 @@ fn populate_at(env: &TestEnv, opened: &str) {
     s += &context("alpha");
     s += &context("beta");
     s += &context("gamma");
-    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:00.000Z", false);
-    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:01.000Z", false);
+    s += &plan_row("ship", "alpha", "dispatch", "l-ship", "2026-01-02T00:00:10.000Z", false);
+    s += &plan_row("sketch", "alpha", "plan", "l-sketch", "2026-01-02T00:00:09.000Z", false);
     s += &plan_row("rel", "beta", "deploy", "l-rel", "2026-01-02T00:00:02.000Z", true);
     s += &plan_row("old", "beta", "done", "l-old", "2026-01-02T00:00:03.000Z", true);
     s += &session_row("g-alpha", "grounded", "alpha", "", "idle", None, "2026-01-02T00:00:00.000Z");
     s += &session_row("l-ship", "ship lead", "alpha", "ship", "working", None, "2026-01-02T00:00:00.000Z");
-    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:08.000Z");
+    s += &session_row("f-idle", "ship fork", "alpha", "ship", "idle", None, "2026-01-02T00:00:02.000Z");
     s += &session_row("f-blocked", "ship review", "alpha", "ship", "blocked", Some("cpd: Worker question"), "2026-01-02T00:00:09.000Z");
     s += &session_row("l-sketch", "sketch", "alpha", "sketch", "idle", None, "2026-01-02T00:00:01.000Z");
     s += &session_row("l-rel", "rel lead", "beta", "rel", "blocked", Some("cpd: PR feedback"), "2026-01-02T00:00:02.000Z");
@@ -674,29 +677,48 @@ fn a_click_on_an_archived_fork_unarchives_and_opens_it() {
     assert_eq!(drive::calls(&fx)[2], words(&["session", "open", "f-idle"]));
 }
 
-/// hs-d686: at both levels the drawn rows come by dot-urgency tier (red 0 > yellow 1 > magenta 2 > cyan 3 > shiro 4,
-/// the white dot and every row with no Inbox item, the red loader among them), then by last activity most recent
-/// first; archived rows stay last, whatever their dot.
+/// hs-d686, pro-d48: at both levels the drawn rows come by dot-urgency tier (red 0 > yellow 1 > magenta 2 > cyan 3 > shiro 4,
+/// the white dot and every row with no Inbox item, the red loader among them), then by creation, newest first; a newer
+/// Event never moves a row; archived rows stay last, whatever their dot. Every seed gives the newest-created row the oldest Event.
 #[test]
-fn the_tree_orders_by_dot_tier_then_last_activity() {
+fn the_tree_orders_by_dot_tier_then_newest_first() {
     let row = |s: &[String], text: &str| s.iter().position(|r| r.contains(text)).unwrap_or_else(|| panic!("{text} on\n{}", s.join("\n")));
 
-    // Level 1: beta's Manager has a magenta dialog (tier 2), then alpha (a white unread, shiro, and Events), then gamma.
-    // Level 2: alpha's live rows as ONE list: the red fork `ship·f-bl`, then the Plan `ship` (the red loader, shiro, and
-    // the newest Event), then `sketch` and the fork `ship·f-id`, whose tie keeps creation order.
+    // Level 1: beta's Manager has a magenta dialog (tier 2), then the shiro Contexts `gamma` (created after alpha, no Event)
+    // and `alpha` (a white unread and the newer Events).
+    // Level 2: alpha's live rows as ONE list: the red fork `ship·f-bl`, then by creation, newest first, the fork
+    // `ship·f-id`, `sketch` and `ship`, whose Events are the newest of the three.
     {
         let fx = fx();
         let _engine = engine(&fx);
         populate_in(&fx);
+        sql(
+            &mut open(&fx.env),
+            "UPDATE contexts SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'gamma';
+             UPDATE plans SET created_at = '2026-01-03T00:00:00.000Z' WHERE id = 'ship';
+             UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'sketch';
+             UPDATE sessions SET created_at = '2026-01-05T00:00:00.000Z' WHERE id = 'f-idle';",
+        );
         let mut tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
         let (beta, alpha, gamma) = (row(&screen, " beta"), row(&screen, " alpha"), row(&screen, " gamma"));
-        assert!(beta < alpha && alpha < gamma, "Contexts by tier then last activity: {screen:#?}");
+        assert!(beta < gamma && gamma < alpha, "Contexts by tier then creation, newest first: {screen:#?}");
         let (fbl, ship, sketch, fid) = (row(&screen, "ship·f-bl"), row(&screen, " ship "), row(&screen, " sketch"), row(&screen, "ship·f-id"));
-        assert!(fbl < ship && ship < sketch && sketch < fid, "alpha's live rows, one list, by tier then last activity: {screen:#?}");
+        assert!(fbl < fid && fid < sketch && sketch < ship, "alpha's live rows, one list, by tier then creation, newest first: {screen:#?}");
     }
 
-    // Within a tier last activity wins: a later Event naming `sketch` lifts it above `ship` (both shiro).
+    // The reverse creation puts `alpha` above `gamma`: the order follows creation, not the Context id.
+    {
+        let fx = fx();
+        let _engine = engine(&fx);
+        populate_in(&fx);
+        sql(&mut open(&fx.env), "UPDATE contexts SET created_at = '2026-01-06T00:00:00.000Z' WHERE id = 'alpha';");
+        let mut tree = Tree::start(&fx, 46, 30);
+        let screen = ready(&tree);
+        assert!(row(&screen, " beta") < row(&screen, " alpha") && row(&screen, " alpha") < row(&screen, " gamma"), "{screen:#?}");
+    }
+
+    // A newer Event naming `sketch` never lifts it: `ship`, created later, stays above it.
     {
         let fx = fx();
         let _engine = engine(&fx);
@@ -704,16 +726,18 @@ fn the_tree_orders_by_dot_tier_then_last_activity() {
         sql(
             &mut open(&fx.env),
             "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
-             VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');",
+             VALUES (cpd_txn(), '2026-01-09T00:00:00.000Z', 'plan-phase', 'alpha', 'sketch', NULL, 'fixture', '{}');
+             UPDATE plans SET created_at = '2026-01-03T00:00:00.000Z' WHERE id = 'sketch';
+             UPDATE plans SET created_at = '2026-01-04T00:00:00.000Z' WHERE id = 'ship';",
         );
         let mut tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
-        let (fbl, sketch, ship, fid) = (row(&screen, "ship·f-bl"), row(&screen, " sketch"), row(&screen, " ship "), row(&screen, "ship·f-id"));
-        assert!(fbl < sketch && sketch < ship && ship < fid, "a later Event wins within a tier: {screen:#?}");
+        let (fbl, ship, sketch, fid) = (row(&screen, "ship·f-bl"), row(&screen, " ship "), row(&screen, " sketch"), row(&screen, "ship·f-id"));
+        assert!(fbl < ship && ship < sketch && sketch < fid, "a newer Event never moves a row: {screen:#?}");
     }
 
-    // Archived rows are last whatever their dot: the archived Plan `old` comes after its live `rel`, and the archived
-    // red fork `ship·f-bl` after every live row of alpha.
+    // Archived rows are last whatever their dot or creation: the archived Plan `old` comes after its live `rel`, and the
+    // archived red fork `ship·f-bl` after every live row of alpha.
     {
         let fx = fx();
         let _engine = engine(&fx);
@@ -721,7 +745,7 @@ fn the_tree_orders_by_dot_tier_then_last_activity() {
         sql(
             &mut open(&fx.env),
             "UPDATE plans SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'old';
-             UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';",
+             UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z', created_at = '2026-01-20T00:00:00.000Z' WHERE id = 'f-blocked';",
         );
         let mut tree = Tree::start(&fx, 46, 30);
         let screen = ready(&tree);
