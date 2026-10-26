@@ -4387,6 +4387,8 @@ node <adapter>/lib/slack-channel.ts --coding-agent <…/@earendil-works/pi-codin
 
 Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9). cwd is `$CPD_HOME`; the helper hands it to the connection, which sends it to the server as its root (`extensions/mcp/runtime.js:149`). Constants in the helper, each with its source: tool `slack_read_channel`, server entry `slack` of `<agentDir>/mcp.json` (the global file only; a project file is never read), `limit` 200 (`refresh.py:56`), window 7 days (`refresh.py:626-641`), 45 s for the channel read (`slack_fetch.py:183`), 30 s for each thread or reaction read (`slack_fetch.py:211, 324`), at most 8 of those at once (`refresh.py:353`).
 
+**Entry.** The helper answers only when it is the script `node` was started with, and it decides by real path: the installed adapter path is a symlink (`<share>/pi` to `pi.<id>`, docs/implementing.md "The adapter swap"), and Node resolves symlinks in a module's `import.meta.url` but not in `process.argv[1]`, so comparing the two as they are never matches there and the script would exit 0 with no output. Reached through a symlink to the script or to a directory that holds it, the helper runs as when reached by its real path. A module that only imports the helper does not run it.
+
 What it does:
 1. **Loads pi's modules** by file URL from the directory of `--coding-agent`: `extensions/mcp/config.js` (`loadMcpConfig`) and `extensions/mcp/runtime.js` (`McpServerConnection`, `McpOAuthCredentialStore`, `createDefaultTransport`). pi's `package.json` does not export them, so no bare import works; contract §9's embedded module imports pi the same way. It builds the connection as `pi mcp list` does (`extensions/mcp/cli.js:67-76`) and **closes it before exiting**, so a refreshed token is saved. A failure here, or a changed API, is `slack_helper_failed`.
 2. **Reads the channel**: `callTool("slack_read_channel", {channel_id, limit: 200})`; the text blocks joined by a newline (`slack_fetch.py:164-180`). Not signed in (the connection's state `needs-auth`, pi's message `requires sign-in`, or a failure text containing `invalid_token`, `unauthorized`, `invalid_auth` or `token_expired`, `slack_fetch.py:55, 91-93`) is `slack_auth`. A timeout, a result with `isError`, an empty text or any other failure is `slack_failed`.
@@ -4415,6 +4417,8 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 | the channel read failed, timed out, or answered `isError` or no text (step 2) | `slack_failed` | 1 |
 | the payload holds no message (step 3) | `slack_unparseable` | 1 |
 | pi's modules did not load or no longer have the shape the helper uses (step 1; after a pi upgrade); `details.message` is the thrown error | `slack_helper_failed` | 1 |
+
+A helper that exits 0 and prints no result is not one of these refusals: E11 reports it as `spawn_failed`, whose message is `<argv> exited 0 but printed no result.` (any other exit with no result keeps `<argv> printed no result.`) and whose `details` are `{argv, exit, stdout, stderr}`, the last two the tail of what the child printed.
 
 Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
