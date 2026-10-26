@@ -26,8 +26,8 @@ pub fn attempt_branch(plan: &PlanId, attempt: &AttemptId) -> String {
 }
 
 /// Whether an Attempt is **linear** (hs-d680, hs-d682): it runs in its PR's one workflow worktree, on the Lead
-/// Branch, so its branch is the Lead Branch. The first of concurrent siblings is linear; a parallel sibling has
-/// its own `cpd/<plan>--<attempt>` worktree and branch.
+/// Branch, so its branch is the Lead Branch. It is its PR's only live Attempt for its whole life; a parallel
+/// Attempt has its own `cpd/<plan>--<attempt>` worktree and branch.
 pub fn is_linear(attempt_branch: &str, lead_branch: &str) -> bool {
     attempt_branch == lead_branch
 }
