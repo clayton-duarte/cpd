@@ -1520,6 +1520,7 @@ CREATE TABLE inbox_items (
   closed_at     TEXT,
   snoozed_until TEXT,
   dismissed_at  TEXT,
+  claimed_at    TEXT CHECK (claimed_at IS NULL OR kind = 'review-requested'),
   CHECK (plan IS NULL OR context IS NOT NULL),
   CHECK (job IS NULL OR plan IS NOT NULL)
 ) STRICT;
