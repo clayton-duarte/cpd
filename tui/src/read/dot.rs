@@ -92,19 +92,20 @@ impl Dot {
                 _ => Dot::working(failed, phase),
             };
         }
-        item.map_or_else(|| Dot::glyph(state), Dot::from)
+        item.and_then(Dot::from_urgency).unwrap_or_else(|| Dot::glyph(state))
     }
 }
 
-impl From<Urgency> for Dot {
-    fn from(urgency: Urgency) -> Dot {
+impl Dot {
+    /// The dot of an Inbox urgency; `None` for blue, which fills no Session dot (B4): no `Dot::Blue` exists.
+    pub fn from_urgency(urgency: Urgency) -> Option<Dot> {
         match urgency {
-            Urgency::Red => Dot::Red,
-            Urgency::Yellow => Dot::Yellow,
-            Urgency::Magenta => Dot::Magenta,
-            Urgency::White => Dot::White,
-            Urgency::Cyan => Dot::Cyan,
-            Urgency::Blue => unimplemented!("blue tier"),
+            Urgency::Red => Some(Dot::Red),
+            Urgency::Yellow => Some(Dot::Yellow),
+            Urgency::Magenta => Some(Dot::Magenta),
+            Urgency::White => Some(Dot::White),
+            Urgency::Cyan => Some(Dot::Cyan),
+            Urgency::Blue => None,
         }
     }
 }
@@ -259,7 +260,8 @@ mod tests {
     /// hs-d570 BL5: a Session whose strongest open item is cyan shows the cyan dot, between magenta and white.
     #[test]
     fn a_cyan_item_gives_its_session_a_cyan_dot_between_magenta_and_white() {
-        assert_eq!(Dot::from(Urgency::Cyan), Dot::Cyan);
+        assert_eq!(Dot::from_urgency(Urgency::Cyan), Some(Dot::Cyan));
+        assert_eq!(Dot::from_urgency(Urgency::Blue), None, "blue fills no dot");
         assert_eq!(Dot::of(State::Idle, Some(Urgency::Cyan), false, None), Dot::Cyan);
         assert!(Dot::Cyan.needs_you());
         assert!(Dot::Magenta > Dot::Cyan && Dot::Cyan > Dot::White);
