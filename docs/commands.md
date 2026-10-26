@@ -3782,7 +3782,7 @@ reasonText(matched, role) {
 
 `<what matched>` is the matched command (`sleep 1m`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, `timeout 60`, `while … sleep`) or, for the tool's input, `bash timeout 120`.
 
-**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
+**Not affected:** a Worker, whatever it runs; every other tool; every `cpd` command's own timeout. A Lead's command that the User explicitly asked for and that waits over the bound runs in the background, as section 15.20 says.
 
 ### 15.12 A Worker runs targeted tests
 
@@ -3985,6 +3985,25 @@ A ratio outside (0, 1), or one that is not a finite number, is refused: `getComp
 
 The ratio applies in every cpd pi session; a plain pi that does not load the adapter is not covered.
 
+### 15.20 A Lead runs a command the User explicitly asks for (pro-d56)
+
+Decision (User, 2026-10-26 11:53 EDT, relayed by the Lead of Plan preco-home-buttons): a Lead runs a command the User explicitly asks it to run. Confirmed and scoped by decision pro-d57 (User, 2026-10-26 12:09 EDT, accepted assumptions A1–A4): A1 the adapter's guards stay for a Lead; A2 only an explicit request counts, never an inferred one; A3 the rule covers Leads only, a Manager's rules are unchanged; A4 the Lead skill's standing bans stay (tmux, wt, git push, product code and commits, and what belongs to cpd itself: `cpd plan decide`, `cpd watch`).
+
+**The rule.** A Lead runs a command the User explicitly asks it to run, and does not refuse it because of its role (decision pro-d56, confirmed and scoped by pro-d57, User, 2026-10-26 11:53 and 12:09 EDT). The User asked in words, in the Lead's conversation, for the Lead to run a command, and the Lead runs it.
+
+**Explicit only.** The User asked, in words, in the Lead's conversation; a Lead never infers a request from the context, from a Worker's Escalation or from a Manager's message that does not quote the User.
+
+**Leads only.** A Manager's and a Worker's rules are unchanged. A Manager asks a Lead; a Worker runs its own turn; neither is given this latitude.
+
+**What stays.** Every adapter guard applies to the request: `pi/lib/noblock.ts` (§15.11, a bash call that waits over 30 s), `pi/lib/testguard.ts` (§15.12, a Worker's full test suite), `pi/lib/askguard.ts` (§15.13, a question's length and labels), `pi/lib/loop-guard.ts` (§15.15, a loop that blocks), `pi/lib/mainguard.ts` (§15.16, a primary checkout's files), `pi/lib/secretguard.ts` (§15.17, raw `op` and `cpd secret approve`; `op` is answered with `cpd secret`), `pi/lib/hostapprove.ts` (§15.18, `cpd host approve`), and `pi/lib/pnguard.ts` (§15 'Every plannotator session is tracked', a plannotator call without a reachable link). So do the Lead skill's standing bans: tmux, wt, git push and force-push, product code and commits, and what belongs to cpd itself (`cpd plan decide`, `cpd watch` except `--ensure`; those last two are skill bans, not adapter guards). When one stops a request, the Lead tells the User what was refused and what to do instead.
+
+**A command that does not exit within 30 seconds** (a dev server, a watcher, a long build) runs in the background: its own process group, its output in the log `/tmp/cpd-<plan>/<name>.log`, its process group id in `/tmp/cpd-<plan>/<name>.pid` (`<plan>` the Plan's id, `<name>` a short name), because the adapter refuses a bash call that waits over the bound (§15.11) and a foreground one would hold the User's conversation. The Lead then tells the User, in one message, the URL or port, the log path and how to stop it.
+
+**Nothing is left orphaned:** the Lead stops what it started (the process group, so the children end too) when the User says they are done, when the User asks it to stop, and at `plan-done` if it still runs.
+
+**Where it runs.** Where the User says; for a Plan's branch, in the PR's Lead worktree (`lead_worktree` of `cpd plan show`).
+
+**Enforcement.** No guard is added: the adapter already lets a background start through (pi's bash tool starts each command in its own process group and returns when the shell exits), and the rule is prose in the cpd-lead skill, pinned by tests. State the exact shell commands NOT here: they belong to the cpd-lead skill, which a later Job of this PR writes, and this section must not repeat them (DRY).
 
 ## 16. The Worker contract
 
