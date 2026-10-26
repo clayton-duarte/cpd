@@ -2367,9 +2367,8 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = polling("");
     // The first poll leaves 50 requests until `reset_at`, a minute from then; the next one, which E5 must not run before that (it
-    // polls every tick otherwise), 4987. The engine reads the reset against the wall clock and waits it out on the `ManualClock`.
-    // `reset_at` is stamped when the first poll answers, so the wait the engine computes is a minute less that handover, and the
-    // test's own setup time never shortens it (a flake under load).
+    // polls every tick otherwise), 4987. Both the stamp and the engine's wait are the `ManualClock`'s, so the real handover
+    // between the first poll answering and the guard reading the reset does not shorten the wait (a flake under load).
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
     let reset = Arc::new(Mutex::new(None::<String>));
     let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
@@ -2377,7 +2376,7 @@ fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
         let mut noted = noted.lock().unwrap();
         noted.push(clock.elapsed());
         if noted.len() == 1 {
-            let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+            let reset_at = (clock.utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
             *stamped.lock().unwrap() = Some(reset_at.clone());
             Reply::ok(&search_reply(50, &reset_at))
         } else {

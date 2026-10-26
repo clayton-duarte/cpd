@@ -23,6 +23,7 @@ use time::format_description::well_known::Rfc3339;
 use super::engine::Engine;
 use super::poll_run::{Finished, PollRun};
 use super::report::{About, Failure, Step};
+use cpd_core::clock::Clock;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
 use cpd_core::host::deadline::Failed;
@@ -102,7 +103,7 @@ fn apply(engine: &mut Engine, finished: Finished) {
             out["polled"]
         ));
     }
-    match rate_guard(&out) {
+    match rate_guard(&*engine.ports.clock, &out) {
         Ok(None) => engine.clear(Step::E5, &About::Machine),
         Ok(Some((until, failure))) => {
             engine.paused_until = Some(until);
@@ -224,8 +225,9 @@ fn is_store_busy(failure: &Failure) -> bool {
 }
 
 /// D9: `None` when the rate limit leaves room; else when to poll again and the
-/// failure to report. A `rate_limit` that is not `{remaining, reset_at}` is a failure.
-fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
+/// failure to report. A `rate_limit` that is not `{remaining, reset_at}` is a failure. The reset is read against `clock`,
+/// the same clock the loop waits on, so a test's handover between the poll answering and the guard reading cannot skew it.
+fn rate_guard(clock: &dyn Clock, out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
     let unusable = |why: String| {
         Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("cpd pr poll printed an unusable rate_limit: {why}.")).with("stdout", out.to_string()))
     };
@@ -237,8 +239,8 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
         return Ok(None);
     }
     let reset = OffsetDateTime::parse(reset_at, &Rfc3339).map_err(|e| unusable(format!("reset_at {reset_at:?} is not RFC 3339: {e}")))?;
-    let wait = (reset - OffsetDateTime::now_utc()).max(time::Duration::ZERO);
-    let until = Instant::now() + Duration::try_from(wait).unwrap_or_default();
+    let wait = (reset - clock.utc()).max(time::Duration::ZERO);
+    let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
         code: ErrorCode::GhRateLimited.as_str().to_owned(),
         message: format!("GitHub's rate limit has {remaining} requests left: PR polling pauses until {reset_at}."),

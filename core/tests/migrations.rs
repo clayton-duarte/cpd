@@ -546,8 +546,38 @@ fn the_frozen_check_passes_on_a_breaking_renumber_with_an_unchanged_body() {
     clone.check().unwrap();
 }
 
-/// Everything that is not that one renumber still fails: an edit, a delete, and a rename
-/// of a migration without the breaking header (legacy or additive).
+/// The module is named `migrations` (not `tests`) so nextest prefixes each test with the
+/// file: `migrations::<fn>` is the name the Job's acceptance lists.
+mod migrations {
+    use super::*;
+
+    /// hs-d697: a breaking migration may be restored to the name a live store applied with
+    /// its body unchanged, even when that older name sorts before its current one.
+    #[test]
+    fn the_frozen_check_passes_on_a_breaking_restore_to_an_older_name() {
+        let clone = Clone::new();
+        let old = clone.migrations().join(MAIN_FILES[1].0);
+        let new = clone.migrations().join("20251201T0000-kind-tables.sql");
+        // The body is untouched; the older name still has the one legacy migration before it.
+        fs::rename(&old, &new).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+
+    /// hs-d700: when a restore shifts the count, a breaking migration's `breaking after <n>`
+    /// header may be corrected in place while every line after the first stays byte-identical.
+    #[test]
+    fn the_frozen_check_passes_on_a_header_only_correction_of_a_breaking_migration() {
+        let clone = Clone::new();
+        let file = clone.migrations().join(MAIN_FILES[1].0);
+        fs::write(&file, BREAKING_TEXT.replace("breaking after 1", "breaking after 2")).unwrap();
+        clone.commit();
+        clone.check().unwrap();
+    }
+}
+
+/// Everything that is not one of those allowances still fails: an edit, a delete, and a
+/// rename of a migration without the breaking header (legacy or additive).
 #[test]
 fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
     let cases: [(&str, &str, fn(&Clone)); 4] = [
@@ -571,29 +601,17 @@ fn the_frozen_check_still_fails_on_an_edit_a_delete_or_an_additive_rename() {
     }
 }
 
-/// A breaking renumber that changes a body line, or moves to an older name, is refused.
+/// A breaking rename that changes a body line is refused, however it is renamed.
 #[test]
-fn the_frozen_check_fails_on_a_rename_that_changes_the_body_or_goes_backwards() {
-    let cases: [(&str, fn(&Clone)); 2] = [
-        ("body changed", |c| {
-            let old = c.migrations().join(MAIN_FILES[1].0);
-            let new = c.migrations().join("20260301T0000-kind-tables.sql");
-            fs::rename(&old, &new).unwrap();
-            fs::write(&new, BREAKING_TEXT.replace("DROP TRIGGER jobs_status;", "DROP TRIGGER jobs_status_old;")).unwrap();
-        }),
-        ("older name", |c| {
-            let old = c.migrations().join(MAIN_FILES[1].0);
-            let new = c.migrations().join("20250101T0000-kind-tables.sql");
-            fs::rename(&old, &new).unwrap();
-        }),
-    ];
-    for (what, change) in cases {
-        let clone = Clone::new();
-        change(&clone);
-        clone.commit();
-        let why = clone.check().expect_err(what);
-        assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "{what}: {why}");
-    }
+fn the_frozen_check_fails_on_a_rename_that_changes_the_body() {
+    let clone = Clone::new();
+    let old = clone.migrations().join(MAIN_FILES[1].0);
+    let new = clone.migrations().join("20260301T0000-kind-tables.sql");
+    fs::rename(&old, &new).unwrap();
+    fs::write(&new, BREAKING_TEXT.replace("DROP TRIGGER jobs_status;", "DROP TRIGGER jobs_status_old;")).unwrap();
+    clone.commit();
+    let why = clone.check().expect_err("body changed");
+    assert!(why.contains("frozen check failed") && why.contains(MAIN_FILES[1].0), "body changed: {why}");
 }
 
 #[test]

@@ -475,6 +475,44 @@ mod tests {
         open_named(&home, &older).unwrap();
     }
 
+    /// hs-d697: a live store applied the breaking migration under its old
+    /// `20261025T2300-queue-failed` name, before the migrations that sort after it
+    /// existed. Restoring that name (body unchanged) opens the store and does not
+    /// re-apply the migration; before the restore this binary lacks the floor.
+    #[test]
+    fn a_store_whose_floor_is_the_restored_queue_failed_name_opens_and_is_not_reapplied() {
+        let (_dir, home) = tmp_home();
+        drop(open_named(&home, schema::NAMED).unwrap());
+        // A live store wrote these rows at apply time; a tool that is not cpd reaches them
+        // by dropping the append-only guards first. The live store's guards are intact, so
+        // capture their text and restore them before opening: the schema must stay a fresh
+        // store's (§4.3), or the migrating transaction rolls back.
+        let guards: Vec<String> = {
+            let conn = Connection::open(home.db()).unwrap();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT sql FROM sqlite_schema WHERE type = 'trigger'\
+                     AND name IN ('schema_migrations_no_update', 'schema_migrations_no_delete')",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<Vec<String>>>().unwrap()
+        };
+        raw(&home, "DROP TRIGGER schema_migrations_no_update; DROP TRIGGER schema_migrations_no_delete");
+        raw(&home, "DELETE FROM schema_migrations WHERE name IN ('20261026T1200-gate-causes','20261027T1000-attempt-lead-branch')");
+        raw(&home, "UPDATE schema_migrations SET name = '20261025T2300-queue-failed' WHERE name = '20261027T1100-queue-failed'");
+        for sql in guards {
+            raw(&home, &sql);
+        }
+        let verdict = judge(&home, schema::NAMED);
+        assert!(verdict.opens(), "{verdict:?}");
+        assert!(verdict.unknown.is_empty(), "{verdict:?}");
+
+        let mut store = open_named(&home, schema::NAMED).unwrap();
+        let queue: Vec<String> =
+            applied(&mut store).into_iter().map(|(name, ..)| name).filter(|name| name.contains("queue-failed")).collect();
+        assert_eq!(queue, ["20261025T2300-queue-failed"], "the restored name stays applied; it is not applied again under a new name");
+    }
+
     #[test]
     fn a_pending_breaking_migration_that_sorts_before_an_applied_one_is_migration_order() {
         let (_dir, home) = tmp_home();
