@@ -15,7 +15,7 @@ Machine `pro` (macOS 26.7.1, arm64, 14 cores), cargo-nextest 0.9.148, written 20
 
 ### Cause
 
-The chain: the Gate runs ~5,100 processes (rs-cost Verdict: 4.8-6.6 ms CPU per exec, 68% system time of the sampled tests); at 4-5 Gates the load is 55-100 on 14 cores (rs-hist Evidence 1); nextest's task is late and the timer wins. Hypotheses:
+The chain: the Gate runs ~5,100 processes (rs-cost Verdict: 4.8-6.6 ms CPU per exec, 68% system time of the sampled tests); at 4-5 Gates the load is 55-100 on 14 cores (rs-hist Verdict 2); nextest's task is late and the timer wins. Hypotheses:
 
 | H | Claim | Status | Deciding finding |
 |---|---|---|---|
