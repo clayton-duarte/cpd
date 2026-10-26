@@ -38,7 +38,7 @@ const WEB_PR_TITLE: &str = "Show the receipt";
 
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
-fn plan() -> PlanId {
+pub(super) fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
 }
 
@@ -95,7 +95,7 @@ fn seed_pay(mut store: Store, phase: &str, job: &str, branch: &str, repo: &Path,
 }
 
 /// What [`Poll`] reads of the database: the Plan `pay` and its PR.
-trait Rows {
+pub(super) trait Rows {
     fn home(&self) -> &CpdHome;
 
     fn store(&self) -> Store {
@@ -1096,7 +1096,7 @@ impl Slot {
 
 /// The in-process `gh` of the poll tests: the search, the lookup of the pull requests no search lists, each answers its
 /// [`Slot`]; `fail`, when set, makes every call fail with its text on stderr; any other call exits 9.
-struct Gh {
+pub(super) struct Gh {
     search: Slot,
     lookup: Slot,
     /// `gh pr list --head <branch>`: the pull requests of the Lead Branch.
@@ -1104,6 +1104,8 @@ struct Gh {
     /// `gh pr create`.
     create: Seq,
     fail: Mutex<Option<String>>,
+    /// The comments read (pr-comments): what it answers; None is an empty read of every pull request the query names.
+    pub(super) comments: Mutex<Option<String>>,
 }
 
 /// Answers of one `gh` call in order: each is given once, the last one for ever.
@@ -1140,6 +1142,10 @@ impl Handler for Gh {
             ["pr", "list", ..] => self.list.get(),
             ["pr", "create", ..] => self.create.get(),
             ["api", "graphql", "-f", query, ..] if query.contains("search(type: ISSUE") => self.search.get(),
+            ["api", "graphql", "-f", query, ..] if query.contains("reviewThreads") => match &*self.comments.lock().unwrap() {
+                Some(text) => Reply::ok(&format!("{text}\n")),
+                None => Reply::ok(&format!("{}\n", empty_comments(query))),
+            },
             ["api", "graphql", "-f", query, ..] if query.contains("p0: repository") => self.lookup.get(),
             ["api", "graphql", "-f", query, ..] => Reply::exit(9, "", &format!("unexpected graphql query: {query}\n")),
             _ => Reply::exit(9, "", &format!("unexpected gh call: {}\n", args.join(" "))),
@@ -1149,7 +1155,7 @@ impl Handler for Gh {
 
 /// The in-process env of the poll tests: fake ports (the git route, the `gh` above), repo `pay` with a bare `origin`, the
 /// Lead worktree of Plan `pay`, and the Plan in the database. It derefs to the [`Kit`] (`cpd`, `git`, `env`, `calls`, ...).
-struct Poll {
+pub(super) struct Poll {
     fx: Kit,
     home: CpdHome,
     repo: PathBuf,
@@ -1159,7 +1165,7 @@ struct Poll {
     /// What the lock pushed to the Lead Branch on origin (R35, §7.2): the base.
     lock_pushed: String,
     branch: String,
-    gh: Arc<Gh>,
+    pub(super) gh: Arc<Gh>,
 }
 
 impl Deref for Poll {
@@ -1176,7 +1182,7 @@ impl Rows for Poll {
     }
 }
 
-fn poll_fx(phase: &str) -> Poll {
+pub(super) fn poll_fx(phase: &str) -> Poll {
     poll_fx_with(phase, "")
 }
 
@@ -1227,6 +1233,7 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
         create: Seq::new(Reply::ok(&format!("{URL}\n"))),
         lookup: Slot::new(if phase == "dispatch" { Reply::ok(&format!("{}\n", lookup_answer(&[Some(pay("OPEN", None, None))]))) } else { Reply::ok("{\"data\":{}}\n") }),
         fail: Mutex::new(None),
+        comments: Mutex::new(None),
     });
     let _ = (*fx.fakes.runner).clone().route("gh", gh.clone());
     let home = CpdHome::resolve(Some(fx.env.cpd_home().into()), None).unwrap();
@@ -1239,12 +1246,12 @@ fn poll_fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> P
 
 impl Poll {
     /// `cpd pr <command> --plan pay`.
-    fn pr(&self, command: &str) -> Run {
+    pub(super) fn pr(&self, command: &str) -> Run {
         self.cpd(&["pr", command, "--plan", "pay"])
     }
 
     /// What the fake `gh` answers to the search, as the text of its stdout.
-    fn search_raw(&self, text: &str) {
+    pub(super) fn search_raw(&self, text: &str) {
         self.gh.search.set(Reply::ok(&format!("{text}\n")));
     }
 
@@ -1254,7 +1261,7 @@ impl Poll {
     }
 
     /// Makes every call of the fake `gh` fail with `text` on stderr.
-    fn fail(&self, text: &str) {
+    pub(super) fn fail(&self, text: &str) {
         *self.gh.fail.lock().unwrap() = Some(text.to_owned());
     }
 
@@ -1264,7 +1271,7 @@ impl Poll {
     }
 
     /// The argv, after `gh`, of every call of the fake `gh` so far.
-    fn gh_calls(&self) -> Vec<Vec<String>> {
+    pub(super) fn gh_calls(&self) -> Vec<Vec<String>> {
         self.calls("gh").into_iter().map(|call| call.args).collect()
     }
 
@@ -1452,14 +1459,14 @@ fn basename(call: &Call) -> String {
 
 /// A pull request as the search and the lookup print it. Its title and creation time are what the
 /// fixtures stored for 812 and 813, so that only the other fields can differ.
-fn node(repo: &str, number: i64, state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
+pub(super) fn node(repo: &str, number: i64, state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
     let title = if number == 813 { "Pay the bills (web)" } else { "Pay the bills" };
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     let review = review.map_or("null".to_owned(), |r| format!("\"{r}\""));
     let rollup = rollup.map_or("null".to_owned(), |s| format!(r#"{{"state":"{s}"}}"#));
     format!(
         r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":{review},
+        "isDraft":false,"state":"{state}","createdAt":"opened","updatedAt":"U1","mergedAt":{merged},"reviewDecision":{review},
         "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
     )
@@ -1484,8 +1491,19 @@ fn viewer(node: String, did_author: bool, requested: bool) -> String {
 }
 
 /// 812, the Plan's pull request.
-fn pay(state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
+pub(super) fn pay(state: &str, review: Option<&str>, rollup: Option<&str>) -> String {
     node("acme/pay", 812, state, review, rollup)
+}
+
+/// The comments read's answer when a test scripted none: an empty read (updatedAt `U1`) of every alias the query names.
+fn empty_comments(query: &str) -> String {
+    let n = query.matches(": repository(").count();
+    let empty = json!({"totalCount": 0, "pageInfo": {"hasPreviousPage": false, "hasNextPage": false}, "nodes": []});
+    let mut data = json!({"viewer": {"login": "me"}});
+    for i in 0..n {
+        data[format!("p{i}")] = json!({"pullRequest": {"id": format!("PR_{i}"), "updatedAt": "U1", "reviewThreads": empty, "comments": empty, "reviews": empty}});
+    }
+    json!({"data": data}).to_string()
 }
 
 const RESET: &str = "2026-10-20T11:00:00Z";
@@ -1527,7 +1545,7 @@ fn lookup_answer(nodes: &[Option<String>]) -> String {
 }
 
 /// `pr-feedback`'s data for PR `repo`.
-fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&str]) -> Value {
+pub(super) fn feedback(state: &str, checks: &str, decision: &str, reasons: &[&str]) -> Value {
     feedback_merge(state, checks, decision, "unknown", "unknown", reasons)
 }
 
@@ -1539,7 +1557,7 @@ fn feedback_merge(state: &str, checks: &str, decision: &str, mergeable: &str, me
 
 impl Poll {
     /// What the fake `gh`'s search answers.
-    fn search(&self, nodes: &[String]) {
+    pub(super) fn search(&self, nodes: &[String]) {
         self.search_raw(&search_answer(nodes, 4987));
     }
 
@@ -1565,7 +1583,7 @@ impl Poll {
     }
 
     /// `pr poll --plan pay`.
-    fn poll(&self) -> Value {
+    pub(super) fn poll(&self) -> Value {
         self.pr("poll").ok()
     }
 
