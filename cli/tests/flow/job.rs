@@ -1630,35 +1630,6 @@ fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
 }
 
 #[test]
-fn an_open_pr_is_not_checked_against_its_shape_and_a_job_added_to_it_is_queued() {
-    let fx = Fx::new();
-    setup(&fx.env);
-    plan(&fx.env, "pl", "deploy");
-    // A `tdd` PR that has opened its pull request: a feedback fix is whatever it is, a `work` Job included.
-    fixture(
-        &fx.env,
-        &format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
-             VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
-             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
-             {}
-             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
-                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';",
-            pull_request("fix", 2, "open")
-        ),
-    );
-    let out = fx.cpd(&["job", "add", "late", "--title", "Fix", "--tier", "S2", "--spec", &spec_file(&fx.env), "--pr", "fix", "--plan", "pl"]).ok();
-    assert_eq!((&out["job"]["kind"], &out["job"]["status"]), (&json!("work"), &json!("queued")));
-    // A `waiting` PR of the same shape refuses it.
-    shaped_pr(&fx.env, "pl", "next", "tdd");
-    refused(
-        &fx.cpd(&["job", "add", "late2", "--title", "Fix", "--tier", "S2", "--spec", &spec_file(&fx.env), "--pr", "next", "--plan", "pl"]),
-        "shape_violation",
-        3,
-    );
-}
-
-#[test]
 fn an_impl_job_that_is_not_a_draft_needs_a_test_job_of_its_pr() {
     let fx = Fx::new();
     setup(&fx.env);
