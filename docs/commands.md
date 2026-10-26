@@ -5079,7 +5079,7 @@ The caller's Session is selected as §1.3 says (`--session <id>`, else `CPD_SESS
 - **Event** `mcp-attached` (contract §5.2) addressed to the caller's Session (`session` set, with its `context` and `plan` when it has one), `data` `{name, server}`: `server` is the entry exactly as the machine policy gives it (pi's key names; a key left out is absent). `text`: `Server <name> attached to Session <id>.`
 - Nothing else: no row, no file, no tmux call.
 
-**The adapter** of that Session registers the server with pi (§15.3 `mcp-attached`, contract §5.3). The attach is for that Session only: never for another Session and never for a later one, never saved and never done by default (pro-d2). There is no list and no detach command (pro-d8): `cpd policy show` lists what the machine allows, and the Session's end detaches.
+**The adapter** of that Session registers the server with pi (§15.3 `mcp-attached`, contract §5.3). The attach is for that Session only: never for another Session and never for a later one, never saved and never done by default (pro-d2). There is no list and no detach command (pro-d8): `cpd policy show` lists what the machine allows, and the Session's end detaches. The server's `direct` tools appear in that Session as `mcp__<name>__<tool>` on a later model call of the same turn, not the call right after the attach (the adapter registers the server when it delivers the Event, then pi connects), and `tool_search` never finds the `direct` tools of a `hidden` server.
 
 ```json
 {"ok": true, "attached": {"name": "slack", "session": "596d007f-…", "event": 48301}}
