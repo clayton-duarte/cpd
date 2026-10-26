@@ -161,7 +161,7 @@ fn run_checks(
     // A linear Attempt runs on the Lead Branch, so the Lead Branch diff `lead...sha` is empty: its tamper and
     // red-test diffs compare against the Attempt's `base_sha` instead (hs-d716), as the merge does (hs-d680).
     let compare = if git::worktree::is_linear(branch, &lead) { base } else { &lead };
-    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, &env.config.host, plan, key))?;
+    let policy = env.store.read(|conn| crate::pr::policy_of_job(conn, &env.home, plan, key))?;
     git::tamper::check_over(root, compare, &policy.protected.paths, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), base, sha)?;
     // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
     kind::guard_tests(env, plan, job, root, compare, base, sha)?;

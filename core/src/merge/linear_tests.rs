@@ -84,8 +84,8 @@ fn rig(attempt_tree: &[(&str, &str)], sibling_tree: Option<&[(&str, &str)]>) -> 
     universe.lock().unwrap().add_worktree(repo.id(), &worktree, Head::Branch(lead.to_owned()));
 
     let home = CpdHome::resolve(Some(root.join("cpd").into_os_string()), None).unwrap();
-    std::fs::create_dir_all(home.root().join("policy/owners")).unwrap();
-    std::fs::write(home.root().join("policy/owners/acme.toml"), OWNER_POLICY).unwrap();
+    std::fs::create_dir_all(home.root().join("policy/acme")).unwrap();
+    std::fs::write(home.root().join("policy/acme/owner.toml"), OWNER_POLICY).unwrap();
     let mut store = Store::open(&home, 5000).unwrap();
     let placeholder = "f".repeat(64);
     store

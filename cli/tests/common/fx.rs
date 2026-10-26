@@ -693,7 +693,7 @@ impl Fx {
         let repo = self.repo_of_universe(name);
         repo.keyed(name);
         // As `TestEnv::keyed_repo`: the repo `acme/<name>` is configured, unless a test wrote its policy already.
-        let policy = self.env.cpd_home().join(format!("policy/repos/acme/{name}.toml"));
+        let policy = self.env.cpd_home().join(format!("policy/acme/{name}.toml"));
         if !policy.exists() {
             self.env.repo_policy("acme", name, "");
         }
@@ -725,7 +725,7 @@ impl Fx {
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
-        if !self.env.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+        if !self.env.cpd_home().join(format!("policy/acme/{name}.toml")).exists() {
             self.env.repo_policy("acme", &name, "");
         }
         url

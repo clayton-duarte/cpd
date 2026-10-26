@@ -897,8 +897,8 @@ impl TestEnv {
             write_executable(&path, &format!("#!/bin/sh\necho 'no fake installed for {tool}' >&2\nexit {DENIED_EXIT}\n"));
         }
         // Every test env has the owner `acme` (an empty policy file: cpd's default), for `context new --owner acme`.
-        fs::create_dir_all(env.cpd_home().join("policy/owners")).expect("create the owners directory");
-        fs::write(env.cpd_home().join("policy/owners/acme.toml"), "").expect("write the acme owner file");
+        fs::create_dir_all(env.cpd_home().join("policy/acme")).expect("create the acme directory");
+        fs::write(env.cpd_home().join("policy/acme/owner.toml"), "").expect("write the acme owner file");
         fs::write(
             env.home().join(".gitconfig"),
             "[user]\n\tname = cpd test\n\temail = test@cpd.invalid\n[init]\n\tdefaultBranch = main\n[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n",
@@ -939,12 +939,14 @@ impl TestEnv {
 
     /// Replaces the owner `owner`'s policy file (every test env has `acme`, an empty one) with `toml`.
     pub fn owner_policy(&self, owner: &str, toml: &str) {
-        fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
+        let dir = self.cpd_home().join("policy").join(owner);
+        fs::create_dir_all(&dir).expect("create the owner policy directory");
+        fs::write(dir.join("owner.toml"), toml).expect("write the owner policy file");
     }
 
     /// Replaces the repo `<owner>/<name>`'s policy file (contract §8.3), creating its directories, with `toml`.
     pub fn repo_policy(&self, owner: &str, name: &str, toml: &str) {
-        let dir = self.cpd_home().join("policy/repos").join(owner);
+        let dir = self.cpd_home().join("policy").join(owner);
         fs::create_dir_all(&dir).expect("create the repo policy directory");
         fs::write(dir.join(format!("{name}.toml")), toml).expect("write the repo policy file");
     }
@@ -952,7 +954,7 @@ impl TestEnv {
     /// A `keyed_repo` whose repo policy file is removed: its repo has no repo scope (it inherits its owner).
     pub fn unconfigured_repo(&self, name: &str) -> PathBuf {
         let repo = self.keyed_repo(name);
-        let _ = fs::remove_file(self.cpd_home().join(format!("policy/repos/acme/{name}.toml")));
+        let _ = fs::remove_file(self.cpd_home().join(format!("policy/acme/{name}.toml")));
         repo
     }
 
@@ -1194,7 +1196,7 @@ impl TestEnv {
         let url = format!("https://github.com/acme/{name}.git");
         self.git(repo, &["remote", "add", "origin", &url]);
         self.git(repo, &["update-ref", "refs/remotes/origin/main", "main"]);
-        if !self.cpd_home().join(format!("policy/repos/acme/{name}.toml")).exists() {
+        if !self.cpd_home().join(format!("policy/acme/{name}.toml")).exists() {
             self.repo_policy("acme", &name, "");
         }
         url

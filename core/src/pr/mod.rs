@@ -48,7 +48,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::hooks::{Detached, Log as HookLog};
 use crate::git::{self, HookOutcome, Operation, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{ContextId, HostName, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -214,14 +214,14 @@ fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdErr
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
 /// which a consumer of many rows (the poll) reports for its row and goes on.
 fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
-    let (home, host) = (env.home.clone(), env.config.host.clone());
-    env.store.read(|conn| pr_policy_in(conn, &home, &host, plan, key, resolve))
+    let home = env.home.clone();
+    env.store.read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
 }
 
-type ResolveFn = fn(&CpdHome, &HostName, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
+type ResolveFn = fn(&CpdHome, &PolicyKey) -> Result<crate::policy::Resolved, CpdError>;
 
 /// [`pr_policy_resolved`] on a connection, for a consumer that has no [`Env`] (an Attempt's, the engine's).
-fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
+fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let (context, owner, name): (String, Option<String>, Option<String>) = conn.query_row(
         "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
           WHERE r.plan = ?1 AND r.key = ?2",
@@ -236,20 +236,20 @@ fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, pl
         Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
         None => PolicyKey::Owner(owner),
     };
-    Ok(resolve(home, host, &policy_key).map(|resolved| resolved.policy))
+    Ok(resolve(home, &policy_key).map(|resolved| resolved.policy))
 }
 
 /// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
 /// Worker Spec) reads, through its Job's PR.
-pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
-    pr_policy_in(conn, home, host, plan, key, resolve)?
+pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+    pr_policy_in(conn, home, plan, key, resolve)?
 }
 
 /// [`policy_of_pr`] of the PR that holds Job `job` of `plan`.
-pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, host: &HostName, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
+pub fn policy_of_job(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, job: &str) -> Result<Policy, CpdError> {
     let pr: String = conn.query_row("SELECT pr FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job], |r| r.get(0))?;
     let key = PrKey::parse(&pr).map_err(|_| CpdError::bad_row(format!("Job {job} has the PR key {pr:?}")))?;
-    policy_of_pr(conn, home, host, plan, &key)
+    policy_of_pr(conn, home, plan, &key)
 }
 
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.

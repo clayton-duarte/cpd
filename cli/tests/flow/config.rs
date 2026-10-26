@@ -44,7 +44,6 @@ fn config_defaults_context_distill_tier_to_gx() {
         json!({
             "version": 1,
             "machine": "hs",
-            "host": "hs",
             "concurrency": 3,
             "retry_cap": 2,
             "lead_tier": "O2",
@@ -214,7 +213,6 @@ fn config_accepts_every_key_with_a_value_at_its_boundary() {
         r#"# comments are allowed
 version = 1
 machine = "a1234567"
-host = "a-123456789012345678901234567890"
 concurrency = 1
 context_curation_min_records = 4294967295
 loop_guard_turns = 4294967295
@@ -282,7 +280,6 @@ work_session = "w"
     assert_eq!(out["config"]["context_engine_timeout_ms"], 4294967295u32);
     assert_eq!(out["config"]["context_engine_reindex_timeout_ms"], 1);
     assert_eq!(out["config"]["machine"], "a1234567");
-    assert_eq!(out["config"]["host"], "a-123456789012345678901234567890");
     assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
