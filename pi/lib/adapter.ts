@@ -21,7 +21,7 @@ import { registerReminderCheck } from "./turns.ts";
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
 
-/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands, bash writes and edit/write calls: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
+/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's and a Lead's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands, bash writes and edit/write calls: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
   registerCompactionRatio(); // §15.19: pi's SettingsManager derives the reserve from the compaction ratio
   registerChatPad(); // §15.9: hook the fullscreen root before pi's first mount, so the pad catches it too
@@ -79,12 +79,12 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       const unseenReason = unseen(event.input, event.toolCallId, ctx.sessionManager.getBranch());
       return unseenReason === undefined ? undefined : { block: true, reason: unseenReason };
     }
-    if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
+    if ((role !== "manager" && role !== "lead" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
     const command = typeof input.command === "string" ? input.command : "";
-    if (role === "manager") {
+    if (role === "manager" || role === "lead") {
       const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
-      return matched === undefined ? undefined : { block: true, reason: reasonText(matched, "manager") };
+      return matched === undefined ? undefined : { block: true, reason: reasonText(matched, role) };
     }
     const matched = unfilteredTestRun(command);
     return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
