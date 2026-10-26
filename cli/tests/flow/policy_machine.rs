@@ -1,6 +1,6 @@
 //! `cpd policy show` and the machine scope (commands.md §22.1 "The machine object", contract §8.3
-//! "The machine scope"): the built binary against a temporary `$CPD_HOME` whose `config.toml`
-//! names the machine `pro`, with policy files written by hand.
+//! "The machine scope"): `policy/host.toml`, the built binary against a temporary `$CPD_HOME` whose
+//! `config.toml` names the machine `pro`, with policy files written by hand.
 
 use crate::common;
 
@@ -54,13 +54,13 @@ impl Fx {
     }
 
     fn machine_file(&self, text: &str) {
-        self.machine_file_of("pro", text);
+        self.write("host.toml", text);
     }
 
-    fn machine_file_of(&self, host: &str, text: &str) {
-        let dir = self.env.cpd_home().join("policy/machines");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{host}.toml")), text).unwrap();
+    fn write(&self, rel: &str, text: &str) {
+        let path = self.env.cpd_home().join("policy").join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
     }
 
     fn real(&self, rel: &str) -> String {
@@ -103,7 +103,7 @@ fn the_machine_object_carries_the_slack_entry_with_pis_key_names() {
     fx.machine_file(SLACK);
     let out = fx.show(&["--owner", "acme"]).ok();
     assert_eq!(out["machine"]["name"], "pro");
-    assert_eq!(out["machine"]["mcp"]["source"], format!("machine:{}", fx.real("machines/pro.toml")));
+    assert_eq!(out["machine"]["mcp"]["source"], format!("machine:{}", fx.real("host.toml")));
     assert_eq!(out["machine"]["mcp"]["servers"], json!({"slack": slack_json()}));
 }
 
@@ -154,7 +154,7 @@ fn every_form_carries_the_same_machine_object() {
 fn an_invalid_machine_file_fails_every_form_as_policy_invalid() {
     let fx = Fx::new();
     fx.machine_file("[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\nheaders = { A = \"b\" }\n");
-    let file = fx.real("machines/pro.toml");
+    let file = fx.real("host.toml");
     let runs = [
         ("--owner", fx.show(&["--owner", "acme"])),
         ("--owner --repo", fx.show(&["--owner", "acme", "--repo", "web"])),
@@ -174,30 +174,17 @@ fn an_owner_file_with_an_mcp_key_is_policy_invalid() {
     let fx = Fx::new();
     fx.env.owner_policy("acme", "[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\n");
     let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["file"], fx.real("owners/acme.toml"));
-    assert!(error["message"].as_str().unwrap().contains("machine"), "{error}");
-}
-
-// n. The machine file is keyed by the host (config key `host`), not by the machine name.
-#[test]
-fn policy_show_reads_the_file_of_the_host_not_of_the_machine_name() {
-    let fx = Fx::new();
-    fs::write(fx.env.cpd_home().join("config.toml"), "version = 1\nmachine = \"pro\"\nhost = \"mac-pro\"\n").unwrap();
-    fx.machine_file_of("pro", "[mcp.servers.by-name]\nurl = \"https://by-name.example.com/mcp\"\n");
-    fx.machine_file_of("mac-pro", "[mcp.servers.by-host]\nurl = \"https://by-host.example.com/mcp\"\n");
-    let out = fx.show(&["--owner", "acme"]).ok();
-    assert_eq!(out["machine"]["name"], "pro");
-    assert_eq!(out["machine"]["mcp"]["source"], format!("machine:{}", fx.real("machines/mac-pro.toml")));
-    assert_eq!(out["machine"]["mcp"]["servers"], json!({"by-host": {"url": "https://by-host.example.com/mcp"}}));
+    assert_eq!(error["details"]["file"], fx.real("acme/owner.toml"));
+    assert!(error["message"].as_str().unwrap().contains("policy/host.toml"), "{error}");
 }
 
 // o. One machine file is both the machine scope and the `[mcp]` table.
 #[test]
-fn a_machine_file_with_pr_and_mcp_sets_the_pr_domain_and_the_servers() {
+fn a_host_toml_with_pr_and_mcp_sets_the_pr_domain_and_the_servers() {
     let fx = Fx::new();
-    fx.machine_file("[pr]\ngate = \"local\"\n\n[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
+    fx.machine_file("[pr]\nfeedback.checks = \"none\"\n\n[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
     let out = fx.show(&["--owner", "acme"]).ok();
-    assert_eq!(out["policy"]["pr"]["source"], format!("machine:{}", fx.real("machines/pro.toml")));
+    assert_eq!(out["policy"]["pr"]["source"], format!("machine:{}", fx.real("host.toml")));
     assert_eq!(out["machine"]["mcp"]["servers"], json!({"x": {"url": "https://x.example.com/mcp"}}));
 }
 
@@ -207,9 +194,9 @@ fn an_mcp_table_in_an_owner_file_is_policy_invalid_with_key_mcp() {
     let fx = Fx::new();
     fx.env.owner_policy("acme", "[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
     let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["file"], fx.real("owners/acme.toml"));
+    assert_eq!(error["details"]["file"], fx.real("acme/owner.toml"));
     assert_eq!(error["details"]["key"], "mcp");
-    assert!(error["message"].as_str().unwrap().contains("is set in a machine file"), "{error}");
+    assert!(error["message"].as_str().unwrap().contains("(policy/host.toml)"), "{error}");
 }
 
 #[test]
@@ -217,9 +204,9 @@ fn an_mcp_table_in_a_repo_file_is_policy_invalid_with_key_mcp() {
     let fx = Fx::new();
     fx.env.repo_policy("acme", "web", "[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n");
     let error = refused(&fx.show(&["--owner", "acme", "--repo", "web"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["file"], fx.real("repos/acme/web.toml"));
+    assert_eq!(error["details"]["file"], fx.real("acme/web.toml"));
     assert_eq!(error["details"]["key"], "mcp");
-    assert!(error["message"].as_str().unwrap().contains("is set in a machine file"), "{error}");
+    assert!(error["message"].as_str().unwrap().contains("(policy/host.toml)"), "{error}");
 }
 
 // q. A domain the machine scope does not expose stays refused there, with or without `[mcp]`.
@@ -228,7 +215,7 @@ fn hooks_in_a_machine_file_are_policy_invalid_by_exposure() {
     let fx = Fx::new();
     fx.machine_file("[hooks]\npre-commit = \"true\"\n");
     let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["file"], fx.real("machines/pro.toml"));
+    assert_eq!(error["details"]["file"], fx.real("host.toml"));
     assert_eq!(error["details"]["key"], "hooks");
 }
 
@@ -237,6 +224,26 @@ fn hooks_beside_mcp_in_a_machine_file_are_policy_invalid_by_exposure() {
     let fx = Fx::new();
     fx.machine_file("[mcp.servers.x]\nurl = \"https://x.example.com/mcp\"\n\n[hooks]\npre-commit = \"true\"\n");
     let error = refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
-    assert_eq!(error["details"]["file"], fx.real("machines/pro.toml"));
+    assert_eq!(error["details"]["file"], fx.real("host.toml"));
     assert_eq!(error["details"]["key"], "hooks");
+}
+
+// A `host.toml` as dotfiles renders it: `[model]` first, then the machine's `cpd.policy` text.
+#[test]
+fn a_host_toml_with_model_and_mcp_reports_the_model_domain_and_the_servers() {
+    let fx = Fx::new();
+    fx.machine_file(&format!(
+        "[model]\nO = \"github-copilot/o\"\nS = \"github-copilot/s\"\nH = \"github-copilot/h\"\nG = \"github-copilot/g\"\n\n{SLACK}"
+    ));
+    let out = fx.show(&["--owner", "acme"]).ok();
+    assert_eq!(out["policy"]["model"]["source"], format!("machine:{}", fx.real("host.toml")), "{out}");
+    assert_eq!(out["machine"]["mcp"]["servers"]["slack"], slack_json(), "{out}");
+}
+
+// The old layout: `policy/machines/pro.toml` is never read; `check_file_names` refuses it (policy_layout.rs l1).
+#[test]
+fn a_file_of_the_old_machines_directory_is_refused_by_policy_show() {
+    let fx = Fx::new();
+    fx.write("machines/pro.toml", SLACK);
+    refused(&fx.show(&["--owner", "acme"]), "policy_invalid", 1);
 }

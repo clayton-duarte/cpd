@@ -1,5 +1,5 @@
 //! `cpd mcp attach` (commands.md §24.1, contract §5.2 `mcp-attached`, §8.3 "The machine scope"; pro-d2, pro-d8), run
-//! as the built binary on machine `pro`, whose policy file is written into `$CPD_HOME/policy/machines/pro.toml`.
+//! as the built binary on machine `pro`, whose policy file is written into `$CPD_HOME/policy/host.toml`.
 //!
 //! Every test here fails before the command exists, for the reason its comment gives.
 
@@ -67,8 +67,8 @@ fn files() -> Value {
     json!({"url": "https://files.example.com/mcp"})
 }
 
-fn machines_dir(env: &TestEnv) -> PathBuf {
-    env.cpd_home().join("policy/machines")
+fn host_file(env: &TestEnv) -> PathBuf {
+    env.cpd_home().join("policy/host.toml")
 }
 
 /// `session.rs`'s fixture on machine `pro`, with no machine file.
@@ -80,8 +80,8 @@ fn bare(env: &TestEnv) {
 /// The fixture and the machine file `text`.
 fn with_file(env: &TestEnv, text: &str) {
     bare(env);
-    fs::create_dir_all(machines_dir(env)).unwrap();
-    fs::write(machines_dir(env).join("pro.toml"), text).unwrap();
+    fs::create_dir_all(host_file(env).parent().unwrap()).unwrap();
+    fs::write(host_file(env), text).unwrap();
 }
 
 fn fixture(env: &TestEnv) {
@@ -261,26 +261,39 @@ fn mcp_attach_unknown_name_is_refused_with_the_available_names() {
 fn mcp_attach_with_no_machine_file_lists_nothing() {
     let env = TestEnv::new();
     bare(&env);
-    assert!(!machines_dir(&env).exists());
+    assert!(!host_file(&env).exists());
     let before = all_events(&env);
     let error = refused(&attach(&env, LEAD, "slack"), "mcp_unknown", 4);
     assert_eq!((error["details"]["name"].clone(), error["details"]["machine"].clone(), error["details"]["available"].clone()), (json!("slack"), json!("pro"), json!([])));
     assert_eq!(all_events(&env), before);
 }
 
-// ---------- the machine file is keyed by the host ----------
+// ---------- the machine scope is the one file host.toml ----------
 
-/// With `machine = "pro"` and `host = "mac-pro"` the file read is `machines/mac-pro.toml`, never `machines/pro.toml`.
+/// The `host.toml` dotfiles renders: `[model]` first, then the machine's `cpd.policy` text with its servers.
 #[test]
-fn mcp_attach_reads_the_file_of_the_host_not_of_the_machine_name() {
+fn mcp_attach_reads_servers_from_a_host_toml_that_also_holds_the_model_table() {
     let env = TestEnv::new();
-    with_file(&env, "[mcp.servers.by-name]\nurl = \"https://by-name.example.com/mcp\"\n");
-    fs::write(machines_dir(&env).join("mac-pro.toml"), "[mcp.servers.by-host]\nurl = \"https://by-host.example.com/mcp\"\n").unwrap();
-    env.write_config(&format!("version = 1\nmachine = \"pro\"\nhost = \"mac-pro\"\nlead_pi_packages = []\n\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
-    attach(&env, LEAD, "by-host").ok();
-    assert_eq!(attached(&env)[0]["data"]["server"], json!({"url": "https://by-host.example.com/mcp"}));
-    let error = refused(&attach(&env, LEAD, "by-name"), "mcp_unknown", 4);
-    assert_eq!(error["details"]["available"], json!(["by-host"]));
+    with_file(
+        &env,
+        &format!("[model]\nO = \"github-copilot/o\"\nS = \"github-copilot/s\"\nH = \"github-copilot/h\"\nG = \"github-copilot/g\"\n\n{MACHINE}"),
+    );
+    attach(&env, LEAD, "slack").ok();
+    assert_eq!(attached(&env)[0]["data"]["server"], slack());
+}
+
+/// The old layout's `policy/machines/pro.toml` is not read: its server is unknown, and no Event is appended.
+#[test]
+fn mcp_attach_does_not_read_a_file_of_the_old_machines_directory() {
+    let env = TestEnv::new();
+    bare(&env);
+    let old = env.cpd_home().join("policy/machines");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(old.join("pro.toml"), MACHINE).unwrap();
+    let before = all_events(&env);
+    let error = refused(&attach(&env, LEAD, "slack"), "mcp_unknown", 4);
+    assert_eq!(error["details"]["available"], json!([]));
+    assert_eq!(all_events(&env), before);
 }
 
 // ---------- f: an invalid machine file ----------

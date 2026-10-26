@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::error::ErrorCode;
-use crate::policy::{check_file_names, parse_scope, Domain};
+use crate::policy::{parse_scope, Domain};
 
 const SLACK: &str = r#"
 [mcp.servers.slack]
@@ -26,7 +26,7 @@ slack_send_message = "direct"
 "#;
 
 fn file() -> &'static Path {
-    Path::new("/h/policy/machines/pro.toml")
+    Path::new("/h/policy/host.toml")
 }
 
 fn parse(text: &str) -> Result<BTreeMap<String, McpServer>, CpdError> {
@@ -59,10 +59,6 @@ fn refused(text: &str, key: Option<&str>) {
     }
 }
 
-fn pro() -> HostName {
-    HostName::parse("pro").unwrap()
-}
-
 fn home() -> (tempfile::TempDir, CpdHome) {
     let dir = tempfile::tempdir().unwrap();
     let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
@@ -80,7 +76,7 @@ fn write(home: &CpdHome, rel: &str, text: &str) {
 #[test]
 fn no_file_means_no_servers_from_default() {
     let (_d, home) = home();
-    let m = load_machine(&home, &pro()).unwrap();
+    let m = load_machine(&home).unwrap();
     assert_eq!(m.source, MachineSource::Default);
     assert!(m.servers.is_empty());
 }
@@ -88,8 +84,8 @@ fn no_file_means_no_servers_from_default() {
 #[test]
 fn an_empty_file_means_no_servers_from_default() {
     let (_d, home) = home();
-    write(&home, "machines/pro.toml", "");
-    let m = load_machine(&home, &pro()).unwrap();
+    write(&home, "host.toml", "");
+    let m = load_machine(&home).unwrap();
     assert_eq!(m.source, MachineSource::Default);
     assert!(m.servers.is_empty());
 }
@@ -115,11 +111,11 @@ fn the_slack_entry_loads_with_every_field_typed() {
 }
 
 #[test]
-fn the_slack_file_loads_from_the_machines_directory_with_its_realpath() {
+fn the_slack_file_loads_from_host_toml_with_its_realpath() {
     let (_d, home) = home();
-    write(&home, "machines/pro.toml", SLACK);
-    let m = load_machine(&home, &pro()).unwrap();
-    let real = std::fs::canonicalize(home.root().join("policy/machines/pro.toml")).unwrap();
+    write(&home, "host.toml", SLACK);
+    let m = load_machine(&home).unwrap();
+    let real = std::fs::canonicalize(home.root().join("policy/host.toml")).unwrap();
     assert_eq!(m.source, MachineSource::File(real));
     assert_eq!(m.servers.len(), 1);
 }
@@ -355,46 +351,29 @@ fn a_500_character_string_is_accepted() {
 // g. owner and repo files
 
 #[test]
-fn an_owner_file_with_mcp_is_refused_and_points_to_the_machine_file() {
-    let err = parse_scope(Path::new("/h/policy/owners/acme.toml"), "[mcp]\n").unwrap_err();
+fn an_owner_file_with_mcp_is_refused_and_points_to_host_toml() {
+    let err = parse_scope(Path::new("/h/policy/acme/owner.toml"), "[mcp]\n").unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-    assert!(err.message().contains("machine"), "{}", err.message());
+    assert!(err.message().contains("policy/host.toml"), "{}", err.message());
     // `mcp` is no domain of the policy.
     assert!(Domain::from_name("mcp").is_none());
 }
 
 #[test]
-fn a_repo_file_with_mcp_servers_is_refused_and_points_to_the_machine_file() {
+fn a_repo_file_with_mcp_servers_is_refused_and_points_to_host_toml() {
     let text = "[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\n";
-    let err = parse_scope(Path::new("/h/policy/repos/acme/web.toml"), text).unwrap_err();
+    let err = parse_scope(Path::new("/h/policy/acme/web.toml"), text).unwrap_err();
     assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-    assert!(err.message().contains("machine"), "{}", err.message());
+    assert!(err.message().contains("policy/host.toml"), "{}", err.message());
 }
 
-// h. only this machine's file is read
+// h. only host.toml is read
 
 #[test]
-fn another_machines_broken_file_is_no_error() {
+fn a_broken_owner_or_repo_file_is_not_parsed_by_load_machine() {
     let (_d, home) = home();
-    write(&home, "machines/pro.toml", SLACK);
-    write(&home, "machines/other.toml", "this is {{ not toml");
-    assert_eq!(load_machine(&home, &pro()).unwrap().servers.len(), 1);
-}
-
-#[test]
-fn an_entry_with_an_invalid_machine_name_is_refused() {
-    let (_d, home) = home();
-    write(&home, "machines/pro.toml", SLACK);
-    write(&home, "machines/Bad_Name.toml", "");
-    let err = check_file_names(&home).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::PolicyInvalid);
-}
-
-#[test]
-fn an_entry_that_is_not_toml_is_refused() {
-    let (_d, home) = home();
-    write(&home, "machines/pro.toml", SLACK);
-    write(&home, "machines/other.json", "{}");
-    let err = check_file_names(&home).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::PolicyInvalid);
+    write(&home, "host.toml", SLACK);
+    write(&home, "acme/owner.toml", "this is {{ not toml");
+    write(&home, "acme/web.toml", "[mcp.servers.x]\nurl = 1\n");
+    assert_eq!(load_machine(&home).unwrap().servers.len(), 1);
 }
