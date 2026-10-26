@@ -525,6 +525,15 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, unconfigured: Optio
     let needs = match &wanted.needs {
         Some(needs) => needs.clone(),
         None if matches!(phase, Phase::Deploy | Phase::Done) => merged_keys(&prs),
+        None if phase == Phase::Dispatch => {
+            return Err(CpdError::new(
+                ErrorCode::NeedsRequired,
+                format!("Plan {plan} is in dispatch: say --needs <pr> to link PR {} to the PR it waits on, or --no-needs. A PR with no needs is started at once.", wanted.key),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", wanted.key.as_str())
+            .with("phase", phase.as_str()));
+        }
         None => Vec::new(),
     };
     let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
