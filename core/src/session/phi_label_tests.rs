@@ -1,5 +1,5 @@
 //! The visible φ mark on Session labels (contract §3.6, §3.9; hs-d694): the loop guard's label
-//! is exactly `φ: loop guard`, not `cpd: loop guard`.
+//! is exactly `φ: loop guard`, not the old cpd label.
 
 use super::LOOP_GUARD_LABEL;
 
