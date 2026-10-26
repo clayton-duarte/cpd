@@ -15,6 +15,8 @@
 //! repair's Gate runs in the PR's Lead worktree at the gated commit (hs-d679).
 
 #[cfg(test)]
+mod comments_tests;
+#[cfg(test)]
 mod gh_runner_tests;
 #[cfg(test)]
 mod incident_tests;
@@ -23,6 +25,7 @@ mod poll_tests;
 
 mod add;
 mod cancel;
+pub mod comments;
 mod edit;
 mod feedback;
 mod gh;
