@@ -508,7 +508,7 @@ test("the Manager's digest counts engine errors by code", async (t) => {
 
 test("record lines are labelled UTC", () => {
   const at = "2026-10-26T03:03:34.352Z";
-  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [
+  const m = contextUpdate("ctx", ID, [{ event: 201, record: "pro-d41", seq: SEQ0 + 1 }, { event: 202, record: "pro-b1", seq: SEQ0 + 2 }], [
     record(1, { id: "pro-d41", kind: "decision", at, text: "One table." }),
     record(2, { id: "pro-b1", kind: "brief", at, text: "Retry payouts." }),
   ])!;
