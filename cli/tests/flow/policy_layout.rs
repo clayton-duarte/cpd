@@ -19,7 +19,7 @@ struct Layout {
 impl Layout {
     /// An env whose `policy/` is empty (the harness's `acme/owner.toml` is removed).
     fn bare() -> Layout {
-        let fx = Layout::new();
+        let fx = Fx::with_ports();
         fx.env.write_config("version = 1\nmachine = \"pro\"\n");
         fs::remove_dir_all(fx.env.cpd_home().join("policy")).unwrap();
         fs::create_dir_all(fx.env.cpd_home().join("policy")).unwrap();
