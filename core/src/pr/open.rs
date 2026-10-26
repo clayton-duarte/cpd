@@ -247,8 +247,8 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
             .with("url", found.url.as_str())
     })?;
-    let created_at = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
-        Some(looked_up) => looked_up.created_at,
+    let (created_at, updated_at) = match gh::lookup(&*Ports::current().runner, lead, &[(repo.clone(), found.number)])?.into_iter().next().flatten() {
+        Some(looked_up) => (looked_up.created_at, looked_up.updated_at),
         None => {
             return Err(CpdError::new(ErrorCode::GhFailed, format!("gh cannot find pull request {repo}#{}, which it just opened.", found.number))
                 .with("url", found.url.as_str()));
@@ -266,6 +266,7 @@ fn opened_row(lead: &Path, pr: &PrRow, existing: Option<PrRef>, stored_title: &s
         mergeable: Mergeable::Unknown,
         merge_state: MergeState::Unknown,
         created_at,
+        updated_at,
         merged_at: None,
     })
 }
@@ -313,7 +314,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
         let membership = pulls::find(tx, &polled.repo, polled.number)?
             .map_or(Membership { authored: true, review_requested: false }, |row| row.membership());
         merged_at = polled.merged_at.clone();
-        pulls::upsert(tx, &Listed { pr: polled, membership })?;
+        pulls::upsert(tx, &Listed { pr: polled, membership }, None)?;
         crate::inbox::model::close_pr_ready(tx, &pulled.row.repo, pulled.row.number)?;
         pulls::find(tx, &pulled.row.repo, pulled.row.number)?.expect("the row was just written").id
     } else {
@@ -652,6 +653,7 @@ mod tests {
             mergeable: Mergeable::Unknown,
             merge_state: MergeState::Unknown,
             created_at: "2026-10-20T10:00:00Z".into(),
+            updated_at: "2026-10-20T10:00:00Z".into(),
             merged_at: merged_at.map(str::to_owned),
         }
     }

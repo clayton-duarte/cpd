@@ -9,6 +9,7 @@ use std::time::Duration;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
+use super::comments::{self, Read};
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
@@ -136,13 +137,26 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
         }
     }
 
+    // The comments of the owned open pull requests whose `updatedAt` moved (§7.6 step 3a): one call, before anything is
+    // written, so that a failed read writes nothing.
+    let mut due: Vec<(String, i64)> = Vec::new();
+    for (_, _, row) in &owned {
+        let moved = seen.iter().any(|l| {
+            l.pr.repo == row.repo && l.pr.number == row.number && l.pr.state == PrState::Open && row.updated_at.as_deref() != Some(l.pr.updated_at.as_str())
+        });
+        if moved && !due.contains(&(row.repo.clone(), row.number)) {
+            due.push((row.repo.clone(), row.number));
+        }
+    }
+    let reads = gh::read_comments(&*env.ports.runner, &root, &due, &env.config.inbox.bot_reviewers)?;
+
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
 
     let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
             match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
-                Some(row) if row.holds(listed)? => {}
+                Some(row) if row.holds(listed, read_of(&reads, listed))? => {}
                 _ => return Ok(true),
             }
         }
@@ -150,7 +164,7 @@ pub(super) fn poll(ports: &Ports, args: PollArgs) -> Result<Output, CpdError> {
     })?;
     let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &reads, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
 
@@ -213,6 +227,7 @@ pub(crate) fn take_lock_with(ports: &Ports, path: &Path) -> Result<fs::File, Cpd
 fn apply(
     tx: &WriteTxn<'_>,
     seen: &[Listed],
+    reads: &[Read],
     owned: &[Owned],
     checks: &[(PlanId, PrKey, Checks)],
     follows: &[Follow],
@@ -226,16 +241,19 @@ fn apply(
             listed.pr.merged_at = Some(pulls::txn_time(tx)?);
         }
         let polled = &listed.pr;
-        let Some(change) = pulls::upsert(tx, &listed)? else { continue };
+        let Some(change) = pulls::upsert(tx, &listed, read_of(reads, &listed))? else { continue };
         let after = &change.after;
         if after.state == "merged" {
             inbox::close_pr_ready(tx, &after.repo, after.number)?;
         }
-        out.changed.push(json!({
-            "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
-            "checks": after.checks, "review_decision": after.review_decision,
-            "mergeable": after.mergeable, "merge_state": after.merge_state,
-        }));
+        // A row only the comments read changed (its feedback and `updated_at`) is no change of the pull request.
+        if change.before.as_ref().is_none_or(|before| !before.holds(&listed, None).unwrap_or(false)) {
+            out.changed.push(json!({
+                "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
+                "checks": after.checks, "review_decision": after.review_decision,
+                "mergeable": after.mergeable, "merge_state": after.merge_state,
+            }));
+        }
         for (plan, key, _) in owned.iter().filter(|(_, _, row)| row.id == after.id) {
             if polled.state == PrState::Merged {
                 out.merged.push((plan.clone(), key.clone()));
@@ -258,6 +276,11 @@ fn apply(
         out.base_changed.push(follow_base(tx, follow)?);
     }
     Ok(out)
+}
+
+/// The comments read of the pull request `listed`, if this poll made one.
+fn read_of<'a>(reads: &'a [Read], listed: &Listed) -> Option<&'a Read> {
+    reads.iter().find(|r| r.repo == listed.pr.repo && r.number == listed.pr.number)
 }
 
 /// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
@@ -359,11 +382,13 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
 
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
 fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks);
+    let open = change.after.feedback.as_deref().unwrap_or_default();
+    let new = comments::new_items(change.before.as_ref().and_then(|b| b.feedback.as_deref()), open);
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks, &new);
     if reasons.is_empty() {
         return Ok(false);
     }
-    let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
+    let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons, (new.len(), open.len()));
     append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
 }

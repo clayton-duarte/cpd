@@ -100,6 +100,9 @@ fn pr_row(r: &Row) -> rusqlite::Result<(String, Value)> {
             merge_state: r.get(20)?,
             authored: r.get(21)?,
             review_requested: r.get(22)?,
+            // Not read here: `to_json` shows neither (`plan show`'s `feedback_open` is its own read).
+            updated_at: None,
+            feedback: None,
         }
         .to_json(),
     };

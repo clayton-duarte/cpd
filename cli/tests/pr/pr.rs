@@ -2121,6 +2121,13 @@ impl Poll {
         self.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
     }
 
+    /// Marks the comments of pull request `number` as read at `updatedAt` `U1` (what [`node`] lists) with none open:
+    /// the poll then makes no comments read for it (pr-comments).
+    fn mark_read(&self, number: i64) {
+        let sql = format!("UPDATE pull_requests SET updated_at = 'U1', feedback = '[]' WHERE number = {number}");
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    }
+
     /// What the fake `gh` is asked for each call of the lookup: the text of its query.
     fn lookup_texts(&self) -> Vec<String> {
         self.gh_calls().into_iter().filter(|c| is_lookup(c)).map(|c| c[3].clone()).collect()
@@ -2205,6 +2212,7 @@ fn a_direct_read_that_says_merged_or_closed_moves_an_unowned_row_and_keeps_it() 
 #[test]
 fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing() {
     let fx = poll_fx("deploy");
+    fx.mark_read(812);
     let (p812, p901, p902, p903) =
         (pay("OPEN", None, None), node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None), node("acme/shop", 903, "OPEN", None, None));
     // 812 is owned; 901 and 902 are authored; 903 is review-requested only.
@@ -2328,6 +2336,7 @@ fn poll_has_no_pr_flag() {
 #[test]
 fn a_second_poll_waits_for_the_lock() {
     let mut fx = poll_fx("deploy");
+    fx.mark_read(812);
     fx.search(&[pay("OPEN", None, None)]);
     let path = fx.home.pr_poll_lock();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -3062,6 +3071,7 @@ fn an_owned_pull_request_that_left_the_search_and_is_merged_takes_the_merged_pat
 #[test]
 fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_changes_nothing() {
     let fx = poll_fx("deploy");
+    fx.mark_read(812);
     fx.search(&[]);
     fx.lookup(&[Some(pay("OPEN", None, None))]);
     let (txns, events) = (fx.txns(), fx.event_count());

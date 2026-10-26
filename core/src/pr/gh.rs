@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{CpdError, ErrorCode};
+use super::comments;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
@@ -375,7 +376,7 @@ pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<V
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner } number url title isDraft state createdAt mergedAt baseRefName reviewDecision \
+        "repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt baseRefName reviewDecision \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -409,6 +410,8 @@ pub struct PolledPr {
     pub mergeable: Mergeable,
     pub merge_state: MergeState,
     pub created_at: String,
+    /// GitHub's `updatedAt`: when it moves, the pull request's comments are read again (`read_comments`).
+    pub updated_at: String,
     pub merged_at: Option<String>,
 }
 
@@ -528,6 +531,8 @@ struct RawPr {
     state: String,
     #[serde(rename = "createdAt")]
     created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
     #[serde(rename = "mergedAt")]
     merged_at: Option<String>,
     /// The search always selects it; it is optional only so that a reply without it (a test's fake `gh`) follows nothing.
@@ -622,6 +627,7 @@ impl Reply<'_> {
             mergeable,
             merge_state,
             created_at: raw.created_at,
+            updated_at: raw.updated_at,
             merged_at: raw.merged_at,
         })
     }
@@ -709,7 +715,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
-fn repo_parts(repo: &str) -> Option<(&str, &str)> {
+pub(super) fn repo_parts(repo: &str) -> Option<(&str, &str)> {
     let part = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
     repo.split_once('/').filter(|(owner, name)| part(owner) && part(name))
 }
@@ -753,6 +759,33 @@ fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError>
     }
     query.push_str(" }");
     Ok(query)
+}
+
+/// The comments of the pull requests `(owner/name, number)`, one alias each, in one call, 15 s at most: what
+/// `comments::query` reads, `parse`d with the `bots` logins (contract §7.6 step 3a). Any failure is `gh_failed` with
+/// the poll's `details` (`call` `lookup`). An empty `prs` makes no call.
+pub fn read_comments(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], bots: &[String]) -> Result<Vec<comments::Read>, CpdError> {
+    if prs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read = || {
+        for (repo, _) in prs {
+            repo_parts(repo).ok_or_else(|| {
+                CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo.")).with("repo", repo.as_str())
+            })?;
+        }
+        let pairs: Vec<(&str, i64)> = prs.iter().map(|(repo, number)| (repo.as_str(), *number)).collect();
+        let (args, out) = graphql(runner, cwd, &comments::query(&pairs))?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let reply = Reply { args: &refs, out: &out };
+        if out.exit != Some(0) {
+            let json = serde_json::from_str::<Value>(&out.stdout);
+            let errors = json.as_ref().is_ok_and(|v| v.get("errors").is_some());
+            return Err(reply.fail_unless_transient(format!("gh {} exited {}.", refs[0], out.exit.map_or("with a signal".to_owned(), |c| c.to_string())), errors, json.is_err()));
+        }
+        comments::parse(&pairs, &out.stdout, bots).map_err(|e| reply.fail(e.message().to_owned()))
+    };
+    read().map_err(|e| polled_call("lookup", e))
 }
 
 fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
@@ -818,7 +851,7 @@ mod tests {
     fn pr(repo: &str, number: i64, draft: bool, state: &str, rollup: &str) -> String {
         format!(
             r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"T{number}",
-            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
+            "isDraft":{draft},"state":"{state}","createdAt":"2026-05-01T10:00:00Z","updatedAt":"2026-05-02T10:00:00Z","mergedAt":null,"reviewDecision":"APPROVED",
             "mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
             "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
         )
@@ -841,10 +874,10 @@ mod tests {
         assert_eq!(
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
-             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
+             issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt updatedAt mergedAt \
              baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
