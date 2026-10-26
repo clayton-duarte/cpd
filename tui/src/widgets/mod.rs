@@ -19,6 +19,8 @@ pub(crate) mod column;
 #[cfg(test)]
 mod draw_tests;
 #[cfg(test)]
+mod column_link_tests;
+#[cfg(test)]
 mod kinds_tests;
 #[cfg(test)]
 mod needs_tests;

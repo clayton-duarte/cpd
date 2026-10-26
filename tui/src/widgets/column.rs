@@ -475,17 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
-        let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))]);
-        // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
-        let link = format!("\x1b]8;;https://github.com/acme/repo/pull/7\x07{}\x1b]8;;\x07", link::CUE);
-        assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
-        // the name is cut before the arrow's column and its gap
-        let (buf, _) = drawn(9, 20, &[pr(7, Some("l-a"))]);
-        assert_eq!(row(&buf, 6).replace(&link, link::CUE), format!(" acme/… {}", link::CUE));
-    }
-
-    #[test]
     fn an_unowned_pr_is_read_only_text_on_both_lines_an_owned_one_clickable_and_only_it_has_a_hit_area() {
         let (buf, hits) = drawn(30, 20, &[pr(7, None), pr(8, Some("l-a"))]);
         for (y, owned) in [(6, false), (7, false), (8, true), (9, true)] {
