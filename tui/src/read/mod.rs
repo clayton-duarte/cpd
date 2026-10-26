@@ -53,7 +53,7 @@ pub use flow::{
     plan_boxes,
 };
 pub use shared::{
-    AttemptStatus, Cause, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
+    AttemptStatus, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::Dot;

@@ -2,6 +2,7 @@
 //! Session and its Escalations (`attempt show`). The Worker's session file is
 //! not in the database: the view reads `session.file` itself, read-only.
 
+use cpd_core::attempt::ledger::Stored;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
@@ -13,7 +14,7 @@ use cpd_core::store::Store;
 
 use super::flow::{WorkerRef, waiting_on};
 use super::shared::{
-    AttemptStatus, Cause, SHOWN_STATUS, EscalationStatus, JobStatus, Origin, Outcome, SessionNode, bad_row, id, sessions, tier,
+    AttemptStatus, SHOWN_STATUS, EscalationStatus, JobStatus, Origin, Outcome, SessionNode, bad_row, id, stored_cause, sessions, tier,
 };
 
 /// What a `worker` view shows: an Attempt (its form) or a Job (its form, which has no Attempt until the Job starts).
@@ -68,7 +69,7 @@ pub struct AttemptDetail {
     pub origin: Origin,
     pub status: AttemptStatus,
     pub outcome: Option<Outcome>,
-    pub cause: Option<Cause>,
+    pub cause: Option<Stored>,
     pub branch: String,
     pub worktree: String,
     pub worker_session: Option<SessionId>,
@@ -201,7 +202,7 @@ fn attempt_row(conn: &Connection, plan: &PlanId, attempt: &AttemptId) -> Result<
         origin: Origin::parse(&format!("{what} has origin"), &origin)?,
         status: AttemptStatus::parse(&format!("{what} has status"), &status)?,
         outcome: outcome.map(|o| Outcome::parse(&format!("{what} has outcome"), &o)).transpose()?,
-        cause: cause.map(|c| Cause::parse(&format!("{what} has cause"), &c)).transpose()?,
+        cause: cause.map(|c| stored_cause(&format!("{what} has cause"), &c)).transpose()?,
         branch: r.get(5)?,
         worktree: r.get(6)?,
         worker_session: worker.map(|w| id("Session id", &w, SessionId::parse)).transpose()?,

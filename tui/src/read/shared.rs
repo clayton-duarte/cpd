@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use clap::ValueEnum;
 use rusqlite::{Connection, ToSql};
 
+use cpd_core::attempt::ledger::Stored;
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
@@ -33,6 +34,11 @@ pub(super) fn tier(what: &str, value: &str) -> Result<Tier, CpdError> {
 /// A `clap::ValueEnum` of another area (`Phase`, `Role`, `State`), read from a row.
 pub(super) fn value_enum<T: ValueEnum>(what: &str, value: &str) -> Result<T, CpdError> {
     T::from_str(value, false).map_err(|_| bad_row(format!("{what} {value:?}")))
+}
+
+/// An ended Attempt's cause, read from a row: the Ledger's list is the only one (contract §3.4).
+pub(super) fn stored_cause(what: &str, value: &str) -> Result<Stored, CpdError> {
+    Stored::parse(value).ok_or_else(|| bad_row(format!("{what} {value:?}")))
 }
 
 macro_rules! string_enum {
@@ -99,15 +105,6 @@ string_enum! {
 string_enum! {
     /// Why an Attempt exists: the Tier ladder or an explicit retry.
     Origin { Ladder = "ladder", Retry = "retry" }
-}
-
-string_enum! {
-    /// An ended Attempt's cause (§3.4).
-    Cause {
-        Merged = "merged", CancelRequested = "cancel_requested", SetupFailed = "setup_failed",
-        TimedOut = "timed_out", Crashed = "crashed", NoSubmit = "no_submit", MergeConflict = "merge_conflict",
-        CasLost = "cas_lost", DirtyTarget = "dirty_target", Tampered = "tampered",
-    }
 }
 
 string_enum! {
