@@ -76,7 +76,7 @@ People, the User's review bot and CI review the open pull request; the engine po
 _Avoid_: pre-Gate review
 
 **Addressing** (step):
-Feedback Jobs are appended and the Plan returns to Dispatching; an update Job, which cpd queues when one of them is queued (or when the pull request conflicts with its base), then brings the pull request up to date. `pr rebase` and `pr push` are the repair.
+A feedback fix is one `work` Job per cohesive fix, appended to the open PR (only `work` and review Jobs are allowed there); the Plan returns to Dispatching and the Job's own merge pushes the Lead Branch to the pull request: no update Job, no PR Gate. A conflict with the base queues an update Job. `pr push` repairs a failed push; `pr rebase` is the other repair.
 
 **φ** (new, hs-d694):
 cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
@@ -125,7 +125,7 @@ The last Job of every started PR, added by cpd (engine E4), never by the Lead: a
 _Avoid_: opener, release Job
 
 **Update Job** (new, hs-d340):
-A Job of kind `update`, added by cpd for a pull request that is already open, for one of two causes: the pull request conflicts with its base (never for a base that merely moved), or a fix Job of the PR (failed checks, review comments) was queued. Like the open Job it merges the base only on a conflict, then cpd runs the Gate and pushes; so every change to an open PR goes the same way. `pr rebase` and `pr push` are the repair.
+A Job of kind `update`, added by cpd for a pull request that is already open and conflicts with its base (never for a base that merely moved, and never for feedback). Like the open Job it merges the base, then cpd runs the Gate and pushes. `pr rebase` and `pr push` are the repair.
 _Avoid_: sync Job, rebase Job
 
 **Spec**:
