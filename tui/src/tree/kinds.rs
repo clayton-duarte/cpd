@@ -53,6 +53,7 @@ pub const KINDS: &[Kind] = &[
     Kind::InboxClosed,
     Kind::InboxSnoozed,
     Kind::InboxDismissed,
+    Kind::InboxClaimed,
 ];
 
 #[cfg(test)]
@@ -93,6 +94,8 @@ mod tests {
             Kind::InboxClosed,
             Kind::InboxSnoozed,
             Kind::InboxDismissed,
+            Kind::InboxClaimed,
+    Kind::InboxClaimed,
         ] {
             assert!(KINDS.contains(&kind), "{kind}");
         }

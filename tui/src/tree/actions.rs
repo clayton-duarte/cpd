@@ -216,7 +216,7 @@ impl Action {
             ],
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
-            Action::Claim(_) => unimplemented!("inbox claim"),
+            Action::Claim(item) => words(&["inbox", "claim", &item.to_string()]),
             Action::Delete { what, yes } => what.command(*yes),
         }
     }
@@ -281,7 +281,7 @@ impl Action {
             Action::Tell { manager, .. } => format!("told {manager}"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
-            Action::Claim(_) => unimplemented!("inbox claim"),
+            Action::Claim(_) => "claimed".into(),
             Action::Delete { .. } if reply["already"] == true => "already deleted".into(),
             Action::Delete { .. } => "deleted".into(),
         }
@@ -612,6 +612,7 @@ mod tests {
             (Action::Snooze { item: 12, until: Until::Hour1 }, vec!["inbox", "snooze", "12", "1h"]),
             (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
             (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
+            (Action::Claim(12), vec!["inbox", "claim", "12"]),
             (Action::EnsureWatch, vec!["watch", "--ensure"]),
             (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "--unblocks", "the engine has been down 60 s", "--", "The engine is down."]),
         ];

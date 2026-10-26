@@ -122,8 +122,13 @@ impl Menu {
     }
 
     /// The menu of the Inbox item `id` (`Kind::Inbox`: a right click) or its snooze choices (`Kind::Snooze`: `s`).
-    pub fn for_item(kind: Kind, id: i64, at: Position) -> Menu {
-        Menu { inbox: Some(id), ..Menu::new(kind, Vec::new(), at, false) }
+    /// `claimable` (a `review-requested` item) puts Claim first.
+    pub fn for_item(kind: Kind, id: i64, at: Position, claimable: bool) -> Menu {
+        let mut items = kind.items().to_vec();
+        if claimable {
+            items.insert(0, Item::Claim);
+        }
+        Menu { path: Vec::new(), inbox: Some(id), menu: menu::Menu::new(items, at) }
     }
 
     #[cfg(test)]
@@ -243,14 +248,14 @@ mod tests {
 
     #[test]
     fn an_inbox_menu_picks_with_enter_and_a_click_and_knows_its_item() {
-        let mut menu = Menu::for_item(Kind::Inbox, 12, Position::new(3, 3));
+        let mut menu = Menu::for_item(Kind::Inbox, 12, Position::new(3, 3), false);
         assert_eq!((menu.inbox, menu.path.is_empty()), (Some(12), true));
         for _ in 0..9 {
             press(&mut menu, KeyCode::Down);
         }
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Dismiss));
         assert_eq!(press(&mut menu, KeyCode::Esc), Outcome::Close);
-        let mut menu = Menu::for_item(Kind::Snooze, 12, Position::new(3, 3));
+        let mut menu = Menu::for_item(Kind::Snooze, 12, Position::new(3, 3), false);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Snooze15));
         press(&mut menu, KeyCode::Down);
         assert_eq!(press(&mut menu, KeyCode::Enter), Outcome::Pick(Item::Snooze1h));

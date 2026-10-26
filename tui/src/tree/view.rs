@@ -411,7 +411,7 @@ impl View {
                 if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
                     let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
                     let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
-                    self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
+                    self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at, false));
                 }
             }
             KeyCode::Char('d') => {
@@ -476,7 +476,7 @@ impl View {
             if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
                 let item = &self.tree.inbox[i];
                 if item.kind != InboxKind::EngineDown {
-                    self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
+                    self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at, item.kind == InboxKind::ReviewRequested));
                 }
             }
             return Effect::None;
@@ -531,6 +531,7 @@ impl View {
                 Item::Snooze1h => Effect::Run(Action::Snooze { item: id, until: Until::Hour1 }),
                 Item::SnoozeTomorrow => Effect::Run(Action::Snooze { item: id, until: Until::Tomorrow }),
                 Item::Dismiss => Effect::Run(Action::Dismiss(id)),
+                Item::Claim => Effect::Run(Action::Claim(id)),
                 _ => Effect::None,
             };
         }
@@ -575,7 +576,7 @@ impl View {
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
             // an Inbox item's entries are the menu's `inbox` branch above
             Item::NewContext | Item::Snooze15 | Item::Snooze1h | Item::SnoozeTomorrow | Item::Dismiss => Effect::None,
-            Item::Claim => unimplemented!("claim"),
+            Item::Claim => Effect::None,
         }
     }
 
