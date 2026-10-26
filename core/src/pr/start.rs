@@ -320,7 +320,12 @@ fn prepare_as(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId,
         timeout: Duration::from_secs(u64::from(config.timeouts.setup_minutes) * 60),
         log: pre_start_log(home, plan, key),
     };
-    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, stacked, &setup, &policy.hooks.pre_start) {
+    let cut = match (&pr.head_ref, stacked) {
+        (Some(head_ref), _) => git::Cut::Adopted(head_ref),
+        (None, true) => git::Cut::Stacked,
+        (None, false) => git::Cut::Base,
+    };
+    match git::prepare_pr_lead_worktree(Path::new(&pr.repo), plan, &path, &pr.lead_branch, &pr.base, cut, &setup, &policy.hooks.pre_start) {
         Ok(lead) => Ok(Prepared { pr: pr.clone(), lead }),
         Err(failure) => {
             let mut error = failure.error.with("pr", key.as_str());

@@ -25,6 +25,8 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let key = pr.key.clone();
     env.store.read(|conn| hold_refused(conn, &id, &key, agent()))?;
     let branch = pr.lead_branch.clone();
+    let remote_branch = pr.remote_branch().to_owned();
+    let adopted = pr.head_ref.is_some();
     let lead = pr.lead(&id)?.clone();
     let policy = pr_policy(&mut env, &id, &key)?;
 
@@ -44,13 +46,14 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     require_open(&plan, &args)?;
 
     // 3. Rule P with G.
-    let (pushed, remote) = match git::push_commit(&lead, &branch, &sha)? {
+    let (pushed, remote) = match git::push_commit(&lead, &remote_branch, &sha)? {
         Push::Pushed { new } => (new, sha.clone()),
         Push::Contained { remote } => (false, remote),
         Push::Rejected { stderr } => {
+            let next = if adopted { "It gained commits cpd lacks: catch up" } else { "Rebase" };
             return Err(CpdError::new(
                 ErrorCode::PushRejected,
-                format!("The remote {branch} does not contain the gated commit, so it moved: nothing was pushed. Run cpd pr rebase --pr {key}."),
+                format!("The remote {remote_branch} does not contain the gated commit, so it moved: nothing was pushed. {next} with cpd pr rebase --pr {key}."),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str())
