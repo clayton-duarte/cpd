@@ -129,11 +129,6 @@ fn a_key_left_out_stays_out() {
 // c. refused keys and tables
 
 #[test]
-fn a_headers_key_is_refused() {
-    refused(&entry("headers = { A = \"b\" }"), Some("headers"));
-}
-
-#[test]
 fn a_command_key_is_refused() {
     refused(&entry("command = \"x\""), Some("command"));
 }
@@ -376,4 +371,189 @@ fn a_broken_owner_or_repo_file_is_not_parsed_by_load_machine() {
     write(&home, "acme/owner.toml", "this is {{ not toml");
     write(&home, "acme/web.toml", "[mcp.servers.x]\nurl = 1\n");
     assert_eq!(load_machine(&home).unwrap().servers.len(), 1);
+}
+
+// ---------- headers (pro-d14) ----------
+
+fn headers(body: &str) -> String {
+    entry(&format!("[mcp.servers.slack.headers]\n{body}"))
+}
+
+fn json(text: &str) -> serde_json::Value {
+    serde_json::to_value(&parse(text).unwrap()["slack"]).unwrap()
+}
+
+/// A TOML basic string.
+fn q(s: &str) -> String {
+    format!("{s:?}")
+}
+
+fn with_value(value: &str) -> String {
+    headers(&format!("X-Test = {}\n", q(value)))
+}
+
+fn with_name(name: &str) -> String {
+    headers(&format!("{} = \"v\"\n", q(name)))
+}
+
+#[test]
+fn headers_the_fullstory_entry_is_accepted_and_kept() {
+    let text = "[mcp.servers.fullstory]\nurl = \"https://mcp.fullstory.com/mcp\"\n\n[mcp.servers.fullstory.headers]\nMCP-Protocol-Version = \"2025-06-18\"\n";
+    let servers = parse(text).unwrap();
+    let h = servers["fullstory"].headers.as_ref().expect("headers kept");
+    assert_eq!(h.iter().collect::<Vec<_>>(), [(&"MCP-Protocol-Version".to_owned(), &"2025-06-18".to_owned())]);
+    let json = serde_json::to_value(&servers["fullstory"]).unwrap();
+    assert_eq!(json["headers"], serde_json::json!({"MCP-Protocol-Version": "2025-06-18"}));
+}
+
+#[test]
+fn headers_several_pairs_and_a_name_with_digits_and_dashes_are_accepted() {
+    let text = headers("MCP-Protocol-Version = \"2025-06-18\"\nX-Api-2-Version = \"7\"\nAccept = \"text/plain\"\n");
+    let servers = parse(&text).unwrap();
+    let h = servers["slack"].headers.as_ref().expect("headers kept");
+    assert_eq!(h.len(), 3);
+    assert_eq!(h["X-Api-2-Version"], "7");
+    assert_eq!(json(&text)["headers"]["Accept"], "text/plain");
+}
+
+#[test]
+fn headers_a_left_out_table_stays_out_of_the_json() {
+    let servers = parse(&entry("")).unwrap();
+    assert!(servers["slack"].headers.is_none());
+    assert!(serde_json::to_value(&servers["slack"]).unwrap().get("headers").is_none());
+    // Red until `headers` is read: the same entry with a table keeps it.
+    assert!(json(&headers("A = \"b\"\n")).get("headers").is_some());
+}
+
+#[test]
+fn headers_refuse_an_empty_table() {
+    // Control: a one-entry table is accepted, so the refusals below are about emptiness, not an unread key.
+    accepted(&headers("A = \"b\""));
+    refused(&headers(""), Some("headers"));
+    refused(&entry("headers = {}"), Some("headers"));
+}
+
+#[test]
+fn headers_refuse_a_value_that_is_not_a_string() {
+    accepted(&with_value("ok"));
+    for v in ["1", "true", "[\"a\"]", "{ a = \"b\" }"] {
+        refused(&headers(&format!("X-Test = {v}\n")), Some("headers"));
+    }
+}
+
+#[test]
+fn headers_refuse_an_empty_value() {
+    accepted(&with_value("x"));
+    refused(&with_value(""), Some("headers"));
+}
+
+#[test]
+fn headers_refuse_a_value_over_500_characters() {
+    accepted(&with_value(&"a".repeat(500)));
+    refused(&with_value(&"a".repeat(501)), Some("headers"));
+}
+
+#[test]
+fn headers_refuse_a_nul_cr_or_lf_in_a_value() {
+    accepted(&with_value("a b"));
+    for c in ["\\u0000", "\\r", "\\n"] {
+        refused(&headers(&format!("X-Test = \"a{c}b\"\n")), Some("headers"));
+    }
+}
+
+#[test]
+fn headers_refuse_a_value_with_an_env_reference() {
+    accepted(&with_value("plain"));
+    for v in ["${TOKEN}", "Bearer ${TOKEN}", "a${B}c"] {
+        refused(&with_value(v), Some("headers"));
+    }
+}
+
+#[test]
+fn headers_refuse_a_value_starting_with_a_bang() {
+    refused(&with_value("!echo hi"), Some("headers"));
+    accepted(&with_value("a!b"));
+    accepted(&with_value("cost$5"));
+}
+
+#[test]
+fn headers_refuse_the_credential_names() {
+    accepted(&with_name("X-Authorization"));
+    for n in ["Authorization", "authorization", "AUTHORIZATION", "Proxy-Authorization", "Cookie"] {
+        refused(&with_name(n), Some("headers"));
+    }
+}
+
+#[test]
+fn headers_refuse_a_name_that_is_not_a_token() {
+    accepted(&with_name(&"a".repeat(64)));
+    for n in ["", "a b", "a_b", "a:b", &"a".repeat(65)] {
+        refused(&with_name(n), Some("headers"));
+    }
+}
+
+/// The key names of the `mcp` row of the "Machine domains" table of docs/contract.md: the backticked spans that open
+/// an item (after `each with: ` or `; `), and the `oauth` keys that follow `optional keys `.
+fn contract_mcp_keys() -> std::collections::BTreeSet<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/contract.md");
+    let doc = std::fs::read_to_string(path).unwrap();
+    let start = doc.find("**Machine domains.**").expect("Machine domains paragraph");
+    let mut row = None;
+    let mut in_table = false;
+    for line in doc[start..].lines() {
+        if line.starts_with('|') {
+            in_table = true;
+            let cells: Vec<&str> = line.trim().trim_matches('|').split('|').map(str::trim).collect();
+            if cells[0] == "`mcp`" {
+                row = Some(cells[1].to_owned());
+            }
+        } else if in_table {
+            break;
+        }
+    }
+    let row = row.expect("the mcp row");
+    let parts: Vec<&str> = row.split('`').collect();
+    let mut keys = std::collections::BTreeSet::new();
+    let mut i = 1;
+    while i < parts.len() {
+        let before = parts[i - 1];
+        if before.ends_with("each with: ") || before.ends_with("; ") {
+            keys.insert(parts[i].to_owned());
+        } else if before.ends_with("optional keys ") {
+            keys.insert(parts[i].to_owned());
+            while i + 2 < parts.len() && parts[i + 1] == ", " {
+                i += 2;
+                keys.insert(parts[i].to_owned());
+            }
+        }
+        i += 2;
+    }
+    keys
+}
+
+#[test]
+fn headers_the_contract_table_lists_exactly_the_keys_the_parser_accepts() {
+    // key name -> (parent table, a valid TOML line); `oauth` is a table of its own.
+    let sample: BTreeMap<&str, (&str, &str)> = BTreeMap::from([
+        ("url", ("", "url = \"https://mcp.fullstory.com/mcp\"")),
+        ("description", ("", "description = \"d\"")),
+        ("exposure", ("", "exposure = \"direct\"")),
+        ("toolExposure", ("", "toolExposure = { a_tool = \"hidden\" }")),
+        ("headers", ("", "headers = { MCP-Protocol-Version = \"2025-06-18\" }")),
+        ("oauth", ("", "")),
+        ("clientId", ("oauth", "clientId = \"c\"")),
+        ("scope", ("oauth", "scope = \"s\"")),
+        ("callbackUrl", ("oauth", "callbackUrl = \"http://localhost:3118/callback\"")),
+    ]);
+    let documented = contract_mcp_keys();
+    let sampled: std::collections::BTreeSet<String> = sample.keys().map(|k| (*k).to_owned()).collect();
+    assert_eq!(documented, sampled, "the contract row and the sample keys differ");
+
+    let lines = |parent: &str| sample.values().filter(|(p, l)| *p == parent && !l.is_empty()).map(|(_, l)| *l).collect::<Vec<_>>().join("\n");
+    let text = format!("[mcp.servers.x]\n{}\n\n[mcp.servers.x.oauth]\n{}\n", lines(""), lines("oauth"));
+    let servers = parse(&text).unwrap_or_else(|e| panic!("an entry with every documented key is refused: {e:?}\n{text}"));
+    let json = serde_json::to_value(&servers["x"]).unwrap();
+    for key in ["url", "description", "exposure", "toolExposure", "oauth", "headers"] {
+        assert!(json.get(key).is_some(), "{key} not kept: {json}");
+    }
 }
