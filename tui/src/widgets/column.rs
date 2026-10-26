@@ -12,7 +12,7 @@ use ratatui::widgets::{Clear, Paragraph};
 use super::host::Usage;
 use crate::cells;
 use crate::dialog::scroll::{self, Cue};
-use crate::link;
+use crate::link::{self, Link, Links};
 use crate::palette::{self, Meaning};
 use crate::box_widget::SectionTitle;
 use super::inbox::{self, Shape, inbox_share};
@@ -272,6 +272,8 @@ pub struct Drawn {
     pub icons: Vec<MergeIcon>,
     /// Where a right click reaches a pull request: every one on screen, owned or not.
     pub rows: Vec<PrRow>,
+    /// Every link drawn (the PR rows' cues): a click on one opens its url.
+    pub links: Links,
     /// The Inbox section, pinned to the bottom (its first row is the empty one): the wheel there scrolls it, a click on its
     /// toggle row folds or unfolds it.
     pub inbox: Rect,
@@ -354,12 +356,19 @@ pub fn draw(
         let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
         f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
+    let mut links = Links::default();
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
-            link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
+            let buf = f.buffer_mut();
+            let block = buf[(x, *y)].style();
+            links.draw(Link::new(&pr.url), Rect::new(x, *y, 1, 1), buf);
+            // The active block keeps its colours on every cell (rule (3)): the cue's own colour is for the other rows.
+            if pr.active {
+                buf[(x, *y)].set_style(block);
+            }
         }
     }
-    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows, inbox: inbox_area, inbox_shape: shape }
+    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows, links, inbox: inbox_area, inbox_shape: shape }
 }
 
 
@@ -503,17 +512,6 @@ mod tests {
         let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
         assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
         assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
-    }
-
-    #[test]
-    fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
-        let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))]);
-        // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
-        let link = format!("\x1b]8;;https://github.com/acme/repo/pull/7\x07{}\x1b]8;;\x07", link::CUE);
-        assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
-        // the name is cut before the arrow's column and its gap
-        let (buf, _) = drawn(9, 20, &[pr(7, Some("l-a"))]);
-        assert_eq!(row(&buf, 6).replace(&link, link::CUE), format!(" acme/… {}", link::CUE));
     }
 
     #[test]

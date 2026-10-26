@@ -2693,7 +2693,8 @@ Exact shapes: a pi pill is `ESC[<fg>m` + U+E0B6 + `ESC[7m` + TEXT + `ESC[27m` + 
 | Chat pane placeholder (no Lead in the slot) | no | fg 8 | palette: muted |
 | tmux message line (`display-message`, a failed status-button click) | no | tmux's own default: a yellow block with text 0, which is the palette's yellow (a refusal) by look; cpd sets no `message-style` | tmux default |
 | tmux copy and view mode highlight | yes | block: 4 inverted | `mode-style`, §6.1 |
-| OSC 8 links (the `󱆭` cells, link labels) | yes (modifier-click) | the colour of the cell they sit on; cpd adds none | `tui/src/link.rs` |
+| Link widget (the `󱆭` cells and titled text, Deploy column and Plan view) | yes (plain left click) | the colour of the cell they sit on; cpd uses `palette::clickable_text()` for the cue (pro-d60) | `tui/src/link.rs` |
+| OSC 8 links (the `󱆭` cells and link labels, Inbox only) | yes (modifier-click) | the colour of the cell they sit on; cpd adds none | `tui/src/link.rs` |
 
 **The exact formats** (`core/src/host/tmux.rs`; tests pin them). `\u{e0b6}` and `\u{e0b4}` are the caps U+E0B6 and U+E0B4. Inside a `#{?…}` branch a comma would split the branch, so each `#[…]` there holds one attribute.
 
