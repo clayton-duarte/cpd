@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use ratatui::{
     buffer::Buffer,
     layout::{Margin, Position, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::Line,
     widgets::Widget,
 };
@@ -103,7 +103,6 @@ pub struct FlowJob {
 pub struct Pill {
     pub key: String,
     pub rect: Rect,
-    pub column: usize,
 }
 
 /// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with nothing after it; the needs on it, and its own, are not drawn (they count for nothing). `lead_working`: the Plan's Lead is working.
@@ -131,14 +130,6 @@ pub struct Chart {
     pub pills: Vec<Pill>,
     /// Pill indices of each column, top to bottom.
     pub columns: Vec<Vec<usize>>,
-}
-
-#[derive(Clone, Copy)]
-pub enum Dir {
-    Up,
-    Down,
-    Left,
-    Right,
 }
 
 /// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
@@ -445,7 +436,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
                 let (left, right) = (parts[i].0.as_str(), parts[i].1.as_str());
                 let gap = body_of(rect).width as usize - Line::from(left).width() - Line::from(right).width();
                 Line::from(pill::pill(format!("{left}{}{right}", " ".repeat(gap)), jobs[i].status.pill())).render(rect, &mut buf);
-                pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
+                pills[i] = Some(Pill { key: jobs[i].key.clone(), rect });
                 columns[l].push(i);
             }
         }
@@ -458,68 +449,9 @@ fn body_of(rect: Rect) -> Rect {
     Rect { x: rect.x + 1, width: rect.width.saturating_sub(2), ..rect }
 }
 
-/// The User's selection in the Plan view: a Job key, held by key so a refresh keeps it. Nothing is selected until the User
-/// clicks a pill or presses an arrow key. `follow` asks the next draw to scroll the selection into view (set by keys only:
-/// a clicked pill is already visible).
-#[derive(Default, Debug, PartialEq)]
-pub struct Selection {
-    pub key: Option<String>,
-    pub follow: bool,
-}
-
-impl Selection {
-    /// Nothing selected (opening a view, switching Plan).
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    /// A refresh: the pill index of the held key in `chart`. A Job that is gone drops the selection; none is ever created.
-    pub fn resolve(&mut self, chart: &Chart) -> Option<usize> {
-        let i = self.key.as_ref().and_then(|k| chart.pills.iter().position(|p| &p.key == k));
-        if i.is_none() {
-            self.reset();
-        }
-        i
-    }
-
-    /// An arrow key: with nothing selected the first pill of the first column, else one step from the selection.
-    pub fn arrow(&mut self, chart: &Chart, dir: Dir) {
-        let to = match self.resolve(chart) {
-            Some(i) => Some(chart.step(i, dir)),
-            None => chart.columns.first().and_then(|c| c.first().copied()),
-        };
-        if let Some(i) = to {
-            self.key = Some(chart.pills[i].key.clone());
-            self.follow = true;
-        }
-    }
-
-    /// A click on the pill `key`: it is already in view, so no scrolling follows. Clicking the selected pill clears it.
-    pub fn click(&mut self, key: String) {
-        if self.key.as_ref() == Some(&key) {
-            self.reset();
-        } else {
-            self.key = Some(key);
-            self.follow = false;
-        }
-    }
-
-    /// A click on empty chart space, or Esc: nothing is selected. Returns the Job that was selected, whose Worker view closes.
-    pub fn clear(&mut self) -> Option<String> {
-        let was = self.key.take();
-        self.reset();
-        was
-    }
-
-    /// Enter: the key to open, none when nothing is selected.
-    pub fn enter(&self) -> Option<String> {
-        self.key.clone()
-    }
-}
-
 impl Chart {
     /// The same chart on a larger canvas: `margin` blank columns left and right and rows above and below it. The buffer and
-    /// the pills' rectangles are on the canvas, so scrolling, `scroll_to` and clicks all share its coordinates.
+    /// the pills' rectangles are on the canvas, so scrolling and the box lines share its coordinates.
     pub fn with_margin(self, margin: Margin) -> Chart {
         let (dx, dy) = (margin.horizontal, margin.vertical);
         let area = self.buf.area;
@@ -529,54 +461,12 @@ impl Chart {
         Chart { buf, pills, columns: self.columns }
     }
 
-    pub fn pill_at(&self, x: u16, y: u16) -> Option<usize> {
-        self.pills.iter().position(|p| x >= p.rect.x && x < p.rect.right() && y == p.rect.y)
-    }
-
-    /// The neighbour of pill `from`: up/down the previous/next Job of its column, left/right the nearest Job (by row) of the
-    /// previous/next column. Stays put at an edge.
-    pub fn step(&self, from: usize, dir: Dir) -> usize {
-        let column = self.pills[from].column;
-        let col = &self.columns[column];
-        let at = col.iter().position(|&i| i == from).unwrap_or(0);
-        let nearest = |l: usize| self.columns[l].iter().copied().min_by_key(|&i| self.pills[i].rect.y.abs_diff(self.pills[from].rect.y)).unwrap_or(from);
-        match dir {
-            Dir::Up => col[at.saturating_sub(1)],
-            Dir::Down => col[(at + 1).min(col.len() - 1)],
-            Dir::Left if column > 0 => nearest(column - 1),
-            Dir::Right if column + 1 < self.columns.len() => nearest(column + 1),
-            _ => from,
-        }
-    }
-
-    /// The smallest scroll offset change that shows pill `i` and its entry and exit in a `w`×`h` window.
-    pub fn scroll_to(&self, i: usize, (ox, oy): (u16, u16), (w, h): (u16, u16)) -> (u16, u16) {
-        let r = self.pills[i].rect;
-        let fit = |o: u16, lo: u16, hi: u16, size: u16| if lo < o { lo } else if hi > o + size { hi.saturating_sub(size) } else { o };
-        (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
-    }
-
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill the blue block, its body bold (its caps blue). Offsets are clamped to
-    /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
-    pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`. Offsets are clamped to the chart; the clamped offsets are
+    /// returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
+    pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16)) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
         let oy = oy.min(self.buf.area.height.saturating_sub(area.height));
         copy_cells(&self.buf, Rect::new(ox, oy, area.width, area.height), dst, Position::new(area.x, area.y));
-        if let Some(pill) = selected.map(|i| self.pills[i].rect) {
-            let window = Rect::new(ox, oy, area.width, area.height);
-            // the body is the blue block, bold; the caps are blue too (the block's colour as foreground)
-            let blue = pill::cap_style(palette::pill_focus());
-            for (rect, style) in [
-                (body_of(pill), palette::pill_focus().add_modifier(Modifier::BOLD)),
-                (Rect::new(pill.x, pill.y, 1, 1), blue),
-                (Rect::new(pill.right() - 1, pill.y, 1, 1), blue),
-            ] {
-                let seen = window.intersection(rect);
-                if !seen.is_empty() {
-                    dst.set_style(Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height), style);
-                }
-            }
-        }
         (ox, oy)
     }
 }
@@ -812,142 +702,19 @@ mod tests {
         assert_eq!((c.pills.len(), c.columns.len(), c.buf.area.area()), (0, 0, 0));
     }
 
-    #[test]
-    fn selection_moves_between_columns_and_within_one() {
-        // a | b c d | e : b, c, d share a card
-        let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"]), job("e", &["b", "c", "d"])], 0);
-        let (a, b, cc, d, e) = (0, 1, 2, 3, 4);
-        assert_eq!(c.step(a, Dir::Right), cc); // the nearest to a's row
-        assert_eq!(c.step(cc, Dir::Right), e);
-        assert_eq!(c.step(cc, Dir::Left), a);
-        assert_eq!(c.step(a, Dir::Left), a);
-        assert_eq!(c.step(e, Dir::Right), e);
-        assert_eq!((c.step(cc, Dir::Up), c.step(b, Dir::Up)), (b, b));
-        assert_eq!((c.step(cc, Dir::Down), c.step(d, Dir::Down)), (d, d));
-        assert_eq!(c.step(a, Dir::Down), a);
-    }
-
     fn two() -> Chart {
         layout(&[job("a", &[]), job("b", &["a"])], 0)
     }
 
     #[test]
-    fn nothing_is_selected_on_open_and_a_refresh_creates_no_selection() {
-        let mut s = Selection::default();
-        assert_eq!((s.resolve(&two()), s.key.clone()), (None, None));
-    }
-
-    #[test]
-    fn the_first_arrow_selects_the_first_pill_of_the_first_column_then_moves() {
-        let c = two();
-        for d in [Dir::Up, Dir::Down, Dir::Left, Dir::Right] {
-            let mut s = Selection::default();
-            s.arrow(&c, d);
-            assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
-        }
-        let mut s = Selection::default();
-        s.arrow(&c, Dir::Right);
-        s.arrow(&c, Dir::Right);
-        assert_eq!(s.key.as_deref(), Some("b"));
-        s.arrow(&layout(&[], 0), Dir::Right); // an empty chart selects nothing
-        assert_eq!(s, Selection::default());
-    }
-
-    #[test]
-    fn a_click_selects_that_pill_without_following() {
-        let c = two();
-        let mut s = Selection { key: None, follow: true };
-        s.click("b".into());
-        let at = s.resolve(&c);
-        assert_eq!((s.key.as_deref(), s.follow, at), (Some("b"), false, Some(1)));
-    }
-
-    #[test]
-    fn a_click_on_another_pill_selects_it() {
-        let mut s = Selection::default();
-        s.click("a".into());
-        s.click("b".into());
-        assert_eq!(s.key.as_deref(), Some("b"));
-    }
-
-    #[test]
-    fn a_click_on_the_selected_pill_clears_it() {
-        let mut s = Selection::default();
-        s.click("a".into());
-        s.click("a".into());
-        assert_eq!(s, Selection::default());
-        assert_eq!(s.enter(), None);
-    }
-
-    #[test]
-    fn empty_space_and_esc_clear_and_name_the_job_to_close() {
-        let mut s = Selection::default();
-        s.click("a".into());
-        assert_eq!(s.clear().as_deref(), Some("a"));
-        assert_eq!((s.clear(), &s), (None, &Selection::default()));
-    }
-
-    #[test]
-    fn an_arrow_after_a_clear_selects_the_first_pill() {
-        let c = two();
-        let mut s = Selection::default();
-        s.arrow(&c, Dir::Right);
-        s.arrow(&c, Dir::Right);
-        s.clear();
-        s.arrow(&c, Dir::Down);
-        assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
-    }
-
-    #[test]
-    fn enter_without_a_selection_opens_nothing() {
-        let mut s = Selection::default();
-        assert_eq!(s.enter(), None);
-        s.click("a".into());
-        assert_eq!(s.enter().as_deref(), Some("a"));
-    }
-
-    #[test]
-    fn a_refresh_keeps_the_selection_by_key() {
-        let mut s = Selection::default();
-        s.click("b".into());
-        let moved = layout(&[job("x", &[]), job("a", &[]), job("b", &["a", "x"])], 0);
-        assert_eq!(s.resolve(&moved), Some(2));
-        assert_eq!(s.key.as_deref(), Some("b"));
-    }
-
-    #[test]
-    fn a_switch_clears_the_selection_even_if_the_new_plan_has_the_same_key() {
-        let mut s = Selection::default();
-        s.arrow(&two(), Dir::Right);
-        s.reset();
-        assert_eq!((s.resolve(&two()), s.key), (None, None));
-    }
-
-    #[test]
-    fn a_selected_job_that_disappears_is_unselected() {
-        let mut s = Selection::default();
-        s.click("b".into());
-        assert_eq!(s.resolve(&layout(&[job("a", &[])], 0)), None);
-        assert_eq!(s, Selection::default());
-        assert_eq!(s.resolve(&two()), None); // and it does not come back
-    }
-
-    #[test]
-    fn the_window_scrolls_to_the_selection_on_both_axes_and_marks_it() {
+    fn the_window_is_clamped_to_the_chart_and_copied_as_drawn() {
         let jobs: Vec<FlowJob> = ["a", "b", "c", "d"].iter().map(|k| job(k, &[])).collect();
         let c = layout(&jobs, 0);
-        // the window shows 3 rows: pill d (row 6) pulls the view down
-        assert_eq!(c.scroll_to(3, (0, 0), (20, 3)), (0, 4));
-        assert_eq!(c.scroll_to(0, (0, 4), (20, 3)), (0, 0));
-        let wide = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
-        assert_eq!(wide.scroll_to(2, (0, 0), (12, 1)), (wide.pills[2].rect.right() + 1 - 12, 0));
         let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
-        let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart
+        let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100)); // clamped to the chart
         assert_eq!((ox, oy), (0, 6));
-        // the pill's body is the blue block, bold; its caps are blue text on the terminal's background
-        assert_eq!((dst[(4, 1)].bg, dst[(4, 1)].fg), (palette::pill_focus().bg.unwrap(), palette::pill_focus().fg.unwrap()));
-        assert!(dst[(4, 1)].modifier.contains(Modifier::BOLD));
-        assert_eq!((dst[(3, 1)].fg, dst[(3, 1)].bg), (palette::pill_focus().fg.unwrap(), ratatui::buffer::Cell::default().bg));
+        assert_eq!(dst[(4, 1)].symbol(), c.buf[(2, 6)].symbol());
+        assert_eq!(dst[(4, 1)].style(), c.buf[(2, 6)].style(), "no pill is marked");
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
     }
 
@@ -959,12 +726,6 @@ mod tests {
         for (p, q) in c.pills.iter().zip(&plain.pills) {
             assert_eq!((p.rect.x, p.rect.y), (q.rect.x + 2, q.rect.y + 1));
             assert_eq!(c.buf[(p.rect.x + 2, p.rect.y)].symbol(), plain.buf[(q.rect.x + 2, q.rect.y)].symbol());
-            assert_eq!(c.pill_at(p.rect.x, p.rect.y), c.pills.iter().position(|r| r.key == p.key));
         }
-        assert_eq!(c.pill_at(q_x(&plain), 0), None, "the margin is not a pill");
-    }
-
-    fn q_x(c: &Chart) -> u16 {
-        c.pills[0].rect.x
     }
 }

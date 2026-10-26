@@ -122,14 +122,13 @@ fn a_left_click_on_a_pr_box_titles_text_or_cue_opens_its_pull_request_url() {
 fn a_click_on_the_title_does_nothing_else_than_open_the_page() {
     let centre = sample_centre(vec![pr_with("api", Some(pull(12, false)))], vec![sample_job("api", "a")]);
     let mut ui = Ui::default();
-    ui.selected.key = Some("a".into());
     let buf = draw(&mut ui, &centre, 12);
     let (x, y) = title_x(&buf, 12).expect("the title shows #12");
-    let (selected, scroll) = (ui.selected.key.clone(), ui.scroll);
+    let scroll = ui.scroll;
     let (ports, runner) = ports_with(Reply::ok(""));
     assert!(ui.click(&ports, left(x + 2, y, KeyModifiers::NONE)).unwrap());
     assert_eq!(opened(&runner), ["https://github.com/acme/repo/pull/12"]);
-    assert_eq!((ui.selected.key.clone(), ui.scroll, ui.error.clone()), (selected, scroll, None), "no selection, scroll or message changes");
+    assert_eq!((ui.scroll, ui.error.clone()), (scroll, None), "no scroll or message changes");
     assert_eq!(runner.calls().len(), 1, "nothing but `open` ran");
 }
 
