@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Fixture, shown, waitFor } from "./fake.ts";
+import { Fixture, shown } from "./fake.ts";
 
 // Decision pro-d56, commands.md §15.20: a Lead runs a command the User explicitly asks for.
 
@@ -100,7 +100,6 @@ test("a Lead's background start and stop pass the adapter's guards and the guard
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");
-  await waitFor("the follower", () => f.follows().length > 0);
   t.after(() => f.close());
 
   const call = async (command: string) => (await f.pi.fireWith("tool_call", { toolName: "bash", toolCallId: "t", input: { command } }))[0] as { block?: boolean } | undefined;
