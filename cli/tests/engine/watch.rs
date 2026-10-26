@@ -2366,23 +2366,32 @@ fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record(
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = polling("");
-    // The first poll leaves 50 requests until `reset_at`, a minute from now; the next one, which E5 must not run before that (it
+    // The first poll leaves 50 requests until `reset_at`, a minute from then; the next one, which E5 must not run before that (it
     // polls every tick otherwise), 4987. The engine reads the reset against the wall clock and waits it out on the `ManualClock`.
-    let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+    // `reset_at` is stamped when the first poll answers, so the wait the engine computes is a minute less that handover, and the
+    // test's own setup time never shortens it (a flake under load).
     let starts = Arc::new(Mutex::new(Vec::<Duration>::new()));
-    let (clock, noted, low) = (fx.fakes.clock.clone(), starts.clone(), search_reply(50, &reset_at));
+    let reset = Arc::new(Mutex::new(None::<String>));
+    let (clock, noted, stamped) = (fx.fakes.clock.clone(), starts.clone(), reset.clone());
     fx.route_fn("gh", move |_| {
         let mut noted = noted.lock().unwrap();
         noted.push(clock.elapsed());
-        Reply::ok(&if noted.len() == 1 { low.clone() } else { search_reply(4987, "2099-01-01T00:00:00Z") })
+        if noted.len() == 1 {
+            let reset_at = (OffsetDateTime::now_utc() + time::Duration::seconds(60)).format(&time::format_description::well_known::Rfc3339).unwrap();
+            *stamped.lock().unwrap() = Some(reset_at.clone());
+            Reply::ok(&search_reply(50, &reset_at))
+        } else {
+            Reply::ok(&search_reply(4987, "2099-01-01T00:00:00Z"))
+        }
     });
 
     let seen = starts.clone();
     fx.watch_steps(move |_| seen.lock().unwrap().len() >= 2).unwrap();
 
-    // The second poll started when the reset came (a minute, less what the test took to get here): the ticks in between ran no poll.
+    // The second poll started when the reset came (a minute, less the handover to the engine): the ticks in between ran no poll.
     let starts = starts.lock().unwrap();
     assert_eq!(starts.len(), 2, "{starts:?}");
+    let reset_at = reset.lock().unwrap().clone().expect("the first poll answered a reset");
     assert!(starts[1] - starts[0] >= Duration::from_secs(55), "polled {:?} after the first, before the reset ({reset_at})", starts[1] - starts[0]);
     // One Event, for the machine, with what the User needs; resuming raised nothing more.
     let errors = fx.events("error");

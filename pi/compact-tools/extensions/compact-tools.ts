@@ -862,7 +862,7 @@ export default function compactTools(pi: ExtensionAPI): void {
 	const enableUI = (ctx: ExtensionContext, reload: boolean, resume: boolean, failures: UIFailure[]) => {
 		// Observe relayout keys before the thinking controller consumes them.
 		// Before the thinking controller: its terminal input handler is the one the tests (and the key relayout) look for last.
-		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx));
+		attemptUI(failures, "editor box bind", () => editorBox.bind(ctx, reload));
 		attemptUI(failures, "cursor bind", () => cursor.bind());
 		attemptUI(failures, "viewport bind", () => viewport.bind(ctx));
 		attemptUI(failures, "progress bind", () => progress.bind(ctx, resume));
