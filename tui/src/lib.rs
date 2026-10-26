@@ -72,6 +72,8 @@ mod moon_tests;
 #[cfg(test)]
 mod phase_dot_tests;
 #[cfg(test)]
+mod zone_tests;
+#[cfg(test)]
 mod phase_dot_views_tests;
 pub mod trace;
 #[cfg(test)]
@@ -145,9 +147,9 @@ pub type RunOn = fn(&Ports, Vec<OsString>) -> Result<Output, CpdError>;
 /// [`RunCommand`].
 #[derive(Clone, Copy)]
 pub struct Restart {
-    /// The one line about a pending restart that failed (`restart::read`, then `Pending::describe`); `None` when
+    /// The one line about a pending restart that failed (`restart::read`, then `Pending::describe` with the caller's `zone`); `None` when
     /// none is pending or the pending one has not failed.
-    pub failed: fn(&CpdHome) -> Result<Option<String>, CpdError>,
+    pub failed: fn(&CpdHome, &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError>,
     /// Removes the pending restart (`restart::clear`).
     pub clear: fn(&CpdHome) -> Result<(), CpdError>,
     /// Marks a restart pending, from the server's tmux to the installed one; whether it newly marked (`restart::mark`).

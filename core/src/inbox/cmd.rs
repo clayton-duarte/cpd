@@ -304,11 +304,13 @@ pub fn snooze_until_on(ports: &Ports, until: Until) -> Result<OffsetDateTime, Cp
 fn snooze(ports: &Ports, args: SnoozeArgs) -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open_with(ports)?;
     let now = ports.clock.utc();
-    let until = timestamp(snooze_until(&*ports.runner, args.until, now)?);
+    let until_at = snooze_until(&*ports.runner, args.until, now)?;
+    let until = timestamp(until_at);
+    let said = crate::clock::prose(until_at, &ports.clock.zone());
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {until}: {}.", item.id, item.label), item.id, &until);
+        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {said}: {}.", item.id, item.label), item.id, &until);
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -357,6 +359,10 @@ fn scoped(mut event: NewEvent, item: &Item) -> NewEvent {
     }
     event
 }
+
+#[cfg(test)]
+#[path = "snooze_time_tests.rs"]
+mod snooze_time_tests;
 
 #[cfg(test)]
 mod tests {

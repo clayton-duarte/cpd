@@ -1,6 +1,6 @@
 import { CpdError, isObject } from "./cpd.ts";
 import type { Message } from "./pi.ts";
-import { localDateTime } from "./time.ts";
+import { proseTime } from "./time.ts";
 
 /** commands.md §15.7a: the custom type of the hidden first message of a by-user Session; its `details.event` counts for the cursor. */
 export const FIRST_MESSAGE_TYPE = "cpd-first-message";
@@ -184,15 +184,15 @@ export function parseRecords(out: Record<string, unknown>): ContextRecord[] {
 /** A `brief` is shown short: its first line and its Plan (§15.7); the whole text is `cpd context show --record <id>`. */
 const line = (r: ContextRecord): string =>
   r.kind === "brief"
-    ? `- ${r.id} brief (${r.at.slice(0, 10)}): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
-    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)}): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
+    ? `- ${r.id} brief (${r.at.slice(0, 10)} UTC): ${r.text.trimStart().split("\n")[0]!.trimEnd()}${r.plan !== undefined ? ` Plan ${r.plan}.` : ""}`
+    : `- ${r.id} ${r.kind} (${r.at.slice(0, 10)} UTC): ${r.text}${r.question !== undefined ? ` Answers ${r.question}.` : ""}${r.supersedes !== undefined ? ` Supersedes ${r.supersedes}.` : ""}`;
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const sender = (from: string | null) => (from === null ? "User" : from);
 
 /** The `Board:` section: each post in full with its sender. Empty when there is none. */
 function boardSection(posts: readonly BoardPost[]): string[] {
-  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p.from)} (${localDateTime(p.at)}): ${p.text}`)];
+  return posts.length === 0 ? [] : ["Board:", ...posts.map((p) => `- ${sender(p.from)} (${proseTime(p.at)}): ${p.text}`)];
 }
 
 /** The Event kinds of a Plan's line, in their fixed order, with how each is counted. */

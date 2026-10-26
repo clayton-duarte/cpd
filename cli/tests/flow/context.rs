@@ -659,7 +659,7 @@ fn show_renders_the_records() {
     assert!(md.contains("hs-d1") && md.contains("superseded by hs-d2"), "{md}");
     assert!(md.contains("hs-q2") && md.contains("When?"), "{md}");
     assert!(md.contains("answer hs-a1") && md.contains("Because."), "{md}");
-    assert!(md.contains(&format!("({})", &records[0]["at"].as_str().unwrap()[..10])), "{md}");
+    assert!(md.contains(&format!("({} UTC)", &records[0]["at"].as_str().unwrap()[..10])), "{md}");
 }
 
 #[test]
@@ -746,8 +746,8 @@ fn show_lists_a_brief_short_under_its_plan_and_record_prints_it_whole() {
     assert!(brief.get("repos").is_none(), "{brief}");
     assert!(records.iter().filter(|r| r["kind"] != "brief").all(|r| r.get("short").is_none()));
     let md = out["markdown"].as_str().unwrap();
-    assert!(md.contains("- hs-p1 (2026-10-14): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14): Retry payouts.\n"), "{md}");
-    assert!(md.contains("- hs-p2 (2026-10-14): web (on hs): The web plan\n  - brief hs-b2 (2026-10-14): Web page.\n"), "{md}");
+    assert!(md.contains("- hs-p1 (2026-10-14 UTC): pay (on hs): The pay plan\n  - brief hs-b1 (2026-10-14 UTC): Retry payouts.\n"), "{md}");
+    assert!(md.contains("- hs-p2 (2026-10-14 UTC): web (on hs): The web plan\n  - brief hs-b2 (2026-10-14 UTC): Web page.\n"), "{md}");
     assert!(!md.contains("Second line"), "{md}");
 
     // `--since` past the Plans but before nothing else: only later records; a new brief brings its Plan.

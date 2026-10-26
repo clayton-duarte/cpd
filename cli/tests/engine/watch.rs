@@ -829,7 +829,11 @@ fn a_restart_sends_no_downtime_notice() {
     let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped' ORDER BY id LIMIT 1");
     fx.watch_first_tick().unwrap();
     // The record is the Event's text, not a message (hs-d514: the Managers are not told of a restart).
-    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {stopped_at}")), "{:?}", fx.texts("watch-started"));
+    // The field stays UTC; the sentence says the time in the engine's zone, which the harness pins (`TZ`, `TestEnv::isolation`) to
+    // the rule of `ManualClock`'s zone.
+    let at = time::OffsetDateTime::parse(&stopped_at, &time::format_description::well_known::Rfc3339).unwrap();
+    let local = cpd_core::clock::prose(at, &cpd_core::clock::ManualClock::new().zone());
+    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {local}")), "{local} {:?}", fx.texts("watch-started"));
     assert_eq!(fx.messages(), [], "no Manager is sent the downtime");
 }
 

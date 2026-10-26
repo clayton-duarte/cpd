@@ -300,7 +300,7 @@ fn an_engine_that_stopped_is_down_from_its_stop_to_the_clock() {
     assert!(down.said);
     assert_eq!(down.down, time::Duration::milliseconds(3200));
     assert_eq!(down.since, w.start);
-    assert_eq!(down.sentence(), format!("The engine was down for 3.2 s: it stopped at {}.", w.stamp(0)));
+    assert_eq!(down.sentence(&w.ports.clock.zone()), format!("The engine was down for 3.2 s: it stopped at {}.", cpd_core::clock::prose(w.start, &w.ports.clock.zone())));
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn a_restart_back_in_exactly_ten_seconds_on_the_clock_is_a_planned_one() {
     let down = downtime(&w, &mut fx, &lock, true, Some(77));
 
     assert_eq!((down.planned, down.overdue), (true, false));
-    assert!(down.sentence().ends_with("(an install's planned restart)."), "{}", down.sentence());
+    assert!(down.sentence(&w.ports.clock.zone()).ends_with("(an install's planned restart)."), "{}", down.sentence(&w.ports.clock.zone()));
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn a_restart_back_a_millisecond_after_ten_seconds_on_the_clock_is_overdue() {
     let down = downtime(&w, &mut fx, &lock, true, Some(77));
 
     assert_eq!((down.planned, down.overdue), (false, true));
-    assert!(down.sentence().contains("it was an install's restart that took longer than 10 s."), "{}", down.sentence());
+    assert!(down.sentence(&w.ports.clock.zone()).contains("it was an install's restart that took longer than 10 s."), "{}", down.sentence(&w.ports.clock.zone()));
 }
 
 #[test]

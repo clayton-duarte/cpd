@@ -226,7 +226,7 @@ fn the_job_form_follows_the_job_to_its_first_attempt() {
     let screen = shots.get(0);
     assert_eq!(screen[0], PLACEHOLDER, "{screen:?}");
     let screen = shots.get(1);
-    assert_eq!(screen[0], "16:33:44 you", "{screen:?}");
+    assert_eq!(screen[0], "12:33:44 you", "{screen:?}");
     assert_eq!(screen.last().map(String::as_str), Some(" later-a1 running · working"), "{screen:?}");
 }
 
@@ -247,7 +247,7 @@ fn an_appended_entry_is_followed_at_the_end() {
     view(&fx, &["api-a1", "--plan", "ship"], true, &display, steps).0.unwrap();
     assert!(shots.get(0).iter().any(|r| r.contains("test result")), "the first screen: {:?}", shots.get(0));
     let screen = shots.get(1);
-    assert_eq!(screen[screen.len() - 3..], ["16:33:44 agent", "      Appended 3.", STATUS].map(str::to_owned), "{screen:?}");
+    assert_eq!(screen[screen.len() - 3..], ["12:33:44 agent", "      Appended 3.", STATUS].map(str::to_owned), "{screen:?}");
     assert_eq!(screen.len(), 8, "the end is in view: {screen:?}");
 }
 
@@ -268,7 +268,7 @@ fn scrolling_leaves_the_end_and_q_closes_the_pane() {
     steps.push(Step::Event(ch('q')));
     view(&fx, &["api-a1", "--plan", "ship"], true, &display, steps).0.unwrap();
     assert!(shots.get(0).iter().any(|r| r.contains("test result")), "the end: {:?}", shots.get(0));
-    assert_eq!(shots.get(1), ["16:33:44 you", "      Implement the API.", "16:33:44 agent", STATUS], "the top");
+    assert_eq!(shots.get(1), ["12:33:44 you", "      Implement the API.", "12:33:44 agent", STATUS], "the top");
     assert!(shots.get(2).iter().any(|r| r.contains("test result")), "the end again: {:?}", shots.get(2));
     assert!(fx.panes().iter().all(|p| p.pane != pane), "q closed the pane: {:?}", fx.panes());
     assert!(

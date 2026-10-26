@@ -103,7 +103,7 @@ fn apply(engine: &mut Engine, finished: Finished) {
             out["polled"]
         ));
     }
-    match rate_guard(&*engine.ports.clock, &out) {
+    match rate_guard(&*engine.ports.clock, &out, &engine.ports.clock.zone()) {
         Ok(None) => engine.clear(Step::E5, &About::Machine),
         Ok(Some((until, failure))) => {
             engine.paused_until = Some(until);
@@ -227,7 +227,7 @@ fn is_store_busy(failure: &Failure) -> bool {
 /// D9: `None` when the rate limit leaves room; else when to poll again and the
 /// failure to report. A `rate_limit` that is not `{remaining, reset_at}` is a failure. The reset is read against `clock`,
 /// the same clock the loop waits on, so a test's handover between the poll answering and the guard reading cannot skew it.
-fn rate_guard(clock: &dyn Clock, out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
+pub(super) fn rate_guard(clock: &dyn Clock, out: &Value, zone: &cpd_core::clock::TimeZone) -> Result<Option<(Instant, Failure)>, Failure> {
     let unusable = |why: String| {
         Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("cpd pr poll printed an unusable rate_limit: {why}.")).with("stdout", out.to_string()))
     };
@@ -243,7 +243,7 @@ fn rate_guard(clock: &dyn Clock, out: &Value) -> Result<Option<(Instant, Failure
     let until = clock.now() + Duration::try_from(wait).unwrap_or_default();
     let failure = Failure {
         code: ErrorCode::GhRateLimited.as_str().to_owned(),
-        message: format!("GitHub's rate limit has {remaining} requests left: PR polling pauses until {reset_at}."),
+        message: format!("GitHub's rate limit has {remaining} requests left: PR polling pauses until {}.", cpd_core::clock::prose(reset, zone)),
         details: json!({"remaining": remaining, "reset_at": reset_at}),
     };
     Ok(Some((until, failure)))

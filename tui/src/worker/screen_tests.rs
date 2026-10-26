@@ -46,12 +46,20 @@ impl Env {
     fn view(&mut self, target: &Target) -> View {
         let worker = read::worker(&mut self.store, &PlanId::parse("ship").unwrap(), target).unwrap();
         let (mut view, mut shown): (View, Option<Stamp>) = (View::new(), None);
-        refresh(&mut view, &mut shown, Some(&worker));
+        refresh(&mut view, &mut shown, Some(&worker), &<cpd_core::clock::ManualClock as cpd_core::clock::Clock>::zone(&cpd_core::clock::ManualClock::new()));
         view
     }
 
     pub(super) fn attempt(&mut self) -> View {
         self.view(&Target::Attempt(AttemptId::parse("api-a1").unwrap()))
+    }
+
+    /// The view of the Attempt as the loop starts it, its time of day drawn in `zone`.
+    fn attempt_in(&mut self, zone: &cpd_core::clock::TimeZone) -> View {
+        let worker = read::worker(&mut self.store, &PlanId::parse("ship").unwrap(), &Target::Attempt(AttemptId::parse("api-a1").unwrap())).unwrap();
+        let (mut view, mut shown): (View, Option<Stamp>) = (View::new(), None);
+        refresh(&mut view, &mut shown, Some(&worker), zone);
+        view
     }
 
     fn job(&mut self, key: &str) -> View {
@@ -137,11 +145,11 @@ fn the_session_file_of_the_worker_is_rendered_read_only() {
     assert_eq!(
         screen,
         [
-            "16:33:44 you",
+            "12:33:44 you",
             "      Implement the API.",
-            "16:33:44 agent",
+            "12:33:44 agent",
             "      On it.",
-            "16:33:44 → bash cargo test",
+            "12:33:44 → bash cargo test",
             "        \u{F060C} test result: ok",
             "",
             "",
@@ -279,7 +287,7 @@ fn the_attempt_form_of_a_failed_job_says_why_at_the_top_and_not_at_the_foot() {
     );
     let mut view = env.attempt();
     let first = screen(&mut view, 60, 12);
-    assert_eq!(first[..3], rows(&[" failed: crashed", "", "16:33:44 you"])[..], "{first:?}");
+    assert_eq!(first[..3], rows(&[" failed: crashed", "", "12:33:44 you"])[..], "{first:?}");
     assert_eq!(first.last().map(String::as_str), Some(" api-a1 ended · stopped"), "{first:?}");
     for _ in 0..8 {
         press(&mut view, KeyCode::Char('k'));
@@ -302,7 +310,7 @@ fn the_attempt_form_of_a_merged_job_has_no_header() {
          UPDATE jobs SET status = 'merged', merged_sha = 'abc123';",
     );
     let screen = screen(&mut env.attempt(), 60, 12);
-    assert_eq!(screen[0], "16:33:44 you", "{screen:?}");
+    assert_eq!(screen[0], "12:33:44 you", "{screen:?}");
 }
 
 /// P5: at most 5 header rows, `…` ends the 5th, then one empty row.
@@ -333,4 +341,17 @@ fn a_session_with_no_file_registered_says_so() {
     populate(&mut env, None);
     let screen = screen(&mut env.attempt(), 70, 3);
     assert_eq!(screen[0], " No session file yet: the Worker has not started its Session.");
+}
+
+#[test]
+fn a_worker_view_draws_the_zone_it_was_given() {
+    // +12:45 is a zone no machine is likely to be in: 2026-10-26T02:54:10Z is 15:39:10 there
+    let zone = cpd_core::clock::TimeZone::posix("<+1245>-12:45").unwrap();
+    let mut env = env();
+    let file = env.dir.path().join("worker.jsonl");
+    let entry = json!({"type": "message", "timestamp": "2026-10-26T02:54:10.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "Do it."}]}});
+    std::fs::write(&file, entry.to_string() + "\n").unwrap();
+    populate(&mut env, Some(&file));
+    let screen = screen(&mut env.attempt_in(&zone), 40, 6);
+    assert_eq!(screen[0], "15:39:10 you", "{screen:?}");
 }

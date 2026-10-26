@@ -14,12 +14,18 @@ async function sectionsAfterStart(f: Fixture): Promise<Record<string, string>> {
   return sections;
 }
 
+/** The sections without the `cpd-time-zone` one, which is built from the real clock and zone and pinned by time-zone-section.test.ts. */
+function withoutTimeZone(sections: Record<string, string>): Record<string, string> {
+  const { "cpd-time-zone": _zone, ...rest } = sections;
+  return rest;
+}
+
 test("a Lead with a pr and an instructions text gets the exact section", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("policy-show", policyShow("lead", { pr: "These repos run no GitHub Actions.", instructions: "Be brief." }));
   const sections = await sectionsAfterStart(f);
-  assert.deepEqual(sections, {
+  assert.deepEqual(withoutTimeZone(sections), {
     preamble: "x",
     [POLICY_SECTION]: "## pr (owner:/p/o.toml)\nThese repos run no GitHub Actions.\n\n## instructions (owner:/p/o.toml)\nBe brief.",
   });
@@ -30,7 +36,7 @@ test("a Lead with a pr and an instructions text gets the exact section", async (
 test("no section when every text is empty, and nothing else is changed", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  assert.deepEqual(await sectionsAfterStart(f), { preamble: "x" });
+  assert.deepEqual(withoutTimeZone(await sectionsAfterStart(f)), { preamble: "x" });
   assert.deepEqual(adapterErrors(f), []);
 });
 
@@ -39,7 +45,7 @@ test("a failed `cpd policy show` is an error message and no section", async (t) 
   t.after(() => f.close());
   f.respond("policy-show", { ok: false, error: { code: "owner_unset", message: "the Context has no owner", details: {} } }, { exit: 3 });
   const sections = await sectionsAfterStart(f);
-  assert.deepEqual(sections, { preamble: "x" });
+  assert.deepEqual(withoutTimeZone(sections), { preamble: "x" });
   const errors = adapterErrors(f);
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.message.content, "φ adapter: policy show: owner_unset: the Context has no owner");

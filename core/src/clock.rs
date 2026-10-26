@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+pub use jiff::tz::TimeZone;
 use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
@@ -18,6 +19,24 @@ pub fn now() -> String {
     timestamp(OffsetDateTime::now_utc())
 }
 
+fn zoned(at: OffsetDateTime, zone: &TimeZone) -> jiff::Zoned {
+    let ts = jiff::Timestamp::from_nanosecond(at.unix_timestamp_nanos()).expect("a time in jiff's range");
+    ts.to_zoned(zone.clone())
+}
+
+/// `at` as prose for a person (`YYYY-MM-DD HH:MM ZZZ`) in `zone`: the abbreviation when letters only, else the numeric offset.
+pub fn prose(at: OffsetDateTime, zone: &TimeZone) -> String {
+    let z = zoned(at, zone);
+    let abbr = zone.to_offset_info(z.timestamp()).abbreviation().to_string();
+    let label = if !abbr.is_empty() && abbr.chars().all(|c| c.is_ascii_alphabetic()) { abbr } else { z.strftime("%:z").to_string() };
+    format!("{} {label}", z.strftime("%Y-%m-%d %H:%M"))
+}
+
+/// The local `HH:MM:SS` of `at` in `zone`, bare.
+pub fn time_of_day(at: OffsetDateTime, zone: &TimeZone) -> String {
+    zoned(at, zone).strftime("%H:%M:%S").to_string()
+}
+
 /// The time a wait reads and the nap it takes; a test passes a [`ManualClock`].
 pub trait Clock: Send + Sync {
     fn now(&self) -> Instant;
@@ -27,6 +46,10 @@ pub trait Clock: Send + Sync {
     /// Which implementation this is, by name, for a test of `Ports` (`"SystemClock"` for the real one).
     fn kind(&self) -> &'static str {
         "other"
+    }
+    /// The zone prose times are written in: the system's, except for [`ManualClock`].
+    fn zone(&self) -> TimeZone {
+        TimeZone::system()
     }
 }
 
@@ -102,6 +125,9 @@ impl Clock for ManualClock {
     }
     fn utc(&self) -> OffsetDateTime {
         EPOCH + self.elapsed()
+    }
+    fn zone(&self) -> TimeZone {
+        TimeZone::posix("EST5EDT,M3.2.0,M11.1.0").expect("a valid rule")
     }
 }
 

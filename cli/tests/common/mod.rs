@@ -999,7 +999,8 @@ impl TestEnv {
     /// `CPD_*`, `PI_*`, `GIT_*`, `XDG_*`, `PLANNOTATOR_*`, `GH_*`, `GITHUB_*`, `SSH_*`,
     /// the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, either case),
     /// `TMUX`, `TMUX_PANE` and `ZDOTDIR` removed, then
-    /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR` and git's config set. It runs in the env's
+    /// `CPD_HOME`, `HOME`, `PATH`, `TMUX_TMPDIR`, `TZ` (a POSIX rule: jiff reads `TZ` first, so no child reads
+    /// /etc/localtime and every child draws times in EST/EDT) and git's config set. It runs in the env's
     /// process group, which the teardown stops: a process that leaves it (`setsid`) is
     /// stopped only when cpd records it ([`TEARDOWN_SH`]).
     pub fn command(&self, program: impl AsRef<OsStr>) -> Command {
@@ -1040,6 +1041,7 @@ impl TestEnv {
             ("CPD_HOME", self.cpd_home().into()),
             ("HOME", self.home().into()),
             ("TMUX_TMPDIR", self.tmux_tmpdir().into()),
+            ("TZ", "EST5EDT,M3.2.0,M11.1.0".into()),
             ("FAKE_TMUX_SERVER_PID", std::process::id().to_string().into()),
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
             ("GIT_CONFIG_GLOBAL", self.home().join(".gitconfig").into()),

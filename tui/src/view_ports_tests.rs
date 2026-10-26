@@ -792,7 +792,7 @@ fn run_logs(fakes: &Fakes, home: &Home, steps: Vec<Step>) -> (Result<(), ViewErr
     let first = read::logs(&mut store, 100).unwrap();
     let follow = read::Follow::new(&mut store, &[], first.events_cursor).unwrap();
     let mut ctx = Ctx::new(&fakes.ports, terminal(), &mut input);
-    let result = logs::show_with(&mut ctx, &mut store, POLL, follow, logs::Log::new(first.events));
+    let result = logs::show_with(&mut ctx, &mut store, POLL, follow, logs::Log::new(first.events, ManualClock::new().zone()));
     (result, ctx.draws(), fakes.clock.naps())
 }
 
@@ -1169,7 +1169,7 @@ thread_local! {
     static OUTCOME: RefCell<Option<RestartOutcome>> = const { RefCell::new(None) };
 }
 
-fn restart_failed(_: &CpdHome) -> Result<Option<String>, CpdError> {
+fn restart_failed(_: &CpdHome, _: &cpd_core::clock::TimeZone) -> Result<Option<String>, CpdError> {
     CALLED.with_borrow_mut(|c| c.push("failed".into()));
     Ok(None)
 }
