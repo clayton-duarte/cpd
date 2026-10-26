@@ -400,7 +400,6 @@ pub fn reopen(placed: &[Placed]) -> Vec<(SessionId, CpdError)> {
 fn reopen_one(item: &Placed) -> Result<(), CpdError> {
     let mut env = Env::open()?;
     let tmux = env.tmux();
-    let cockpit = env.config.tmux.cockpit_session.clone();
     if item.place == Place::Chat {
         return open(OpenArgs { id: crate::args::SessionRef::Plain(item.id.clone()) }).map(drop);
     }
@@ -408,14 +407,46 @@ fn reopen_one(item: &Placed) -> Result<(), CpdError> {
     if tmux.list_panes()?.iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&item.id)) {
         return Ok(());
     }
+    start_parked(&mut env, &row, "tmux restart").map(drop)
+}
+
+/// Starts `row` (a Lead or Manager) as a parked `cpd session run <id>` window in the cockpit, as `command`: a dead pane of
+/// the Session is killed first (G2), the pane is recorded with a `session-moved` `parked` Event (compare-and-swap on the
+/// pane the row had, so two starters never leave two windows), and the go signal comes last (contract §6.4). The chat slot
+/// never moves. Returns the pane, or none when another process recorded one first (its window made here is killed).
+pub(crate) fn start_parked(env: &mut Env, row: &Row, command: &str) -> Result<Option<PaneId>, CpdError> {
+    let tmux = env.tmux();
+    let cockpit = env.config.tmux.cockpit_session.clone();
+    for dead in tmux.list_panes()?.iter().filter(|p| p.dead && p.cpd_session.as_ref() == Some(&row.id)) {
+        tmux.kill_pane(&dead.pane)?;
+    }
     let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
-    let (window, pane) = tmux.new_window(&cockpit, &parked_window(&row), &spawn)?;
-    kill_window_on_error(&tmux, &window, || {
+    let (window, pane) = tmux.new_window(&cockpit, &parked_window(row), &spawn)?;
+    let started = kill_window_on_error(&tmux, &window, || {
         tmux.set_pane_title(&pane, &env.store.read(|conn| row.title(conn))?)?;
-        env.store.write("tmux restart", |tx| moved(tx, &row, &pane, &window, "parked"))?;
-        // The go signal only once the store knows the pane (contract §6.4); on failure the window is killed and E2 stops the row.
-        tmux.set_pane_session(&pane, &row.id)
-    })
+        let won = env.store.write(command, |tx| {
+            let changed = tx.execute(
+                "UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2 AND tmux_pane IS ?3",
+                rusqlite::params![pane.as_str(), row.id.as_str(), row.tmux_pane],
+            )?;
+            if changed == 0 {
+                return Ok(false);
+            }
+            moved(tx, row, &pane, &window, "parked")?;
+            Ok(true)
+        })?;
+        if won {
+            // The go signal only once the store knows the pane; on failure the window is killed and E2 stops the row.
+            tmux.set_pane_session(&pane, &row.id)?;
+        }
+        Ok(won)
+    })?;
+    if started {
+        Ok(Some(pane))
+    } else {
+        let _ = tmux.kill_window(&window);
+        Ok(None)
+    }
 }
 
 /// What [`close_lead`] found.

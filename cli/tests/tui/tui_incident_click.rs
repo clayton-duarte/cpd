@@ -132,6 +132,7 @@ fn a_click_opens_the_incident_lead() {
 
     assert!(messages(&env).is_empty(), "the Lead is opened, not woken: {:?}", messages(&env));
     assert_eq!(chat_slot_session(&env), LEAD, "the incident's Lead is in the chat slot");
+    env.tmux(&["kill-session", "-t", "cpd"]);
 }
 
 #[test]
@@ -145,6 +146,7 @@ fn a_click_with_no_incident_reports_on_the_client() {
     let displays = display_messages(&env);
     let call = displays.iter().find(|c| c.iter().any(|a| a.contains(NO_INCIDENT))).unwrap_or_else(|| panic!("no {NO_INCIDENT:?}: {displays:?}"));
     assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
+    env.tmux(&["kill-session", "-t", "cpd"]);
 }
 
 #[test]
@@ -158,4 +160,5 @@ fn a_click_with_no_lead_reports_on_the_client() {
     let displays = display_messages(&env);
     let call = displays.iter().find(|c| c.iter().any(|a| a.contains(NO_LEAD))).unwrap_or_else(|| panic!("no {NO_LEAD:?}: {displays:?}"));
     assert!(call.windows(2).any(|w| w == ["-c", CLIENT]), "{call:?}");
+    env.tmux(&["kill-session", "-t", "cpd"]);
 }

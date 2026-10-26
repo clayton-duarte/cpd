@@ -12,6 +12,7 @@ mod tui_cause;
 mod tui_checklist;
 mod tui_dialog;
 mod tui_history;
+mod tui_inbox_blue;
 mod tui_inbox_cyan;
 mod tui_host_click;
 mod tui_incident_click;

@@ -10,6 +10,9 @@
 //!   has at least one entry and non-empty keys. Every refusal is `policy_invalid` (`policy::policy_invalid`) with
 //!   `details.file` the `file` argument and `details.key` the dotted path of the offending key (null when the file
 //!   does not parse).
+//!   `headers`, when present, is a table of at least one header name to literal value: a name matches
+//!   `^[A-Za-z0-9-]{1,64}$` and is not `authorization`, `proxy-authorization` or `cookie` (any case); a value is a
+//!   string of 1 to 500 characters with no NUL, CR or LF, no `${` and no leading `!`.
 //! - [`load_machine`]: reads only `host.toml` of the home's `policy/` (no file: no servers, [`MachineSource::Default`];
 //!   else [`MachineSource::File`] with its realpath). The names in `policy/` are checked by `check_file_names`.
 
@@ -60,6 +63,8 @@ pub struct McpServer {
     pub tool_exposure: Option<BTreeMap<String, Exposure>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOauth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<BTreeMap<String, String>>,
 }
 
 /// An entry as read: `url` is checked present afterwards, so that [`bad_key`] can read one key at a time.
@@ -74,6 +79,8 @@ struct RawEntry {
     #[serde(default, deserialize_with = "tool_exposure")]
     tool_exposure: Option<BTreeMap<String, Exposure>>,
     oauth: Option<McpOauth>,
+    #[serde(default, deserialize_with = "headers")]
+    headers: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +131,41 @@ fn tool_exposure<'de, D: Deserializer<'de>>(d: D) -> Result<Option<BTreeMap<Stri
     }
     map.keys().try_for_each(|k| valid_text(k)).map_err(de::Error::custom)?;
     Ok(Some(map))
+}
+
+/// `headers`: at least one entry; names and values are checked by [`header_name_ok`] and [`header_value_ok`].
+fn headers<'de, D: Deserializer<'de>>(d: D) -> Result<Option<BTreeMap<String, String>>, D::Error> {
+    let Some(map) = Option::<BTreeMap<String, String>>::deserialize(d)? else { return Ok(None) };
+    if map.is_empty() {
+        return Err(de::Error::custom("headers has at least one entry"));
+    }
+    for (name, value) in &map {
+        header_name_ok(name).and_then(|()| header_value_ok(value)).map_err(de::Error::custom)?;
+    }
+    Ok(Some(map))
+}
+
+/// `^[A-Za-z0-9-]{1,64}$`, and not a credential header (compared case-insensitively): credentials are OAuth's.
+fn header_name_ok(name: &str) -> Result<(), String> {
+    if !(1..=64).contains(&name.len()) || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        return Err("a header name matches ^[A-Za-z0-9-]{1,64}$".to_owned());
+    }
+    if ["authorization", "proxy-authorization", "cookie"].iter().any(|c| name.eq_ignore_ascii_case(c)) {
+        return Err("a header name is not authorization, proxy-authorization or cookie".to_owned());
+    }
+    Ok(())
+}
+
+/// 1 to 500 characters with no NUL, CR or LF, no `${` and not starting with `!` (pi expands and runs those).
+fn header_value_ok(value: &str) -> Result<(), String> {
+    valid_text(value)?;
+    if value.contains(['\r', '\n']) {
+        return Err("a header value has no CR or LF".to_owned());
+    }
+    if value.contains("${") || value.starts_with('!') {
+        return Err("a header value is literal: no ${ and no leading !".to_owned());
+    }
+    Ok(())
 }
 
 /// `^https://[^/@?#\s]+([/?][^\s#]*)?$`, or (`http_local`) `^http://` + a loopback host (contract §8.3).
@@ -212,6 +254,7 @@ pub fn parse_machine(file: &Path, text: &str) -> Result<BTreeMap<String, McpServ
                 exposure: parsed.exposure,
                 tool_exposure: parsed.tool_exposure,
                 oauth: parsed.oauth,
+                headers: parsed.headers,
             },
         );
     }

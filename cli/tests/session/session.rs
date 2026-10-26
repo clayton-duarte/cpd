@@ -1226,9 +1226,209 @@ fn e2_kills_the_window_of_a_dead_parked_lead() {
     assert!(fx.pane_dead(&lead1_pane));
 
     fx.engine_tick();
-    assert_eq!(window_names(&fx), ["main"]);
+    // The dead window is killed (its pane is gone), and E2 restarts the Lead in a new parked window.
+    assert!(panes(&fx).iter().all(|p| p.pane != lead1_pane), "the dead pane's window is killed");
+    assert_restarted_parked(&fx, LEAD1, &lead1_pane, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-pay"]);
+    assert_eq!(slot(&fx).session, LEAD2, "the chat slot is untouched");
+}
+
+/// The `session-moved` Events of `id`, as `(place, pane)`, in order.
+fn moves_of(env: &impl Cpd, id: &str) -> Vec<(String, Value)> {
+    events(env, "session-moved")
+        .into_iter()
+        .filter(|e| e["session"] == id)
+        .map(|e| (e["data"]["place"].as_str().unwrap().to_owned(), e["data"]["pane"].clone()))
+        .collect()
+}
+
+/// `id` runs in a new pane of the parked window `window`, started by `cpd session run <id>`; the store records it, and
+/// `session-moved` `parked` follows the `none` of the dead pane.
+fn assert_restarted_parked(fx: &Fx, id: &str, old_pane: &str, window: &str) {
+    let mine: Vec<PaneRow> = panes(fx).into_iter().filter(|p| p.session == id).collect();
+    assert_eq!(mine.len(), 1, "one pane of {id}: {mine:?}");
+    let pane = &mine[0];
+    assert_ne!(pane.pane, old_pane, "a new pane");
+    assert_eq!(pane.window_name, window);
+    let argv = pane_argv(fx, &pane.pane);
+    assert_eq!(argv[argv.len() - 3..], ["session", "run", id]);
+    assert!(!fx.pane_dead(&pane.pane));
+    let row = show(fx, id);
+    assert_eq!((&row["tmux_pane"], &row["place"]), (&json!(pane.pane), &json!("parked")));
+    let moves = moves_of(fx, id);
+    let [.., none, parked] = moves.as_slice() else { panic!("no restart in the moves of {id}: {moves:?}") };
+    assert_eq!(none, &("none".to_owned(), Value::Null));
+    assert_eq!(parked, &("parked".to_owned(), json!(pane.pane)));
+}
+
+/// The `error` Events about a Session or `session_restart_loop`: the fixture's own errors (an Attempt without a worktree, E5's
+/// spawn) are not what these tests are about.
+fn session_errors(fx: &Fx) -> Vec<Value> {
+    events(fx, "error").into_iter().filter(|e| !e["session"].is_null() || e["data"]["code"] == "session_restart_loop").collect()
+}
+
+/// `lead1` (idle) parked in `park-pay` and `lead2` (made `working`) parked in `park-other`, the chat slot the placeholder.
+fn two_parked_leads(fx: &Fx) -> (String, String) {
+    dying_leads(fx);
+    fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead2'");
+    let one = fx.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    let two = fx.cpd(&["session", "open", LEAD2]).ok()["pane"].as_str().unwrap().to_owned();
+    fx.cpd(&["session", "park"]).ok();
+    assert_eq!(window_names(fx), ["main", "park-other", "park-pay"]);
+    (one, two)
+}
+
+#[test]
+fn e2_restarts_a_lead_whose_pane_died_while_it_was_working_in_a_parked_window() {
+    let fx = Fx::with_ports();
+    let (one, _) = two_parked_leads(&fx);
+    fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
+    fx.pane_exit(&one, 1);
+
+    fx.engine_tick();
+    assert_restarted_parked(&fx, LEAD1, &one, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-other", "park-pay"]);
+    assert_placeholders(&fx, 1);
+    assert!(slot(&fx).session.is_empty(), "the chat slot never changes");
+    // The other Lead's pane lives: nothing was done to it.
+    let places: Vec<String> = moves_of(&fx, LEAD2).into_iter().map(|(place, _)| place).collect();
+    assert_eq!(places, ["chat", "parked"]);
+
+    // Idempotent: the new pane lives, a tick writes nothing.
+    let moved = events(&fx, "session-moved").len();
+    fx.engine_tick();
+    assert_eq!(events(&fx, "session-moved").len(), moved);
+}
+
+#[test]
+fn e2_restarts_a_dead_manager_in_its_context_window() {
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    let message = home(&fx.env).manager_message(&cpd_core::ids::ContextId::parse("ctx").unwrap());
+    fs::create_dir_all(message.parent().unwrap()).unwrap();
+    fs::write(&message, "You are the Manager.").unwrap();
+    fx.env.sql("UPDATE sessions SET state = 'idle' WHERE id = 'manager1'");
+    let old = fx.cpd(&["session", "open", MANAGER]).ok()["pane"].as_str().unwrap().to_owned();
+    fx.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(window_names(&fx), ["ctx-ctx", "main"]);
+    fx.pane_exit(&old, 1);
+
+    fx.engine_tick();
+    assert_restarted_parked(&fx, MANAGER, &old, "ctx-ctx");
+    assert_eq!(window_names(&fx), ["ctx-ctx", "main"]);
+    assert_eq!(slot(&fx).session, LEAD1, "the chat slot is untouched");
+}
+
+#[test]
+fn e2_does_not_restart_a_lead_that_stopped_itself_or_was_closed() {
+    let fx = Fx::with_ports();
+    let (one, two) = two_parked_leads(&fx);
+    // lead2 died working: restarted (the control). lead1 wrote `stopped` first, as `/quit` does.
+    fx.cpd(&["session", "state", "stopped", "--session", LEAD1]).ok();
+    fx.pane_exit(&one, 0);
+    fx.pane_exit(&two, 1);
+    fx.engine_tick();
+    assert_restarted_parked(&fx, LEAD2, &two, "park-other");
+    assert_eq!(window_names(&fx), ["main", "park-other"]);
     assert!(show(&fx, LEAD1)["tmux_pane"].is_null());
     assert_eq!((show(&fx, LEAD1)["state"].clone(), show(&fx, LEAD1)["place"].clone()), (json!("stopped"), json!("none")));
+    assert_eq!(moves_of(&fx, LEAD1).last().unwrap().0, "none");
+
+    // `session close` writes `stopped` and kills the pane: the engine restarts nothing.
+    fx.env.sql("UPDATE sessions SET state = 'idle' WHERE id = 'lead1'");
+    fx.cpd(&["session", "open", LEAD1]).ok();
+    fx.cpd(&["session", "park"]).ok();
+    assert_eq!(window_names(&fx), ["main", "park-other", "park-pay"]);
+    fx.cpd(&["session", "close", LEAD1]).ok();
+    let moved = moves_of(&fx, LEAD1);
+    fx.engine_tick();
+    assert_eq!(window_names(&fx), ["main", "park-other"]);
+    assert_eq!(moves_of(&fx, LEAD1), moved);
+    assert!(show(&fx, LEAD1)["tmux_pane"].is_null());
+}
+
+#[test]
+fn e2_does_not_restart_an_archived_lead_or_the_lead_of_a_done_plan() {
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    let message = home(&fx.env).manager_message(&cpd_core::ids::ContextId::parse("ctx").unwrap());
+    fs::create_dir_all(message.parent().unwrap()).unwrap();
+    fs::write(&message, "You are the Manager.").unwrap();
+    // The Manager is the control: it is restarted; both Leads are not.
+    fx.env.sql("UPDATE sessions SET state = 'idle' WHERE id IN ('manager1', 'lead2')");
+    let manager = fx.cpd(&["session", "open", MANAGER]).ok()["pane"].as_str().unwrap().to_owned();
+    let one = fx.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    let two = fx.cpd(&["session", "open", LEAD2]).ok()["pane"].as_str().unwrap().to_owned();
+    fx.cpd(&["session", "park"]).ok();
+    assert_eq!(window_names(&fx), ["ctx-ctx", "main", "park-other", "park-pay"]);
+    fx.env.sql("UPDATE sessions SET archived_at = 't9' WHERE id = 'lead1'");
+    for phase in ["plan", "dispatch", "deploy"] {
+        fx.env.sql(&format!("UPDATE plans SET phase = '{phase}', locked_at = {} WHERE id = 'other'", if phase == "plan" { "NULL" } else { "'t'" }));
+    }
+    fx.env.sql("UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'other'");
+    for pane in [&manager, &one, &two] {
+        fx.pane_exit(pane, 1);
+    }
+
+    fx.engine_tick();
+    assert_restarted_parked(&fx, MANAGER, &manager, "ctx-ctx");
+    assert_eq!(window_names(&fx), ["ctx-ctx", "main"]);
+    for id in [LEAD1, LEAD2] {
+        assert!(show(&fx, id)["tmux_pane"].is_null(), "{id}");
+        assert_eq!(moves_of(&fx, id).last().unwrap().0, "none", "{id}");
+    }
+}
+
+#[test]
+fn e2_leaves_a_lead_stopped_and_raises_session_restart_loop_once_when_its_restart_died_within_ten_minutes() {
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    let old = fx.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    fx.cpd(&["session", "open", LEAD2]).ok();
+    fx.pane_exit(&old, 1);
+    fx.engine_tick();
+    assert_restarted_parked(&fx, LEAD1, &old, "park-pay");
+    let restarted = show(&fx, LEAD1)["tmux_pane"].as_str().unwrap().to_owned();
+    assert!(session_errors(&fx).is_empty(), "{:?}", session_errors(&fx));
+
+    // The restart died nine minutes later (the fake clock): the engine does not start it again.
+    fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
+    fx.advance(Duration::from_secs(9 * 60));
+    fx.pane_exit(&restarted, 1);
+    fx.engine_tick();
+    assert_eq!(window_names(&fx), ["main"]);
+    assert!(panes(&fx).iter().all(|p| p.session != LEAD1));
+    let lead1 = show(&fx, LEAD1);
+    assert_eq!((&lead1["state"], &lead1["tmux_pane"], &lead1["place"]), (&json!("stopped"), &Value::Null, &json!("none")));
+    let errors = session_errors(&fx);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!((&errors[0]["data"]["code"], &errors[0]["session"]), (&json!("session_restart_loop"), &json!(LEAD1)));
+
+    // Once: later ticks raise nothing more and start nothing.
+    fx.engine_tick();
+    fx.engine_tick();
+    assert_eq!(session_errors(&fx).len(), 1);
+    assert_eq!(window_names(&fx), ["main"]);
+    assert_eq!(slot(&fx).session, LEAD2, "the chat slot is untouched");
+}
+
+#[test]
+fn e2_restarts_a_lead_again_when_its_last_restart_is_ten_minutes_old() {
+    let fx = Fx::with_ports();
+    dying_leads(&fx);
+    let old = fx.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
+    fx.cpd(&["session", "open", LEAD2]).ok();
+    fx.pane_exit(&old, 1);
+    fx.engine_tick();
+    let restarted = show(&fx, LEAD1)["tmux_pane"].as_str().unwrap().to_owned();
+
+    fx.env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead1'");
+    fx.advance(Duration::from_secs(10 * 60));
+    fx.pane_exit(&restarted, 1);
+    fx.engine_tick();
+    assert_restarted_parked(&fx, LEAD1, &restarted, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-pay"]);
+    assert!(session_errors(&fx).is_empty(), "{:?}", session_errors(&fx));
     assert_eq!(slot(&fx).session, LEAD2, "the chat slot is untouched");
 }
 
@@ -1266,9 +1466,10 @@ fn e2_replaces_a_dead_lead_in_the_chat_slot_by_the_placeholder() {
     assert_eq!((s.pane.as_str(), s.view.as_str(), s.window_name.as_str()), (lead1_pane.as_str(), "chat", "main"));
     assert!(!fx.pane_dead(&lead1_pane), "the placeholder runs");
     assert_placeholders(&fx, 1);
-    assert_eq!(window_names(&fx), ["main"]);
-    assert!(show(&fx, LEAD1)["tmux_pane"].is_null());
-    assert_eq!(show(&fx, LEAD1)["place"], "none");
+    // And E2 restarts the Lead in a parked window, never in the chat slot.
+    assert_restarted_parked(&fx, LEAD1, &lead1_pane, "park-pay");
+    assert_eq!(window_names(&fx), ["main", "park-pay"]);
+    assert_eq!(slot(&fx).pane, lead1_pane);
 }
 
 #[test]

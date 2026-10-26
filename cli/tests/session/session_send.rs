@@ -6,7 +6,7 @@ use crate::common;
 use std::fs;
 
 use common::fx::Fx;
-use common::session::{events, setup_with_fork};
+use common::session::{events, setup, setup_with_fork, show};
 use common::{TestEnv, refused};
 use serde_json::{Value, json};
 
@@ -29,7 +29,7 @@ fn a_send_appends_one_session_message_from_cpd_session() {
     let events = messages(&fx);
     assert_eq!(events.len(), 1);
     let event = &events[0];
-    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2", "unblocks": "u"}));
+    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2", "unblocks": "u", "started": false, "pane": null}));
     assert_eq!(event["kind"], "session-message");
     assert_eq!((&event["session"], &event["context"], &event["plan"]), (&json!("lead1"), &json!("ctx"), &json!("pay")));
     assert_eq!((&event["job"], &event["attempt"]), (&Value::Null, &Value::Null));
@@ -88,8 +88,10 @@ fn each_call_is_one_more_message() {
 
 #[test]
 fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     for lead in ["lead1", "lead2", "fork1"] {
         let out = fx.cpd(&["session", "send", lead, "hello", "--unblocks", "u"]).ok();
         assert_eq!(out["session"], lead);
@@ -101,8 +103,10 @@ fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
 
 #[test]
 fn a_manager_is_a_target_and_an_archived_one_is_refused() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.env.sql("INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
          VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'stopped', 't5', 't5', NULL)",
     );
@@ -119,8 +123,10 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
 
 #[test]
 fn the_refusals_write_nothing() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     let error = refused(&fx.cpd(&["session", "send", "nope", "hi", "--unblocks", "u"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nope");
     let error = refused(&fx.cpd(&["session", "send", "worker1", "hi", "--unblocks", "u"]), "not_a_lead", 3);
@@ -157,8 +163,10 @@ fn exactly_one_of_text_and_file_and_the_text_limits() {
 
 #[test]
 fn the_targets_follower_sees_the_message_and_the_senders_does_not() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "ping", "--unblocks", "u"], &[("CPD_SESSION", "lead2")]).ok();
     let seen = follow(&fx, "lead1");
     assert_eq!(seen.len(), 1, "{seen:?}");
@@ -221,8 +229,10 @@ fn a_send_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
 
 #[test]
 fn the_same_text_to_a_second_session_is_refused_broadcast() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.cpd_with(fx.env.root(), &["session", "send", "lead1", "news", "--unblocks", "u"], AGENT).ok();
     let error = refused(&fx.cpd_with(fx.env.root(), &["session", "send", "fork1", " news ", "--unblocks", "u"], AGENT), "broadcast", 3);
     assert_eq!(error["details"]["session"], "lead1");
@@ -241,8 +251,10 @@ fn the_same_text_to_the_same_session_within_an_hour_is_refused_duplicate() {
 
 #[test]
 fn the_user_without_a_session_is_not_guarded() {
-    let fx = Fx::new();
+    let fx = Fx::with_ports();
     setup_with_fork(&fx.env);
+    fx.env.write_tmux_config("");
+    fx.cockpit();
     fx.env.sql("UPDATE plans SET phase = 'plan' WHERE id = 'pay';
          UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
          UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
@@ -265,4 +277,136 @@ fn the_help_usage_puts_the_id_first() {
     let id = usage.find("<id>").unwrap_or_else(|| panic!("no <id> in: {usage}"));
     let unblocks = usage.find("--unblocks").unwrap_or_else(|| panic!("no --unblocks in: {usage}"));
     assert!(id < unblocks, "usage must put the id first, as the parser does: {usage}");
+}
+
+// ---------- a send starts a stopped Lead or Manager that has no pane (commands.md §10.13, hs-d725) ----------
+
+/// `(pane, window name, @cpd_session)` of every pane of the fake server.
+fn panes(fx: &Fx) -> Vec<(String, String, String)> {
+    let out = fx.tmux(&["list-panes", "-a", "-F", "#{pane_id}\t#{window_name}\t#{@cpd_session}"]);
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            (f[0].to_owned(), f[1].to_owned(), f[2].to_owned())
+        })
+        .collect()
+}
+
+/// The chat slot: the pane of `main` that holds a Session.
+fn slot(fx: &Fx) -> (String, String) {
+    let found: Vec<_> = panes(fx).into_iter().filter(|(_, window, session)| window == "main" && !session.is_empty()).collect();
+    assert_eq!(found.len(), 1, "one Session in the chat slot: {found:?}");
+    (found[0].0.clone(), found[0].2.clone())
+}
+
+/// The `new-window` calls the mocked tmux got, as their argv.
+fn new_windows(fx: &Fx) -> Vec<Vec<String>> {
+    fx.calls("tmux").into_iter().map(|c| c.args).filter(|a| a.iter().any(|x| x == "new-window")).collect()
+}
+
+fn swaps(fx: &Fx) -> usize {
+    fx.calls("tmux").iter().filter(|c| c.args.iter().any(|x| x == "swap-pane")).count()
+}
+
+/// A cockpit whose chat slot holds `lead1` (idle, opened); `lead2` and `manager1` are stopped with no pane.
+fn cockpit_with_lead1_in_the_chat_slot() -> Fx {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    fx.cockpit();
+    fx.cpd(&["session", "open", "lead1"]).ok();
+    fx
+}
+
+fn parked_moves(fx: &Fx) -> Vec<Value> {
+    events(fx, "session-moved").into_iter().filter(|e| e["data"]["place"] == "parked").collect()
+}
+
+/// Sends to `target` and asserts what every start has: one `new-window -d` in the cockpit named `window` running
+/// `cpd session run <target>`, the row's pane the new one, one parked `session-moved`, the chat slot and its mark as
+/// they were, no swap, and `started: true` with the pane in the JSON.
+fn assert_a_send_starts_it_in(fx: &Fx, target: &str, window: &str) {
+    let slot_before = slot(fx);
+    let windows_before = new_windows(fx).len();
+    let swaps_before = swaps(fx);
+    let parked_before = parked_moves(fx).len();
+    let out = fx.cpd(&["session", "send", target, "wake up", "--unblocks", "u"]).ok();
+
+    let started = new_windows(fx).split_off(windows_before);
+    assert_eq!(started.len(), 1, "one new-window: {started:?}");
+    let argv = &started[0];
+    assert!(argv.windows(2).any(|w| w == ["-t", "=cpd:"]) && argv.contains(&"-d".to_owned()), "-d in the cockpit: {argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["-n", window]), "window {window}: {argv:?}");
+    assert_eq!(argv[argv.len() - 3..], ["session", "run", target], "{argv:?}");
+
+    let pane = out["pane"].as_str().unwrap_or_else(|| panic!("a pane in the JSON: {out}")).to_owned();
+    assert_eq!(out["started"], true, "{out}");
+    assert_eq!(show(fx, target)["tmux_pane"], json!(pane));
+    assert!(panes(fx).iter().any(|(p, w, s)| *p == pane && w == window && s == target), "{:?}", panes(fx));
+
+    let moved = parked_moves(fx);
+    assert_eq!(moved.len(), parked_before + 1, "one parked session-moved: {moved:?}");
+    assert_eq!((&moved.last().unwrap()["session"], &moved.last().unwrap()["data"]["pane"]), (&json!(target), &json!(pane)));
+    assert_eq!(slot(fx), slot_before, "the chat slot did not move");
+    assert_eq!(swaps(fx), swaps_before, "no swap-pane");
+    assert_eq!(messages(fx).last().unwrap()["session"], target);
+}
+
+#[test]
+fn a_send_to_a_stopped_lead_with_no_pane_starts_it_in_a_parked_window_running_session_run() {
+    let fx = cockpit_with_lead1_in_the_chat_slot();
+    assert!(show(&fx, "lead2")["tmux_pane"].is_null());
+    assert_a_send_starts_it_in(&fx, "lead2", "park-other");
+}
+
+#[test]
+fn a_send_to_a_stopped_lead_records_its_pane_and_leaves_the_chat_slot_alone() {
+    let fx = cockpit_with_lead1_in_the_chat_slot();
+    let (pane, session) = slot(&fx);
+    let swaps_before = swaps(&fx);
+    let out = fx.cpd(&["session", "send", "lead2", "wake up", "--unblocks", "u"]).ok();
+    let started = out["pane"].as_str().unwrap_or_else(|| panic!("a pane in the JSON: {out}")).to_owned();
+    assert_ne!(started, pane);
+    assert_eq!(show(&fx, "lead2")["tmux_pane"], json!(started));
+    assert_eq!(show(&fx, "lead2")["place"], "parked");
+    assert_eq!(slot(&fx), (pane, session));
+    assert_eq!(show(&fx, "lead1")["place"], "chat");
+    assert_eq!(swaps(&fx), swaps_before);
+}
+
+#[test]
+fn a_send_to_a_stopped_manager_with_no_pane_starts_it_in_its_context_window() {
+    let fx = cockpit_with_lead1_in_the_chat_slot();
+    assert!(show(&fx, "manager1")["tmux_pane"].is_null());
+    assert_a_send_starts_it_in(&fx, "manager1", "ctx-ctx");
+}
+
+#[test]
+fn a_send_to_a_lead_with_a_live_pane_starts_no_window() {
+    let fx = cockpit_with_lead1_in_the_chat_slot();
+    // lead2 gets a live parked pane (open, then park); its state is still `stopped`.
+    fx.cpd(&["session", "open", "lead2"]).ok();
+    fx.cpd(&["session", "park"]).ok();
+    let pane = show(&fx, "lead2")["tmux_pane"].clone();
+    assert!(pane.is_string(), "lead2 has a pane");
+    let windows = new_windows(&fx).len();
+    let moved = events(&fx, "session-moved").len();
+    let out = fx.cpd(&["session", "send", "lead2", "hi", "--unblocks", "u"]).ok();
+    assert_eq!(out["started"], false, "{out}");
+    assert_eq!(out["pane"], Value::Null, "{out}");
+    assert_eq!(new_windows(&fx).len(), windows, "no new window");
+    assert_eq!(events(&fx, "session-moved").len(), moved);
+    assert_eq!(show(&fx, "lead2")["tmux_pane"], pane);
+    assert_eq!(messages(&fx).len(), 1);
+}
+
+#[test]
+fn a_send_to_a_stopped_lead_with_no_cockpit_is_refused_no_cockpit_and_writes_no_event() {
+    let fx = Fx::with_ports();
+    setup(&fx.env);
+    let error = refused(&fx.cpd(&["session", "send", "lead2", "wake up", "--unblocks", "u"]), "no_cockpit", 3);
+    assert_eq!(error["details"]["next"], "cpd tui");
+    assert!(messages(&fx).is_empty());
+    assert!(show(&fx, "lead2")["tmux_pane"].is_null());
 }

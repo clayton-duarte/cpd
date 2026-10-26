@@ -182,13 +182,14 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
 
 // ---------- the Inbox's tier glyphs (hs-d483) ----------
 
-/// The five tiers, red to white (the order of `cpd inbox list`): urgency, glyph (code point, never a copied glyph) and the
+/// The six tiers, red to white (the order of `cpd inbox list`): urgency, glyph (code point, never a copied glyph) and the
 /// colour of its urgency, through the palette.
-fn tiers() -> [(Urgency, &'static str, Color); 5] {
+fn tiers() -> [(Urgency, &'static str, Color); 6] {
     [
         (Urgency::Red, "\u{F0362}", palette::color_clickable(Meaning::Failed)),
         (Urgency::Yellow, "\u{F069A}", palette::color_clickable(Meaning::Review)),
         (Urgency::Magenta, "\u{F173A}", palette::color_clickable(Meaning::Planning)),
+        (Urgency::Blue, "\u{F0368}", palette::color_clickable(Meaning::External)),
         (Urgency::Cyan, "\u{F06F1}", palette::color_clickable(Meaning::Notice)),
         (Urgency::White, "\u{F0366}", palette::color_clickable(Meaning::NotStarted)),
     ]

@@ -1026,17 +1026,17 @@ fn a_version_6_database_migrates_to_12_with_inbox_items_and_the_four_inbox_event
 }
 
 #[test]
-fn the_inbox_items_table_accepts_the_urgency_cyan_and_refuses_others() {
+fn the_inbox_items_table_accepts_the_urgency_blue_and_refuses_others() {
     let dir = tempfile::tempdir().unwrap();
     let home = home(&dir);
     let mut store = Store::open(&home, 5000).unwrap();
     let item = |urgency: &str| {
         format!("INSERT INTO inbox_items (kind, urgency, subject, label, opened_at) VALUES ('curate-docs', '{urgency}', 'curate-docs:ctx', 'l', 't');")
     };
-    for urgency in ["white", "cyan", "magenta", "yellow", "red"] {
+    for urgency in ["white", "cyan", "blue", "magenta", "yellow", "red"] {
         write(&mut store, &item(urgency)).unwrap_or_else(|e| panic!("{urgency}: {e:?}"));
     }
-    assert!(write(&mut store, &item("blue")).is_err());
+    assert!(write(&mut store, &item("teal")).is_err());
     assert!(write(&mut store, &item("")).is_err());
 }
 

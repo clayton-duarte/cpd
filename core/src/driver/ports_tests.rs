@@ -40,7 +40,7 @@ use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::ports::{Fakes, Ports};
 
-use super::{StartCtx, start_with};
+use super::{Allocation, StartCtx, start_with, start_with_allocation};
 use crate::store::Store;
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -735,21 +735,48 @@ fn a_linear_attempt_takes_the_workflow_worktree() {
     );
 }
 
+/// Start Job `key` with `allocation`; the result.
+fn start_with_alloc(rig: &mut StartRig, fakes: &Fakes, key: &str, allocation: Option<Allocation>) -> Result<(), CpdError> {
+    fakes.spawn.set_self_exe(std::env::current_exe().unwrap());
+    let config = config();
+    let catalog = catalog();
+    let ctx = StartCtx { home: &rig.home, config: &config, catalog: &catalog, command: "test" };
+    start_with_allocation(&fakes.ports, &mut rig.store, &ctx, &PlanId::parse("pay").unwrap(), &JobKey::parse(key).unwrap(), allocation).map(|_| ())
+}
+
+fn attempt_rows(rig: &mut StartRig, id: &str) -> i64 {
+    rig.store.read(|conn| Ok(conn.query_row("SELECT count(*) FROM attempts WHERE plan = 'pay' AND id = ?1", [id], |r| r.get(0))?)).unwrap()
+}
+
 #[test]
-fn a_live_sibling_takes_an_attempt_worktree() {
+fn a_live_linear_attempt_refuses_the_start_of_a_sibling_cas_lost() {
     let mut rig = start_rig(false);
     let fakes = Fakes::new();
     start_attempt(&mut rig, &fakes, "a");
-    assert_eq!(
-        allocated(&mut rig, "a-a1"),
-        ("cpd/pay/api".to_owned(), "/repos/r.lead".to_owned()),
-        "the first live Attempt of the PR is linear"
-    );
+    let err = start_with_alloc(&mut rig, &fakes, "b", None).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CasLost);
+    assert_eq!(attempt_rows(&mut rig, "b-a1"), 0);
+}
+
+#[test]
+fn a_live_linear_attempt_refuses_an_explicit_parallel_allocation_cas_lost() {
+    let mut rig = start_rig(false);
+    let fakes = Fakes::new();
+    start_attempt(&mut rig, &fakes, "a");
+    let err = start_with_alloc(&mut rig, &fakes, "b", Some(Allocation::Parallel)).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CasLost);
+    assert_eq!(attempt_rows(&mut rig, "b-a1"), 0);
+}
+
+#[test]
+fn a_live_parallel_attempt_takes_a_parallel_sibling() {
+    let mut rig = start_rig(true);
+    let fakes = Fakes::new();
     start_attempt(&mut rig, &fakes, "b");
     assert_eq!(
         allocated(&mut rig, "b-a1"),
         ("cpd/pay--b-a1".to_owned(), "/repos/r.pay--b-a1".to_owned()),
-        "a second live sibling gets its own worktree and branch"
+        "a sibling of a live parallel Attempt gets its own worktree and branch"
     );
 }
 

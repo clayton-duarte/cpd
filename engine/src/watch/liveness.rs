@@ -13,6 +13,7 @@
 //!   and a Lead's dead pane is cleaned up (G2): its park or ctx window is
 //!   killed, or, in the chat slot, the pane becomes the placeholder (§3.6).
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
@@ -412,6 +413,89 @@ fn stop_and_clean(engine: &mut Engine, session: &Live, why: &str, dead_lead: Opt
     if let Some(pane) = dead_lead.filter(|_| in_slot && changed) {
         replace_with_placeholder(engine, pane)?;
         engine.log.line(&format!("E2: replaced Lead {}'s dead pane {} in the chat slot by the placeholder", session.name, pane.pane));
+    }
+    if changed && session.state != "stopped" && matches!(session.role.as_str(), "lead" | "manager") {
+        restart(engine, session)?;
+    }
+    Ok(())
+}
+
+/// A Lead or Manager that died while not `stopped` is not restarted when the engine started it less than this ago (A4).
+const RESTART_GUARD: Duration = Duration::from_secs(10 * 60);
+
+/// `run/session-restarts.json`: a map of Session id to when E2 last restarted it, as the engine's clock reads it (the Ledger's
+/// times are wall time, the guard must follow the engine's clock). Safe to delete: the 10 minutes then start again. A file that
+/// is not such a map is deleted and written again.
+fn restarts_path(engine: &Engine) -> std::path::PathBuf {
+    engine.home.run_dir().join("session-restarts.json")
+}
+
+fn read_restarts(engine: &mut Engine) -> BTreeMap<String, OffsetDateTime> {
+    let path = restarts_path(engine);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(e) => {
+            engine.log.line(&format!("E2: cannot read {}: {e}", path.display()));
+            return BTreeMap::new();
+        }
+    };
+    let parsed = serde_json::from_str::<BTreeMap<String, String>>(&text)
+        .ok()
+        .and_then(|m| m.into_iter().map(|(id, at)| Some((id, OffsetDateTime::parse(&at, &Rfc3339).ok()?))).collect());
+    parsed.unwrap_or_else(|| {
+        engine.log.line(&format!("E2: {} is not a map of Session to time: deleted, written again", path.display()));
+        let _ = std::fs::remove_file(&path);
+        BTreeMap::new()
+    })
+}
+
+/// Records the restart of `id` at `now`, and drops the entries older than [`RESTART_GUARD`].
+fn write_restart(engine: &mut Engine, id: &str, now: OffsetDateTime) {
+    let mut all = read_restarts(engine);
+    all.insert(id.to_owned(), now);
+    let limit = time::Duration::try_from(RESTART_GUARD).unwrap_or(time::Duration::ZERO);
+    let kept: BTreeMap<String, String> =
+        all.into_iter().filter(|(_, at)| now - *at < limit).map(|(id, at)| (id, cpd_core::clock::timestamp(at))).collect();
+    let path = restarts_path(engine);
+    let text = serde_json::to_string(&kept).expect("a map of strings serializes");
+    if let Err(e) = cpd_core::atomic::write_atomic(&path, text) {
+        engine.log.line(&format!("E2: cannot write {}: {e}", path.display()));
+    }
+}
+
+/// Restarts `session` in a parked window, unless it is archived, its Lead's Plan is `done` or archived, or the engine restarted it
+/// less than [`RESTART_GUARD`] ago: then it stays `stopped` and the step fails `session_restart_loop`.
+fn restart(engine: &mut Engine, session: &Live) -> Result<(), CpdError> {
+    let id = session.id.as_str();
+    let live: bool = engine.store.read(|conn| {
+        let (archived, plan): (bool, Option<String>) =
+            conn.query_row("SELECT archived_at IS NOT NULL, plan FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(!archived
+            && match (&plan, session.role.as_str()) {
+                (Some(plan), "lead") => cpd_core::session::plan_inactive(conn, plan).is_ok(),
+                _ => true,
+            })
+    })?;
+    if !live {
+        return Ok(());
+    }
+    let now = engine.ports.clock.utc();
+    if let Some(last) = read_restarts(engine).get(id) {
+        let seconds = (now - *last).whole_seconds();
+        if seconds < i64::try_from(RESTART_GUARD.as_secs()).unwrap_or(i64::MAX) {
+            return Err(CpdError::new(
+                ErrorCode::SessionRestartLoop,
+                format!("Session {} ({}) died {seconds}s after the engine last restarted it: left stopped.", session.id, session.name),
+            )
+            .with("session", id)
+            .with("name", session.name.as_str())
+            .with("seconds", seconds));
+        }
+    }
+    if let Some(pane) = cpd_core::session::start_parked_as(&engine.ports, engine.home.clone(), &session.id, SOURCE)? {
+        write_restart(engine, id, now);
+        engine.log.line(&format!("E2: restarted Session {} ({}) in the parked pane {pane}", session.id, session.name));
     }
     Ok(())
 }

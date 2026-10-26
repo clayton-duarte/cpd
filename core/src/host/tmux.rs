@@ -96,10 +96,12 @@ const DANGO: [u8; 3] = [5, 7, 2];
 /// (colour 7, hs-d534) and blue on the focused pane, set in the format itself (`pane_active`);
 /// the three view pills are dango ([`DANGO`], hs-d671) and keep their colour when focused, so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
-/// border line characters before the format; the leading `━` is always colour 7,
-/// the pane-border line colour, and stands before the pill's own colour, so the
-/// caps keep it and the left cap lands at column 3 from the pane's edge (hs-d478,
-/// hs-d684, checked on a private server).
+/// border line characters before the format, then the format's `━`, which carries no
+/// colour: it keeps the base style tmux draws the format from, the pane's own border
+/// style (`pane-active-border-style`, blue, on the active pane, else
+/// `pane-border-style`, colour 7), the style of the line cells around it (pro-d61;
+/// tmux 3.8 `window_make_pane_status`, `window_pane_get_border_style`). The pill's own
+/// colour starts after it, and the left cap lands at column 3 from the pane's edge (hs-d478).
 pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
     let plain = pill::fg_if("pane_active", spec().meanings.focus, spec().meanings.plain);
     let view_colour = format!(
@@ -109,7 +111,7 @@ pub static BORDER_FORMAT: LazyLock<String> = LazyLock::new(|| {
         pill::fg(DANGO[2]),
         plain
     );
-    let title = |fg: &str, text: &str| format!("{}━{}", pill::fg(7), pill::pill(fg, "", text));
+    let title = |fg: &str, text: &str| format!("━{}", pill::pill(fg, "", text));
     format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{},}},#{{?#{{==:#{{@cpd_view}},chat}},,#{{?#{{==:#{{@cpd_view}},history}},,{}}}}}}}",
         title(&plain, "#{@cpd_title}"),

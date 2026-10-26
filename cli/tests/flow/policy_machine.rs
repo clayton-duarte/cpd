@@ -153,7 +153,7 @@ fn every_form_carries_the_same_machine_object() {
 #[test]
 fn an_invalid_machine_file_fails_every_form_as_policy_invalid() {
     let fx = Fx::new();
-    fx.machine_file("[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\nheaders = { A = \"b\" }\n");
+    fx.machine_file("[mcp.servers.slack]\nurl = \"https://mcp.slack.com/mcp\"\nenv = { A = \"b\" }\n");
     let file = fx.real("host.toml");
     let runs = [
         ("--owner", fx.show(&["--owner", "acme"])),
@@ -164,7 +164,7 @@ fn an_invalid_machine_file_fails_every_form_as_policy_invalid() {
     for (form, run) in &runs {
         let error = refused(run, "policy_invalid", 1);
         assert_eq!(error["details"]["file"], file, "{form}");
-        assert!(error["details"]["key"].as_str().is_some_and(|k| k.contains("headers")), "{form}: {error}");
+        assert!(error["details"]["key"].as_str().is_some_and(|k| k.contains("env")), "{form}: {error}");
     }
 }
 
