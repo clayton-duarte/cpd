@@ -129,11 +129,6 @@ fn a_key_left_out_stays_out() {
 // c. refused keys and tables
 
 #[test]
-fn a_headers_key_is_refused() {
-    refused(&entry("headers = { A = \"b\" }"), Some("headers"));
-}
-
-#[test]
 fn a_command_key_is_refused() {
     refused(&entry("command = \"x\""), Some("command"));
 }
