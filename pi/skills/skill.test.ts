@@ -579,7 +579,8 @@ test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib 
 /** Commands.md §9: pr open, push and rebase run the Gate only when the PR's `pr.gate` is `local`. */
 test("cpd-lead: every 'run(s) the Gate' sentence names pr.gate", () => {
   const sentences = skillFiles("cpd-lead")[0]!.text.split(/(?<=[.;!?])\s+/).filter((s) => /\bruns? the Gate\b/i.test(s));
-  assert.ok(sentences.length >= 4, "the guard must find the sentences it guards");
+  // The feedback-fix rewrite (pro-d68) left one such sentence in the skill: the minimum is that count, and each must still name pr.gate.
+  assert.ok(sentences.length >= 1, "the guard must find the sentences it guards");
   const bad = sentences.filter((s) => !s.includes("pr.gate"));
   assert.deepEqual(bad, []);
 });
@@ -607,24 +608,29 @@ for (const { skill } of skills) test(`${skill}: asks the User only with ask_user
   assert.match(ask, /\(a record, not a question to the User\)/);
 });
 
-test("cpd-lead leaves a PR's conflict and its fixes to the update Job; the hand repair pushes through the Gate, never a plain git push or a sync Job (hs-d305, hs-d340)", () => {
+test("cpd-lead leaves a PR's conflict to the update Job and a feedback fix is one work Job pushed by its own merge; the hand repair pushes through the Gate, never a plain git push or a sync Job (hs-d305, hs-d340, pro-d68)", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
-  assert.ok(!/(?<!never a )plain `git push`/.test(text));
+  assert.ok(!/(?<!never a |Never push with a )plain `git push`/.test(text));
   assert.ok(!/run no local tests/i.test(text));
   assert.ok(!/hs-d220/.test(text));
   const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
   const addressing = section(text, "### Addressing");
   const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
   assert.match(row, /A conflict with the base is no reason and sends you nothing/);
-  assert.match(row, /cpd queue the PR's update Job/);
-  assert.match(row, /you run neither `cpd pr rebase` nor `cpd pr push` for it/);
+  assert.match(row, /Append one Job per actionable item to the PR named in `data\.pr` with `cpd job add/);
+  assert.match(row, /The fix Job's own merge pushes it to the pull request: nothing else is queued/);
+  assert.match(row, /cpd queues an update Job for it/);
+  assert.doesNotMatch(row, /cpd queue the PR's update Job/);
+  assert.doesNotMatch(row, /cpd pr (rebase|push)/, "a feedback fix is pushed by its own merge: the row sends the Lead to no push command");
   assert.doesNotMatch(row, /`conflict`/, "a conflict is no pr-feedback reason (hs-d340)");
-  assert.match(addressing, /Queuing the first fix Job makes cpd queue the PR's update Job/);
-  assert.match(addressing, /merges the base only if the Lead Branch conflicts with it/);
-  assert.match(addressing, /for which the poll queues the same Job/);
+  assert.match(addressing, /Append ONE `work` Job per cohesive fix/);
+  assert.match(addressing, /The Job's merge pushes the Lead Branch to the pull request: nothing else is queued, no Gate runs/);
+  assert.match(addressing, /A conflict with the base is unchanged: cpd queues an `update` Job \(never for a base that merely moved\)/);
+  assert.match(addressing, /only `work` Jobs and review Jobs are allowed there/);
+  assert.doesNotMatch(addressing, /Queuing the first fix Job makes cpd queue/);
   assert.match(addressing, /never a plain `git push`/);
   assert.match(addressing, /never with a sync (or merge )?Job/);
-  assert.match(addressing, /code the merge needs/);
+  assert.match(addressing, /No `--kind`, no test, impl or docs Job, no `--draft`, no review: the Job is queued at once/);
   assert.match(addressing, /`cpd pr rebase --pr <key>`/);
   assert.match(addressing, /`cpd pr push --pr <key>`/);
   assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
@@ -699,16 +705,18 @@ test("the open Job and the update Job: cpd adds them, the Lead decides only when
   const merged = rows.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
   assert.match(merged, /`data\.number` and `data\.url`/);
   assert.match(merged, /Do not open a PR yourself/);
-  assert.match(merged, /cpd queues an update Job that pushes them/);
+  assert.match(merged, /A fix Job of an open PR is done when its `job-merged` arrives: its merge pushed the Lead Branch to the pull request/);
+  assert.doesNotMatch(merged, /cpd queues an update Job that pushes them/);
   const failed = section(lead, "#### Failed Jobs");
   assert.match(failed, /A PR's open or update Job/);
   assert.match(failed, /cpd adds a fresh open Job at its next tick/);
   const pr = section(lead, "### PR");
   assert.match(pr, /the Job's `job-merged` Event carries the URL \(`data\.url`\)/);
-  assert.match(pr, /cpd queues an update Job; you do nothing/);
+  assert.match(pr, /if the PR then conflicts with it, cpd queues an update Job; you do nothing/);
   const fixes = section(lead, "#### Appending fixes");
   assert.match(fixes, /A Gate failure of a PR's open or update Job is not one/);
-  assert.match(fixes, /makes cpd queue the PR's update Job/);
+  assert.match(fixes, /On a PR that is already open, a fix Job is a `work` Job and its own merge carries it to the pull request/);
+  assert.doesNotMatch(fixes, /makes cpd queue the PR's update Job/);
 });
 
 test("a review Job holds the open Job through a stub fix draft the Lead registers with it (hs-d497)", () => {
