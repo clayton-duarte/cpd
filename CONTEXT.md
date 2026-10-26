@@ -78,6 +78,10 @@ _Avoid_: pre-Gate review
 **Addressing** (step):
 Feedback Jobs are appended and the Plan returns to Dispatching; an update Job, which cpd queues when one of them is queued (or when the pull request conflicts with its base), then brings the pull request up to date. `pr rebase` and `pr push` are the repair.
 
+**φ** (new, hs-d694):
+cpd's mark, as π is pi's: it overlaps the three letters C·P·D, references the golden ratio, and reads like a dango. Documents that name cpd's mark write it φ beside the name; the word `cpd` never changes. The mark and its logo are specified once in [docs/mark.md](docs/mark.md).
+_Avoid_: cpd logo (the logo is defined soon)
+
 ## Work units
 
 **Context** (entity):
@@ -261,7 +265,7 @@ Where a Domain's value is set: cpd's default, a machine file, an owner file, or 
 _Avoid_: layer, level, override file
 
 **Repo policy file** (new):
-The repo scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: required for every repo cpd works on (`repo_unconfigured` when missing; an empty file means nothing to configure), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
+The repo scope of a Policy, `$CPD_HOME/policy/<owner>/<repo>.toml`: optional (a repo without one has no repo scope and inherits default, machine and owner; an empty file means the same), and the one place of the repo's hooks, test commands and protected paths (contract §8.3).
 
 
 **Exposure** (new, hs-d9, hs-d12):

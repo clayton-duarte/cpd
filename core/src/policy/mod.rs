@@ -40,7 +40,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use known::known_owners;
-pub use resolve::{check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve, resolve_lenient, resolve_machine, resolve_unowned_row};
+pub use resolve::{check_file_names, default_policy, key_of_scope_file, policy_dir, repo_path, resolve, resolve_machine, resolve_unowned_row};
 
 /// What a policy is resolved for (contract §8.3 "Model"): never a machine, a path or a cwd.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -141,19 +141,6 @@ pub fn confirm_fallback(home: &crate::home::CpdHome, owner: &OwnerLogin) -> Resu
         let _ = std::fs::remove_file(&tmp);
         io(e)
     })
-}
-
-/// `repo_unconfigured` (exit 3): the repo has no `<owner>/<name>.toml` (`file`); an empty one is valid.
-pub fn repo_unconfigured(owner: &OwnerLogin, name: &RepoName, file: &std::path::Path) -> CpdError {
-    CpdError::new(
-        ErrorCode::RepoUnconfigured,
-        format!(
-            "The repo {owner}/{name} has no policy file: create {} (an empty file means nothing to configure).",
-            file.display()
-        ),
-    )
-    .with("repo", format!("{owner}/{name}"))
-    .with("file", file.display().to_string())
 }
 
 /// `repo_unkeyed` (exit 1): the repo cannot be keyed from `origin`; `url` is `None` with no `origin`.
@@ -274,29 +261,14 @@ mod tests {
     }
 
     #[test]
-    fn a_repo_without_a_file_is_repo_unconfigured_after_the_owner_check() {
+    fn a_repo_without_a_file_resolves_from_its_owner_and_the_owner_is_still_checked_first() {
         let (_d, home) = home();
         let err = resolve(&home, &repo_key("acme", "other")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
-        write(&home, "acme/owner.toml", "");
-        let err = resolve(&home, &repo_key("acme", "other")).unwrap_err();
-        assert_eq!((err.code(), err.exit().code()), (ErrorCode::RepoUnconfigured, 3));
-        assert_eq!(err.details()["repo"], "acme/other");
-        assert!(err.details()["file"].as_str().unwrap().ends_with("policy/acme/other.toml"));
-        // An Owner key never raises it.
-        resolve(&home, &PolicyKey::Owner(owner("acme"))).unwrap();
-    }
-
-    #[test]
-    fn the_lenient_resolve_takes_a_missing_repo_file_as_no_repo_scope() {
-        let (_d, home) = home();
         write(&home, "acme/owner.toml", "[gate]\npr = \"local\"\n");
-        let r = resolve_lenient(&home, &repo_key("acme", "other")).unwrap();
+        let r = resolve(&home, &repo_key("acme", "other")).unwrap();
         assert_eq!(r.policy.gate.pr, Gate::Local);
         assert!(matches!(r.sources.get(Domain::Gates).source, Source::Owner(_)));
-        // A missing owner file is still `owner_unconfirmed`.
-        let err = resolve_lenient(&home, &repo_key("nobody", "other")).unwrap_err();
-        assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed);
     }
 
     #[test]

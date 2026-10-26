@@ -50,6 +50,14 @@ fn help_lists_the_commands() {
 }
 
 #[test]
+fn install_help_lists_the_root_option() {
+    let home = temp_home();
+    let out = json(cpd(&home).args(["install", "--help"]), 0);
+    let help = out["help"].as_str().expect("help text");
+    assert!(help.contains("--root"), "no --root in: {help}");
+}
+
+#[test]
 fn an_unknown_command_is_a_usage_error_with_the_usage_on_stdout() {
     let home = temp_home();
     let out = json(cpd(&home).arg("bogus"), 2);

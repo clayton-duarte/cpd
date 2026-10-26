@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use super::domain::{merge, Policy, Scope, Source, Sources};
 use super::exposure::ScopeKind;
 use super::load::{load_scope_file, parse_scope, policy_invalid};
-use super::{owner_unconfirmed, repo_unconfigured, PolicyKey, Resolved};
+use super::{owner_unconfirmed, PolicyKey, Resolved};
 use crate::home::CpdHome;
 use crate::ids::{OwnerLogin, RepoName};
 
@@ -48,21 +48,11 @@ const OLD_LAYOUT: &str = "the old layout owners/, repos/, machines/ is no longer
 const MACHINE_FILE: &str = "host.toml";
 pub(super) const OWNER_FILE: &str = "owner.toml";
 
-/// What a missing repo file is.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RepoFile {
-    /// `repo_unconfigured`.
-    Required,
-    /// No repo scope.
-    Optional,
-}
-
 /// The scope layers of `key`, most specific first (repo, owner, machine), or `None` when the owner
-/// has no file. A missing machine file is no layer.
+/// has no file. A missing repo or machine file is no layer.
 fn layers(
     home: &CpdHome,
     key: &PolicyKey,
-    repo_file: RepoFile,
 ) -> Result<Option<Vec<(Source, Scope)>>, crate::error::CpdError> {
     let Some((owner_real, owner_scope)) = load_scope_file(&owner_path(home, key.owner()), ScopeKind::Owner)? else {
         return Ok(None);
@@ -70,10 +60,8 @@ fn layers(
     let mut layers = Vec::new();
     if let PolicyKey::Repo(owner, name) = key {
         let path = repo_path(home, owner, name);
-        match load_scope_file(&path, ScopeKind::Repo)? {
-            Some((real, scope)) => layers.push((Source::Repo(real), scope)),
-            None if repo_file == RepoFile::Required => return Err(repo_unconfigured(owner, name, &path)),
-            None => {}
+        if let Some((real, scope)) = load_scope_file(&path, ScopeKind::Repo)? {
+            layers.push((Source::Repo(real), scope));
         }
     }
     layers.push((Source::Owner(owner_real), owner_scope));
@@ -90,19 +78,10 @@ fn merge_layers(layers: &[(Source, Scope)]) -> Resolved {
 
 /// The policy of `key`: cpd's default, then `host.toml`, the owner file and the repo file,
 /// per domain, the whole domain replaced. A key whose owner has no file is
-/// `owner_unconfirmed`, even when its repo file exists. A Repo key whose repo file is missing is
-/// `repo_unconfigured` (an empty file is valid), after the owner check.
+/// `owner_unconfirmed`, even when its repo file exists. A missing repo file is no repo scope
+/// (the same as an empty one).
 pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, key, RepoFile::Required)? {
-        Some(layers) => Ok(merge_layers(&layers)),
-        None => Err(owner_unconfirmed(home, key.owner())),
-    }
-}
-
-/// [`resolve`] with the repo file optional: a missing one is no repo scope (owner, machine and default only).
-/// For the `pr poll`, which needs only `pr.feedback` and keeps polling an open PR of an unconfigured repo.
-pub fn resolve_lenient(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, key, RepoFile::Optional)? {
+    match layers(home, key)? {
         Some(layers) => Ok(merge_layers(&layers)),
         None => Err(owner_unconfirmed(home, key.owner())),
     }
@@ -112,7 +91,7 @@ pub fn resolve_lenient(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crat
 /// an owner without a file is cpd's default, source `default (no owner file)`,
 /// not `owner_unconfirmed`.
 pub fn resolve_unowned_row(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
-    match layers(home, key, RepoFile::Optional)? {
+    match layers(home, key)? {
         Some(layers) => Ok(merge_layers(&layers)),
         None => Ok(Resolved {
             policy: default_policy().clone(),

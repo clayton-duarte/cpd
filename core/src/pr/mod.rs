@@ -212,8 +212,7 @@ fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdErr
 
 /// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
 /// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unconfirmed`, `policy_invalid`),
-/// which a consumer of many rows (the poll) reports for its row and goes on. `resolve` is the strict [`resolve`], or
-/// the poll's `resolve_lenient` (a missing repo file is no repo scope).
+/// which a consumer of many rows (the poll) reports for its row and goes on.
 fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey, resolve: ResolveFn) -> Result<Result<Policy, CpdError>, CpdError> {
     let home = env.home.clone();
     env.store.read(|conn| pr_policy_in(conn, &home, plan, key, resolve))
@@ -240,8 +239,8 @@ fn pr_policy_in(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key:
     Ok(resolve(home, &policy_key).map(|resolved| resolved.policy))
 }
 
-/// The strict policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
-/// Worker Spec) reads, through its Job's PR. `repo_unconfigured` when the PR's repo has no policy file.
+/// The policy of PR `key` of `plan`, from a connection: what an Attempt-level consumer (the quick check, the
+/// Worker Spec) reads, through its Job's PR.
 pub fn policy_of_pr(conn: &rusqlite::Connection, home: &CpdHome, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
     pr_policy_in(conn, home, plan, key, resolve)?
 }

@@ -3026,6 +3026,14 @@ impl InstallRig {
         Installed { exit, stderr: String::from_utf8_lossy(&stderr).into_owned() }
     }
 
+    /// Runs `cpd install --root <checkout>` through the command tree, in process on the `Fx`'s ports: the CLI's own
+    /// wiring of the install, unlike [`InstallRig::run`], which calls `cpd_core::install::run` directly.
+    fn cli(&self) -> Run {
+        let root = self.install.root.to_str().expect("the checkout path is UTF-8");
+        let target = self.install.target_dir.to_str().expect("the target dir path is UTF-8");
+        self.fx.cpd_with(self.install.root.as_path(), &["install", "--root", root], &[("CARGO_TARGET_DIR", target)])
+    }
+
     /// [`InstallRig::run`] of an install that must succeed: its stderr.
     fn run_ok(&self) -> String {
         let run = self.run();
@@ -3087,6 +3095,40 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert_eq!(out.exit, 0, "{store}: {}", out.stderr);
         assert!(rig.fx.env.home().join(".local/bin/cpd").exists());
     }
+}
+
+#[test]
+fn install_cli_installs_the_binary_and_the_adapter_into_a_temporary_home() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let rig = InstallRig::new(OPENS);
+
+    let run = rig.cli();
+
+    let json = run.ok();
+    assert!(!json["binary"].as_str().expect("binary is a string").is_empty(), "{json}");
+    assert!(!json["adapter"].as_str().expect("adapter is a string").is_empty(), "{json}");
+    assert!(!json["version"].as_str().expect("version is a string").is_empty(), "{json}");
+
+    // The binary is the built one, at <HOME>/.local/bin/cpd, mode 755.
+    let built = rig.install.target_dir.join("release/cpd");
+    let bin = rig.install.home.join(".local/bin/cpd");
+    assert!(bin.is_file(), "{} is not a file", bin.display());
+    assert_eq!(fs::read(&bin).unwrap(), fs::read(&built).unwrap(), "the installed binary is not the built one");
+    assert_eq!(fs::metadata(&bin).unwrap().permissions().mode() & 0o777, 0o755, "the binary is not mode 755");
+
+    // The adapter is <HOME>/.local/share/cpd/pi -> pi.<id>, the checkout's pi/ minus test/.
+    let adapter = rig.share().join("pi");
+    assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is not a symlink");
+    let target = fs::read_link(&adapter).unwrap().to_string_lossy().into_owned();
+    assert!(target.starts_with("pi.") && !target.contains('/'), "the target `{target}` is not a relative pi.<id>");
+    let expected: Vec<String> = tree(&rig.install.root.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert_eq!(tree(&adapter), expected);
+
+    // The follow-ups ran on the installed binary.
+    let calls = rig.calls();
+    assert!(calls.contains(&vec!["config".to_string()]), "no config follow-up: {calls:?}");
+    assert!(calls.contains(&vec!["watch".to_string(), "--check".to_string()]), "no watch --check follow-up: {calls:?}");
 }
 
 // ---------- the adapter swap of `cpd install` (pi-ci-W9) ----------

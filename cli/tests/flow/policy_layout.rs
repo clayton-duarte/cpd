@@ -135,11 +135,13 @@ fn l3_the_repo_wins_over_the_owner_and_the_machine() {
 }
 
 #[test]
-fn l3_a_missing_repo_file_is_repo_unconfigured_naming_the_file() {
+fn l3_a_missing_repo_file_inherits_the_owner() {
     let fx = Layout::new();
+    fx.write("acme/owner.toml", "[tests]\ntext = \"Owner.\"\n");
     fs::remove_file(fx.path("acme/r.toml")).unwrap();
-    let error = refused(&fx.show(&["--owner", "acme", "--repo", "r"]), "repo_unconfigured", 3);
-    assert_eq!(error["details"]["file"], fx.path("acme/r.toml").display().to_string(), "{error}");
+    let out = fx.repo();
+    assert_eq!(tests_of(&out)["text"], "Owner.", "{out}");
+    assert_eq!(out["files"], serde_json::json!([fx.real("acme/owner.toml")]), "{out}");
 }
 
 #[test]

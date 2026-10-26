@@ -951,7 +951,7 @@ impl TestEnv {
         fs::write(dir.join(format!("{name}.toml")), toml).expect("write the repo policy file");
     }
 
-    /// A `keyed_repo` whose repo policy file is removed: its repo is unconfigured (`repo_unconfigured`).
+    /// A `keyed_repo` whose repo policy file is removed: its repo has no repo scope (it inherits its owner).
     pub fn unconfigured_repo(&self, name: &str) -> PathBuf {
         let repo = self.keyed_repo(name);
         let _ = fs::remove_file(self.cpd_home().join(format!("policy/acme/{name}.toml")));
