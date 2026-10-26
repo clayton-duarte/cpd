@@ -282,8 +282,12 @@ fn a_build_whose_migrations_are_all_on_origin_main_installs() {
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert!(rig.installed().exists());
-    // The script's assertion that cargo ran once: the build is the shell's now, the built binary's verdict is asked once.
-    assert_eq!(rig.built_calls().len(), 1);
+    // The script's assertion that cargo ran once: the build is the shell's now, and the built binary is asked once for
+    // the store verdict, then once for the config migration and validation (both before it replaces the binary).
+    let calls = rig.built_calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[0].args, ["--version"], "{calls:?}");
+    assert_eq!(calls[1].args, ["config", "--migrate"], "{calls:?}");
 }
 
 #[test]
