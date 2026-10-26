@@ -27,7 +27,7 @@ test("cursor: registered_event, then the greatest event of this Session's cpd-co
 
 const SEQ0 = 40;
 const record = (n: number, over: Partial<ContextRecord> = {}): ContextRecord => ({
-  seq: SEQ0 + n, id: `hs-n${n}`, kind: "note", at: "(2026-10-17 UTC)T09:00:00.000Z", by: OTHER, text: `note ${n}`, ...over,
+  seq: SEQ0 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}`, ...over,
 });
 const recordEvent = (n: number): RecordEvent => ({ event: 200 + n, record: `hs-n${n}`, seq: SEQ0 + n });
 const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
@@ -60,7 +60,7 @@ test("message: a brief is shown short: its first line and its Plan, never the re
 });
 
 test("parseRecords: a record's plan is its Plan id", () => {
-  const raw = { seq: 1, id: "hs-b1", kind: "brief", at: "(2026-10-17 UTC)T09:00:00.000Z", by: { session: null, plan: null }, text: "Retry.", short: true, plan: { id: "pay", machine: "hs" } };
+  const raw = { seq: 1, id: "hs-b1", kind: "brief", at: "2026-10-17T09:00:00.000Z", by: { session: null, plan: null }, text: "Retry.", short: true, plan: { id: "pay", machine: "hs" } };
   assert.equal(parseRecords({ records: [raw] })[0]!.plan, "pay");
   assert.equal("plan" in parseRecords({ records: [{ ...raw, plan: undefined }] })[0]!, false);
 });
