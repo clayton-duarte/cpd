@@ -200,12 +200,16 @@ pub fn refuse_user_version(version: i64) -> Result<(), CpdError> {
 }
 
 /// `store_too_new` (§4.5): the store has a breaking migration this cpd does not
-/// know, or a later scheme. `floor` is the store's newest breaking migration.
+/// know, or a later scheme. `floor` is the store's newest breaking migration; the
+/// message names it when it is known, so an operator can see which one this binary lacks.
 fn too_new(version: i64, floor: Option<&str>, unknown: &[String]) -> CpdError {
-    CpdError::new(
-        ErrorCode::StoreTooNew,
-        format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
-    )
+    let message = match floor {
+        Some(floor) => format!(
+            "The database was migrated by a newer cpd (schema {version}): it applied migration {floor}, which this cpd does not know. Upgrade cpd."
+        ),
+        None => format!("The database was migrated by a newer cpd (schema {version}): upgrade cpd."),
+    };
+    CpdError::new(ErrorCode::StoreTooNew, message)
     .with("user_version", version)
     .with("floor", floor)
     .with("unknown", unknown)
