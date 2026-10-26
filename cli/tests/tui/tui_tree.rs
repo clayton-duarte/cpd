@@ -1543,6 +1543,43 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     assert_eq!(calls[3], words(&["session", "open", "l-new"]), "the new fork is opened");
 }
 
+/// hs-d688: a live Context with no row ends with the clickable ` ╰󰬪 new`; a click on it opens the same New Plan input
+/// popup the context menu's New Plan… does, and the answer runs `plan new` for that Context and opens the new Lead.
+/// Nothing runs before the popup is answered. `gamma`'s row is found by its text, not a fixed index.
+#[test]
+fn a_click_on_an_empty_contexts_new_row_opens_the_new_plan_popup_and_runs_plan_new() {
+    let fx = fx();
+    let _engine = engine(&fx);
+    populate_in(&fx);
+    drive::cpd_says(&fx, r#"{"ok":true,"plan":{"id":"fresh"},"lead":{"session":"l-new"}}"#);
+    let dialogs = drive::dialogs(&fx);
+    dialogs.cancel();
+    let mut tree = Tree::start(&fx, 60, 22);
+    let screen = ready(&tree);
+    // gamma, the live Context with no row, ends with ` ╰󰬪 new`
+    let found = screen.iter().position(|r| r.contains("\u{F0B2A} new"));
+    assert!(found.is_some(), "gamma's new row is on the screen:\n{}", screen.join("\n"));
+    let row = found.expect("just asserted") as u16;
+    let column = screen[row as usize].find("new").expect("the word `new` on the row") as u16;
+    tree.click(column, row);
+    // the click opens the popup and runs nothing until it is answered (the fake cancels it)
+    assert_eq!(
+        dialogs.popups(),
+        ["cpd tui view dialog input --title='New Plan' --prompt='Title:' --initial='' --validate='title'"],
+        "the context menu's New Plan… popup"
+    );
+    assert!(drive::calls(&fx).is_empty(), "nothing runs before the popup is answered: {:?}", drive::calls(&fx));
+    // answering it runs `plan new` for `gamma` and opens the new Lead
+    dialogs.type_in("Fresh");
+    tree.click(column, row);
+    tree.until_that("the new Plan to run", |_| drive::calls(&fx).len() >= 2);
+    assert_eq!(
+        drive::calls(&fx),
+        [words(&["plan", "new", "fresh", "--context=gamma", "--title=Fresh", "--by-user"]), words(&["session", "open", "l-new"])],
+        "the new Plan's id derived from the title, in `gamma`"
+    );
+}
+
 #[test]
 fn a_refused_open_of_the_new_lead_shows_its_message_and_the_plan_stays_created() {
     let fx = fx();
