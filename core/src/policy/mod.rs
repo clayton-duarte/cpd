@@ -264,10 +264,10 @@ mod tests {
         let (_d, home) = home();
         let err = resolve(&home, &host(), &repo_key("acme", "other")).unwrap_err();
         assert_eq!(err.code(), ErrorCode::OwnerUnconfirmed, "the owner is checked first");
-        write(&home, "owners/acme.toml", "[pr]\ngate = \"local\"\n");
+        write(&home, "owners/acme.toml", "[gate]\npr = \"local\"\n");
         let r = resolve(&home, &host(), &repo_key("acme", "other")).unwrap();
-        assert_eq!(r.policy.pr.gate, Gate::Local);
-        assert!(matches!(r.sources.get(Domain::Pr).source, Source::Owner(_)));
+        assert_eq!(r.policy.gate.pr, Gate::Local);
+        assert!(matches!(r.sources.get(Domain::Gate).source, Source::Owner(_)));
     }
 
     #[test]
