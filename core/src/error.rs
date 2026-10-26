@@ -99,6 +99,8 @@ error_codes! {
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
     InstallStateInvalid = "install_state_invalid" => Failure,
+    // The install (commands.md §14.4).
+    InstallFailed = "install_failed" => Failure,
     // The holographic engine rail (contract §4.6, hs-d677).
     EngineFailed = "engine_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
