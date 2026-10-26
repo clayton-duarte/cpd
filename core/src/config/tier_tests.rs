@@ -1,4 +1,5 @@
 use super::tier::*;
+use crate::error::ErrorCode;
 
 #[cfg(test)]
 mod tests {
