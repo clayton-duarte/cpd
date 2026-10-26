@@ -59,7 +59,7 @@ fn user_options_live_on_the_server() {
 fn user_options_live_on_a_window() {
     let t = T::new();
     t.server();
-    for k in ["@cpd_session", "@cpd_title", "@cpd_view", "@cpd_job", "@cpd_history", "@cpd_preview"] {
+    for k in ["@cpd_session", "@cpd_title", "@cpd_view", "@cpd_history", "@cpd_preview"] {
         t.ok(&["set", "-t", "@0", k, "v"]);
         assert_eq!(show(&t, &["show", "-t", "@0", "-v", k]), "v\n", "{k}");
     }
@@ -69,10 +69,10 @@ fn user_options_live_on_a_window() {
 fn user_options_live_on_a_pane() {
     let t = T::new();
     t.server();
-    t.ok(&["set", "-p", "-t", "%0", "@cpd_job", "j1"]);
-    assert_eq!(show(&t, &["show", "-p", "-t", "%0", "-v", "@cpd_job"]), "j1\n");
-    assert_eq!(t.ok(&["display-message", "-p", "-t", "%0", "#{@cpd_job}"]), "j1\n");
-    assert!(t.state().expect("server").panes()[0].options.contains(&("@cpd_job".into(), "j1".into())));
+    t.ok(&["set", "-p", "-t", "%0", "@cpd_history", "j1"]);
+    assert_eq!(show(&t, &["show", "-p", "-t", "%0", "-v", "@cpd_history"]), "j1\n");
+    assert_eq!(t.ok(&["display-message", "-p", "-t", "%0", "#{@cpd_history}"]), "j1\n");
+    assert!(t.state().expect("server").panes()[0].options.contains(&("@cpd_history".into(), "j1".into())));
 }
 
 #[test]
