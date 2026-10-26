@@ -1,7 +1,7 @@
 //! The dialog kit's `select`: a radio list in the kit's frame (commands.md §13.2), its keys, clicks and scrolling, the
 //! check of its options and its opener.
 
-use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -10,7 +10,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, Mo
 
 use super::view::{Dialog, Mode};
 use super::{Outcome, check_options, select};
+use cpd_core::clock::ManualClock;
 use cpd_core::error::ErrorCode;
+use cpd_core::fakes::tmux::{FakeTmux, TmuxRoute};
+use cpd_core::host::runner::FakeRunner;
 use cpd_core::host::Tmux;
 
 const L: &str = "\u{E0B6}";
@@ -172,42 +175,40 @@ fn the_options_are_refused_when_none_empty_repeated_or_with_a_control_character(
     }
 }
 
-/// A `tmux` mock (a shell script): on `display-popup` it writes `<dir>/result`, if there is one, to the `--out` file named in the popup's command.
-fn mock_tmux(dir: &tempfile::TempDir) -> (Tmux, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-    let calls = dir.path().join("calls");
-    let program = dir.path().join("tmux");
-    let script = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
-         case \" $* \" in *\" list-clients \"*) echo '1 100 30';; esac\n\
-         case \" $* \" in *\" display-popup \"*)\n  for last; do :; done\n  out=${{last#*--out=\\'}}; out=${{out%%\\'*}}\n  \
-         [ -f '{result}' ] && cp '{result}' \"$out\";;\nesac\nexit 0\n",
-        calls = calls.display(),
-        result = dir.path().join("result").display()
-    );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    (Tmux::new("test").with_program(&program), calls)
+/// The result a popup writes (none: it closes with no usable result), set by the test.
+type Answer = Arc<Mutex<Option<String>>>;
+
+/// A fake tmux (the `tmux` route of a `FakeRunner`) with a server in `dir` and one client of 100 x 30: on `display-popup`
+/// it writes the text in the [`Answer`] it returns, if there is one, to the `--out` file named in the popup's command.
+fn mock_tmux(dir: &tempfile::TempDir) -> (Tmux, Arc<FakeRunner>, Answer) {
+    let route = Arc::new(TmuxRoute::new());
+    let runner = Arc::new(FakeRunner::new(ManualClock::new()).route("tmux", route.clone()));
+    let tmux = Tmux::with_tmpdir("test", dir.path()).with_runner(runner.clone());
+    tmux.run(&["new-session", "-d", "-s", "cockpit", "-x", "100", "-y", "30", "sleep 1"].map(str::to_owned)).unwrap();
+    route.fake().add_client("c1", 100, 30);
+    let result = Answer::default();
+    let answer = result.clone();
+    FakeTmux::on_popup(route.fake(), move |_| answer.lock().unwrap().clone());
+    (tmux, runner, result)
 }
 
 #[test]
 fn the_opener_runs_a_select_popup_with_one_option_flag_each_and_returns_the_chosen_option() {
     let dir = tempfile::tempdir().unwrap();
-    let (tmux, calls) = mock_tmux(&dir);
+    let (tmux, runner, result) = mock_tmux(&dir);
     let options = opts(&["a", "b"]);
-    let result = dir.path().join("result");
 
-    std::fs::write(&result, r#"{"confirmed":true,"value":"b"}"#).unwrap();
+    *result.lock().unwrap() = Some(r#"{"confirmed":true,"value":"b"}"#.to_owned());
     assert_eq!(select(&tmux, "New Context", "Owner:", &options).unwrap(), Some("b".to_owned()));
-    let text = std::fs::read_to_string(&calls).unwrap();
-    assert_eq!(text.matches("display-popup").count(), 1, "{text}");
-    let command = text.lines().last().unwrap();
+    let popups: Vec<_> = runner.calls().into_iter().filter(|c| c.args.iter().any(|a| a == "display-popup")).collect();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    let command = popups[0].args.last().unwrap();
     assert!(command.starts_with("cpd tui view dialog select --title='New Context' --out='"), "{command}");
     assert!(command.ends_with("' --prompt='Owner:' --option='a' --option='b'"), "{command}");
 
-    std::fs::write(&result, r#"{"confirmed":false}"#).unwrap();
+    *result.lock().unwrap() = Some(r#"{"confirmed":false}"#.to_owned());
     assert_eq!(select(&tmux, "New Context", "Owner:", &options).unwrap(), None);
 
-    std::fs::remove_file(&result).unwrap();
+    *result.lock().unwrap() = None;
     assert!(select(&tmux, "New Context", "Owner:", &options).is_err());
 }

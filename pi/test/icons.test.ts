@@ -28,22 +28,25 @@ test("the config schema toggle defaults are the same two glyphs", () => {
   assert.equal(props.properties.collapse.default, COLLAPSE);
 });
 
+process.env.TZ = "Asia/Kolkata";
+const TIME_MS = Date.parse("2026-10-14T21:41:02.114Z");
+
 const theme: Theme = { fg: (_c, t) => t, bg: (_c, t) => t, bold: (t) => t };
 const cpdMessage = (text: string, content = "body"): RenderedMessage =>
-  ({ role: "custom", timestamp: 0, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
+  ({ role: "custom", timestamp: TIME_MS, customType: "cpd", content, display: true, details: { text } }) as unknown as RenderedMessage;
 const draw = (m: RenderedMessage, expanded: boolean): string[] =>
   (new Rendering().render(m, { expanded, outputPad: 1 }, theme) as Component).render(80);
 const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 test("a cpd block closes with the chevron circles and ends with the right chevron terminator", () => {
   const m = cpdMessage("Worker of Job x", "line one\nline two");
-  assert.equal(plain(draw(m, false).at(-1)!), ` ╰${EXPAND} expand`);
-  assert.equal(plain(draw(m, true).at(-1)!), ` ╰${COLLAPSE} collapse`);
-  assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), ` ╰${TERM}`);
+  assert.equal(plain(draw(m, false).at(-1)!), `╰${EXPAND} expand · 03:11`);
+  assert.equal(plain(draw(m, true).at(-1)!), `╰${COLLAPSE} collapse · 03:11`);
+  assert.equal(plain(draw(cpdMessage("Nothing more", ""), false).at(-1)!), `╰${TERM}`);
 });
 
-test("the loader keeps its eight moon frames, U+F0F61 included, and the waiting glyph is not one of them", () => {
-  const moons = [0xF0F64, 0xF0F67, 0xF0F61, 0xF0F68, 0xF0F62, 0xF0F66, 0xF0F63, 0xF0F65].map(G);
+test("the loader has the 28 moon_alt frames and the waiting glyph is not one of them", () => {
+  const moons = [0xE3E3, ...Array.from({ length: 27 }, (_, i) => 0xE3C8 + i)].map(G);
   assert.deepEqual([...LOADER_FRAMES], moons);
   assert.ok(!LOADER_FRAMES.includes(G(0xF1853)));
 });

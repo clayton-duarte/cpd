@@ -24,7 +24,7 @@ pub struct OwnerArgs {
 }
 
 pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     let login = &args.login;
     let out = |already: bool| {

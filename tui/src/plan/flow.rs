@@ -6,21 +6,24 @@
 //! column is one past the deepest column it needs; each card has one entry and one exit at its middle row, joined by one
 //! vertical bus per gap between columns, lines that skip columns riding a row free of cards.
 //!
-//! Hand-written drawing is only the line glyphs (`Mask`) and the window copy (`Chart::blit`): ratatui has no widget for
-//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions are lengths laid end to
-//! end ([`starts`]), not ratatui's `Layout`, whose constraint solver takes seconds for a few hundred cards; pills are
+//! Hand-written drawing is only the line glyphs (`Mask`): ratatui 0.30's `Cell::merge_symbol` (ratatui-core 0.1.2
+//! `buffer/cell.rs`) merges straight edges into junctions but turns a rounded corner (`╭╮╰╯`) plain when a third line
+//! joins, so `Mask` keeps the corner. The window copy is [`copy_cells`]. Positions are lengths laid end to end
+//! ([`starts`]), not ratatui's `Layout`, whose constraint solver takes seconds for a few hundred cards; pills are
 //! `Line`s aligned left and right.
 
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::{Margin, Position, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::Widget,
 };
 
+use crate::buffer::copy_cells;
+use crate::cells;
 use crate::palette::{self, Meaning};
 use crate::pill;
 use cpd_core::config::Tier;
@@ -142,14 +145,10 @@ pub enum Dir {
 const GAP: u16 = 3;
 
 fn truncate(s: &str, w: usize) -> String {
-    if s.chars().count() <= w {
-        s.to_string()
-    } else {
-        s.chars().take(w.saturating_sub(1)).collect::<String>() + "…"
-    }
+    cells::truncate(s, w)
 }
 
-/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` characters) and the right half (`│<tier>[│aN]`).
+/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` columns) and the right half (`│<tier>[│aN]`).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
     (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{}", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
@@ -525,11 +524,7 @@ impl Chart {
         let (dx, dy) = (margin.horizontal, margin.vertical);
         let area = self.buf.area;
         let mut buf = Buffer::empty(Rect::new(0, 0, area.width + 2 * dx, area.height + 2 * dy));
-        for y in 0..area.height {
-            for x in 0..area.width {
-                buf[(x + dx, y + dy)] = self.buf[(x, y)].clone();
-            }
-        }
+        copy_cells(&self.buf, area, &mut buf, Position::new(dx, dy));
         let pills = self.pills.into_iter().map(|p| Pill { rect: Rect { x: p.rect.x + dx, y: p.rect.y + dy, ..p.rect }, ..p }).collect();
         Chart { buf, pills, columns: self.columns }
     }
@@ -566,11 +561,7 @@ impl Chart {
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
         let oy = oy.min(self.buf.area.height.saturating_sub(area.height));
-        for y in 0..area.height.min(self.buf.area.height - oy) {
-            for x in 0..area.width.min(self.buf.area.width - ox) {
-                dst[(area.x + x, area.y + y)] = self.buf[(x + ox, y + oy)].clone();
-            }
-        }
+        copy_cells(&self.buf, Rect::new(ox, oy, area.width, area.height), dst, Position::new(area.x, area.y));
         if let Some(pill) = selected.map(|i| self.pills[i].rect) {
             let window = Rect::new(ox, oy, area.width, area.height);
             // the body is the blue block, bold; the caps are blue too (the block's colour as foreground)
@@ -591,8 +582,13 @@ impl Chart {
 }
 
 #[cfg(test)]
+#[path = "flow_width_tests.rs"]
+mod flow_width_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_text::rows;
 
     static CAP_L: &str = "\u{e0b6}";
     static CAP_R: &str = "\u{e0b4}";
@@ -608,10 +604,7 @@ mod tests {
     }
 
     fn text(c: &Chart) -> String {
-        (0..c.buf.area.height)
-            .map(|y| (0..c.buf.area.width).map(|x| c.buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows(&c.buf).join("\n")
     }
 
     /// The chart's text against `want`, written below an opening newline that is not part of it.
@@ -683,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_pill_spins_through_the_eight_moon_phases() {
+    fn a_running_pill_spins_through_the_28_moon_phases() {
         let icons: Vec<String> = (0..=palette::SPINNER.len()).map(|f| icon_at(Live::Running, f)).collect();
         assert_eq!(icons, [palette::SPINNER.to_vec(), vec![palette::SPINNER[0]]].concat());
     }

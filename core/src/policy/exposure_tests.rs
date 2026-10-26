@@ -8,7 +8,7 @@ use std::path::Path;
 
 use ScopeKind::{Machine, Owner, Repo};
 
-const ALL_THREE: [&str; 6] = ["pr", "deploy", "code", "tests", "monitor", "instructions"];
+const ALL_THREE: [&str; 7] = ["gate", "pr", "deploy", "code", "tests", "monitor", "instructions"];
 const REPO_ONLY: [&str; 3] = ["hooks", "test-commands", "protected"];
 
 fn domain(name: &str) -> Domain {
@@ -20,8 +20,9 @@ fn scope(text: &str) -> Scope {
     parse_scope(Path::new("t.toml"), text).unwrap_or_else(|e| panic!("`{text}` is a valid scope: {e}"))
 }
 
-const SETS: [(&str, &str); 6] = [
-    ("pr", "[pr]\ngate = \"local\"\n"),
+const SETS: [(&str, &str); 7] = [
+    ("gate", "[gate]\nmerge = \"local\"\n"),
+    ("pr", "[pr]\nfeedback.checks = \"none\"\n"),
     ("deploy", "[deploy]\ntext = \"d\"\n"),
     ("code", "[code]\ntext = \"c\"\n"),
     ("tests", "[tests]\ntext = \"t\"\n"),

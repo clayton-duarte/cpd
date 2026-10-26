@@ -1,4 +1,4 @@
-//! `run/models-<provider>.json` (contract §1.4, §3.7 E14): the ids a provider offered at its last good list, the diff
+//! `run/models-<provider>.json` (contract §1.4, §3.7 E15): the ids a provider offered at its last good list, the diff
 //! of each write, and the write itself, whole, by `.tmp` and rename, under `locks/models.lock`.
 
 use std::collections::BTreeSet;
@@ -101,7 +101,7 @@ pub fn read_all(home: &CpdHome) -> Result<Vec<Read>, CpdError> {
     Ok(reads)
 }
 
-/// The newest `polled_at` among the files that parse: `None` when there is none (E14 is due at once).
+/// The newest `polled_at` among the files that parse: `None` when there is none (E15 is due at once).
 pub fn newest_polled_at(home: &CpdHome) -> Result<Option<OffsetDateTime>, CpdError> {
     Ok(read_all(home)?
         .iter()
@@ -216,7 +216,7 @@ fn write_listed(home: &CpdHome, pi_version: &str, listed: &Listed, now: &str, ap
     Ok(Outcome::Written(Written { provider: provider.clone(), polled_at: now.to_owned(), count: file.ids.len(), changes: this }))
 }
 
-/// Writes the good lists of `answer` (contract §3.7 E14), each against its own previous file, under
+/// Writes the good lists of `answer` (contract §3.7 E15), each against its own previous file, under
 /// `locks/models.lock`; a failed or empty one writes nothing, and a provider the answer does not name keeps its file.
 /// Errors: `lock_timeout`, `store_failed`.
 pub fn apply(home: &CpdHome, busy_ms: u32, answer: &Answer) -> Result<Applied, CpdError> {

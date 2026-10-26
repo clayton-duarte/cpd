@@ -1,4 +1,4 @@
-// The model-discovery helper (docs/contract.md §3.7 E14; docs/commands.md §14.4; Context decisions pro-d13, pro-d17,
+// The model-discovery helper (docs/contract.md §3.7 E15; docs/commands.md §14.5; Context decisions pro-d13, pro-d17,
 // pro-d20). Lists the models of every provider pi can use and a list can change for: `github-copilot` when pi has a
 // login for it (pi's own API: the account's list) and every custom provider of `models.json` with a `baseUrl`
 // (`GET <baseUrl>/models`, the key resolved by pi from that provider's own `apiKey`). Built-in providers are not listed.
@@ -41,7 +41,7 @@ export type Entry =
 export type Answer = { ok: true; pi_version: string; providers: Entry[] } | { ok: false; error: Failure };
 
 const COPILOT = "github-copilot";
-/** The timeout of one fetch (contract §3.7 E14). */
+/** The timeout of one fetch (contract §3.7 E15). */
 const FETCH_TIMEOUT_MS = 60_000;
 /** The file-name-safe provider name (contract §1.4). */
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;

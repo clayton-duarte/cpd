@@ -1,4 +1,4 @@
-//! E14, model discovery (contract §3.7 E14, §1.4 `models-<provider>.json`; Context decisions pro-d13, pro-d17, pro-d20):
+//! E15, model discovery (contract §3.7 E15, §1.4 `models-<provider>.json`; Context decisions pro-d13, pro-d17, pro-d20):
 //! runs the helper `pi/lib/models-list.ts` when no cached list exists or the newest `polled_at` is
 //! `watch.models_discovery_seconds` old, validates its answer and writes one file per provider that has a good list
 //! (`cpd_core::models`, shared with `cpd models refresh`). Like E11 the run is detached from the tick: a later tick
@@ -20,7 +20,7 @@ use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::models::{Answer, Applied, Helper, Outcome, apply, newest_polled_at};
 
-/// What E14 remembers between ticks.
+/// What E15 remembers between ticks.
 #[derive(Default)]
 pub(super) struct State {
     /// The run in flight: its answer arrives here.
@@ -29,7 +29,7 @@ pub(super) struct State {
     last_end: Option<Instant>,
 }
 
-/// `CPD_TEST_MODELS_DISCOVERY=off` (contract §1.2 test overrides): a debug build's E14 does nothing, so the tests of the
+/// `CPD_TEST_MODELS_DISCOVERY=off` (contract §1.2 test overrides): a debug build's E15 does nothing, so the tests of the
 /// other steps see no helper run. A release build ignores it.
 fn switched_off() -> bool {
     if !cfg!(debug_assertions) {
@@ -58,7 +58,7 @@ pub(super) fn run(engine: &mut Engine) {
         engine.models.last_end = Some(Instant::now());
         match answer.and_then(|answer| apply(&engine.home, engine.config.timeouts.store_busy_ms, &answer)) {
             Ok(applied) => report(engine, &applied),
-            Err(e) => engine.fail(Step::E14, About::Machine, Failure::from(&e)),
+            Err(e) => engine.fail(Step::E15, About::Machine, Failure::from(&e)),
         }
         return;
     }
@@ -72,7 +72,7 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => {
             // The next try is a period away, as after a run that failed.
             engine.models.last_end = Some(Instant::now());
-            engine.fail(Step::E14, About::Machine, Failure::from(&e));
+            engine.fail(Step::E15, About::Machine, Failure::from(&e));
         }
     }
 }
@@ -101,11 +101,11 @@ fn report(engine: &mut Engine, applied: &Applied) {
         match outcome {
             Outcome::Written(w) => {
                 let changed = w.changes.as_ref().map_or(0, |c| c.appeared.len() + c.went_away.len());
-                engine.log.line(&format!("E14: cached {} id(s) of {} ({changed} changed)", w.count, w.provider));
+                engine.log.line(&format!("E15: cached {} id(s) of {} ({changed} changed)", w.count, w.provider));
             }
             Outcome::Failed(failure) => {
                 clean = false;
-                engine.fail(Step::E14, About::Machine, Failure::from(&failure.error()));
+                engine.fail(Step::E15, About::Machine, Failure::from(&failure.error()));
             }
         }
     }
@@ -116,9 +116,9 @@ fn report(engine: &mut Engine, applied: &Applied) {
             message: format!("The cached model list of {provider} is not readable and was treated as missing."),
             details: json!({"provider": provider, "file": path.display().to_string()}),
         };
-        engine.fail(Step::E14, About::Machine, failure);
+        engine.fail(Step::E15, About::Machine, failure);
     }
     if clean {
-        engine.clear(Step::E14, &About::Machine);
+        engine.clear(Step::E15, &About::Machine);
     }
 }

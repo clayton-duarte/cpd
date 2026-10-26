@@ -98,7 +98,7 @@ error_codes! {
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
     TitleFailed = "title_failed" => Failure,
-    // Model discovery (contract §3.7 E14, commands.md §14.4).
+    // Model discovery (contract §3.7 E15, commands.md §14.5).
     ModelsKeyUnset = "models_key_unset" => Failure,
     ModelsUnauthorized = "models_unauthorized" => Failure,
     ModelsUnreachable = "models_unreachable" => Failure,
@@ -109,6 +109,9 @@ error_codes! {
     ModelsRefreshFailed = "models_refresh_failed" => Failure,
     ModelsNoProvider = "models_no_provider" => Failure,
     ModelsHelperFailed = "models_helper_failed" => Failure,
+    InstallStateInvalid = "install_state_invalid" => Failure,
+    // The holographic engine rail (contract §4.6, hs-d677).
+    EngineFailed = "engine_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnconfirmed = "owner_unconfirmed" => Failure,
@@ -145,6 +148,9 @@ error_codes! {
     Broadcast = "broadcast" => Refused,
     Duplicate = "duplicate" => Refused,
     NoManager = "no_manager" => Refused,
+    ManagerOnly = "manager_only" => Refused,
+    UntilPrNotIncident = "until_pr_not_incident" => Refused,
+    IncidentHold = "incident_hold" => Refused,
     UserOnly = "user_only" => Refused,
     CurationNotPending = "curation_not_pending" => Refused,
     ManagerMissing = "manager_missing" => Refused,
@@ -224,6 +230,9 @@ error_codes! {
     SecretExists = "secret_exists" => Refused,
     SecretNotSignedIn = "secret_not_signed_in" => Refused,
     OwnerInUse = "owner_in_use" => Refused,
+    HostApprovalRequired = "host_approval_required" => Refused,
+    NotAManager = "not_a_manager" => Refused,
+    EngineDisabled = "engine_disabled" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -237,6 +246,7 @@ error_codes! {
     SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
+    EngineMissing = "engine_missing" => NotFound,
 
     // Exit 5: timeout.
     StoreBusy = "store_busy" => Timeout,
@@ -427,6 +437,7 @@ mod tests {
             (ErrorCode::SessionRequired, 2),
             (ErrorCode::InvalidPlanId, 2),
             (ErrorCode::InvalidRecordId, 2),
+            (ErrorCode::UntilPrNotIncident, 3),
             (ErrorCode::JobLocked, 3),
             (ErrorCode::DraftIncomplete, 3),
             (ErrorCode::IllegalTransition, 3),

@@ -392,7 +392,7 @@ pub(crate) fn rerun(targets: &Targets, yes: bool) -> Result<Output, CpdError> {
 /// `plan delete` (§4.14).
 pub(super) fn plan_delete(args: DeleteArgs) -> Result<Output, CpdError> {
     let id = args.id;
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { home, config, mut store, .. } = Env::open()?;
     let deleted: Option<Option<String>> =
         store.read(|conn| Ok(conn.query_row("SELECT deleted_at FROM plans WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?))?;
     match deleted {

@@ -1,4 +1,4 @@
-//! `cpd models refresh` and `cpd models show` (commands.md §14.4).
+//! `cpd models refresh` and `cpd models show` (commands.md §14.5).
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -12,12 +12,12 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::output::Output;
 
-/// The `models` commands (commands.md §14.4).
+/// The `models` commands (commands.md §14.5).
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Read the model lists pi can offer now (§14.4)
+    /// Read the model lists pi can offer now (§14.5)
     Refresh,
-    /// Print the cached model lists (§14.4)
+    /// Print the cached model lists (§14.5)
     Show(ShowArgs),
 }
 

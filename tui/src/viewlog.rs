@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use cpd_core::home::CpdHome;
-use time::OffsetDateTime;
+use cpd_core::ports::Ports;
 use time::format_description::well_known::Rfc3339;
 
 /// The log of one view.
@@ -22,7 +22,12 @@ impl ViewLog {
 
     /// Appends `<RFC 3339 time> <line>`; `Err` with the reason when the file cannot be written.
     pub fn append(&self, line: &str) -> Result<(), String> {
-        let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+        self.append_with(&Ports::current(), line)
+    }
+
+    /// [`ViewLog::append`] stamped by the clock of `ports`.
+    pub fn append_with(&self, ports: &Ports, line: &str) -> Result<(), String> {
+        let at = ports.clock.utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
         let failed = |e: std::io::Error| format!("cannot write {}: {e}", self.path.display());
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(failed)?;
@@ -35,6 +40,7 @@ impl ViewLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::OffsetDateTime;
 
     #[test]
     fn lines_are_appended_one_timestamped_line_each_and_the_directory_is_created() {

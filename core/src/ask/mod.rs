@@ -5,7 +5,7 @@
 //!
 //! Expiring an Escalation whose asker died is the engine's (E1), not here.
 
-mod question;
+pub(crate) mod question;
 mod reply;
 
 use crate::args::{PlanArg, Text};

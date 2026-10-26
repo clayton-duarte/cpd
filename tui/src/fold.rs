@@ -66,6 +66,16 @@ pub fn plain() -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{TERMINATOR}"), muted()))
 }
 
+/// The closing row of a LIVE Context with no row at all (hs-d688): the muted corner `╰` and terminator glyph, then the
+/// clickable word ` new`; a left click on it opens the Context's New Plan popup, the context menu's New Plan… does.
+pub fn new_plan() -> Line<'static> {
+    Line::from(vec![
+        Span::styled(CLOSE, muted()),
+        Span::styled(TERMINATOR, muted()),
+        Span::styled(" new", palette::clickable_text()),
+    ])
+}
+
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
 /// items or fewer): a muted `╰`, the terminator glyph U+F0B2A and the word (the empty Inbox; hs-d487, hs-d574).
 pub fn done(text: &str) -> Line<'static> {

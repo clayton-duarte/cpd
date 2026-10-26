@@ -1,4 +1,4 @@
-//! The helper run and its answer (contract §3.7 E14 "The helper's answer"): `node <pi_adapter>/lib/models-list.ts`,
+//! The helper run and its answer (contract §3.7 E15 "The helper's answer"): `node <pi_adapter>/lib/models-list.ts`,
 //! no argument, under pi's Node, in its own process group, with a deadline; the answer is validated here, once.
 
 use std::process::{Command, Stdio};
@@ -14,7 +14,7 @@ use crate::git::{TAIL_LINES, tail};
 use crate::home::CpdHome;
 use crate::host::deadline::{self, Failed};
 
-/// The helper's deadline (contract §3.7 E14): above its 60 s fetch of one provider.
+/// The helper's deadline (contract §3.7 E15): above its 60 s fetch of one provider.
 const DEADLINE: Duration = Duration::from_secs(120);
 
 /// A provider the helper listed.

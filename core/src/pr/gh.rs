@@ -3,11 +3,9 @@
 //! Every failure is `gh_failed` with `argv`, `exit` and the last 60 lines of stderr.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,6 +14,9 @@ use crate::error::{CpdError, ErrorCode};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::limit::limit;
+use crate::host::deadline::Failed;
+use crate::host::runner::Runner;
+use crate::ports::Ports;
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -121,21 +122,15 @@ fn failed(argv: &[&str], message: String, exit: Option<i32>, stderr: &str) -> Cp
 }
 
 /// What a finished `gh` call printed; `exit` is `None` when a signal ended it.
-struct Output {
-    stdout: String,
-    stderr: String,
-    exit: Option<i32>,
+pub(super) struct Output {
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+    pub(super) exit: Option<i32>,
 }
 
 /// `gh` ran past its timeout and was killed; `stderr` is what it had printed.
-struct Killed {
-    stderr: String,
-}
-
-/// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
-/// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
-fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
-    run_timed(cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
+pub(super) struct Killed {
+    pub(super) stderr: String,
 }
 
 /// The `gh_failed` of a call killed after `timeout`.
@@ -143,57 +138,37 @@ fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
     failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
 }
 
-/// [`run_raw`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
-fn run_timed(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
-    let mut child = Command::new("gh")
-        .args(args)
-        .current_dir(cwd)
-        .env("GH_PROMPT_DISABLED", "1")
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| failed(args, format!("Cannot run gh: {e}."), None, &e.to_string()))?;
-    // Both pipes are drained while the child runs, or a full pipe would block it.
-    let mut out = child.stdout.take().expect("stdout is piped");
-    let mut err = child.stderr.take().expect("stderr is piped");
-    let stdout = thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = out.read_to_end(&mut text);
-        text
-    });
-    let stderr = thread::spawn(move || {
-        let mut text = Vec::new();
-        let _ = err.read_to_end(&mut text);
-        text
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() >= deadline => {
-                // The pipes close when the child dies, which ends the readers.
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(e) => return Err(failed(args, format!("Cannot wait for gh: {e}."), None, &e.to_string())),
-        }
-    };
-    let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-    let Some(status) = status else {
-        return Ok(Err(Killed { stderr }));
-    };
-    Ok(Ok(Output { stdout, stderr, exit: status.code() }))
+/// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
+/// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
+pub(super) fn run_raw_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
+    run_timed_with(runner, cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
+}
+
+/// [`run_raw_with`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result):
+/// one `Runner` call of `gh <args>` in `cwd` under `timeout`, with `GH_PROMPT_DISABLED=1` and `NO_COLOR=1`.
+pub(super) fn run_timed_with(runner: &dyn Runner, cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
+    let mut command = Command::new("gh");
+    command.args(args).current_dir(cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());
+    match runner.output(&mut command, "gh", timeout) {
+        Ok(out) => Ok(Ok(Output {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit: out.status.code(),
+        })),
+        Err(Failed::Timeout(_)) => Ok(Err(Killed { stderr: String::new() })),
+        Err(Failed::Io(e)) => Err(failed(args, format!("Cannot run gh: {e}."), None, &e.to_string())),
+    }
 }
 
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
 /// and a timeout (60 s) are `gh_failed`.
 fn run(cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
-    let out = run_raw(cwd, args, TIMEOUT)?;
+    run_on(&*Ports::current().runner, cwd, args)
+}
+
+/// [`run`] on `runner`.
+fn run_on(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let out = run_raw_with(runner, cwd, args, TIMEOUT)?;
     match out.exit {
         Some(0) => Ok(out.stdout),
         Some(code) => Err(failed(args, format!("gh {} exited {code}.", args[0]), Some(code), &out.stderr)),
@@ -251,10 +226,10 @@ pub fn create_pr(cwd: &Path, base: &str, head: &str, title: &str, body: &str) ->
     }
 }
 
-pub fn view(cwd: &Path, number: i64) -> Result<View, CpdError> {
+pub fn view(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<View, CpdError> {
     let n = number.to_string();
     let args = ["pr", "view", &n, "--json", "state,mergedAt,statusCheckRollup,reviews,comments,title,reviewDecision,url"];
-    parse(&args, &run(cwd, &args)?)
+    parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `gh pr close <number> --repo <repo>`. A pull request that is already closed or merged is the
@@ -298,10 +273,10 @@ pub struct MergeView {
 }
 
 /// The pull request `number` of `repo`, read fresh from GitHub.
-pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
+pub fn view_for_merge(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
     let n = number.to_string();
     let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"];
-    parse(&args, &run(cwd, &args)?)
+    parse(&args, &run_on(runner, cwd, &args)?)
 }
 
 /// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
@@ -319,19 +294,19 @@ pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdEr
 
 /// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`.
-pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+pub fn merge_pr(runner: &dyn Runner, cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
     let n = number.to_string();
     let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
-    run(cwd, &args).map(drop)
+    run_on(runner, cwd, &args).map(drop)
 }
 
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.
-pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
+pub fn inline_comments(runner: &dyn Runner, cwd: &Path, number: i64) -> Result<Vec<InlineComment>, CpdError> {
     let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments?per_page=100");
     let args = ["api", endpoint.as_str(), "--paginate"];
-    let stdout = run(cwd, &args)?;
+    let stdout = run_on(runner, cwd, &args)?;
     let mut comments = Vec::new();
     for page in serde_json::Deserializer::from_str(&stdout).into_iter::<Vec<InlineComment>>() {
         comments.extend(page.map_err(|e| {
@@ -621,11 +596,11 @@ fn polled_call(call: &str, e: CpdError) -> CpdError {
 
 /// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
 /// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
-fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
+fn graphql(runner: &dyn Runner, cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
     let args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
-    match run_timed(cwd, &refs, timeout)? {
+    match run_timed_with(runner, cwd, &refs, timeout)? {
         Ok(out) => Ok((args, out)),
         Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
     }
@@ -633,9 +608,9 @@ fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
-pub fn search_open(cwd: &Path) -> Result<Search, CpdError> {
+pub fn search_open(runner: &dyn Runner, cwd: &Path) -> Result<Search, CpdError> {
     let search = || {
-        let (args, out) = graphql(cwd, SEARCH_QUERY)?;
+        let (args, out) = graphql(runner, cwd, SEARCH_QUERY)?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         parse_search(&Reply { args: &refs, out: &out })
     };
@@ -689,11 +664,11 @@ fn repo_parts(repo: &str) -> Option<(&str, &str)> {
 /// most; `None` for one that GitHub cannot find (deleted, or no access). `gh`
 /// exits 1 on such an alias: stdout is parsed whatever the exit, and a call
 /// without `data` is `gh_failed`. An empty `prs` makes no call.
-pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
+pub fn lookup(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    let found = lookup_call(cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
+    let found = lookup_call(runner, cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
     Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
@@ -701,11 +676,11 @@ pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>
 /// selected, both required in the reply. An `OPEN` pull request carries what the viewer's own flags are
 /// (`authored` = `viewerDidAuthor`, `review_requested` = a latest review request); a merged or closed one has neither.
 /// `None` for one GitHub cannot find. Failures are the lookup's (`details.call` `lookup`). An empty `prs` makes no call.
-pub fn read_absent(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
+pub fn read_absent(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    lookup_call(cwd, prs, true).map_err(|e| polled_call("lookup", e))
+    lookup_call(runner, cwd, prs, true).map_err(|e| polled_call("lookup", e))
 }
 
 /// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
@@ -726,9 +701,9 @@ fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError>
     Ok(query)
 }
 
-fn lookup_call(cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
+fn lookup_call(runner: &dyn Runner, cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
     let query = lookup_query(prs, viewer)?;
-    let (args, out) = graphql(cwd, &query)?;
+    let (args, out) = graphql(runner, cwd, &query)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer)
 }
@@ -776,6 +751,11 @@ mod tests {
     use super::*;
 
     const ARGS: [&str; 4] = ["api", "graphql", "-f", "query=Q"];
+
+    /// A runner that answers nothing: the tests that use it make no call.
+    fn runner() -> crate::host::runner::FakeRunner {
+        crate::host::runner::FakeRunner::new(crate::clock::ManualClock::new())
+    }
 
     fn reply(stdout: &str, exit: i32) -> Output {
         Output { stdout: stdout.to_owned(), stderr: "gh: boom".to_owned(), exit: Some(exit) }
@@ -1037,7 +1017,7 @@ mod tests {
         }
         let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
         assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
-        assert_eq!(read_absent(Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(read_absent(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]
@@ -1065,8 +1045,9 @@ mod tests {
     #[test]
     fn a_repo_that_is_not_owner_name_is_refused_before_gh_runs() {
         let nowhere = Path::new("/nonexistent");
+        let runner = runner();
         for repo in ["", "a", "a/", "/b", "a/b/c", "a b/c", "o/n\"}) { x", "o\"/n", "ö/n"] {
-            let e = lookup(nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
+            let e = lookup(&runner, nowhere, &[(repo.to_owned(), 1)]).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{repo:?}");
             assert!(e.message().contains("owner/name"), "{repo:?}: {}", e.message());
         }
@@ -1074,7 +1055,7 @@ mod tests {
 
     #[test]
     fn an_empty_lookup_makes_no_call() {
-        assert_eq!(lookup(Path::new("/nonexistent"), &[]).unwrap(), vec![]);
+        assert_eq!(lookup(&runner(), Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]

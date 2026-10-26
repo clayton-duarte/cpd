@@ -2,7 +2,7 @@
 //! subprocess (a process boundary, cpd 1 §11 step 5), `pr_poll_seconds` after the
 //! end of the previous poll, at its due time (the engine wakes for it between ticks),
 //! whether or not any Plan is in `deploy`: one poll covers every open pull request of the User. `cpd` is the executable the engine started
-//! from (`host::exe::started_as`), as for the drivers of E3 (hs-d151): not `PATH`.
+//! from (`Spawn::self_exe`), as for the drivers of E3 (hs-d151): not `PATH`.
 //!
 //! The rate guard: when a poll leaves fewer than [`RATE_FLOOR`] requests of
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
@@ -25,8 +25,9 @@ use super::poll_run::{Finished, PollRun};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{TAIL_LINES, tail};
-use cpd_core::host::deadline::{self, Failed};
-use cpd_core::host::exe::started_as;
+use cpd_core::host::deadline::Failed;
+use cpd_core::host::runner::Runner;
+use cpd_core::ports::Ports;
 use cpd_core::host::limit::limit;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
@@ -49,13 +50,14 @@ pub(super) fn due(engine: &Engine, now: Instant) -> Option<Instant> {
 
 /// E5, first step: starts `cpd pr poll` on its own thread when it is due and none runs.
 pub(super) fn start(engine: &mut Engine) {
-    let now = Instant::now();
+    let now = engine.ports.clock.now();
     if due(engine, now).is_none_or(|due| now < due) {
         return;
     }
     engine.paused_until = None;
     let root = engine.home.root().to_path_buf();
-    engine.poll = Some(PollRun::start(move || poll(&root)));
+    let ports = engine.ports.clone();
+    engine.poll = Some(PollRun::start_on(ports.clock.clone(), move || poll(&ports, &root)));
 }
 
 /// E5, second step: applies the poll that ended, if one did.
@@ -246,10 +248,15 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 }
 
 /// Runs `cpd pr poll` and returns its success value, or the failure it printed.
-fn poll(root: &Path) -> Result<Value, Failure> {
-    let exe = started_as().map_err(|e| Failure::from(&e))?;
+fn poll(ports: &Ports, root: &Path) -> Result<Value, Failure> {
+    let exe = ports.spawn.self_exe().map_err(|e| Failure::from(&e))?;
+    poll_with(&*ports.runner, &exe, root)
+}
+
+/// [`poll`] on `runner`, with `exe` the recorded path of cpd's own executable.
+pub(super) fn poll_with(runner: &dyn Runner, exe: &Path, root: &Path) -> Result<Value, Failure> {
     let argv = [&*exe.to_string_lossy(), "pr", "poll"];
-    let mut cmd = Command::new(&exe);
+    let mut cmd = Command::new(exe);
     cmd.args(&argv[1..])
         .env("CPD_HOME", root)
         // The engine's own selection is not the subprocess's.
@@ -258,7 +265,7 @@ fn poll(root: &Path) -> Result<Value, Failure> {
         .env_remove("CPD_ATTEMPT")
         .current_dir(root)
         .stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
+    let out = runner.output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
         Failed::Io(e) => {
             Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)))
         }
