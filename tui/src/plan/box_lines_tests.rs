@@ -239,7 +239,15 @@ fn a_box_keeps_a_dash_after_its_title() {
         let c = canvas_of(std::slice::from_ref(&p), &[]);
         let width = t.chars().count() + 4; // `╭`, `─`, the title, at least one `─`, `╮`
         assert_eq!(usize::from(c.buf.area.width), width, "the box is title + 4 cells wide\n{}", shown(&c.buf));
-        assert_eq!(plain(&c.buf, 0), format!("╭─{t}─╮"), "\n{}", shown(&c.buf));
+        if p.pull.is_none() {
+            assert_eq!(plain(&c.buf, 0), format!("╭─{t}─╮"), "\n{}", shown(&c.buf));
+        } else {
+            // the link's cells hold pieces, so only the cells the link does not touch are compared
+            let w = c.buf.area.width;
+            let cell = |x: u16| c.buf[(x, 0)].symbol().to_string();
+            assert_eq!([cell(0), cell(1)], ["╭", "─"], "\n{}", shown(&c.buf));
+            assert_eq!([cell(w - 3), cell(w - 2), cell(w - 1)], [" ", "─", "╮"], "\n{}", shown(&c.buf));
+        }
     }
 }
 
