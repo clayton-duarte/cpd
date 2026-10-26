@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadPi, main, PARALLEL, PI_MODULES, PI_NAMES, readTeamChannel, Refusal, resultText, type CallTool } from "../lib/slack-channel.ts";
 
 const ME = "U04DB4MTUMR";
@@ -166,6 +166,40 @@ test("the helper reads through pi's own connection, loaded by file URL", async (
   const usage = run({}, ["--bogus", "x"]);
   assert.equal(usage.status, 2);
   assert.equal(JSON.parse(usage.stdout).error.code, "usage");
+});
+
+test("a helper reached through a symlink to its script or to its directory still runs main", async (t) => {
+  const pi = fakePi(FAKE_CONFIG, FAKE_RUNTIME);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "slack-link-")));
+  t.after(() => {
+    pi.done();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const answers = join(pi.root, "answers.json");
+  writeFileSync(answers, JSON.stringify({ slack_read_channel: channelText, slack_read_thread: "", slack_get_reactions: "" }));
+  symlinkSync(realpathSync(helper), join(root, "script.ts"));
+  symlinkSync(realpathSync(join(here, "..")), join(root, "pi"));
+  for (const script of [join(root, "script.ts"), join(root, "pi", "lib", "slack-channel.ts")]) {
+    const r = spawnSync(process.execPath, [script, "--coding-agent", pi.entry, "--channel", CHANNEL, "--me", ME], {
+      env: { ...process.env, PI_CODING_AGENT_DIR: pi.root, FAKE_ANSWERS: answers },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(r.status, 0, `${script}: ${r.stderr}`);
+    assert.notEqual(r.stdout, "", `${script} printed nothing`);
+    const out = JSON.parse(r.stdout);
+    assert.deepEqual([out.ok, out.channel, out.read], [true, CHANNEL, 3], script);
+  }
+});
+
+test("a module that only imports the helper does not run main", (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "slack-import-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const script = join(root, "importer.ts");
+  writeFileSync(script, `import ${JSON.stringify(pathToFileURL(realpathSync(helper)).href)};\n`);
+  const r = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 30_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "");
 });
 
 test("main parses and answers without a process: the posts with ts, author, primary, reactions, claim, thread tags", async (t) => {
