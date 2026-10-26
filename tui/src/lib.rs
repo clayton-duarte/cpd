@@ -23,6 +23,8 @@ pub mod box_widget;
 #[cfg(test)]
 mod box_widget_tests;
 #[cfg(test)]
+mod link_widget_tests;
+#[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
 mod guard_popup_tests;

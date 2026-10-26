@@ -19,7 +19,12 @@
 //! cell's style is written.
 
 use ratatui::buffer::{Buffer, CellDiffOption, CellWidth};
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
+
+use cpd_core::error::CpdError;
+use cpd_core::host::runner::Runner;
 
 /// The link cue, drawn where a view links to a page (hs-d191, hs-d235): `nf-md-share_circle` (U+F11AD).
 pub const CUE: &str = "\u{F11AD}";
@@ -272,4 +277,56 @@ mod tests {
         assert_eq!(buf[(1, 0)].symbol(), "b");
         assert_eq!(buf[(2, 0)].symbol(), format!("{OPEN}c{CLOSE}"));
     }
+}
+
+/// A cockpit link: the cue `CUE`, or `<text> CUE`, the whole output the click target (pro-d60).
+pub struct Link<'a> {
+    #[allow(dead_code)]
+    url: &'a str,
+    #[allow(dead_code)]
+    text: Option<Line<'a>>,
+}
+
+impl<'a> Link<'a> {
+    /// The cue only.
+    pub fn new(url: &'a str) -> Link<'a> {
+        Link { url, text: None }
+    }
+    /// `<text> CUE`, the text underlined.
+    pub fn text(self, text: impl Into<Line<'a>>) -> Link<'a> {
+        Link { text: Some(text.into()), ..self }
+    }
+    /// Cells of the whole output: 1, or the text's width + 2.
+    pub fn width(&self) -> u16 {
+        todo!("Link::width")
+    }
+}
+
+impl Widget for Link<'_> {
+    fn render(self, _area: Rect, _buf: &mut Buffer) {
+        todo!("Link::render")
+    }
+}
+
+/// The (rect, url) of every link drawn.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Links {
+    drawn: Vec<(Rect, String)>,
+}
+
+impl Links {
+    /// Renders `link` into `area` and records the rect it drew with the url.
+    pub fn draw(&mut self, _link: Link<'_>, _area: Rect, _buf: &mut Buffer) {
+        let _ = &self.drawn;
+        todo!("Links::draw")
+    }
+    /// The url of the link drawn on that cell.
+    pub fn at(&self, _at: Position) -> Option<&str> {
+        todo!("Links::at")
+    }
+}
+
+/// Opens `url` in the default browser (macOS `open`) through `runner`.
+pub fn open_url(_runner: &dyn Runner, _url: &str) -> Result<(), CpdError> {
+    todo!("open_url")
 }
