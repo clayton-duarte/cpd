@@ -1424,6 +1424,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | the Job is Ready (§3.2) | `job_not_ready` | 3 |
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
+| a linear Attempt of the Job's PR is live (pro-d52, contract §3.7 E3 item 1) | `cas_lost` | 3 |
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
 | the Job's Tier for the Attempt is one a Worker may have (§5, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
@@ -2858,7 +2859,7 @@ Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, one `session-me
 
 Idempotent: a second one is refused.
 
-**E3: Linear vs parallel Attempts** (hs-d680, hs-d682, hs-d683; contract §3.7 E3, A1). When E3 schedules a Ready Job, it derives which Attempt of a PR runs as the linear one (reusing the PR's workflow worktree on its Lead Branch) and which as parallel siblings (each with its own worktree): an Attempt is linear iff no other Attempt of the same PR is live when inserted. E3 passes this allocation to the driver starter, which takes the driver lock and enforces it atomically before starting, ensuring no two Attempts can share the workflow worktree. See §7.1, §7.2.
+**E3: Linear vs parallel Attempts** (pro-d52, hs-d680, hs-d682, hs-d683; contract §3.7 E3, §7.2, §7.4, A1). When E3 schedules a Ready Job of a PR each pass, it derives which Attempt runs as the linear one (the PR's only live Attempt for its whole life, reusing the PR's workflow worktree on its Lead Branch) and which as parallel siblings (each with its own worktree): by the rule of contract §3.7 E3, (1) if the PR has a live linear Attempt, no Ready Job starts; (2) if the PR has only live parallel Attempts, every Ready Job is parallel; (3) if no Attempt is live, one Ready Job is linear and the rest are parallel. E3 passes this allocation to the driver starter, which takes the driver lock and enforces it atomically before starting, ensuring no two Attempts can share the workflow worktree.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once. It fails and creates nothing when `$CPD_HOME` does not exist (hs-d519 3c/5, docs/research/hygiene.md, bug 3c/5).
 
